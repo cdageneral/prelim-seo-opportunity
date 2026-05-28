@@ -22,6 +22,7 @@ import {
   narrativePrompt,
   pptPromptGenerator,
   categoryBreakdownPrompt,
+  type MergedKeyword,
 } from './prompts';
 
 // Lazy client — reads key at call time, not at module load.
@@ -164,16 +165,44 @@ export async function generateCategoryBreakdown(
   industry: string,
   semrush: SemrushSnapshot
 ): Promise<CategoryBreakdownResult> {
-  const keywords = semrush.topKeywords.slice(0, 150);
-  if (keywords.length === 0) {
+  // ── Build merged keyword pool ──────────────────────────────────────────────
+  // Step 1: ranked keywords the client appears for (have real position data)
+  const rankedMap = new Map<string, number>(); // lowercase keyword → position
+  for (const kw of semrush.topKeywords.slice(0, 100)) {
+    rankedMap.set(kw.keyword.toLowerCase(), kw.position);
+  }
+
+  const merged: MergedKeyword[] = [];
+
+  // Add ranked keywords first
+  for (const kw of semrush.topKeywords.slice(0, 100)) {
+    merged.push({
+      keyword:        kw.keyword,
+      searchVolume:   kw.searchVolume ?? 0,
+      clientPosition: kw.position ?? null,
+    });
+  }
+
+  // Step 2: gap keywords (competitor ranks, client doesn't) — deduplicated
+  for (const kw of semrush.gapKeywords.slice(0, 100)) {
+    if (!rankedMap.has(kw.keyword.toLowerCase())) {
+      merged.push({
+        keyword:        kw.keyword,
+        searchVolume:   kw.searchVolume ?? 0,
+        clientPosition: null,  // client does not rank for this
+      });
+    }
+  }
+
+  if (merged.length === 0) {
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, page1CaptureRate: 0 };
   }
 
-  const prompt = categoryBreakdownPrompt(domain, industry, keywords);
+  const prompt = categoryBreakdownPrompt(domain, industry, merged);
 
   const response = await getClient().messages.create({
     model:      MODELS.fast,
-    max_tokens: 1200,
+    max_tokens: 1500,
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 100_000 });
 
@@ -182,7 +211,10 @@ export async function generateCategoryBreakdown(
   // Claude returns: { "categories": [{ "name": "...", "keywordIndices": [0,1,2] }] }
   const parsed = extractJSON<{ categories: Array<{ name: string; keywordIndices: number[] }> }>(text);
 
-  // Compute demand sums in TypeScript — no Claude arithmetic
+  // ── Compute demand sums in TypeScript — no Claude arithmetic ──────────────
+  // monthlyDemand = ALL keywords (ranked + unranked) → the true demand pool
+  // page1Demand   = only keywords where client position ≤ 10
+  // top3Demand    = only keywords where client position ≤ 3
   const result: CategoryBreakdownResult = {
     categories: [],
     totalMonthlyDemand: 0,
@@ -197,13 +229,12 @@ export async function generateCategoryBreakdown(
     let top3Demand    = 0;
 
     for (const idx of cat.keywordIndices) {
-      const kw = keywords[idx];
+      const kw = merged[idx];
       if (!kw) continue;
       const vol = kw.searchVolume ?? 0;
-      const pos = kw.position    ?? 999;
       monthlyDemand += vol;
-      if (pos <= 10) page1Demand += vol;
-      if (pos <= 3)  top3Demand  += vol;
+      if (kw.clientPosition !== null && kw.clientPosition <= 10) page1Demand += vol;
+      if (kw.clientPosition !== null && kw.clientPosition <= 3)  top3Demand  += vol;
     }
 
     result.categories.push({ name: cat.name, monthlyDemand, page1Demand, top3Demand });

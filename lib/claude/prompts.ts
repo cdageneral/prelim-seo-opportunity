@@ -15,28 +15,42 @@ import type { ProfoundSnapshot } from '../apis/profound';
 
 // ─── Pass 2.5: Category Breakdown ────────────────────────────────────────────
 //
-// Takes the client's top organic keywords and asks Claude to classify them into
-// 3-6 service/product categories. All arithmetic (demand sums) is done in
-// TypeScript after the response — Claude only outputs a keyword-to-index mapping.
+// Classifies a MERGED pool of (a) keywords the client ranks for and
+// (b) gap keywords from the top competitor that the client doesn't rank for.
+// Claude only outputs a keyword-to-index mapping.
+// All arithmetic (demand sums) is computed in TypeScript.
+
+export interface MergedKeyword {
+  keyword:        string;
+  searchVolume:   number;
+  clientPosition: number | null; // null = client doesn't rank for this keyword
+}
 
 export function categoryBreakdownPrompt(
   domain: string,
   industry: string,
-  keywords: SemrushKeyword[]
+  keywords: MergedKeyword[]
 ): string {
   const kwList = keywords
-    .map((k, i) => `${i}. ${k.keyword} | pos ${k.position} | ${k.searchVolume.toLocaleString()}/mo`)
+    .map((k, i) => {
+      const posLabel = k.clientPosition !== null
+        ? `client pos: ${k.clientPosition}`
+        : 'client: unranked';
+      return `${i}. ${k.keyword} | ${posLabel} | ${k.searchVolume.toLocaleString()}/mo`;
+    })
     .join('\n');
 
-  return `You are analyzing the top organic search keywords for a website to identify its core service or product categories.
+  return `You are analyzing organic search keywords for a website to identify its core service or product categories.
 
 WEBSITE: ${domain}
 INDUSTRY: ${industry}
 
-TOP ORGANIC KEYWORDS (index. keyword | position | monthly search volume):
+KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
 
-Task: Group these keywords into 3-6 meaningful service or product categories that reflect what this business offers. Every keyword index must appear in exactly one category. Ignore keywords that are clearly navigational brand misspellings (e.g. typos of the brand name) — omit those indices entirely.
+Note: "client: unranked" means this keyword has search demand in the category but the client does not currently appear on page 1 for it.
+
+Task: Group ALL keywords into 3-6 meaningful service or product categories that reflect what this business offers and the demand around it. Every index must appear in exactly one category. Omit only clear brand-name typos/misspellings (e.g. "sonobelo", "sono bello" misspellings).
 
 Return JSON ONLY — no markdown, no explanation:
 {
