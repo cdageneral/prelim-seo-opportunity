@@ -62,10 +62,10 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
   const progress = Math.min(98, Math.round((elapsed / TOTAL_DURATION) * 100));
 
   // Active batch based on progress
-  const activeBatchIndex = Math.max(
-    0,
-    BATCHES.findIndex(b => progress < b.endPct)
-  );
+  // When findIndex returns -1 (progress >= all endPct values), stay on the last
+  // batch rather than wrapping back to 0.
+  const _batchIdx = BATCHES.findIndex(b => progress < b.endPct);
+  const activeBatchIndex = _batchIdx === -1 ? BATCHES.length - 1 : _batchIdx;
 
   // Time labels
   const remaining      = Math.max(0, TOTAL_DURATION - elapsed);
