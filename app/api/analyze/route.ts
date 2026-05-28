@@ -4,7 +4,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { waitUntil } from '@vercel/functions';
 import { z }       from 'zod';
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
@@ -56,17 +55,15 @@ export async function POST(req: NextRequest) {
     triggeredAt: new Date(),
   }).returning();
 
-  // waitUntil keeps the Vercel Lambda alive after the response is sent
-  // so the long-running analysis (SerpAPI + Claude) can complete.
-  waitUntil(
-    runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
-      .catch(async (err) => {
-        console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
-        await db.update(analyses)
-          .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
-          .where(eq(analyses.id, analysis.id));
-      })
-  );
+  // Fire-and-forget — with maxDuration=300, Vercel keeps the Lambda alive
+  // long enough for the full pipeline to complete after the response is sent.
+  runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
+    .catch(async (err) => {
+      console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
+      await db.update(analyses)
+        .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
+        .where(eq(analyses.id, analysis.id));
+    });
 
   return NextResponse.json({ analysisId: analysis.id, status: 'running' });
 }
@@ -106,11 +103,30 @@ async function runAnalysis(
   industry: string,
   manualCompetitors: Array<{ domain: string }>
 ) {
-  console.log(`[OrbitIQ] Analysis ${analysisId}: fetching APIs for ${domain}`);
+  console.log(`[OrbitIQ] Analysis ${analysisId}: starting for ${domain}`);
+  console.log(`[OrbitIQ] Env check — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, PROFOUND: ${!!process.env.PROFOUND_API_KEY}, ANTHROPIC: ${!!process.env.ANTHROPIC_API_KEY}`);
 
+  // Pre-flight: Anthropic key is required — fail fast with a clear message
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY is not set. Go to Vercel → your project → Settings → Environment Variables and add it.');
+  }
+
+  // Fault-tolerant fetches — a failed API key won't crash the whole analysis
   const [semrush, profound] = await Promise.all([
-    getSemrushSnapshot(domain),
-    getProfoundSnapshot(domain),
+    getSemrushSnapshot(domain).catch(err => {
+      console.error(`[OrbitIQ] Semrush failed:`, err);
+      return {
+        domain, overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
+        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {}, fetchedAt: new Date().toISOString(),
+      } as any;
+    }),
+    getProfoundSnapshot(domain).catch(err => {
+      console.error(`[OrbitIQ] Profound failed (skipping LLM data):`, err);
+      return {
+        domain, overallScore: 0, platformScores: [], brandContext: { summary: '', positioning: [], misalignments: [] },
+        competitors: [], topicAuthority: [], visibilityTrend: [], totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
+      } as any;
+    }),
   ]);
 
   // Merge manual competitors into Semrush snapshot so gap analysis uses them
@@ -130,7 +146,13 @@ async function runAnalysis(
   }
 
   const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
-  const serp = await getSerpApiSnapshot(domain, topKeywords);
+  const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
+    console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
+    return {
+      domain, keywords: [], aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
+      topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
+    } as any;
+  });
 
   await db.update(analyses)
     .set({
@@ -140,7 +162,15 @@ async function runAnalysis(
     })
     .where(eq(analyses.id, analysisId));
 
-  const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound);
+  const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound)
+    .catch(err => {
+      // Surface Anthropic errors clearly instead of "TypeError: fetch failed"
+      const msg = String(err?.message ?? err);
+      if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
+        throw new Error(`Anthropic API key error: ${msg}. Check ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables.`);
+      }
+      throw new Error(`Claude synthesis failed: ${msg}`);
+    });
 
   if (synthesis.personas.length > 0) {
     await db.insert(personas).values(

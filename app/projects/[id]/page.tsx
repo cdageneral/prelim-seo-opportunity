@@ -97,7 +97,14 @@ export default function ProjectBriefPage() {
         body:    JSON.stringify({ projectId }),
       });
       const data = await res.json();
-      if (res.ok) { setPollingId(data.analysisId); fetchProject(); }
+      if (res.ok) {
+        setPollingId(data.analysisId);
+        fetchProject();
+      } else {
+        setAnalysisError(
+          data?.error ?? 'Failed to start analysis. Check that your API keys are set correctly in Vercel → Settings → Environment Variables.'
+        );
+      }
     } finally {
       setTriggering(false);
     }
