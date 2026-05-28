@@ -238,7 +238,7 @@ Source: Semrush competitive landscape data
 SLIDE 3 — Where Rankings Live Today
 Position distribution visualization
 Stats: ${JSON.stringify(semrush.positionDist)}
-Narrative: "${narrative.visibilityGap?.substring(0, 150) ?? ''}"
+Narrative: "${narrative?.visibilityGap?.substring(0, 150) ?? ''}"
 
 SLIDE 4 — The AI Search Landscape
 AI Overview rate: ${Math.round(serp.aioSummary.aioRate * 100)}%
@@ -274,7 +274,7 @@ Top competitors by organic presence
 SOV comparison vs. ${semrush.competitors.slice(0, 3).map(c => c.domain).join(', ')}
 
 SLIDE 10 — The Strategic Call
-"${narrative.strategicCall ?? 'Invest in the organic layer that compounds.'}"
+"${narrative?.strategicCall ?? 'Invest in the organic layer that compounds.'}"
 3 prioritized next steps
 
 DESIGN REQUIREMENTS:
