@@ -57,7 +57,7 @@ export default function ProjectBriefPage() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const analysis = project?.analyses?.[0] ?? null;
-  const isRunning  = analysis?.status === 'running' || pollingId !== null;
+  const isRunning  = !analysisError && (analysis?.status === 'running' || pollingId !== null);
   const hasResults = analysis?.status === 'completed';
 
   // Timeout: if an analysis has been "running" for >6 minutes without resolving,
