@@ -136,8 +136,9 @@ export async function POST(req: NextRequest) {
         topCompetitor:       hm.topCompetitor,
         semrushSnapshot: {
           ...(semrush as any),
-          _narrative: synthesis.narrative,
-          _pptPrompt: synthesis.pptPrompt,
+          _narrative:          synthesis.narrative,
+          _pptPrompt:          synthesis.pptPrompt,
+          _categoryBreakdown:  synthesis.categoryBreakdown,
         } as any,
       })
       .where(eq(analyses.id, analysisId));

@@ -9,9 +9,43 @@
  *  5. PPT prompt       — sonnet (generate pptx skill prompt)
  */
 
-import type { SemrushSnapshot }  from '../apis/semrush';
+import type { SemrushSnapshot, SemrushKeyword }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
 import type { ProfoundSnapshot } from '../apis/profound';
+
+// ─── Pass 2.5: Category Breakdown ────────────────────────────────────────────
+//
+// Takes the client's top organic keywords and asks Claude to classify them into
+// 3-6 service/product categories. All arithmetic (demand sums) is done in
+// TypeScript after the response — Claude only outputs a keyword-to-index mapping.
+
+export function categoryBreakdownPrompt(
+  domain: string,
+  industry: string,
+  keywords: SemrushKeyword[]
+): string {
+  const kwList = keywords
+    .map((k, i) => `${i}. ${k.keyword} | pos ${k.position} | ${k.searchVolume.toLocaleString()}/mo`)
+    .join('\n');
+
+  return `You are analyzing the top organic search keywords for a website to identify its core service or product categories.
+
+WEBSITE: ${domain}
+INDUSTRY: ${industry}
+
+TOP ORGANIC KEYWORDS (index. keyword | position | monthly search volume):
+${kwList}
+
+Task: Group these keywords into 3-6 meaningful service or product categories that reflect what this business offers. Every keyword index must appear in exactly one category. Ignore keywords that are clearly navigational brand misspellings (e.g. typos of the brand name) — omit those indices entirely.
+
+Return JSON ONLY — no markdown, no explanation:
+{
+  "categories": [
+    { "name": "Short category name", "keywordIndices": [0, 3, 7, 12] },
+    { "name": "Second category",     "keywordIndices": [1, 2, 5, 8] }
+  ]
+}`;
+}
 
 // ─── Pass 1: Persona Generation ───────────────────────────────────────────────
 

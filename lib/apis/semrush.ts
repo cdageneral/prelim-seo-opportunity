@@ -110,14 +110,16 @@ export async function getDomainOverview(domain: string): Promise<SemrushDomainOv
   };
 }
 
-// ─── Organic Keywords (Top 50) ────────────────────────────────────────────────
+// ─── Organic Keywords (Top 150) ───────────────────────────────────────────────
+// Increased from 50 → 150 in v7.6 to give the category breakdown pass
+// enough keyword coverage across all service/product categories.
 
 export async function getOrganicKeywords(domain: string): Promise<SemrushKeyword[]> {
   const raw = await semrushGet({
     type:    'domain_organic',
     domain,
     database: 'us',
-    display_limit: '50',
+    display_limit: '150',
     display_sort: 'tr_desc',
     export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
   });

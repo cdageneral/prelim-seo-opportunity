@@ -21,6 +21,7 @@ import {
   opportunityPrompt,
   narrativePrompt,
   pptPromptGenerator,
+  categoryBreakdownPrompt,
 } from './prompts';
 
 // Lazy client — reads key at call time, not at module load.
@@ -139,6 +140,85 @@ export async function generateNarrative(
   return extractJSON(text);
 }
 
+// ─── Pass 2.5: Category Breakdown ────────────────────────────────────────────
+//
+// Classifies the client's top organic keywords into service/product categories
+// using Claude haiku, then computes page1/top3/monthly demand per category in
+// TypeScript (no hallucinated numbers — all arithmetic is done here).
+
+export interface CategoryBreakdownResult {
+  categories: Array<{
+    name:          string;
+    monthlyDemand: number;
+    page1Demand:   number;
+    top3Demand:    number;
+  }>;
+  totalMonthlyDemand: number;
+  totalPage1Demand:   number;
+  totalTop3Demand:    number;
+  page1CaptureRate:   number;
+}
+
+export async function generateCategoryBreakdown(
+  domain: string,
+  industry: string,
+  semrush: SemrushSnapshot
+): Promise<CategoryBreakdownResult> {
+  const keywords = semrush.topKeywords.slice(0, 150);
+  if (keywords.length === 0) {
+    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, page1CaptureRate: 0 };
+  }
+
+  const prompt = categoryBreakdownPrompt(domain, industry, keywords);
+
+  const response = await getClient().messages.create({
+    model:      MODELS.fast,
+    max_tokens: 1200,
+    messages:   [{ role: 'user', content: prompt }],
+  }, { timeout: 100_000 });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  // Claude returns: { "categories": [{ "name": "...", "keywordIndices": [0,1,2] }] }
+  const parsed = extractJSON<{ categories: Array<{ name: string; keywordIndices: number[] }> }>(text);
+
+  // Compute demand sums in TypeScript — no Claude arithmetic
+  const result: CategoryBreakdownResult = {
+    categories: [],
+    totalMonthlyDemand: 0,
+    totalPage1Demand:   0,
+    totalTop3Demand:    0,
+    page1CaptureRate:   0,
+  };
+
+  for (const cat of parsed.categories) {
+    let monthlyDemand = 0;
+    let page1Demand   = 0;
+    let top3Demand    = 0;
+
+    for (const idx of cat.keywordIndices) {
+      const kw = keywords[idx];
+      if (!kw) continue;
+      const vol = kw.searchVolume ?? 0;
+      const pos = kw.position    ?? 999;
+      monthlyDemand += vol;
+      if (pos <= 10) page1Demand += vol;
+      if (pos <= 3)  top3Demand  += vol;
+    }
+
+    result.categories.push({ name: cat.name, monthlyDemand, page1Demand, top3Demand });
+    result.totalMonthlyDemand += monthlyDemand;
+    result.totalPage1Demand   += page1Demand;
+    result.totalTop3Demand    += top3Demand;
+  }
+
+  result.page1CaptureRate = result.totalMonthlyDemand > 0
+    ? result.totalPage1Demand / result.totalMonthlyDemand
+    : 0;
+
+  return result;
+}
+
 // ─── Pass 4: PPT Prompt Generation ───────────────────────────────────────────
 
 export async function generatePPTPrompt(
@@ -172,8 +252,8 @@ export async function generatePPTPrompt(
 // ─── Master Synthesis Entry Point ────────────────────────────────────────────
 
 export interface SynthesisResult {
-  personas:     any[];
-  opportunities: any[];
+  personas:          any[];
+  opportunities:     any[];
   narrative: {
     marketPositionNarrative: string;
     visibilityGap:           string;
@@ -181,7 +261,8 @@ export interface SynthesisResult {
     competitiveReality:      string;
     strategicCall:           string;
   };
-  pptPrompt:    string;
+  pptPrompt:         string;
+  categoryBreakdown: CategoryBreakdownResult;
   heroMetrics: {
     marketCaptureRate:   number;
     totalCategoryVolume: number;
@@ -203,12 +284,16 @@ export async function runFullSynthesis(
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}`);
 
-  // Passes 1 & 2 run in parallel
-  const [personas, opportunities] = await Promise.all([
+  // Passes 1, 2, 2.5 run in parallel
+  const [personas, opportunities, categoryBreakdown] = await Promise.all([
     generatePersonas(domain, industry, semrush, serp),
     generateOpportunities(domain, industry, semrush, serp, profound),
+    generateCategoryBreakdown(domain, industry, semrush).catch(err => {
+      console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
+      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, page1CaptureRate: 0 } as CategoryBreakdownResult;
+    }),
   ]);
-  console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}`);
+  console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}, Categories: ${categoryBreakdown.categories.length}`);
 
   // Passes 3 & 4 run in parallel — PPT prompt uses placeholder narrative snippets
   // until narrative is available; the deck is built from opportunities + raw data.
@@ -227,23 +312,29 @@ export async function runFullSynthesis(
   ]);
   console.log(`[OrbitIQ] Narrative + PPT prompt generated in parallel`);
 
-  // Compute hero metrics for fast UI rendering
-  const totalCategoryVolume = semrush.competitors.reduce(
-    (sum, c) => sum + c.organicTraffic, semrush.overview.organicTraffic
-  );
-  const marketCaptureRate = totalCategoryVolume > 0
-    ? semrush.overview.organicTraffic / totalCategoryVolume
-    : 0;
+  // Compute hero metrics — prefer new demand-based metrics where available
+  const totalCategoryVolume = categoryBreakdown.totalMonthlyDemand > 0
+    ? categoryBreakdown.totalMonthlyDemand
+    : semrush.competitors.reduce((sum, c) => sum + c.organicTraffic, semrush.overview.organicTraffic);
+
+  const clientOwnedVolume = categoryBreakdown.totalPage1Demand > 0
+    ? categoryBreakdown.totalPage1Demand
+    : semrush.overview.organicTraffic;
+
+  const marketCaptureRate = categoryBreakdown.page1CaptureRate > 0
+    ? categoryBreakdown.page1CaptureRate
+    : (totalCategoryVolume > 0 ? semrush.overview.organicTraffic / totalCategoryVolume : 0);
 
   return {
     personas,
     opportunities,
     narrative,
     pptPrompt,
+    categoryBreakdown,
     heroMetrics: {
       marketCaptureRate,
       totalCategoryVolume,
-      clientOwnedVolume:   semrush.overview.organicTraffic,
+      clientOwnedVolume,
       keywordFootprint:    semrush.overview.organicKeywords,
       aioAvailable:        serp.aioSummary.withAIO,
       aioAcquired:         serp.aioSummary.clientCited,
