@@ -93,6 +93,16 @@ export default function ProjectBriefPage() {
   // Poll for analysis completion
   useEffect(() => {
     if (!pollingId) return;
+
+    // Hard 6-minute wall clock — catches silent Lambda deaths where the DB
+    // never transitions from "running" to "completed" or "failed".
+    const timeout = setTimeout(() => {
+      setPollingId(null);
+      setAnalysisError(
+        'Analysis timed out after 6 minutes. This usually means Vercel ended the function early. Try running again — if it keeps failing, check your Vercel function logs.'
+      );
+    }, 6 * 60 * 1000);
+
     const interval = setInterval(async () => {
       const res  = await fetch(`/api/analyze?id=${pollingId}`);
       const data = await res.json();
@@ -101,6 +111,7 @@ export default function ProjectBriefPage() {
       if (data.triggeredAt) setPolledTriggeredAt(data.triggeredAt);
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(interval);
+        clearTimeout(timeout);
         setPollingId(null);
         if (data.status === 'failed') {
           setAnalysisError(data.errorMessage ?? 'Analysis failed. Check that your API keys are correct in Vercel environment variables.');
@@ -108,7 +119,11 @@ export default function ProjectBriefPage() {
         fetchProject();
       }
     }, 3000);
-    return () => clearInterval(interval);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, [pollingId, fetchProject]);
 
   async function triggerAnalysis() {

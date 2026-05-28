@@ -131,7 +131,7 @@ export async function generateNarrative(
   );
 
   const response = await getClient().messages.create({
-    model:      MODELS.deep,
+    model:      MODELS.default,  // sonnet — fast enough, opus was causing Vercel timeouts
     max_tokens: 4000,
     messages:   [{ role: 'user', content: prompt }],
   });
