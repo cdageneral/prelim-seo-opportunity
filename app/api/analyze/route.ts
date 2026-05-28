@@ -145,7 +145,7 @@ async function runAnalysis(
     }
   }
 
-  const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
+  const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
   const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
     console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
     return {
