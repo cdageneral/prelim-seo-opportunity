@@ -131,7 +131,7 @@ async function runAnalysis(
 
   // Merge manual competitors into Semrush snapshot so gap analysis uses them
   if (manualCompetitors.length > 0) {
-    const existing = new Set(semrush.competitors.map(c => c.domain));
+    const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
     for (const mc of manualCompetitors) {
       if (!existing.has(mc.domain)) {
         semrush.competitors.unshift({
