@@ -3,9 +3,9 @@
  *
  * Four-pass pipeline:
  *  Pass 1 — Personas       (haiku  — fast classification)
- *  Pass 2 — Opportunities  (sonnet — analytical scoring)
+ *  Pass 2 — Opportunities  (haiku  — fast structured scoring)
  *  Pass 3 — Narrative      (sonnet — CMO-level storytelling)
- *  Pass 4 — PPT Prompt     (sonnet — structured prompt generation)
+ *  Pass 4 — PPT Prompt     (haiku  — fast structured generation)
  *
  * Passes 1 & 2 run in parallel.
  * Passes 3 & 4 run in parallel — PPT prompt uses null for narrative
@@ -96,7 +96,7 @@ export async function generateOpportunities(
   const prompt = opportunityPrompt(domain, industry, semrush, serp, profound);
 
   const response = await getClient().messages.create({
-    model:      MODELS.default,
+    model:      MODELS.fast,   // haiku — fast structured JSON scoring; sonnet was causing timeouts
     max_tokens: 2000,
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 100_000 });
@@ -158,7 +158,7 @@ export async function generatePPTPrompt(
   );
 
   const response = await getClient().messages.create({
-    model:      MODELS.default,
+    model:      MODELS.fast,   // haiku — fast enough for structured prompt generation
     max_tokens: 2000,
     messages:   [{
       role: 'user',
