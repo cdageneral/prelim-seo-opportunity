@@ -53,6 +53,7 @@ export default function ProjectBriefPage() {
   const [pollingId, setPollingId]   = useState<string | null>(null);
   const [renaming, setRenaming]     = useState(false);
   const [newName, setNewName]       = useState('');
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const analysis = project?.analyses?.[0] ?? null;
   const isRunning  = analysis?.status === 'running' || pollingId !== null;
@@ -78,6 +79,9 @@ export default function ProjectBriefPage() {
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(interval);
         setPollingId(null);
+        if (data.status === 'failed') {
+          setAnalysisError(data.errorMessage ?? 'Analysis failed. Check that your API keys are correct in Vercel environment variables.');
+        }
         fetchProject();
       }
     }, 3000);
@@ -221,6 +225,24 @@ export default function ProjectBriefPage() {
             competitors={project.competitors ?? []}
             onChange={fetchProject}
           />
+
+          {/* Error banner */}
+          {analysisError && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-red-400 text-sm font-medium">Analysis failed</p>
+                <p className="text-red-300/80 text-xs mt-0.5">{analysisError}</p>
+              </div>
+              <button onClick={() => setAnalysisError(null)} className="text-red-400/60 hover:text-red-400 transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
 
           {/* No analysis yet */}
           {!isRunning && !hasResults && (
