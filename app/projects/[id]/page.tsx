@@ -51,6 +51,7 @@ export default function ProjectBriefPage() {
   const [loading, setLoading]       = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [pollingId, setPollingId]   = useState<string | null>(null);
+  const [polledTriggeredAt, setPolledTriggeredAt] = useState<string | undefined>(undefined);
   const [renaming, setRenaming]     = useState(false);
   const [newName, setNewName]       = useState('');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -58,6 +59,25 @@ export default function ProjectBriefPage() {
   const analysis = project?.analyses?.[0] ?? null;
   const isRunning  = analysis?.status === 'running' || pollingId !== null;
   const hasResults = analysis?.status === 'completed';
+
+  // Timeout: if an analysis has been "running" for >6 minutes without resolving,
+  // something went wrong on the server (Lambda timeout, etc). Show an error.
+  const ANALYSIS_TIMEOUT_MS = 6 * 60 * 1000;
+  useEffect(() => {
+    if (!isRunning) return;
+    const startMs = polledTriggeredAt
+      ? new Date(polledTriggeredAt).getTime()
+      : analysis?.triggeredAt
+        ? new Date(analysis.triggeredAt).getTime()
+        : Date.now();
+    const elapsed = Date.now() - startMs;
+    if (elapsed > ANALYSIS_TIMEOUT_MS) {
+      setPollingId(null);
+      setAnalysisError(
+        'Analysis timed out after 6 minutes. This usually means Vercel ended the function early. Try running again — if it keeps failing, check your Vercel function logs.'
+      );
+    }
+  }, [isRunning, polledTriggeredAt, analysis?.triggeredAt, ANALYSIS_TIMEOUT_MS]);
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -76,6 +96,9 @@ export default function ProjectBriefPage() {
     const interval = setInterval(async () => {
       const res  = await fetch(`/api/analyze?id=${pollingId}`);
       const data = await res.json();
+      // Capture the real triggeredAt from each poll so the timeout clock
+      // anchors to THIS run, not a stale previous analysis in project data.
+      if (data.triggeredAt) setPolledTriggeredAt(data.triggeredAt);
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(interval);
         setPollingId(null);
@@ -260,7 +283,7 @@ export default function ProjectBriefPage() {
           {isRunning && (
             <AnalysisRunningState
               clientName={project.clientName}
-              triggeredAt={analysis?.triggeredAt ?? undefined}
+              triggeredAt={polledTriggeredAt ?? analysis?.triggeredAt ?? undefined}
               hasError={!!analysisError}
             />
           )}
