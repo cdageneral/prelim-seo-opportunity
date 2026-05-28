@@ -77,7 +77,7 @@ export async function generatePersonas(
 
   const response = await getClient().messages.create({
     model:      MODELS.fast,
-    max_tokens: 2000,
+    max_tokens: 800,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -98,7 +98,7 @@ export async function generateOpportunities(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,
-    max_tokens: 3000,
+    max_tokens: 1200,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -132,7 +132,7 @@ export async function generateNarrative(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,  // sonnet — fast enough, opus was causing Vercel timeouts
-    max_tokens: 4000,
+    max_tokens: 1500,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -146,7 +146,7 @@ export async function generatePPTPrompt(
   clientName: string,
   domain: string,
   industry: string,
-  narrative: any,
+  narrative: any | null,
   opportunities: any[],
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
@@ -160,7 +160,7 @@ export async function generatePPTPrompt(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,
-    max_tokens: 4000,
+    max_tokens: 1500,
     messages:   [{
       role: 'user',
       content: `${systemPrompt}\n\nGenerate the complete PPTX skill prompt now. Make it detailed and ready to paste directly into the Claude PPTX skill. Return only the prompt text, no preamble.`,
@@ -211,21 +211,22 @@ export async function runFullSynthesis(
   ]);
   console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}`);
 
-  // Pass 3 depends on 1 & 2
-  const narrative = await generateNarrative(
-    domain, clientName, industry,
-    semrush, serp, profound,
-    personas, opportunities
-  );
-  console.log(`[OrbitIQ] Narrative generated`);
-
-  // Pass 4 depends on 3
-  const pptPrompt = await generatePPTPrompt(
-    clientName, domain, industry,
-    narrative, opportunities,
-    semrush, serp, profound
-  );
-  console.log(`[OrbitIQ] PPT prompt generated`);
+  // Passes 3 & 4 run in parallel — PPT prompt uses placeholder narrative snippets
+  // until narrative is available; the deck is built from opportunities + raw data.
+  const [narrative, pptPrompt] = await Promise.all([
+    generateNarrative(
+      domain, clientName, industry,
+      semrush, serp, profound,
+      personas, opportunities
+    ),
+    generatePPTPrompt(
+      clientName, domain, industry,
+      null,          // narrative not yet available — prompts.ts handles null gracefully
+      opportunities,
+      semrush, serp, profound
+    ),
+  ]);
+  console.log(`[OrbitIQ] Narrative + PPT prompt generated in parallel`);
 
   // Compute hero metrics for fast UI rendering
   const totalCategoryVolume = semrush.competitors.reduce(

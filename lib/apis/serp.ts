@@ -166,7 +166,7 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
 export async function batchKeywordScan(
   keywords: string[],
   clientDomain: string,
-  limit = 20
+  limit = 10
 ): Promise<KeywordSerpData[]> {
   const batch = keywords.slice(0, limit);
   const results: KeywordSerpData[] = [];
