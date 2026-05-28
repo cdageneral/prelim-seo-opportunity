@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z }      from 'zod';
 import { db }     from '@/db';
 import { analyses, reports } from '@/db/schema';
-import { eq }     from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { generatePPTPrompt } from '@/lib/claude/synthesize';
 
 const Schema = z.object({ analysisId: z.string().uuid() });
@@ -19,8 +19,12 @@ export async function POST(req: NextRequest) {
 
   const { analysisId } = parsed.data;
 
-  const existing = await db.query.reports.findFirst({ where: eq(reports.analysisId, analysisId) });
-  if (existing?.type === 'PPT_PROMPT' && existing.promptText) {
+  // Query specifically for PPT_PROMPT type — a PDF report for the same analysis
+  // would otherwise prevent the cache from ever hitting.
+  const existing = await db.query.reports.findFirst({
+    where: and(eq(reports.analysisId, analysisId), eq(reports.type, 'PPT_PROMPT')),
+  });
+  if (existing?.promptText) {
     return NextResponse.json({ promptText: existing.promptText, cached: true });
   }
 

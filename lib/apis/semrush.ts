@@ -155,23 +155,24 @@ export async function getKeywordGap(
   clientDomain: string,
   competitorDomain: string
 ): Promise<SemrushKeywordGap[]> {
-  // Semrush Gap Analysis — keywords competitor ranks for but client doesn't (or ranks lower)
+  // Fetch competitor's top organic keywords — these are the gap opportunities.
+  // (phrase_kdi is keyword difficulty, not gap analysis. The correct approach
+  //  is to pull the competitor's top-traffic keywords and let Claude cross-reference.)
   const raw = await semrushGet({
-    type:        'phrase_kdi',
-    domain:      clientDomain,
-    domains:     competitorDomain,
-    database:    'us',
-    display_limit: '100',
-    display_filter: '+|Po|Lt|11',  // Only where client is not in top 10
-    export_columns: 'Ph,Nq,Po,Cp,Nr',
+    type:           'domain_organic',
+    domain:         competitorDomain,
+    database:       'us',
+    display_limit:  '100',
+    display_sort:   'tr_desc',
+    export_columns: 'Ph,Po,Nq,Cp',
   });
 
   return parseSemrushCSV(raw).map(row => ({
     keyword:            row['Keyword'] ?? '',
     searchVolume:       parseInt(row['Search Volume'] ?? '0'),
-    clientPosition:     row['Position'] ? parseInt(row['Position']) : null,
+    clientPosition:     null,   // Unknown without a second API call; Claude uses this as "gap"
     competitor:         competitorDomain,
-    competitorPosition: parseInt(row['Competitor Position'] ?? '0'),
+    competitorPosition: parseInt(row['Position'] ?? '0'),
     cpc:                parseFloat(row['CPC'] ?? '0'),
   }));
 }

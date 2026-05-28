@@ -140,8 +140,8 @@ export function narrativePrompt(
   personas: any[],
   opportunities: any[]
 ): string {
-  const captureRate     = semrush.overview.organicTraffic / Math.max(1, semrush.overview.organicKeywords * 100);
   const totalCategory   = semrush.competitors.reduce((s, c) => s + c.organicTraffic, semrush.overview.organicTraffic);
+  const captureRate     = totalCategory > 0 ? semrush.overview.organicTraffic / totalCategory : 0;
   const topComp         = semrush.competitors[0]?.domain ?? 'the market leader';
   const aioRate         = Math.round(serp.aioSummary.aioRate * 100);
   const clientAIORate   = Math.round(serp.aioSummary.clientAIORate * 100);

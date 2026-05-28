@@ -43,6 +43,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const domain = normalizeDomain(parsed.data.domain);
 
+  // Prevent duplicate competitors on the same project
+  const existing = await db.select().from(competitors)
+    .where(and(eq(competitors.projectId, params.id), eq(competitors.domain, domain)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return NextResponse.json({ error: 'This competitor is already tracked for this project.' }, { status: 409 });
+  }
+
   const [competitor] = await db.insert(competitors).values({
     projectId: params.id,
     domain,

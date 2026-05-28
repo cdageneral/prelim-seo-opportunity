@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { z }       from 'zod';
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
@@ -12,6 +13,8 @@ import { getSemrushSnapshot } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot } from '@/lib/apis/serp';
 import { getProfoundSnapshot } from '@/lib/apis/profound';
 import { runFullSynthesis } from '@/lib/claude/synthesize';
+
+export const maxDuration = 300; // Vercel Pro: up to 300s for long-running analysis
 
 const AnalyzeSchema = z.object({ projectId: z.string().uuid() });
 
@@ -53,14 +56,17 @@ export async function POST(req: NextRequest) {
     triggeredAt: new Date(),
   }).returning();
 
-  // Run async — client polls status
-  runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
-    .catch(async (err) => {
-      console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
-      await db.update(analyses)
-        .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
-        .where(eq(analyses.id, analysis.id));
-    });
+  // waitUntil keeps the Vercel Lambda alive after the response is sent
+  // so the long-running analysis (SerpAPI + Claude) can complete.
+  waitUntil(
+    runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
+      .catch(async (err) => {
+        console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
+        await db.update(analyses)
+          .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
+          .where(eq(analyses.id, analysis.id));
+      })
+  );
 
   return NextResponse.json({ analysisId: analysis.id, status: 'running' });
 }
