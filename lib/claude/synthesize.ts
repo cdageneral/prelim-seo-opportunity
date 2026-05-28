@@ -78,7 +78,7 @@ export async function generatePersonas(
     model:      MODELS.fast,
     max_tokens: 1500,
     messages:   [{ role: 'user', content: prompt }],
-  });
+  }, { timeout: 100_000 });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
   return extractJSON<any[]>(text);
@@ -99,7 +99,7 @@ export async function generateOpportunities(
     model:      MODELS.default,
     max_tokens: 2000,
     messages:   [{ role: 'user', content: prompt }],
-  });
+  }, { timeout: 100_000 });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
   return extractJSON<any[]>(text);
@@ -133,7 +133,7 @@ export async function generateNarrative(
     model:      MODELS.default,  // sonnet — fast enough, opus was causing Vercel timeouts
     max_tokens: 2500,
     messages:   [{ role: 'user', content: prompt }],
-  });
+  }, { timeout: 100_000 });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
   return extractJSON(text);
@@ -164,7 +164,7 @@ export async function generatePPTPrompt(
       role: 'user',
       content: `${systemPrompt}\n\nGenerate the complete PPTX skill prompt now. Make it detailed and ready to paste directly into the Claude PPTX skill. Return only the prompt text, no preamble.`,
     }],
-  });
+  }, { timeout: 100_000 });
 
   return response.content[0].type === 'text' ? response.content[0].text : '';
 }

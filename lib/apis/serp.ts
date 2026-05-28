@@ -71,7 +71,11 @@ async function fetchSerpData(keyword: string): Promise<any> {
     output:   'json',
   });
 
-  const res = await fetch(`${SERP_BASE}?${params.toString()}`);
+  // 15-second hard timeout per keyword — prevents one slow SERP call from
+  // blocking the entire pipeline and pushing total time over Vercel's 5-min limit.
+  const res = await fetch(`${SERP_BASE}?${params.toString()}`, {
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!res.ok) {
     throw new Error(`SerpAPI error ${res.status}: ${await res.text()}`);
   }
