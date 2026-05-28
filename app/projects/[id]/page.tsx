@@ -55,29 +55,34 @@ export default function ProjectBriefPage() {
   const [renaming, setRenaming]     = useState(false);
   const [newName, setNewName]       = useState('');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  // Track which analysis ID we've already declared timed-out so dismissing
+  // the error banner doesn't immediately re-trigger the timeout check.
+  const [timedOutId, setTimedOutId] = useState<string | null>(null);
 
   const analysis = project?.analyses?.[0] ?? null;
-  const isRunning  = !analysisError && (analysis?.status === 'running' || pollingId !== null);
+  const isRunning  = (analysis?.status === 'running' || pollingId !== null)
+                     && analysis?.id !== timedOutId;
   const hasResults = analysis?.status === 'completed';
 
-  // Timeout: if an analysis has been "running" for >6 minutes without resolving,
-  // something went wrong on the server (Lambda timeout, etc). Show an error.
+  // Page-load timeout: if the DB still shows an analysis as "running" but it
+  // started >6 minutes ago, the Lambda died silently. Mark it timed-out once
+  // so dismissing the error banner doesn't loop.
   const ANALYSIS_TIMEOUT_MS = 6 * 60 * 1000;
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isRunning || pollingId) return; // only for page-load stale analyses
     const startMs = polledTriggeredAt
       ? new Date(polledTriggeredAt).getTime()
       : analysis?.triggeredAt
         ? new Date(analysis.triggeredAt).getTime()
         : Date.now();
     const elapsed = Date.now() - startMs;
-    if (elapsed > ANALYSIS_TIMEOUT_MS) {
-      setPollingId(null);
+    if (elapsed > ANALYSIS_TIMEOUT_MS && analysis?.id) {
+      setTimedOutId(analysis.id);
       setAnalysisError(
         'Analysis timed out after 6 minutes. This usually means Vercel ended the function early. Try running again — if it keeps failing, check your Vercel function logs.'
       );
     }
-  }, [isRunning, polledTriggeredAt, analysis?.triggeredAt, ANALYSIS_TIMEOUT_MS]);
+  }, [isRunning, pollingId, polledTriggeredAt, analysis?.triggeredAt, analysis?.id, ANALYSIS_TIMEOUT_MS]);
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -128,6 +133,9 @@ export default function ProjectBriefPage() {
 
   async function triggerAnalysis() {
     setTriggering(true);
+    setAnalysisError(null);
+    setTimedOutId(null);
+    setPolledTriggeredAt(undefined);
     try {
       const res  = await fetch('/api/analyze', {
         method:  'POST',
