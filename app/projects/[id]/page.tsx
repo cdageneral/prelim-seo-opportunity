@@ -257,7 +257,13 @@ export default function ProjectBriefPage() {
           )}
 
           {/* Running */}
-          {isRunning && <AnalysisRunningState clientName={project.clientName} />}
+          {isRunning && (
+            <AnalysisRunningState
+              clientName={project.clientName}
+              triggeredAt={analysis?.triggeredAt ?? undefined}
+              hasError={!!analysisError}
+            />
+          )}
 
           {/* Brief */}
           {hasResults && analysis && (
