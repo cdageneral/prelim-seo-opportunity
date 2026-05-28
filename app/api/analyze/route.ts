@@ -1,20 +1,9 @@
 /**
- * POST /api/analyze
- *
- * Main analysis orchestration:
- *  1. Validate input
- *  2. Create analysis record (pending)
- *  3. Fire parallel API calls (Semrush + SerpAPI + Profound)
- *  4. Store raw snapshots in Neon
- *  5. Run Claude synthesis pipeline
- *  6. Store personas, opportunities, and narrative
- *  7. Mark analysis complete
- *
- * Returns: { analysisId, status, heroMetrics }
+ * POST /api/analyze  — trigger analysis
+ * GET  /api/analyze  — poll status
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { auth }    from '@clerk/nextjs/server';
 import { z }       from 'zod';
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
@@ -24,13 +13,7 @@ import { getSerpApiSnapshot } from '@/lib/apis/serp';
 import { getProfoundSnapshot } from '@/lib/apis/profound';
 import { runFullSynthesis } from '@/lib/claude/synthesize';
 
-// ─── Input Validation ─────────────────────────────────────────────────────────
-
-const AnalyzeSchema = z.object({
-  projectId: z.string().uuid(),
-});
-
-// ─── Domain Normalization ─────────────────────────────────────────────────────
+const AnalyzeSchema = z.object({ projectId: z.string().uuid() });
 
 function normalizeDomain(url: string): string {
   try {
@@ -41,21 +24,10 @@ function normalizeDomain(url: string): string {
   }
 }
 
-// ─── Route Handler ────────────────────────────────────────────────────────────
-
 export async function POST(req: NextRequest) {
-  // Auth check
-  const { userId, orgId } = auth();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  // Parse and validate request body
   let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  try { body = await req.json(); } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
   const parsed = AnalyzeSchema.safeParse(body);
@@ -65,33 +37,24 @@ export async function POST(req: NextRequest) {
 
   const { projectId } = parsed.data;
 
-  // Load project
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
+    with: { competitors: true },
   });
 
-  if (!project) {
-    return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-  }
-
-  // Org-scoped access check
-  if (orgId && project.clerkOrgId !== orgId) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-  }
+  if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
   const domain   = normalizeDomain(project.websiteUrl);
   const industry = project.industry ?? 'General';
 
-  // Create analysis record (pending)
   const [analysis] = await db.insert(analyses).values({
     projectId,
-    status: 'running',
+    status:     'running',
     triggeredAt: new Date(),
   }).returning();
 
-  // Run analysis in background, respond immediately with analysisId
-  // The client polls GET /api/analyze/[id]/status
-  runAnalysis(analysis.id, domain, project.clientName, industry)
+  // Run async — client polls status
+  runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
     .catch(async (err) => {
       console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
       await db.update(analyses)
@@ -99,34 +62,70 @@ export async function POST(req: NextRequest) {
         .where(eq(analyses.id, analysis.id));
     });
 
-  return NextResponse.json({
-    analysisId: analysis.id,
-    status: 'running',
-    message: 'Analysis started. Poll /api/analyze/status?id=' + analysis.id,
-  });
+  return NextResponse.json({ analysisId: analysis.id, status: 'running' });
 }
 
-// ─── Analysis Runner ──────────────────────────────────────────────────────────
+export async function GET(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get('id');
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+
+  const analysis = await db.query.analyses.findFirst({
+    where: eq(analyses.id, id),
+  });
+
+  if (!analysis) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  return NextResponse.json({
+    analysisId:   analysis.id,
+    status:       analysis.status,
+    triggeredAt:  analysis.triggeredAt,
+    completedAt:  analysis.completedAt,
+    errorMessage: analysis.errorMessage,
+    heroMetrics: analysis.status === 'completed' ? {
+      marketCaptureRate:   analysis.marketCaptureRate,
+      totalCategoryVolume: analysis.totalCategoryVolume,
+      clientOwnedVolume:   analysis.clientOwnedVolume,
+      keywordFootprint:    analysis.keywordFootprint,
+      aioAvailable:        analysis.aioAvailable,
+      aioAcquired:         analysis.aioAcquired,
+      topCompetitor:       analysis.topCompetitor,
+    } : null,
+  });
+}
 
 async function runAnalysis(
   analysisId: string,
   domain: string,
   clientName: string,
-  industry: string
+  industry: string,
+  manualCompetitors: Array<{ domain: string }>
 ) {
   console.log(`[OrbitIQ] Analysis ${analysisId}: fetching APIs for ${domain}`);
 
-  // ── Step 1: Parallel API calls ─────────────────────────────────────────────
   const [semrush, profound] = await Promise.all([
     getSemrushSnapshot(domain),
     getProfoundSnapshot(domain),
   ]);
 
-  // SerpAPI uses Semrush keywords — sequential dependency
+  // Merge manual competitors into Semrush snapshot so gap analysis uses them
+  if (manualCompetitors.length > 0) {
+    const existing = new Set(semrush.competitors.map(c => c.domain));
+    for (const mc of manualCompetitors) {
+      if (!existing.has(mc.domain)) {
+        semrush.competitors.unshift({
+          domain:          mc.domain,
+          commonKeywords:  0,
+          organicKeywords: 0,
+          organicTraffic:  0,
+          relevance:       1,
+        });
+      }
+    }
+  }
+
   const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
   const serp = await getSerpApiSnapshot(domain, topKeywords);
 
-  // ── Step 2: Store raw snapshots ────────────────────────────────────────────
   await db.update(analyses)
     .set({
       semrushSnapshot:  semrush as any,
@@ -135,15 +134,8 @@ async function runAnalysis(
     })
     .where(eq(analyses.id, analysisId));
 
-  console.log(`[OrbitIQ] Analysis ${analysisId}: snapshots stored, starting synthesis`);
+  const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound);
 
-  // ── Step 3: Claude synthesis ───────────────────────────────────────────────
-  const synthesis = await runFullSynthesis(
-    domain, clientName, industry,
-    semrush, serp, profound
-  );
-
-  // ── Step 4: Store personas ─────────────────────────────────────────────────
   if (synthesis.personas.length > 0) {
     await db.insert(personas).values(
       synthesis.personas.map((p: any) => ({
@@ -159,25 +151,23 @@ async function runAnalysis(
     );
   }
 
-  // ── Step 5: Store opportunities ────────────────────────────────────────────
   if (synthesis.opportunities.length > 0) {
     await db.insert(opportunities).values(
       synthesis.opportunities.map((o: any) => ({
         analysisId,
-        category:         o.category,
-        title:            o.title,
-        summary:          o.summary,
-        impactScore:      o.impactScore,
-        effortScore:      o.effortScore,
-        estimatedVisits:  o.estimatedVisits,
-        estimatedLeads:   o.estimatedLeads,
-        evidence:         o.evidence,
-        rank:             o.rank,
+        category:        o.category,
+        title:           o.title,
+        summary:         o.summary,
+        impactScore:     o.impactScore,
+        effortScore:     o.effortScore,
+        estimatedVisits: o.estimatedVisits,
+        estimatedLeads:  o.estimatedLeads,
+        evidence:        o.evidence,
+        rank:            o.rank,
       }))
     );
   }
 
-  // ── Step 6: Update analysis with hero metrics + narrative ─────────────────
   const hm = synthesis.heroMetrics;
   await db.update(analyses)
     .set({
@@ -190,7 +180,6 @@ async function runAnalysis(
       aioAvailable:        hm.aioAvailable,
       aioAcquired:         hm.aioAcquired,
       topCompetitor:       hm.topCompetitor,
-      // Store narrative in JSON snapshot extension
       semrushSnapshot: {
         ...(semrush as any),
         _narrative: synthesis.narrative,
@@ -200,44 +189,4 @@ async function runAnalysis(
     .where(eq(analyses.id, analysisId));
 
   console.log(`[OrbitIQ] Analysis ${analysisId}: complete`);
-}
-
-// ─── GET: Status Check ────────────────────────────────────────────────────────
-
-export async function GET(req: NextRequest) {
-  const { userId } = auth();
-  if (!userId) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const id = req.nextUrl.searchParams.get('id');
-  if (!id) {
-    return NextResponse.json({ error: 'Missing id parameter' }, { status: 400 });
-  }
-
-  const analysis = await db.query.analyses.findFirst({
-    where: eq(analyses.id, id),
-    with: { project: true },
-  });
-
-  if (!analysis) {
-    return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
-  }
-
-  return NextResponse.json({
-    analysisId:     analysis.id,
-    status:         analysis.status,
-    triggeredAt:    analysis.triggeredAt,
-    completedAt:    analysis.completedAt,
-    errorMessage:   analysis.errorMessage,
-    heroMetrics: analysis.status === 'completed' ? {
-      marketCaptureRate:   analysis.marketCaptureRate,
-      totalCategoryVolume: analysis.totalCategoryVolume,
-      clientOwnedVolume:   analysis.clientOwnedVolume,
-      keywordFootprint:    analysis.keywordFootprint,
-      aioAvailable:        analysis.aioAvailable,
-      aioAcquired:         analysis.aioAcquired,
-      topCompetitor:       analysis.topCompetitor,
-    } : null,
-  });
 }

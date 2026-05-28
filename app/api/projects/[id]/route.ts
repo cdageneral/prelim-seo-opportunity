@@ -1,17 +1,15 @@
 /**
  * /api/projects/[id]
- *
- * GET    — fetch project + latest analysis
- * PATCH  — update project fields
- * DELETE — soft delete (status = archived)
+ * GET    — project + analyses + competitors
+ * PATCH  — update name, url, industry, notes
+ * DELETE — hard delete project
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { auth }   from '@clerk/nextjs/server';
 import { z }      from 'zod';
 import { db }     from '@/db';
-import { projects, analyses } from '@/db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { projects } from '@/db/schema';
+import { eq }     from 'drizzle-orm';
 
 const UpdateSchema = z.object({
   clientName: z.string().min(1).optional(),
@@ -21,9 +19,9 @@ const UpdateSchema = z.object({
   status:     z.enum(['active', 'archived', 'draft']).optional(),
 }).strict();
 
-async function getProject(id: string, orgFilter: string) {
-  return db.query.projects.findFirst({
-    where: and(eq(projects.id, id), eq(projects.clerkOrgId, orgFilter)),
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, params.id),
     with: {
       analyses: {
         orderBy: (a, { desc }) => [desc(a.triggeredAt)],
@@ -33,28 +31,15 @@ async function getProject(id: string, orgFilter: string) {
           personas:      true,
         },
       },
+      competitors: { orderBy: (c, { asc }) => [asc(c.createdAt)] },
     },
   });
-}
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const { userId, orgId } = auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const project = await getProject(params.id, orgId ?? userId);
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   return NextResponse.json({ project });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { userId, orgId } = auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const orgFilter = orgId ?? userId;
-  const existing  = await getProject(params.id, orgFilter);
-  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -70,20 +55,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .where(eq(projects.id, params.id))
     .returning();
 
+  if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({ project: updated });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { userId, orgId } = auth();
-  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const orgFilter = orgId ?? userId;
-  const existing  = await getProject(params.id, orgFilter);
-  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-
-  await db.update(projects)
-    .set({ status: 'archived', updatedAt: new Date() })
-    .where(eq(projects.id, params.id));
-
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  await db.delete(projects).where(eq(projects.id, params.id));
   return NextResponse.json({ success: true });
 }
