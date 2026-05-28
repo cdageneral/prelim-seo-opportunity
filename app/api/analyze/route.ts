@@ -1,19 +1,29 @@
 /**
- * POST /api/analyze  — trigger analysis
- * GET  /api/analyze  — poll status
+ * POST /api/analyze  — Phase 1: trigger data gathering
+ * GET  /api/analyze  — poll analysis status
+ *
+ * Two-phase architecture (v7.0):
+ *   Phase 1 (this file): Semrush + Profound (parallel) → SerpAPI → save snapshots
+ *   Phase 2 (/api/synthesize): read snapshots from DB → 4-pass Claude synthesis → save results
+ *
+ * Why two phases? Each Vercel Lambda has a hard 300s limit. The combined data +
+ * synthesis pipeline was hitting ~320s under API load. Splitting it gives each
+ * phase its own 300s budget; typical times are Phase 1 ~25s, Phase 2 ~50s.
+ *
+ * The GET response includes `dataReady: true` once Phase 1 snapshots are saved.
+ * The client uses this flag to auto-trigger Phase 2 via POST /api/synthesize.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z }       from 'zod';
 import { db }      from '@/db';
-import { analyses, personas, opportunities, projects } from '@/db/schema';
+import { analyses, projects } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 import { getSemrushSnapshot } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot } from '@/lib/apis/serp';
 import { getProfoundSnapshot } from '@/lib/apis/profound';
-import { runFullSynthesis } from '@/lib/claude/synthesize';
 
-export const maxDuration = 300; // Vercel Pro: up to 300s for long-running analysis
+export const maxDuration = 300;
 
 const AnalyzeSchema = z.object({ projectId: z.string().uuid() });
 
@@ -51,19 +61,21 @@ export async function POST(req: NextRequest) {
 
   const [analysis] = await db.insert(analyses).values({
     projectId,
-    status:     'running',
+    status:      'running',
     triggeredAt: new Date(),
   }).returning();
 
-  // Fire-and-forget — with maxDuration=300, Vercel keeps the Lambda alive
-  // long enough for the full pipeline to complete after the response is sent.
-  runAnalysis(analysis.id, domain, project.clientName, industry, (project as any).competitors ?? [])
-    .catch(async (err) => {
-      console.error(`[OrbitIQ] Analysis ${analysis.id} failed:`, err);
-      await db.update(analyses)
-        .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
-        .where(eq(analyses.id, analysis.id));
-    });
+  runPhase1(
+    analysis.id,
+    domain,
+    industry,
+    (project as any).competitors ?? []
+  ).catch(async (err) => {
+    console.error(`[OrbitIQ] Phase 1 failed for ${analysis.id}:`, err);
+    await db.update(analyses)
+      .set({ status: 'failed', errorMessage: String(err?.message ?? err), completedAt: new Date() })
+      .where(eq(analyses.id, analysis.id));
+  });
 
   return NextResponse.json({ analysisId: analysis.id, status: 'running' });
 }
@@ -78,12 +90,20 @@ export async function GET(req: NextRequest) {
 
   if (!analysis) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
+  // dataReady: Phase 1 snapshots are saved but synthesis not yet complete.
+  // Client sees this and auto-POSTs to /api/synthesize.
+  const dataReady =
+    !!analysis.semrushSnapshot &&
+    analysis.marketCaptureRate === null &&
+    analysis.status === 'running';
+
   return NextResponse.json({
     analysisId:   analysis.id,
     status:       analysis.status,
     triggeredAt:  analysis.triggeredAt,
     completedAt:  analysis.completedAt,
     errorMessage: analysis.errorMessage,
+    dataReady,
     heroMetrics: analysis.status === 'completed' ? {
       marketCaptureRate:   analysis.marketCaptureRate,
       totalCategoryVolume: analysis.totalCategoryVolume,
@@ -96,50 +116,47 @@ export async function GET(req: NextRequest) {
   });
 }
 
-async function runAnalysis(
+async function runPhase1(
   analysisId: string,
   domain: string,
-  clientName: string,
   industry: string,
   manualCompetitors: Array<{ domain: string }>
 ) {
-  console.log(`[OrbitIQ] Analysis ${analysisId}: starting for ${domain}`);
+  console.log(`[OrbitIQ] Phase 1 starting for ${analysisId} (${domain})`);
   console.log(`[OrbitIQ] Env check — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, PROFOUND: ${!!process.env.PROFOUND_API_KEY}, ANTHROPIC: ${!!process.env.ANTHROPIC_API_KEY}`);
 
-  // Pre-flight: Anthropic key is required — fail fast with a clear message
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set. Go to Vercel → your project → Settings → Environment Variables and add it.');
+    throw new Error('ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.');
   }
 
-  // Fault-tolerant fetches — a failed API key won't crash the whole analysis
   const [semrush, profound] = await Promise.all([
     getSemrushSnapshot(domain).catch(err => {
       console.error(`[OrbitIQ] Semrush failed:`, err);
       return {
-        domain, overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
-        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {}, fetchedAt: new Date().toISOString(),
+        domain,
+        overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
+        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
+        fetchedAt: new Date().toISOString(),
       } as any;
     }),
     getProfoundSnapshot(domain).catch(err => {
       console.error(`[OrbitIQ] Profound failed (skipping LLM data):`, err);
       return {
-        domain, overallScore: 0, platformScores: [], brandContext: { summary: '', positioning: [], misalignments: [] },
-        competitors: [], topicAuthority: [], visibilityTrend: [], totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
+        domain, overallScore: 0, platformScores: [],
+        brandContext: { summary: '', positioning: [], misalignments: [] },
+        competitors: [], topicAuthority: [], visibilityTrend: [],
+        totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
       } as any;
     }),
   ]);
 
-  // Merge manual competitors into Semrush snapshot so gap analysis uses them
   if (manualCompetitors.length > 0) {
     const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
     for (const mc of manualCompetitors) {
       if (!existing.has(mc.domain)) {
         semrush.competitors.unshift({
-          domain:          mc.domain,
-          commonKeywords:  0,
-          organicKeywords: 0,
-          organicTraffic:  0,
-          relevance:       1,
+          domain: mc.domain, commonKeywords: 0, organicKeywords: 0,
+          organicTraffic: 0, relevance: 1,
         });
       }
     }
@@ -149,11 +166,14 @@ async function runAnalysis(
   const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
     console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
     return {
-      domain, keywords: [], aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
+      domain, keywords: [],
+      aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
       topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
     } as any;
   });
 
+  // Save snapshots — status stays 'running', marketCaptureRate stays null.
+  // The GET endpoint uses these two facts to compute dataReady=true.
   await db.update(analyses)
     .set({
       semrushSnapshot:  semrush as any,
@@ -162,67 +182,5 @@ async function runAnalysis(
     })
     .where(eq(analyses.id, analysisId));
 
-  const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound)
-    .catch(err => {
-      // Surface Anthropic errors clearly instead of "TypeError: fetch failed"
-      const msg = String(err?.message ?? err);
-      if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
-        throw new Error(`Anthropic API key error: ${msg}. Check ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables.`);
-      }
-      throw new Error(`Claude synthesis failed: ${msg}`);
-    });
-
-  if (synthesis.personas.length > 0) {
-    await db.insert(personas).values(
-      synthesis.personas.map((p: any) => ({
-        analysisId,
-        segmentName:         p.segmentName,
-        description:         p.description,
-        intentStage:         p.intentStage,
-        primaryQueries:      p.primaryQueries,
-        painPoints:          p.painPoints,
-        aiDiscoveryBehavior: p.aiDiscoveryBehavior,
-        contentGaps:         p.contentGaps,
-      }))
-    );
-  }
-
-  if (synthesis.opportunities.length > 0) {
-    await db.insert(opportunities).values(
-      synthesis.opportunities.map((o: any) => ({
-        analysisId,
-        category:        o.category,
-        title:           o.title,
-        summary:         o.summary,
-        impactScore:     o.impactScore,
-        effortScore:     o.effortScore,
-        estimatedVisits: o.estimatedVisits,
-        estimatedLeads:  o.estimatedLeads,
-        evidence:        o.evidence,
-        rank:            o.rank,
-      }))
-    );
-  }
-
-  const hm = synthesis.heroMetrics;
-  await db.update(analyses)
-    .set({
-      status:              'completed',
-      completedAt:         new Date(),
-      marketCaptureRate:   hm.marketCaptureRate,
-      totalCategoryVolume: hm.totalCategoryVolume,
-      clientOwnedVolume:   hm.clientOwnedVolume,
-      keywordFootprint:    hm.keywordFootprint,
-      aioAvailable:        hm.aioAvailable,
-      aioAcquired:         hm.aioAcquired,
-      topCompetitor:       hm.topCompetitor,
-      semrushSnapshot: {
-        ...(semrush as any),
-        _narrative: synthesis.narrative,
-        _pptPrompt: synthesis.pptPrompt,
-      } as any,
-    })
-    .where(eq(analyses.id, analysisId));
-
-  console.log(`[OrbitIQ] Analysis ${analysisId}: complete`);
+  console.log(`[OrbitIQ] Phase 1 complete for ${analysisId} — snapshots saved, awaiting Phase 2`);
 }

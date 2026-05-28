@@ -2,40 +2,40 @@
 
 import { useEffect, useState } from 'react';
 
-// ─── Pipeline batch timing estimates (seconds) ────────────────────────────────
+// ─── Two-phase pipeline timing estimates ──────────────────────────────────────
 //
-//  Batch 1 — Data Gathering   (Semrush + Profound in parallel, then 5 SerpAPI
-//             keywords sequentially):  ~15–30s
-//  Batch 2 — Claude Pass 1+2  (Haiku personas + Sonnet opportunities in
-//             parallel):              ~20–40s
-//  Batch 3 — Claude Pass 3+4  (Sonnet narrative + Sonnet PPT prompt in
-//             parallel):              ~30–60s
-//  Batch 4 — Saving Results   (DB write):  ~2–5s
+//  Phase 1 — Data Gathering
+//    Batch 1: Semrush + Profound (parallel) → SerpAPI (5 keywords sequential)
+//    Typical: ~20–30s  |  Worst case: ~80s
 //
-//  Median total: ~75s  |  Worst case: ~150s  |  Cap shown: 240s
+//  Phase 2 — Claude Synthesis (auto-triggered by client when Phase 1 saves)
+//    Batch 2: Pass 1 (haiku personas) + Pass 2 (haiku opportunities) in parallel
+//    Batch 3: Pass 3 (sonnet narrative) + Pass 4 (haiku PPT prompt) in parallel
+//    Batch 4: Save results to database
+//    Typical: ~30–60s  |  Worst case: ~150s
 //
-const TOTAL_DURATION = 180; // seconds — used for % estimate; caps at 98%
+//  Total typical: ~60–90s  |  Cap shown: 180s
+//
+const TOTAL_DURATION = 180; // seconds — caps progress display at 98%
 
-// Each batch: the % threshold at which it is considered "done"
-// and the next batch becomes active.
 const BATCHES = [
   {
-    label:  'Batch 1 — Gathering SEO data',
-    detail: 'Semrush · SerpAPI (5 keywords) · Profound running in parallel',
-    endPct: 25,
+    label:  'Phase 1 — Gathering SEO & AI data',
+    detail: 'Semrush · Profound · SerpAPI (5 keywords) — all running now',
+    endPct: 22,
   },
   {
-    label:  'Batch 2 — AI: Personas & Opportunities',
-    detail: 'Claude building audience personas + scoring growth opportunities',
+    label:  'Phase 2 — AI: Personas & Opportunities',
+    detail: 'Claude building audience personas + scoring growth opportunities in parallel',
     endPct: 55,
   },
   {
-    label:  'Batch 3 — AI: Narrative & Presentation',
-    detail: 'Claude writing CMO narrative + generating deck brief (running in parallel)',
-    endPct: 90,
+    label:  'Phase 2 — AI: Narrative & Presentation',
+    detail: 'Claude writing CMO narrative + generating deck brief in parallel',
+    endPct: 88,
   },
   {
-    label:  'Batch 4 — Saving results',
+    label:  'Saving results',
     detail: 'Writing analysis to database · finalizing brief',
     endPct: 98,
   },
@@ -43,8 +43,8 @@ const BATCHES = [
 
 interface Props {
   clientName:  string;
-  triggeredAt?: string;   // ISO string from the analysis record
-  hasError?:   boolean;   // true → show red dot instead of green
+  triggeredAt?: string;
+  hasError?:   boolean;
 }
 
 export default function AnalysisRunningState({ clientName, triggeredAt, hasError }: Props) {
@@ -58,16 +58,11 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
     return () => clearInterval(id);
   }, [triggeredAt]);
 
-  // Progress percentage — fills to 98%, never 100% until poll confirms done
   const progress = Math.min(98, Math.round((elapsed / TOTAL_DURATION) * 100));
 
-  // Active batch based on progress
-  // When findIndex returns -1 (progress >= all endPct values), stay on the last
-  // batch rather than wrapping back to 0.
   const _batchIdx = BATCHES.findIndex(b => progress < b.endPct);
   const activeBatchIndex = _batchIdx === -1 ? BATCHES.length - 1 : _batchIdx;
 
-  // Time labels
   const remaining      = Math.max(0, TOTAL_DURATION - elapsed);
   const remMin         = Math.floor(remaining / 60);
   const remSec         = remaining % 60;
@@ -104,8 +99,8 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
           Analyzing {clientName}
         </h3>
         <p className="text-orbit-secondary text-sm mt-2 max-w-md">
-          Running 4 pipeline batches — data gathering, then two rounds of parallel
-          Claude AI synthesis. Usually completes in 2–3 minutes.
+          Two-phase pipeline — Phase 1 gathers SEO data, Phase 2 runs Claude AI synthesis.
+          Usually completes in 1–2 minutes.
         </p>
       </div>
 
@@ -138,7 +133,6 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
 
           return (
             <div key={i} className="flex items-start gap-3">
-              {/* Batch indicator */}
               <div className={`mt-0.5 w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-all duration-500 ${
                 isDone
                   ? 'bg-emerald-500/20 border-emerald-500/60'
@@ -157,7 +151,6 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
                 )}
               </div>
 
-              {/* Labels */}
               <div className="flex-1">
                 <p className={`text-sm font-semibold transition-colors ${
                   isDone   ? 'text-emerald-400'
@@ -173,7 +166,6 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
                 </p>
               </div>
 
-              {/* Active spinner badge */}
               {isActive && (
                 <div className="shrink-0 mt-0.5">
                   <div className="w-4 h-4 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />

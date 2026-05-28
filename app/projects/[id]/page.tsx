@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter }  from 'next/navigation';
 import Link from 'next/link';
 import MarketGapSection      from '@/components/brief/MarketGapSection';
@@ -56,10 +56,11 @@ export default function ProjectBriefPage() {
   const [newName, setNewName]       = useState('');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
+  // Ref (not state) to track whether Phase 2 has been triggered for the current
+  // run. Using a ref avoids stale closure issues inside the setInterval callback.
+  const phase2TriggeredRef = useRef(false);
+
   const analysis = project?.analyses?.[0] ?? null;
-  // isRunning is only true when WE triggered a run in this session (pollingId set).
-  // A stale "running" DB record from a previous Lambda timeout is silently ignored
-  // on page entry — no error banner, just "Ready to analyze".
   const isRunning  = pollingId !== null;
   const hasResults = analysis?.status === 'completed';
 
@@ -74,33 +75,59 @@ export default function ProjectBriefPage() {
 
   useEffect(() => { fetchProject(); }, [fetchProject]);
 
-  // Poll for analysis completion
+  // ─── Polling: watches for Phase 1 completion and auto-triggers Phase 2 ───────
   useEffect(() => {
     if (!pollingId) return;
 
-    // Hard 6-minute wall clock — catches silent Lambda deaths where the DB
-    // never transitions from "running" to "completed" or "failed".
+    // 8-minute wall clock — catches silent Lambda deaths where the DB
+    // never transitions away from "running".
     const timeout = setTimeout(() => {
       setPollingId(null);
       setAnalysisError(
-        'Analysis timed out after 6 minutes. This usually means Vercel ended the function early. Try running again — if it keeps failing, check your Vercel function logs.'
+        'Analysis timed out after 8 minutes. Try running again — if it keeps failing, check your Vercel function logs.'
       );
-    }, 6 * 60 * 1000);
+    }, 8 * 60 * 1000);
 
     const interval = setInterval(async () => {
-      const res  = await fetch(`/api/analyze?id=${pollingId}`);
-      const data = await res.json();
-      // Capture the real triggeredAt from each poll so the timeout clock
-      // anchors to THIS run, not a stale previous analysis in project data.
-      if (data.triggeredAt) setPolledTriggeredAt(data.triggeredAt);
-      if (data.status === 'completed' || data.status === 'failed') {
-        clearInterval(interval);
-        clearTimeout(timeout);
-        setPollingId(null);
-        if (data.status === 'failed') {
-          setAnalysisError(data.errorMessage ?? 'Analysis failed. Check that your API keys are correct in Vercel environment variables.');
+      try {
+        const res  = await fetch(`/api/analyze?id=${pollingId}`);
+        const data = await res.json();
+
+        // Anchor the progress timer to the current run's triggeredAt
+        if (data.triggeredAt) setPolledTriggeredAt(data.triggeredAt);
+
+        // ── Phase 1 → Phase 2 handoff ────────────────────────────────────────
+        // When Phase 1 saves its snapshots, dataReady flips to true.
+        // We auto-POST to /api/synthesize exactly once (ref guards duplicates).
+        if (data.dataReady && !phase2TriggeredRef.current) {
+          phase2TriggeredRef.current = true;
+          console.log('[OrbitIQ] Phase 1 complete — triggering Phase 2 (Claude synthesis)');
+          fetch('/api/synthesize', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ analysisId: pollingId }),
+          }).catch(err => {
+            console.error('[OrbitIQ] Phase 2 trigger failed:', err);
+            // Don't surface to user — polling will catch the failed status if it matters
+          });
         }
-        fetchProject();
+
+        // ── Terminal states ───────────────────────────────────────────────────
+        if (data.status === 'completed' || data.status === 'failed') {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          setPollingId(null);
+          if (data.status === 'failed') {
+            setAnalysisError(
+              data.errorMessage ??
+              'Analysis failed. Check that your API keys are correct in Vercel → Settings → Environment Variables.'
+            );
+          }
+          fetchProject();
+        }
+      } catch (err) {
+        // Network error during poll — keep trying until wall-clock timeout fires
+        console.error('[OrbitIQ] Poll error:', err);
       }
     }, 3000);
 
@@ -114,6 +141,7 @@ export default function ProjectBriefPage() {
     setTriggering(true);
     setAnalysisError(null);
     setPolledTriggeredAt(undefined);
+    phase2TriggeredRef.current = false; // reset for new run
     try {
       const res  = await fetch('/api/analyze', {
         method:  'POST',
@@ -179,14 +207,12 @@ export default function ProjectBriefPage() {
             <span className="text-orbit-primary text-sm font-medium">{project.clientName}</span>
           </div>
           <div className="flex items-center gap-2">
-            {/* Rename */}
             <button
               onClick={() => setRenaming(true)}
               className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all"
             >
               Rename
             </button>
-            {/* Refresh / Run */}
             <button
               onClick={triggerAnalysis}
               disabled={triggering || isRunning}
@@ -197,7 +223,6 @@ export default function ProjectBriefPage() {
               </svg>
               {isRunning ? 'Running...' : hasResults ? 'Refresh Analysis' : 'Run Analysis'}
             </button>
-            {/* Delete */}
             <button
               onClick={deleteProject}
               className="text-xs text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/60 px-3 py-1.5 rounded-lg transition-all"
@@ -230,7 +255,6 @@ export default function ProjectBriefPage() {
       )}
 
       <main className="relative max-w-7xl mx-auto px-6 py-10">
-        {/* Client header */}
         <div className="mb-8 flex items-start justify-between">
           <div>
             <h1 className="text-3xl font-bold text-orbit-primary">{project.clientName}</h1>
@@ -250,7 +274,6 @@ export default function ProjectBriefPage() {
         </div>
 
         <div className="flex flex-col gap-6">
-          {/* Competitors panel — always visible */}
           <CompetitorsPanel
             projectId={projectId}
             competitors={project.competitors ?? []}
@@ -275,12 +298,10 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* No analysis yet */}
           {!isRunning && !hasResults && (
             <NoAnalysisState clientName={project.clientName} onRun={triggerAnalysis} loading={triggering} />
           )}
 
-          {/* Running */}
           {isRunning && (
             <AnalysisRunningState
               clientName={project.clientName}
@@ -289,7 +310,6 @@ export default function ProjectBriefPage() {
             />
           )}
 
-          {/* Brief */}
           {hasResults && analysis && (
             <div className="flex flex-col gap-8 animate-fade-in">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
