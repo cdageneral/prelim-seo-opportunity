@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
   try {
     const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound)
       .catch(err => {
-        const msg = String(err?.message ?? err);
+        const msg = String((err as any)?.message ?? err);
         if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
           throw new Error(`Anthropic API key error: ${msg}. Check ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables.`);
         }
@@ -148,10 +148,10 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error(`[OrbitIQ] Phase 2 failed for ${analysisId}:`, err);
     await db.update(analyses)
-      .set({ status: 'failed', errorMessage: String(err?.message ?? err), completedAt: new Date() })
+      .set({ status: 'failed', errorMessage: String((err as any)?.message ?? err), completedAt: new Date() })
       .where(eq(analyses.id, analysisId));
     return NextResponse.json(
-      { error: String(err?.message ?? err) },
+      { error: String((err as any)?.message ?? err) },
       { status: 500 }
     );
   }
