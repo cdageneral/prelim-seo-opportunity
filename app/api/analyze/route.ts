@@ -1,17 +1,22 @@
 /**
- * POST /api/analyze  — Phase 1: trigger data gathering
- * GET  /api/analyze  — poll analysis status
+ * POST /api/analyze  — Phase 1: data gathering (SYNCHRONOUS)
+ * GET  /api/analyze  — poll analysis status (backup / debug)
  *
- * Two-phase architecture (v7.0):
- *   Phase 1 (this file): Semrush + Profound (parallel) → SerpAPI → save snapshots
- *   Phase 2 (/api/synthesize): read snapshots from DB → 4-pass Claude synthesis → save results
+ * v7.2 architecture — no fire-and-forget:
+ *   The POST handler awaits all data API calls before returning.
+ *   This keeps the Vercel Lambda alive for the full duration (the HTTP
+ *   connection is open, so Vercel does not terminate the function early).
  *
- * Why two phases? Each Vercel Lambda has a hard 300s limit. The combined data +
- * synthesis pipeline was hitting ~320s under API load. Splitting it gives each
- * phase its own 300s budget; typical times are Phase 1 ~25s, Phase 2 ~50s.
+ *   Previously, fire-and-forget was used (return response, work continues).
+ *   On Vercel App Router, the Lambda is terminated when the response is sent
+ *   unless waitUntil() is used — so fire-and-forget was silently killing the
+ *   background work every time. This caused the DB to stay in 'running' state
+ *   and the 8-minute client timer to fire.
  *
- * The GET response includes `dataReady: true` once Phase 1 snapshots are saved.
- * The client uses this flag to auto-trigger Phase 2 via POST /api/synthesize.
+ * Client flow:
+ *   1. POST /api/analyze       → awaits (~25–80s) → returns { analysisId }
+ *   2. POST /api/synthesize    → awaits (~30–100s) → returns { status: 'completed' }
+ *   3. fetchProject()          → renders brief
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -36,6 +41,8 @@ function normalizeDomain(url: string): string {
   }
 }
 
+// ─── POST: Phase 1 — synchronous data gathering ───────────────────────────────
+
 export async function POST(req: NextRequest) {
   let body: unknown;
   try { body = await req.json(); } catch {
@@ -56,6 +63,14 @@ export async function POST(req: NextRequest) {
 
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
+  // Pre-flight: fail fast before burning any API credits
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json(
+      { error: 'ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.' },
+      { status: 500 }
+    );
+  }
+
   const domain   = normalizeDomain(project.websiteUrl);
   const industry = project.industry ?? 'General';
 
@@ -65,20 +80,87 @@ export async function POST(req: NextRequest) {
     triggeredAt: new Date(),
   }).returning();
 
-  runPhase1(
-    analysis.id,
-    domain,
-    industry,
-    (project as any).competitors ?? []
-  ).catch(async (err) => {
-    console.error(`[OrbitIQ] Phase 1 failed for ${analysis.id}:`, err);
-    await db.update(analyses)
-      .set({ status: 'failed', errorMessage: String(err?.message ?? err), completedAt: new Date() })
-      .where(eq(analyses.id, analysis.id));
-  });
+  console.log(`[OrbitIQ] Phase 1 starting for ${analysis.id} (${domain})`);
+  console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, PROFOUND: ${!!process.env.PROFOUND_API_KEY}`);
 
-  return NextResponse.json({ analysisId: analysis.id, status: 'running' });
+  try {
+    // ── Data APIs — fault-tolerant, each has AbortSignal timeout ─────────────
+    const [semrush, profound] = await Promise.all([
+      getSemrushSnapshot(domain).catch(err => {
+        console.error(`[OrbitIQ] Semrush failed:`, err);
+        return {
+          domain,
+          overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
+          topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
+          fetchedAt: new Date().toISOString(),
+        } as any;
+      }),
+      getProfoundSnapshot(domain).catch(err => {
+        console.error(`[OrbitIQ] Profound failed (skipping LLM data):`, err);
+        return {
+          domain, overallScore: 0, platformScores: [],
+          brandContext: { summary: '', positioning: [], misalignments: [] },
+          competitors: [], topicAuthority: [], visibilityTrend: [],
+          totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
+        } as any;
+      }),
+    ]);
+
+    // Merge manually-added competitors
+    if ((project as any).competitors?.length > 0) {
+      const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
+      for (const mc of (project as any).competitors) {
+        if (!existing.has(mc.domain)) {
+          semrush.competitors.unshift({
+            domain: mc.domain, commonKeywords: 0, organicKeywords: 0,
+            organicTraffic: 0, relevance: 1,
+          });
+        }
+      }
+    }
+
+    // SerpAPI — 5 keywords, 15s timeout each
+    const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
+    const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
+      console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
+      return {
+        domain, keywords: [],
+        aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
+        topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
+      } as any;
+    });
+
+    // Save snapshots — keep status 'running' so /api/synthesize knows to proceed
+    await db.update(analyses)
+      .set({
+        semrushSnapshot:  semrush as any,
+        serpApiSnapshot:  serp    as any,
+        profoundSnapshot: profound as any,
+      })
+      .where(eq(analyses.id, analysis.id));
+
+    console.log(`[OrbitIQ] Phase 1 complete for ${analysis.id}`);
+
+    // Return analysisId so the client can immediately call /api/synthesize
+    return NextResponse.json({
+      analysisId:  analysis.id,
+      triggeredAt: analysis.triggeredAt,
+      status:      'data_ready',
+    });
+
+  } catch (err) {
+    console.error(`[OrbitIQ] Phase 1 unexpected error for ${analysis.id}:`, err);
+    await db.update(analyses)
+      .set({ status: 'failed', errorMessage: String(err), completedAt: new Date() })
+      .where(eq(analyses.id, analysis.id));
+    return NextResponse.json(
+      { error: `Data gathering failed: ${String(err)}` },
+      { status: 500 }
+    );
+  }
 }
+
+// ─── GET: poll status (backup / debug) ───────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
@@ -90,20 +172,12 @@ export async function GET(req: NextRequest) {
 
   if (!analysis) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  // dataReady: Phase 1 snapshots are saved but synthesis not yet complete.
-  // Client sees this and auto-POSTs to /api/synthesize.
-  const dataReady =
-    !!analysis.semrushSnapshot &&
-    analysis.marketCaptureRate === null &&
-    analysis.status === 'running';
-
   return NextResponse.json({
     analysisId:   analysis.id,
     status:       analysis.status,
     triggeredAt:  analysis.triggeredAt,
     completedAt:  analysis.completedAt,
     errorMessage: analysis.errorMessage,
-    dataReady,
     heroMetrics: analysis.status === 'completed' ? {
       marketCaptureRate:   analysis.marketCaptureRate,
       totalCategoryVolume: analysis.totalCategoryVolume,
@@ -114,73 +188,4 @@ export async function GET(req: NextRequest) {
       topCompetitor:       analysis.topCompetitor,
     } : null,
   });
-}
-
-async function runPhase1(
-  analysisId: string,
-  domain: string,
-  industry: string,
-  manualCompetitors: Array<{ domain: string }>
-) {
-  console.log(`[OrbitIQ] Phase 1 starting for ${analysisId} (${domain})`);
-  console.log(`[OrbitIQ] Env check — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, PROFOUND: ${!!process.env.PROFOUND_API_KEY}, ANTHROPIC: ${!!process.env.ANTHROPIC_API_KEY}`);
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.');
-  }
-
-  const [semrush, profound] = await Promise.all([
-    getSemrushSnapshot(domain).catch(err => {
-      console.error(`[OrbitIQ] Semrush failed:`, err);
-      return {
-        domain,
-        overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
-        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
-        fetchedAt: new Date().toISOString(),
-      } as any;
-    }),
-    getProfoundSnapshot(domain).catch(err => {
-      console.error(`[OrbitIQ] Profound failed (skipping LLM data):`, err);
-      return {
-        domain, overallScore: 0, platformScores: [],
-        brandContext: { summary: '', positioning: [], misalignments: [] },
-        competitors: [], topicAuthority: [], visibilityTrend: [],
-        totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
-      } as any;
-    }),
-  ]);
-
-  if (manualCompetitors.length > 0) {
-    const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
-    for (const mc of manualCompetitors) {
-      if (!existing.has(mc.domain)) {
-        semrush.competitors.unshift({
-          domain: mc.domain, commonKeywords: 0, organicKeywords: 0,
-          organicTraffic: 0, relevance: 1,
-        });
-      }
-    }
-  }
-
-  const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
-  const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
-    console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
-    return {
-      domain, keywords: [],
-      aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
-      topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
-    } as any;
-  });
-
-  // Save snapshots — status stays 'running', marketCaptureRate stays null.
-  // The GET endpoint uses these two facts to compute dataReady=true.
-  await db.update(analyses)
-    .set({
-      semrushSnapshot:  semrush as any,
-      serpApiSnapshot:  serp    as any,
-      profoundSnapshot: profound as any,
-    })
-    .where(eq(analyses.id, analysisId));
-
-  console.log(`[OrbitIQ] Phase 1 complete for ${analysisId} — snapshots saved, awaiting Phase 2`);
 }

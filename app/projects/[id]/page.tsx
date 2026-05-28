@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter }  from 'next/navigation';
 import Link from 'next/link';
 import MarketGapSection      from '@/components/brief/MarketGapSection';
@@ -47,21 +47,18 @@ export default function ProjectBriefPage() {
   const router    = useRouter();
   const projectId = params.id as string;
 
-  const [project, setProject]       = useState<Project | null>(null);
-  const [loading, setLoading]       = useState(true);
+  const [project, setProject]     = useState<Project | null>(null);
+  const [loading, setLoading]     = useState(true);
   const [triggering, setTriggering] = useState(false);
-  const [pollingId, setPollingId]   = useState<string | null>(null);
-  const [polledTriggeredAt, setPolledTriggeredAt] = useState<string | undefined>(undefined);
-  const [renaming, setRenaming]     = useState(false);
-  const [newName, setNewName]       = useState('');
+  const [triggeredAt, setTriggeredAt] = useState<string | undefined>(undefined);
+  const [renaming, setRenaming]   = useState(false);
+  const [newName, setNewName]     = useState('');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  // Ref (not state) to track whether Phase 2 has been triggered for the current
-  // run. Using a ref avoids stale closure issues inside the setInterval callback.
-  const phase2TriggeredRef = useRef(false);
-
-  const analysis = project?.analyses?.[0] ?? null;
-  const isRunning  = pollingId !== null;
+  const analysis   = project?.analyses?.[0] ?? null;
+  // isRunning is true only while this session is actively running an analysis.
+  // A stale 'running' record from a previous session is ignored on page load.
+  const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
 
   const fetchProject = useCallback(async () => {
@@ -75,88 +72,61 @@ export default function ProjectBriefPage() {
 
   useEffect(() => { fetchProject(); }, [fetchProject]);
 
-  // ─── Polling: watches for Phase 1 completion and auto-triggers Phase 2 ───────
-  useEffect(() => {
-    if (!pollingId) return;
-
-    // 8-minute wall clock — catches silent Lambda deaths where the DB
-    // never transitions away from "running".
-    const timeout = setTimeout(() => {
-      setPollingId(null);
-      setAnalysisError(
-        'Analysis timed out after 8 minutes. Try running again — if it keeps failing, check your Vercel function logs.'
-      );
-    }, 8 * 60 * 1000);
-
-    const interval = setInterval(async () => {
-      try {
-        const res  = await fetch(`/api/analyze?id=${pollingId}`);
-        const data = await res.json();
-
-        // Anchor the progress timer to the current run's triggeredAt
-        if (data.triggeredAt) setPolledTriggeredAt(data.triggeredAt);
-
-        // ── Phase 1 → Phase 2 handoff ────────────────────────────────────────
-        // When Phase 1 saves its snapshots, dataReady flips to true.
-        // We auto-POST to /api/synthesize exactly once (ref guards duplicates).
-        if (data.dataReady && !phase2TriggeredRef.current) {
-          phase2TriggeredRef.current = true;
-          console.log('[OrbitIQ] Phase 1 complete — triggering Phase 2 (Claude synthesis)');
-          fetch('/api/synthesize', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ analysisId: pollingId }),
-          }).catch(err => {
-            console.error('[OrbitIQ] Phase 2 trigger failed:', err);
-            // Don't surface to user — polling will catch the failed status if it matters
-          });
-        }
-
-        // ── Terminal states ───────────────────────────────────────────────────
-        if (data.status === 'completed' || data.status === 'failed') {
-          clearInterval(interval);
-          clearTimeout(timeout);
-          setPollingId(null);
-          if (data.status === 'failed') {
-            setAnalysisError(
-              data.errorMessage ??
-              'Analysis failed. Check that your API keys are correct in Vercel → Settings → Environment Variables.'
-            );
-          }
-          fetchProject();
-        }
-      } catch (err) {
-        // Network error during poll — keep trying until wall-clock timeout fires
-        console.error('[OrbitIQ] Poll error:', err);
-      }
-    }, 3000);
-
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
-    };
-  }, [pollingId, fetchProject]);
-
+  // ─── Main analysis trigger ─────────────────────────────────────────────────
+  // v7.2: Synchronous two-phase approach.
+  //   Phase 1 (POST /api/analyze):    data gathering, Lambda stays alive ~25–80s
+  //   Phase 2 (POST /api/synthesize): Claude synthesis, Lambda stays alive ~30–100s
+  //
+  // No fire-and-forget, no polling. The Lambda stays alive because the HTTP
+  // connection is open — Vercel terminates Lambdas when the response is sent,
+  // so keeping the connection open IS the keepalive mechanism.
   async function triggerAnalysis() {
     setTriggering(true);
     setAnalysisError(null);
-    setPolledTriggeredAt(undefined);
-    phase2TriggeredRef.current = false; // reset for new run
+    setTriggeredAt(new Date().toISOString());
+
     try {
-      const res  = await fetch('/api/analyze', {
+      // ── Phase 1: Data gathering ──────────────────────────────────────────
+      console.log('[OrbitIQ] Starting Phase 1 (data gathering)');
+      const res1 = await fetch('/api/analyze', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ projectId }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        setPollingId(data.analysisId);
-        fetchProject();
-      } else {
+      const data1 = await res1.json();
+
+      if (!res1.ok) {
         setAnalysisError(
-          data?.error ?? 'Failed to start analysis. Check that your API keys are set correctly in Vercel → Settings → Environment Variables.'
+          data1?.error ?? 'Data gathering failed. Check your API keys in Vercel → Settings → Environment Variables.'
         );
+        return;
       }
+
+      console.log('[OrbitIQ] Phase 1 complete. Starting Phase 2 (Claude synthesis)');
+
+      // ── Phase 2: Claude synthesis ────────────────────────────────────────
+      const res2 = await fetch('/api/synthesize', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ analysisId: data1.analysisId }),
+      });
+      const data2 = await res2.json();
+
+      if (!res2.ok) {
+        setAnalysisError(
+          data2?.error ?? 'AI synthesis failed. Check your Anthropic API key and try again.'
+        );
+        return;
+      }
+
+      console.log('[OrbitIQ] Phase 2 complete. Refreshing project.');
+      await fetchProject();
+
+    } catch (err) {
+      // Network error (user went offline, tab was backgrounded aggressively, etc.)
+      setAnalysisError(
+        'Analysis failed due to a network error. Please check your connection and try again.'
+      );
     } finally {
       setTriggering(false);
     }
@@ -215,7 +185,7 @@ export default function ProjectBriefPage() {
             </button>
             <button
               onClick={triggerAnalysis}
-              disabled={triggering || isRunning}
+              disabled={isRunning}
               className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -299,13 +269,13 @@ export default function ProjectBriefPage() {
           )}
 
           {!isRunning && !hasResults && (
-            <NoAnalysisState clientName={project.clientName} onRun={triggerAnalysis} loading={triggering} />
+            <NoAnalysisState clientName={project.clientName} onRun={triggerAnalysis} loading={false} />
           )}
 
           {isRunning && (
             <AnalysisRunningState
               clientName={project.clientName}
-              triggeredAt={polledTriggeredAt ?? analysis?.triggeredAt ?? undefined}
+              triggeredAt={triggeredAt}
               hasError={!!analysisError}
             />
           )}
