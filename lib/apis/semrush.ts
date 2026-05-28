@@ -77,7 +77,7 @@ async function semrushGet(params: Record<string, string>): Promise<string> {
   if (!API_KEY) throw new Error('SEMRUSH_API_KEY is not set — skipping Semrush');
   const qs = new URLSearchParams({ ...params, key: API_KEY });
   const url = `${SEMRUSH_BASE}/?${qs.toString()}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     throw new Error(`Semrush API error ${res.status}: ${await res.text()}`);
   }

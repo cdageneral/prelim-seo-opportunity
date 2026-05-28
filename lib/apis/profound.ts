@@ -71,6 +71,7 @@ async function profoundGet<T>(path: string, params?: Record<string, string>): Pr
   }
 
   const res = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(20_000),
     headers: {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type':  'application/json',
