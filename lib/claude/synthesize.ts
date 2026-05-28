@@ -1,16 +1,15 @@
 /**
  * OrbitIQ Claude Synthesis Pipeline
  *
- * Five-pass pipeline:
+ * Four-pass pipeline:
  *  Pass 1 — Personas       (haiku  — fast classification)
  *  Pass 2 — Opportunities  (sonnet — analytical scoring)
- *  Pass 3 — Narrative      (opus   — CMO-level storytelling)
+ *  Pass 3 — Narrative      (sonnet — CMO-level storytelling)
  *  Pass 4 — PPT Prompt     (sonnet — structured prompt generation)
  *
- * Credit strategy:
- *  - Haiku for classification passes (cheap, fast)
- *  - Sonnet for structured analysis
- *  - Opus only for the final narrative (the CMO moment)
+ * Passes 1 & 2 run in parallel.
+ * Passes 3 & 4 run in parallel — PPT prompt uses null for narrative
+ * (prompts.ts handles null gracefully with optional chaining).
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -43,7 +42,7 @@ function getClient(): Anthropic {
 const MODELS = {
   fast:    'claude-haiku-4-5-20251001',   // Classification, persona draft
   default: 'claude-sonnet-4-6',            // Opportunity analysis, structured output
-  deep:    'claude-opus-4-6',              // Final narrative synthesis
+  deep:    'claude-opus-4-6',              // Reserved — not used (Vercel timeout risk)
 } as const;
 
 // ─── JSON Extraction Helper ───────────────────────────────────────────────────
@@ -77,7 +76,7 @@ export async function generatePersonas(
 
   const response = await getClient().messages.create({
     model:      MODELS.fast,
-    max_tokens: 800,
+    max_tokens: 1500,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -98,7 +97,7 @@ export async function generateOpportunities(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,
-    max_tokens: 1200,
+    max_tokens: 2000,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -132,7 +131,7 @@ export async function generateNarrative(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,  // sonnet — fast enough, opus was causing Vercel timeouts
-    max_tokens: 1500,
+    max_tokens: 2500,
     messages:   [{ role: 'user', content: prompt }],
   });
 
@@ -160,7 +159,7 @@ export async function generatePPTPrompt(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,
-    max_tokens: 1500,
+    max_tokens: 2000,
     messages:   [{
       role: 'user',
       content: `${systemPrompt}\n\nGenerate the complete PPTX skill prompt now. Make it detailed and ready to paste directly into the Claude PPTX skill. Return only the prompt text, no preamble.`,
@@ -204,7 +203,7 @@ export async function runFullSynthesis(
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}`);
 
-  // Passes 1 & 2 can run in parallel
+  // Passes 1 & 2 run in parallel
   const [personas, opportunities] = await Promise.all([
     generatePersonas(domain, industry, semrush, serp),
     generateOpportunities(domain, industry, semrush, serp, profound),
