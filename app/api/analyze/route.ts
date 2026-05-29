@@ -126,9 +126,17 @@ export async function POST(req: NextRequest) {
       return {
         domain, keywords: [],
         aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
+        serpFeatureSummary: { scanned: 0, withPAA: 0, withVideo: 0 },
         topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
       } as any;
     });
+
+    // Diagnostic log — always fires so we can confirm SerpAPI results in Vercel logs
+    console.log(
+      `[OrbitIQ] SerpAPI scan: ${serp.keywords?.length ?? 0} keywords scanned,` +
+      ` ${serp.aioSummary?.withAIO ?? 0} AIOs, PAA=${serp.serpFeatureSummary?.withPAA ?? 0},` +
+      ` video=${serp.serpFeatureSummary?.withVideo ?? 0}`
+    );
 
     // Save snapshots — keep status 'running' so /api/synthesize knows to proceed
     await db.update(analyses)
