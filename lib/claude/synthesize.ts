@@ -336,7 +336,7 @@ export async function runFullSynthesis(
     generateOpportunities(domain, industry, semrush, serp, profound),
     generateCategoryBreakdown(domain, industry, semrush).catch(err => {
       console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
-      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, page1CaptureRate: 0 } as CategoryBreakdownResult;
+      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0 } as CategoryBreakdownResult;
     }),
   ]);
   console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}, Categories: ${categoryBreakdown.categories.length}`);
