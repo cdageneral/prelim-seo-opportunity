@@ -227,7 +227,11 @@ This is NOT a data report. This is a strategic story that answers:
 The tone is: direct, confident, data-backed, CMO-appropriate.
 No bullet-point summaries. Write in sharp, declarative paragraphs.
 
-STRICT DATA RULE: Only cite numbers from the VERIFIED DATA section below. Do NOT mention traffic, visits, sessions, or pageviews for any competitor — that data is not available. Stick to keyword positions, search volume, capture rates, and AIO metrics.
+STRICT DATA RULES — apply to every section without exception:
+1. Only cite numbers that appear verbatim in the VERIFIED DATA section below. Do not calculate, derive, or estimate any other numbers.
+2. Never mention "visits", "traffic", "sessions", "pageviews", or "monthly visitors" for any party — client or competitor. This data is not verified.
+3. Use "search demand" or "searches" instead of "visits" when referring to volume.
+4. The page 1 capture rate is ${Math.round(captureRate * 100)}% — use only this figure, never a different percentage.
 
 ── VERIFIED DATA (cite these exact numbers — do not invent or round differently) ──
 
