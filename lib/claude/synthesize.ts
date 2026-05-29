@@ -167,15 +167,19 @@ export async function generateCategoryBreakdown(
 ): Promise<CategoryBreakdownResult> {
   // ── Build merged keyword pool ──────────────────────────────────────────────
   // Step 1: ranked keywords the client appears for (have real position data)
+  // MVP cap: 20 ranked + 20 gap = 40 total keywords
+  // Remove slice limits when moving to full production footprint
+  const MVP_LIMIT = 20;
+
   const rankedMap = new Map<string, number>(); // lowercase keyword → position
-  for (const kw of semrush.topKeywords.slice(0, 100)) {
+  for (const kw of semrush.topKeywords.slice(0, MVP_LIMIT)) {
     rankedMap.set(kw.keyword.toLowerCase(), kw.position);
   }
 
   const merged: MergedKeyword[] = [];
 
   // Add ranked keywords first
-  for (const kw of semrush.topKeywords.slice(0, 100)) {
+  for (const kw of semrush.topKeywords.slice(0, MVP_LIMIT)) {
     merged.push({
       keyword:        kw.keyword,
       searchVolume:   kw.searchVolume ?? 0,
@@ -184,7 +188,7 @@ export async function generateCategoryBreakdown(
   }
 
   // Step 2: gap keywords (competitor ranks, client doesn't) — deduplicated
-  for (const kw of semrush.gapKeywords.slice(0, 100)) {
+  for (const kw of semrush.gapKeywords.slice(0, MVP_LIMIT)) {
     if (!rankedMap.has(kw.keyword.toLowerCase())) {
       merged.push({
         keyword:        kw.keyword,

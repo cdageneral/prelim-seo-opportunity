@@ -110,16 +110,16 @@ export async function getDomainOverview(domain: string): Promise<SemrushDomainOv
   };
 }
 
-// ─── Organic Keywords (Top 150) ───────────────────────────────────────────────
-// Increased from 50 → 150 in v7.6 to give the category breakdown pass
-// enough keyword coverage across all service/product categories.
+// ─── Organic Keywords (MVP: 40) ───────────────────────────────────────────────
+// Capped at 40 for MVP to reduce token usage and Semrush API units.
+// Remove cap when moving to full production footprint.
 
 export async function getOrganicKeywords(domain: string): Promise<SemrushKeyword[]> {
   const raw = await semrushGet({
     type:    'domain_organic',
     domain,
     database: 'us',
-    display_limit: '150',
+    display_limit: '40',
     display_sort: 'tr_desc',
     export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
   });
@@ -167,7 +167,7 @@ export async function getKeywordGap(
     type:           'domain_organic',
     domain:         competitorDomain,
     database:       'us',
-    display_limit:  '100',
+    display_limit:  '40',
     display_sort:   'tr_desc',
     export_columns: 'Ph,Po,Nq,Cp',
   });
