@@ -32,45 +32,45 @@ function SerpFeatureCard({
   acquiredLabel, availableLabel, noData,
 }: FeatureCardProps) {
   return (
-    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-2.5">
-      <div className="flex items-center gap-1.5 mb-1.5">
+    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
+      <div className="flex items-center gap-2 mb-2">
         <span
           className="rounded-full inline-block shrink-0"
-          style={{ width: '8px', height: '8px', background: color }}
+          style={{ width: '9px', height: '9px', background: color }}
         />
         <span
           className="text-orbit-tertiary font-medium uppercase tracking-widest"
-          style={{ fontSize: '9px' }}
+          style={{ fontSize: '10px' }}
         >
           {label}
         </span>
         <span
           className="ml-auto font-semibold"
-          style={{ color, fontSize: '13px' }}
+          style={{ color, fontSize: '15px' }}
         >
           {rate}%
         </span>
       </div>
 
       {noData ? (
-        <p className="text-orbit-tertiary" style={{ fontSize: '10px' }}>
+        <p className="text-orbit-secondary" style={{ fontSize: '12px' }}>
           Re-run analysis to scan
         </p>
       ) : (
         <>
-          <p style={{ fontSize: '11px', color: '#8888AA', margin: '0 0 5px' }}>
+          <p style={{ fontSize: '12px', color: '#8888AA', margin: '0 0 6px' }}>
             <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{acquired}</span>
             {' '}{acquiredLabel}
             &nbsp;/&nbsp;
             <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{available}</span>
             {' '}{availableLabel}
           </p>
-          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '3px', width: '100%' }}>
+          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '4px', width: '100%' }}>
             <div
               style={{
                 background:   color,
                 borderRadius: '3px',
-                height:       '3px',
+                height:       '4px',
                 width:        `${Math.min(100, rate)}%`,
               }}
             />
@@ -193,7 +193,7 @@ export default function FootprintSection({ analysis }: Props) {
       <div className="flex gap-4 items-start">
 
         {/* ── LEFT: Ranking Distribution ── */}
-        <div className="flex flex-col gap-3" style={{ flex: '0 0 52%' }}>
+        <div className="flex flex-col gap-3" style={{ flex: 1 }}>
           <p className="text-orbit-secondary text-xs font-medium">Where Your Rankings Live</p>
           <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
             <svg
@@ -243,27 +243,27 @@ export default function FootprintSection({ analysis }: Props) {
         </div>
 
         {/* ── RIGHT: SERP Features ── */}
-        <div className="flex flex-col gap-2" style={{ flex: 1 }}>
+        <div className="flex flex-col gap-3" style={{ flex: 1 }}>
           <p className="text-orbit-secondary text-xs font-medium">SERP Features</p>
 
           {/* Combined donut: total acquired / total available across all 3 features */}
-          <div className="flex justify-center py-1">
-            <div className="relative" style={{ width: '96px', height: '96px' }}>
-              <svg viewBox="0 0 36 36" width="96" height="96" style={{ transform: 'rotate(-90deg)' }}>
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="3.2" />
+          <div className="flex justify-center py-2">
+            <div className="relative" style={{ width: '140px', height: '140px' }}>
+              <svg viewBox="0 0 36 36" width="140" height="140" style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="2.8" />
                 <circle
                   cx="18" cy="18" r="15.9"
-                  fill="none" stroke="#6C63FF" strokeWidth="3.2"
+                  fill="none" stroke="#6C63FF" strokeWidth="2.8"
                   strokeLinecap="round"
                   strokeDasharray={`${combinedRate} 100`}
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span style={{ color: '#6C63FF', fontWeight: 700, fontSize: '20px', lineHeight: 1 }}>
+                <span style={{ color: '#6C63FF', fontWeight: 700, fontSize: '28px', lineHeight: 1 }}>
                   {combinedRate}%
                 </span>
-                <span style={{ color: '#555570', fontSize: '8px', marginTop: '2px', textAlign: 'center', lineHeight: 1.2 }}>
-                  SERP<br />coverage
+                <span style={{ color: '#8888AA', fontSize: '11px', marginTop: '4px', textAlign: 'center', lineHeight: 1.3 }}>
+                  SERP coverage
                 </span>
               </div>
             </div>
