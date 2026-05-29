@@ -117,7 +117,8 @@ export async function generateNarrative(
   serp: SerpApiSnapshot,
   profound: ProfoundSnapshot,
   personas: any[],
-  opportunities: any[]
+  opportunities: any[],
+  categoryBreakdown: CategoryBreakdownResult
 ): Promise<{
   marketPositionNarrative: string;
   visibilityGap: string;
@@ -128,7 +129,8 @@ export async function generateNarrative(
   const prompt = narrativePrompt(
     domain, clientName, industry,
     semrush, serp, profound,
-    personas, opportunities
+    personas, opportunities,
+    categoryBreakdown
   );
 
   const response = await getClient().messages.create({
@@ -347,7 +349,8 @@ export async function runFullSynthesis(
     generateNarrative(
       domain, clientName, industry,
       semrush, serp, profound,
-      personas, opportunities
+      personas, opportunities,
+      categoryBreakdown
     ),
     generatePPTPrompt(
       clientName, domain, industry,

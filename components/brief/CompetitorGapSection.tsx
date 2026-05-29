@@ -281,7 +281,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
       {/* ── Three Stat Cards ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-2.5">
         <StatCard
-          label="Annual Search Demand"
+          label="Total Demand Available"
           value={fmtAnnual(totalMonthly)}
           sub="Total category"
           source="Semrush keyword research"
@@ -318,7 +318,7 @@ function StatCard({
 }) {
   return (
     <div className="bg-orbit-surface rounded-lg p-3 border border-orbit-border">
-      <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-wider mb-1.5">
+      <p className="text-orbit-primary text-[13px] font-semibold mb-1.5">
         {label}
       </p>
       <p

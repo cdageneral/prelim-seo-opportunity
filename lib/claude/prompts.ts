@@ -202,10 +202,17 @@ export function narrativePrompt(
   serp: SerpApiSnapshot,
   profound: ProfoundSnapshot,
   personas: any[],
-  opportunities: any[]
+  opportunities: any[],
+  categoryBreakdown: { page1CaptureRate: number; totalMonthlyDemand: number; totalPage1Demand: number }
 ): string {
-  const totalCategory   = semrush.competitors.reduce((s, c) => s + c.organicTraffic, semrush.overview.organicTraffic);
-  const captureRate     = totalCategory > 0 ? semrush.overview.organicTraffic / totalCategory : 0;
+  // Use keyword-level capture rate from category breakdown — this is the same
+  // number displayed as the hero metric in the UI (page1Demand / totalMonthlyDemand).
+  const captureRate     = categoryBreakdown.page1CaptureRate > 0
+    ? categoryBreakdown.page1CaptureRate
+    : (semrush.overview.organicTraffic / Math.max(1, semrush.competitors.reduce((s, c) => s + c.organicTraffic, semrush.overview.organicTraffic)));
+  const totalCategory   = categoryBreakdown.totalMonthlyDemand > 0
+    ? categoryBreakdown.totalMonthlyDemand
+    : semrush.competitors.reduce((s, c) => s + c.organicTraffic, semrush.overview.organicTraffic);
   const topComp         = semrush.competitors[0]?.domain ?? 'the market leader';
   const aioRate         = Math.round(serp.aioSummary.aioRate * 100);
   const clientAIORate   = Math.round(serp.aioSummary.clientAIORate * 100);
@@ -220,18 +227,21 @@ This is NOT a data report. This is a strategic story that answers:
 The tone is: direct, confident, data-backed, CMO-appropriate.
 No bullet-point summaries. Write in sharp, declarative paragraphs.
 
-── VERIFIED DATA (cite these exact numbers) ──────────────────────────────────
+STRICT DATA RULE: Only cite numbers from the VERIFIED DATA section below. Do NOT mention traffic, visits, sessions, or pageviews for any competitor — that data is not available. Stick to keyword positions, search volume, capture rates, and AIO metrics.
+
+── VERIFIED DATA (cite these exact numbers — do not invent or round differently) ──
 
 Market position:
-- Estimated market capture rate: ${Math.round(captureRate * 100)}%
-- ${clientName} organic traffic: ${semrush.overview.organicTraffic.toLocaleString()} visits/mo (Semrush)
-- Total category traffic pool: ~${totalCategory.toLocaleString()} visits/mo (Semrush competitive landscape)
-- Top competitor (${topComp}): ${semrush.competitors[0]?.organicTraffic.toLocaleString() ?? 'N/A'} visits/mo
+- Page 1 capture rate: ${Math.round(captureRate * 100)}% (keyword demand analysis — use THIS number, not any other)
+- Total category search demand: ~${totalCategory.toLocaleString()} searches/mo (keyword-level analysis)
+- Top competitor: ${topComp} (${semrush.competitors[0]?.commonKeywords ?? 0} keywords overlap with ${clientName})
+- ${semrush.competitors.length} competitors identified in this category
 
-Search visibility:
+Keyword footprint:
+- Total organic keywords: ${semrush.overview.organicKeywords.toLocaleString()} (Semrush)
+- Keywords ranking page 1 (positions 1–10): ${semrush.topKeywords.filter(k => k.position <= 10).length}
+- Keywords ranking page 2+ (positions 11+): ${semrush.topKeywords.filter(k => k.position > 10).length}
 - Position distribution: ${JSON.stringify(semrush.positionDist)} (Semrush)
-- Keywords ranking page 1: ${semrush.topKeywords.filter(k => k.position <= 10).length}
-- Keywords ranking page 2+: ${semrush.topKeywords.filter(k => k.position > 10).length}
 
 AI search landscape:
 - ${aioRate}% of tracked keywords trigger AI Overviews (SerpAPI live data)
@@ -246,7 +256,7 @@ Top opportunities: ${opportunities.map(o => o.title).join(', ')}
 Write the following narrative sections:
 
 1. MARKET POSITION NARRATIVE (150 words)
-   Open with the market capture rate as the story hook. Make it visceral — the organic demand exists, the question is who captures it.
+   Open with the page 1 capture rate as the story hook. Make it visceral — the search demand exists, the question is who captures it.
 
 2. THE VISIBILITY GAP (100 words)
    Translate the position distribution into business impact. What does it mean to have ${semrush.positionDist['11-20'] ?? 0} keywords on page 2? Revenue language, not SEO metrics.
@@ -255,7 +265,7 @@ Write the following narrative sections:
    The most strategic paragraph. ${aioRate}% of searches now trigger AI Overviews. ${clientName} is cited in ${clientAIORate}% of them. What does the brand look like to AI — and what's the cost of that?
 
 4. COMPETITIVE REALITY (100 words)
-   Not "here's what competitors do." Frame it as: here's the territory already claimed, here's what's contestable.
+   Frame it as: here's the keyword territory already contested, here's what's still unclaimed. Do NOT mention competitor traffic or visit counts — use keyword overlap and market capture rate only.
 
 5. THE STRATEGIC CALL (80 words)
    One clear recommendation a CMO can take to the board. No waffling. What's the move?

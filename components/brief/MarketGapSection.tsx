@@ -163,7 +163,7 @@ export default function MarketGapSection({ analysis }: Props) {
         {/* Card 2: Total Demand Captured */}
         <div className="bg-orbit-surface rounded-lg p-3 border border-orbit-border">
           <p className="text-orbit-primary text-[13px] font-semibold mb-1.5">Total Demand Captured</p>
-          <p className="font-semibold text-lg leading-tight" style={{ color: '#8B85FF' }}>{fmtAnnual(page1Monthly + brandedMonthly)}</p>
+          <p className="font-semibold text-lg leading-tight" style={{ color: '#8B85FF' }}>{fmtAnnual(page1Monthly)}</p>
           <p className="text-orbit-secondary text-xs mt-1">Captured on page 1</p>
           <p className="text-[10px] mt-1.5" style={{ color: '#8B85FF' }}>Brand: {fmtAnnual(brandedMonthly)}</p>
           <p className="text-[10px] mt-0.5" style={{ color: '#22C55E' }}>Non-brand: {fmtAnnual(nonBrandedMonthly)}</p>
