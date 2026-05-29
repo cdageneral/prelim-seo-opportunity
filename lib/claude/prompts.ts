@@ -40,10 +40,14 @@ export function categoryBreakdownPrompt(
     })
     .join('\n');
 
+  // Extract a clean brand name hint from domain (e.g. "sonobello.com" → "Sono Bello")
+  const brandHint = domain.replace(/\.(com|net|org|io|co).*$/, '').replace(/[-_]/g, ' ');
+
   return `You are analyzing organic search keywords for a website to identify its core service or product categories.
 
 WEBSITE: ${domain}
 INDUSTRY: ${industry}
+BRAND NAME HINT: "${brandHint}" (use this to identify branded keywords)
 
 KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
@@ -51,18 +55,24 @@ ${kwList}
 Note: "client: unranked" means this keyword has demand but the client does not rank on page 1 for it.
 
 CATEGORIZATION RULES — follow exactly:
-1. BRAND category (type: "brand"): keywords containing the business name, brand variants, or misspellings. Assign type "brand".
-2. LOCATION category (type: "location"): keywords that combine the brand/service with a city, state, or "near me". Assign type "location".
-3. PROCEDURE categories (type: "procedure"): group all remaining keywords by the specific SERVICE or PROCEDURE they relate to (e.g. "Liposuction", "Tummy Tuck", "Body Contouring"). IMPORTANT — pricing, cost, reviews, before/after, and how-to keywords belong INSIDE their relevant procedure category. Do NOT create separate categories for pricing or reviews.
 
-Every index must appear in exactly one category. Omit only obvious nonsensical misspellings.
+1. BRAND category (type: "brand"): keywords that contain the brand name, brand variants, or misspellings. Name this category after the actual brand (e.g. "Sono Bello Brand Searches", not "Brand & Company Name").
 
-Return JSON ONLY — no markdown, no explanation:
+2. LOCATION category (type: "location"): keywords combining the brand or service with a city, state, or "near me". Name it after what you find (e.g. "Sono Bello Locations", not "Location Services").
+
+3. PROCEDURE categories (type: "procedure"): group all remaining keywords by the specific SERVICE or PROCEDURE they represent. Name each from the keywords themselves (e.g. "Liposuction", "Tummy Tuck").
+   - CRITICAL: pricing, cost, reviews, before/after, testimonials, and how-to keywords MUST be placed inside their parent procedure category. NEVER create a standalone "Reviews", "Pricing", or "Cost" category — these are modifiers, not procedures.
+   - If a review or pricing keyword clearly belongs to a procedure (e.g. "liposuction reviews", "tummy tuck cost"), assign it to that procedure.
+   - Only create a new procedure category if 2+ keywords share the same core service topic.
+
+Every keyword index must appear in exactly one category. Omit only obvious nonsensical misspellings.
+
+Return JSON ONLY — no markdown, no explanation. Category names must come from the actual keywords, not from these examples:
 {
   "categories": [
-    { "name": "Short category name", "type": "procedure", "keywordIndices": [0, 3, 7, 12] },
-    { "name": "Brand & Company Name", "type": "brand",   "keywordIndices": [1, 2] },
-    { "name": "Location Services",    "type": "location", "keywordIndices": [5, 8] }
+    { "name": "[Derived from actual keywords — e.g. Liposuction]", "type": "procedure", "keywordIndices": [0, 3, 7, 12] },
+    { "name": "[Actual brand name + descriptor — e.g. Sono Bello Brand Searches]", "type": "brand", "keywordIndices": [1, 2] },
+    { "name": "[Actual brand/service + location — e.g. Sono Bello Locations]", "type": "location", "keywordIndices": [5, 8] }
   ]
 }`;
 }

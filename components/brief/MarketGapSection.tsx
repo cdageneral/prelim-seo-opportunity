@@ -23,6 +23,13 @@ interface Props { analysis: any; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Returns the first n complete sentences from a block of text. */
+function firstSentences(text: string, n: number): string {
+  const matches = text.match(/[^.!?]*[.!?]+/g) ?? [];
+  const result  = matches.slice(0, n).join(' ').trim();
+  return result || text;
+}
+
 function fmtAnnual(monthly: number): string {
   const a = monthly * 12;
   if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
@@ -92,11 +99,11 @@ export default function MarketGapSection({ analysis }: Props) {
       {/* ── Callout ── */}
       <div className="bg-orbit-surface border-l-[3px] border-orbit-accent rounded-r-lg px-4 py-3">
         {calloutText ? (
-          <p className="text-orbit-secondary text-sm leading-relaxed">{calloutText}</p>
+          <p className="text-orbit-secondary text-sm leading-relaxed">{firstSentences(calloutText, 2)}</p>
         ) : (
           <p className="text-orbit-secondary text-sm leading-relaxed">
             <strong className="text-orbit-primary font-medium">Branded demand is fully owned.</strong>{' '}
-            The {gapPct}% gap is unbranded procedure demand — {fmtAnnual(totalMonthly)} annual searches where this site does not show up.
+            The {gapPct}% gap is unbranded procedure demand — {fmtAnnual(totalMonthly)} annual searches where this site does not appear.
           </p>
         )}
       </div>

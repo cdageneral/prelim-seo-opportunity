@@ -16,6 +16,13 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Returns the first n complete sentences from a block of text. */
+function firstSentences(text: string, n: number): string {
+  const matches = text.match(/[^.!?]*[.!?]+/g) ?? [];
+  const result  = matches.slice(0, n).join(' ').trim();
+  return result || text;
+}
+
 function fmtNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000)     return n.toLocaleString();
@@ -166,7 +173,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
       {/* ── Callout ───────────────────────────────────────────────────────── */}
       {calloutText ? (
         <div className="bg-orbit-surface border-l-[3px] border-orbit-accent rounded-r-lg px-4 py-3">
-          <p className="text-orbit-secondary text-sm leading-relaxed">{calloutText}</p>
+          <p className="text-orbit-secondary text-sm leading-relaxed">{firstSentences(calloutText, 2)}</p>
         </div>
       ) : null}
 
