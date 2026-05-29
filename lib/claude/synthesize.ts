@@ -150,14 +150,18 @@ export async function generateNarrative(
 export interface CategoryBreakdownResult {
   categories: Array<{
     name:          string;
+    type:          'procedure' | 'brand' | 'location';
     monthlyDemand: number;
     page1Demand:   number;
     top3Demand:    number;
   }>;
-  totalMonthlyDemand: number;
-  totalPage1Demand:   number;
-  totalTop3Demand:    number;
-  page1CaptureRate:   number;
+  totalMonthlyDemand:      number;
+  totalPage1Demand:        number;
+  totalTop3Demand:         number;
+  brandedPage1Demand:      number;   // page1 from brand + location categories
+  nonBrandedPage1Demand:   number;   // page1 from procedure categories only
+  totalKeywordsAnalyzed:   number;
+  page1CaptureRate:        number;
 }
 
 export async function generateCategoryBreakdown(
@@ -199,7 +203,7 @@ export async function generateCategoryBreakdown(
   }
 
   if (merged.length === 0) {
-    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, page1CaptureRate: 0 };
+    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0 };
   }
 
   const prompt = categoryBreakdownPrompt(domain, industry, merged);
@@ -212,22 +216,23 @@ export async function generateCategoryBreakdown(
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
 
-  // Claude returns: { "categories": [{ "name": "...", "keywordIndices": [0,1,2] }] }
-  const parsed = extractJSON<{ categories: Array<{ name: string; keywordIndices: number[] }> }>(text);
+  // Claude returns categories with name, type, and keywordIndices
+  const parsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(text);
 
   // ── Compute demand sums in TypeScript — no Claude arithmetic ──────────────
-  // monthlyDemand = ALL keywords (ranked + unranked) → the true demand pool
-  // page1Demand   = only keywords where client position ≤ 10
-  // top3Demand    = only keywords where client position ≤ 3
   const result: CategoryBreakdownResult = {
     categories: [],
-    totalMonthlyDemand: 0,
-    totalPage1Demand:   0,
-    totalTop3Demand:    0,
-    page1CaptureRate:   0,
+    totalMonthlyDemand:    0,
+    totalPage1Demand:      0,
+    totalTop3Demand:       0,
+    brandedPage1Demand:    0,
+    nonBrandedPage1Demand: 0,
+    totalKeywordsAnalyzed: merged.length,
+    page1CaptureRate:      0,
   };
 
   for (const cat of parsed.categories) {
+    const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
     let monthlyDemand = 0;
     let page1Demand   = 0;
     let top3Demand    = 0;
@@ -241,10 +246,16 @@ export async function generateCategoryBreakdown(
       if (kw.clientPosition !== null && kw.clientPosition <= 3)  top3Demand  += vol;
     }
 
-    result.categories.push({ name: cat.name, monthlyDemand, page1Demand, top3Demand });
+    result.categories.push({ name: cat.name, type: catType, monthlyDemand, page1Demand, top3Demand });
     result.totalMonthlyDemand += monthlyDemand;
     result.totalPage1Demand   += page1Demand;
     result.totalTop3Demand    += top3Demand;
+
+    if (catType === 'brand' || catType === 'location') {
+      result.brandedPage1Demand    += page1Demand;
+    } else {
+      result.nonBrandedPage1Demand += page1Demand;
+    }
   }
 
   result.page1CaptureRate = result.totalMonthlyDemand > 0

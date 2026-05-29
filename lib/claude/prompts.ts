@@ -48,15 +48,21 @@ INDUSTRY: ${industry}
 KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
 
-Note: "client: unranked" means this keyword has search demand in the category but the client does not currently appear on page 1 for it.
+Note: "client: unranked" means this keyword has demand but the client does not rank on page 1 for it.
 
-Task: Group ALL keywords into 3-6 meaningful service or product categories that reflect what this business offers and the demand around it. Every index must appear in exactly one category. Omit only clear brand-name typos/misspellings (e.g. "sonobelo", "sono bello" misspellings).
+CATEGORIZATION RULES — follow exactly:
+1. BRAND category (type: "brand"): keywords containing the business name, brand variants, or misspellings. Assign type "brand".
+2. LOCATION category (type: "location"): keywords that combine the brand/service with a city, state, or "near me". Assign type "location".
+3. PROCEDURE categories (type: "procedure"): group all remaining keywords by the specific SERVICE or PROCEDURE they relate to (e.g. "Liposuction", "Tummy Tuck", "Body Contouring"). IMPORTANT — pricing, cost, reviews, before/after, and how-to keywords belong INSIDE their relevant procedure category. Do NOT create separate categories for pricing or reviews.
+
+Every index must appear in exactly one category. Omit only obvious nonsensical misspellings.
 
 Return JSON ONLY — no markdown, no explanation:
 {
   "categories": [
-    { "name": "Short category name", "keywordIndices": [0, 3, 7, 12] },
-    { "name": "Second category",     "keywordIndices": [1, 2, 5, 8] }
+    { "name": "Short category name", "type": "procedure", "keywordIndices": [0, 3, 7, 12] },
+    { "name": "Brand & Company Name", "type": "brand",   "keywordIndices": [1, 2] },
+    { "name": "Location Services",    "type": "location", "keywordIndices": [5, 8] }
   ]
 }`;
 }

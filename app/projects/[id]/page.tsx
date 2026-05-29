@@ -284,7 +284,10 @@ export default function ProjectBriefPage() {
             <div className="flex flex-col gap-8 animate-fade-in">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <MarketGapSection     analysis={analysis} />
-                <CompetitorGapSection analysis={analysis} />
+                <CompetitorGapSection
+                  analysis={analysis}
+                  manualDomains={(project.competitors ?? []).map(c => c.domain)}
+                />
               </div>
               <FootprintSection      analysis={analysis} />
               <LLMVisibilitySection  analysis={analysis} />
