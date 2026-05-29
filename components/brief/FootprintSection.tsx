@@ -46,6 +46,14 @@ export default function FootprintSection({ analysis }: Props) {
 
   const noSerpData = scanned === null || scanned === 0;
 
+  // ── DEBUG: temporary diagnostic — remove after confirming SERP data flows correctly ──
+  const _serpDebug = [
+    `snapshot=${analysis.serpApiSnapshot === null ? 'null' : analysis.serpApiSnapshot === undefined ? 'undefined' : 'present'}`,
+    `keywords=${Array.isArray(analysis.serpApiSnapshot?.keywords) ? analysis.serpApiSnapshot.keywords.length : 'n/a'}`,
+    `aioTotal=${analysis.serpApiSnapshot?.aioSummary?.total ?? 'n/a'}`,
+    `featSummary=${featSummary ? `scanned=${featSummary.scanned}` : 'none'}`,
+  ].join(' | ');
+
   // Donut arc lengths (out of 100)
   const availArc = scanned && aioAvail > 0 ? Math.round((aioAvail / scanned) * 100) : 0;
   const wonArc   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
@@ -238,6 +246,8 @@ export default function FootprintSection({ analysis }: Props) {
         {/* Factual SERP insight */}
         <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
           <p className="text-orbit-secondary text-xs leading-relaxed">{serpInsight}</p>
+          {/* DEBUG — remove once SERP data confirmed working */}
+          <p className="text-orbit-tertiary text-[9px] mt-2 font-mono">{_serpDebug}</p>
         </div>
 
       </div>
