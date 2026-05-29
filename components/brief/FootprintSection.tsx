@@ -160,14 +160,6 @@ export default function FootprintSection({ analysis }: Props) {
     ? Math.min(100, Math.round((totalAcquired / totalAvailable) * 100))
     : 0;
 
-  // ── Debug (remove after confirming SERP data flows correctly) ──
-  const _serpDebug = [
-    `snapshot=${analysis.serpApiSnapshot === null ? 'null' : analysis.serpApiSnapshot === undefined ? 'undefined' : 'present'}`,
-    `keywords=${Array.isArray(serpSnap.keywords) ? serpSnap.keywords.length : 'n/a'}`,
-    `featSummary=${featSummary
-      ? `scanned=${featSummary.scanned} paaAcq=${featSummary.paaClientCited ?? 'n/a'} vidAcq=${featSummary.videoClientCited ?? 'n/a'}`
-      : 'none'}`,
-  ].join(' | ');
 
   // ── Y-axis grid lines ──
   const ySteps     = 4;
@@ -176,20 +168,6 @@ export default function FootprintSection({ analysis }: Props) {
     const y   = (i / ySteps) * CHART_H;
     return { val, y };
   });
-
-  // ── Factual SERP insight ──
-  let serpInsight = '';
-  if (noSerpData) {
-    serpInsight = 'SERP feature data unavailable — run a fresh analysis to populate AI Overview, PAA, and video carousel counts.';
-  } else if (aioAvail === 0 && paaAvail === 0 && videoAvail === 0) {
-    serpInsight = `Of ${sc} keywords scanned, none triggered an AI Overview, PAA box, or video carousel.`;
-  } else {
-    const parts: string[] = [];
-    if (aioAvail > 0)   parts.push(`${aioAvail} trigger AI Overviews (client cited in ${aioAcq})`);
-    if (paaAvail > 0)   parts.push(`${paaAvail} trigger PAA boxes (client cited in ${paaAcq})`);
-    if (videoAvail > 0) parts.push(`${videoAvail} trigger video carousels (client cited in ${videoAcq})`);
-    serpInsight = `Of ${sc} keywords scanned: ${parts.join(', ')}. Source: SerpAPI live scan.`;
-  }
 
   return (
     <div className="orbit-card p-6 flex flex-col gap-6">
@@ -344,23 +322,6 @@ export default function FootprintSection({ analysis }: Props) {
             noData={noSerpData}
           />
         </div>
-      </div>
-
-      {/* AIO gap alert */}
-      {aioRate < 20 && aioAvail > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
-          <p className="text-amber-400 text-xs">
-            <strong>AIO exposure gap:</strong> {aioAvail - aioAcq} AI Overviews run on this site&apos;s
-            target keywords without citing it. Each uncaptured AIO is a brand visibility moment lost to competitors.
-          </p>
-        </div>
-      )}
-
-      {/* Factual SERP insight */}
-      <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
-        <p className="text-orbit-secondary text-xs leading-relaxed">{serpInsight}</p>
-        {/* DEBUG — remove once SERP data confirmed working */}
-        <p className="text-orbit-tertiary text-[9px] mt-2 font-mono">{_serpDebug}</p>
       </div>
 
     </div>
