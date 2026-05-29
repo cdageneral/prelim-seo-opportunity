@@ -32,33 +32,33 @@ function SerpFeatureCard({
   acquiredLabel, availableLabel, noData,
 }: FeatureCardProps) {
   return (
-    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
+    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
         <span
           className="rounded-full inline-block shrink-0"
-          style={{ width: '9px', height: '9px', background: color }}
+          style={{ width: '10px', height: '10px', background: color }}
         />
         <span
-          className="text-orbit-tertiary font-medium uppercase tracking-widest"
-          style={{ fontSize: '10px' }}
+          className="text-orbit-secondary font-semibold uppercase tracking-wider"
+          style={{ fontSize: '12px' }}
         >
           {label}
         </span>
         <span
-          className="ml-auto font-semibold"
-          style={{ color, fontSize: '15px' }}
+          className="ml-auto font-bold"
+          style={{ color, fontSize: '18px' }}
         >
           {rate}%
         </span>
       </div>
 
       {noData ? (
-        <p className="text-orbit-secondary" style={{ fontSize: '12px' }}>
+        <p className="text-orbit-secondary" style={{ fontSize: '13px' }}>
           Re-run analysis to scan
         </p>
       ) : (
         <>
-          <p style={{ fontSize: '12px', color: '#8888AA', margin: '0 0 6px' }}>
+          <p style={{ fontSize: '13px', color: '#8888AA', margin: '0 0 8px' }}>
             <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{acquired}</span>
             {' '}{acquiredLabel}
             &nbsp;/&nbsp;

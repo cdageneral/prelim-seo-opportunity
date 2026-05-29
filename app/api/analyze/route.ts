@@ -121,12 +121,13 @@ export async function POST(req: NextRequest) {
 
     // SerpAPI — 5 keywords, 15s timeout each
     const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
+    console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, keywords to scan=${Math.min(topKeywords.length, 5)} of ${topKeywords.length} available`);
     const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
       console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
       return {
         domain, keywords: [],
         aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
-        serpFeatureSummary: { scanned: 0, withPAA: 0, withVideo: 0 },
+        serpFeatureSummary: { scanned: 0, withPAA: 0, paaClientCited: 0, withVideo: 0, videoClientCited: 0 },
         topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
       } as any;
     });
