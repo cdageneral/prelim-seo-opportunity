@@ -125,7 +125,8 @@ export function opportunityPrompt(
   profound: ProfoundSnapshot
 ): string {
   const positionDist = JSON.stringify(semrush.positionDist);
-  const topComp      = semrush.competitors[0]?.domain ?? 'unknown competitor';
+  // Sort by organicTraffic so manually-added competitors (traffic=0) don't steal top spot
+  const topComp      = [...semrush.competitors].sort((a, b) => b.organicTraffic - a.organicTraffic)[0]?.domain ?? 'unknown competitor';
   const gapKeywords  = semrush.gapKeywords.slice(0, 15)
     .map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`)
     .join(', ');
@@ -213,7 +214,8 @@ export function narrativePrompt(
   const totalCategory   = categoryBreakdown.totalMonthlyDemand > 0
     ? categoryBreakdown.totalMonthlyDemand
     : semrush.competitors.reduce((s, c) => s + c.organicTraffic, semrush.overview.organicTraffic);
-  const topComp         = semrush.competitors[0]?.domain ?? 'the market leader';
+  // Sort by organicTraffic so manually-added competitors (traffic=0) don't steal top spot
+  const topComp         = [...semrush.competitors].sort((a, b) => b.organicTraffic - a.organicTraffic)[0]?.domain ?? 'the market leader';
   const aioRate         = Math.round(serp.aioSummary.aioRate * 100);
   const clientAIORate   = Math.round(serp.aioSummary.clientAIORate * 100);
   const profoundScore   = profound.overallScore;

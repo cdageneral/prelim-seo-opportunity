@@ -111,7 +111,9 @@ export async function POST(req: NextRequest) {
       const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
       for (const mc of (project as any).competitors) {
         if (!existing.has(mc.domain)) {
-          semrush.competitors.unshift({
+          // push (not unshift) — manual competitors go to the end so
+          // Semrush-discovered competitors (sorted by relevance/traffic) stay at [0]
+          semrush.competitors.push({
             domain: mc.domain, commonKeywords: 0, organicKeywords: 0,
             organicTraffic: 0, relevance: 1,
           });
