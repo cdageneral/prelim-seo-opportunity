@@ -1,5 +1,11 @@
 'use client';
 
+function firstSentences(text: string, n: number): string {
+  const matches = text.match(/[^.!?]+[.!?]+/g);
+  if (!matches) return text;
+  return matches.slice(0, n).join(' ').trim();
+}
+
 interface Props { analysis: any; }
 
 const PLATFORM_ICONS: Record<string, string> = {
@@ -131,7 +137,7 @@ export default function LLMVisibilitySection({ analysis }: Props) {
       {aiText && (
         <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
           <p className="text-orbit-accent text-xs font-medium mb-2 uppercase tracking-widest">The AI Search Moment</p>
-          <p className="text-orbit-secondary text-sm leading-relaxed">{aiText}</p>
+          <p className="text-orbit-secondary text-sm leading-relaxed">{firstSentences(aiText, 2)}</p>
         </div>
       )}
     </div>

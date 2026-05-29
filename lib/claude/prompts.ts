@@ -267,8 +267,8 @@ Write the following narrative sections:
 2. THE VISIBILITY GAP (100 words)
    Translate the position distribution into business impact. What does it mean to have ${semrush.positionDist['11-20'] ?? 0} keywords on page 2? Revenue language, not SEO metrics.
 
-3. THE AI SEARCH MOMENT (120 words)
-   The most strategic paragraph. ${aioRate}% of searches now trigger AI Overviews. ${clientName} is cited in ${clientAIORate}% of them. What does the brand look like to AI — and what's the cost of that?
+3. THE AI SEARCH MOMENT (2 sentences, 40 words max)
+   Be blunt. State the AIO exposure rate and the client's citation rate, then name the business consequence in one sentence. No fluff.
 
 4. COMPETITIVE REALITY (100 words)
    Frame it as: here's the keyword territory already contested, here's what's still unclaimed. Do NOT mention competitor traffic or visit counts — use keyword overlap and market capture rate only.
