@@ -118,10 +118,16 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
     })),
   ];
 
-  // Uncaptured demand
-  const combinedReach = players.reduce((s, p) => s + p.traffic, 0);
-  const uncaptured    = Math.max(0, totalMonthly - combinedReach);
-  const uncapturedPct = totalMonthly > 0 ? (uncaptured / totalMonthly) * 100 : 0;
+  // Other players (demand not reached by any listed player — for table row only)
+  const combinedReach  = players.reduce((s, p) => s + p.traffic, 0);
+  const otherPlayers   = Math.max(0, totalMonthly - combinedReach);
+  const otherPlayersPct = totalMonthly > 0 ? (otherPlayers / totalMonthly) * 100 : 0;
+
+  // Volume to Displace — demand in the keyword pool the client is NOT on page 1 for.
+  // Uses keyword-level data (same source as Market Gap card) for accuracy.
+  const clientPage1Demand:   number = cb?.totalPage1Demand ?? 0;
+  const volumeToDisplace:    number = Math.max(0, totalMonthly - clientPage1Demand);
+  const volumeToDisplacePct: number = totalMonthly > 0 ? (volumeToDisplace / totalMonthly) * 100 : 0;
 
   return (
     <div className="orbit-card p-6 flex flex-col gap-5">
@@ -159,13 +165,13 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           </div>
         </div>
 
-        {/* Hero — uncaptured % */}
+        {/* Hero — volume to displace */}
         <div className="text-right flex-shrink-0">
           <span className="text-4xl font-bold leading-none" style={{ color: '#EF4444' }}>
-            {uncapturedPct.toFixed(1)}%
+            {volumeToDisplacePct.toFixed(1)}%
           </span>
           <p className="text-orbit-tertiary text-xs mt-1">
-            of category demand<br />uncaptured by any player
+            of category demand<br />not yet on client&apos;s page 1
           </p>
         </div>
       </div>
@@ -242,29 +248,31 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
             );
           })}
 
-          {/* Uncaptured demand row */}
-          <div
-            className="grid py-2.5 border-b border-orbit-border items-center"
-            style={{ gridTemplateColumns: '1fr 110px 80px' }}
-          >
-            <div>
-              <span className="text-sm font-semibold" style={{ color: '#EF4444' }}>
-                Uncaptured demand
-              </span>
-              <div className="mt-1.5 h-[3px] bg-orbit-muted rounded-sm overflow-hidden" style={{ width: '85%' }}>
-                <div
-                  className="h-full rounded-sm"
-                  style={{ width: `${Math.max(0.4, uncapturedPct)}%`, background: '#EF4444' }}
-                />
+          {/* Other players row */}
+          {otherPlayers > 0 && (
+            <div
+              className="grid py-2.5 border-b border-orbit-border items-center"
+              style={{ gridTemplateColumns: '1fr 110px 80px' }}
+            >
+              <div>
+                <span className="text-sm" style={{ color: '#666688' }}>
+                  Other players
+                </span>
+                <div className="mt-1.5 h-[3px] bg-orbit-muted rounded-sm overflow-hidden" style={{ width: '85%' }}>
+                  <div
+                    className="h-full rounded-sm"
+                    style={{ width: `${Math.max(0.4, otherPlayersPct)}%`, background: '#444466' }}
+                  />
+                </div>
               </div>
+              <span className="text-xs text-right" style={{ color: '#666688' }}>
+                {fmtAnnual(otherPlayers)}
+              </span>
+              <span className="text-xs text-right" style={{ color: '#666688' }}>
+                {otherPlayersPct.toFixed(1)}%
+              </span>
             </div>
-            <span className="text-xs text-right font-semibold" style={{ color: '#EF4444' }}>
-              {fmtAnnual(uncaptured)}
-            </span>
-            <span className="text-xs text-right font-bold" style={{ color: '#EF4444' }}>
-              {uncapturedPct.toFixed(1)}%
-            </span>
-          </div>
+          )}
 
           {/* Total rollup */}
           <div
@@ -296,10 +304,10 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           smallValue
         />
         <StatCard
-          label="Annual Uncaptured"
-          value={fmtAnnual(uncaptured)}
-          sub="No player reaches"
-          source={`${uncapturedPct.toFixed(1)}% of total available`}
+          label="Volume to Displace"
+          value={fmtAnnual(volumeToDisplace)}
+          sub="Client's page 1 gap"
+          source={`${volumeToDisplacePct.toFixed(1)}% of total demand`}
           valueColor="#EF4444"
         />
       </div>
