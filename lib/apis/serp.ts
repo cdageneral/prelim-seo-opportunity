@@ -31,15 +31,17 @@ export interface AIOSource {
 }
 
 export interface KeywordSerpData {
-  keyword:         string;
-  searchVolume?:   number;   // Passed in from Semrush data
-  organicResults:  SerpResult[];
-  hasAIO:          boolean;
-  aioSources:      AIOSource[];     // Domains cited in the AI Overview
-  featuredSnippet: SerpResult | null;
-  paaQuestions:    string[];        // People Also Ask
-  serpFeatures:    string[];        // ['featured_snippet', 'knowledge_panel', 'local_pack', ...]
-  clientRank:      number | null;   // Client's position on this SERP (null = not found)
+  keyword:          string;
+  searchVolume?:    number;   // Passed in from Semrush data
+  organicResults:   SerpResult[];
+  hasAIO:           boolean;
+  aioSources:       AIOSource[];     // Domains cited in the AI Overview
+  featuredSnippet:  SerpResult | null;
+  paaQuestions:     string[];        // People Also Ask questions
+  paaClientCited:   boolean;         // Client domain appears in a PAA answer link
+  serpFeatures:     string[];        // ['featured_snippet', 'knowledge_panel', 'local_pack', ...]
+  videoClientCited: boolean;         // Client domain appears in the video carousel
+  clientRank:       number | null;   // Client's position on this SERP (null = not found)
 }
 
 export interface SerpApiSnapshot {
@@ -53,9 +55,11 @@ export interface SerpApiSnapshot {
     clientAIORate: number; // clientCited / withAIO
   };
   serpFeatureSummary: {
-    scanned:    number;   // Total keywords scanned
-    withPAA:    number;   // Keywords that triggered a People Also Ask box
-    withVideo:  number;   // Keywords that triggered a video carousel
+    scanned:         number;  // Total keywords scanned
+    withPAA:         number;  // Keywords that triggered a PAA box (available)
+    paaClientCited:  number;  // Keywords where client appeared in a PAA answer (acquired)
+    withVideo:       number;  // Keywords that triggered a video carousel (available)
+    videoClientCited: number; // Keywords where client appeared in the video carousel (acquired)
   };
   topAIOCompetitors: Array<{ domain: string; citedCount: number }>;
   fetchedAt: string;
@@ -134,12 +138,19 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
     snippet:  fsRaw.answer ?? fsRaw.snippet,
   } : null;
 
-  // PAA questions
-  const paaQuestions: string[] = (data.related_questions ?? []).map((q: any) => q.question ?? '');
+  // PAA questions + client citation check
+  const clientNorm = clientDomain.replace(/^www\./, '');
+  const rawPAA: any[] = data.related_questions ?? [];
+  const paaQuestions: string[] = rawPAA.map((q: any) => q.question ?? '');
+  // Client is cited in PAA if its domain appears in any PAA answer link
+  const paaClientCited: boolean = rawPAA.some((q: any) => {
+    const link: string = q.link ?? q.source?.link ?? '';
+    return link && extractDomain(link).includes(clientNorm);
+  });
 
   // SERP feature inventory
   const serpFeatures: string[] = [];
-  if (data.answer_box)      serpFeatures.push('featured_snippet');
+  if (data.answer_box)         serpFeatures.push('featured_snippet');
   if (aio || data.ai_overview) serpFeatures.push('ai_overview');
   if (data.knowledge_graph)    serpFeatures.push('knowledge_panel');
   if (data.local_results)      serpFeatures.push('local_pack');
@@ -148,9 +159,15 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
   if (data.images_results)     serpFeatures.push('image_pack');
   if (data.twitter_results)    serpFeatures.push('twitter_pack');
 
+  // Video carousel client citation check — client domain appears in a video result
+  const videoClientCited: boolean = (data.videos ?? []).some((v: any) => {
+    const link: string = v.link ?? '';
+    return link && extractDomain(link).includes(clientNorm);
+  });
+
   // Client rank
   const clientResult = organicResults.find(r =>
-    r.domain.includes(clientDomain.replace(/^www\./, ''))
+    r.domain.includes(clientNorm)
   );
   const clientRank = clientResult?.position ?? null;
 
@@ -161,7 +178,9 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
     aioSources,
     featuredSnippet,
     paaQuestions,
+    paaClientCited,
     serpFeatures,
+    videoClientCited,
     clientRank,
   };
 }
@@ -201,9 +220,11 @@ function buildSerpFeatureSummary(
   keywords: KeywordSerpData[]
 ): SerpApiSnapshot['serpFeatureSummary'] {
   return {
-    scanned:   keywords.length,
-    withPAA:   keywords.filter(k => k.paaQuestions.length > 0).length,
-    withVideo: keywords.filter(k => k.serpFeatures.includes('video_carousel')).length,
+    scanned:          keywords.length,
+    withPAA:          keywords.filter(k => k.paaQuestions.length > 0).length,
+    paaClientCited:   keywords.filter(k => k.paaClientCited).length,
+    withVideo:        keywords.filter(k => k.serpFeatures.includes('video_carousel')).length,
+    videoClientCited: keywords.filter(k => k.videoClientCited).length,
   };
 }
 

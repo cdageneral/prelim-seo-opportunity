@@ -3,81 +3,181 @@
 interface Props { analysis: any; }
 
 const BUCKETS = [
-  { key: '1-3',   label: 'Positions 1–3',  hex: '#6C63FF' },
-  { key: '4-10',  label: 'Positions 4–10', hex: '#06B6D4' },
-  { key: '11-20', label: 'Page 2',         hex: '#F59E0B' },
-  { key: '21+',   label: 'Page 3+',        hex: '#EF4444' },
+  { key: '1-3',   label: 'Pos 1–3',  hex: '#6C63FF' },
+  { key: '4-10',  label: 'Pos 4–10', hex: '#06B6D4' },
+  { key: '11-20', label: 'Page 2',   hex: '#F59E0B' },
+  { key: '21+',   label: 'Page 3+',  hex: '#EF4444' },
 ];
 
-const CHART_H   = 140;  // px — usable bar area height
-const CHART_W   = 400;  // SVG viewBox width
-const BAR_W     = 60;   // bar width
-const COL_STEP  = CHART_W / BUCKETS.length; // column width per bucket
+const CHART_H  = 120;
+const CHART_W  = 260;
+const BAR_W    = 36;
+const COL_STEP = CHART_W / BUCKETS.length;
+
+// ── Sub-component: individual SERP feature card ────────────────────────────
+
+interface FeatureCardProps {
+  label:          string;
+  color:          string;
+  rate:           number;   // 0–100
+  acquired:       number;
+  available:      number;
+  acquiredLabel:  string;
+  availableLabel: string;
+  noData:         boolean;
+}
+
+function SerpFeatureCard({
+  label, color, rate, acquired, available,
+  acquiredLabel, availableLabel, noData,
+}: FeatureCardProps) {
+  return (
+    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-2.5">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span
+          className="rounded-full inline-block shrink-0"
+          style={{ width: '8px', height: '8px', background: color }}
+        />
+        <span
+          className="text-orbit-tertiary font-medium uppercase tracking-widest"
+          style={{ fontSize: '9px' }}
+        >
+          {label}
+        </span>
+        <span
+          className="ml-auto font-semibold"
+          style={{ color, fontSize: '13px' }}
+        >
+          {rate}%
+        </span>
+      </div>
+
+      {noData ? (
+        <p className="text-orbit-tertiary" style={{ fontSize: '10px' }}>
+          Re-run analysis to scan
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: '11px', color: '#8888AA', margin: '0 0 5px' }}>
+            <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{acquired}</span>
+            {' '}{acquiredLabel}
+            &nbsp;/&nbsp;
+            <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{available}</span>
+            {' '}{availableLabel}
+          </p>
+          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '3px', width: '100%' }}>
+            <div
+              style={{
+                background:   color,
+                borderRadius: '3px',
+                height:       '3px',
+                width:        `${Math.min(100, rate)}%`,
+              }}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────────────
 
 export default function FootprintSection({ analysis }: Props) {
+
+  // ── Ranking distribution ──
   const semrush      = analysis.semrushSnapshot ?? {};
   const positionDist = semrush.positionDist ?? {};
   const totalKws     = Object.values(positionDist as Record<string, number>).reduce((a, b) => a + b, 0);
   const maxCount     = Math.max(...BUCKETS.map(b => (positionDist[b.key] as number) ?? 0), 1);
 
-  // AIO data
+  // ── AIO data (stored as dedicated DB columns) ──
   const aioAvail = analysis.aioAvailable ?? 0;
   const aioAcq   = analysis.aioAcquired  ?? 0;
+  // Rate = acquired / available: how many available AIOs does the client appear in?
   const aioRate  = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
 
-  // SERP feature summary — prefer pre-aggregated, fall back to keywords[] for old analyses
+  // ── SERP feature summary (stored in serpApiSnapshot JSONB) ──
   const serpSnap    = analysis.serpApiSnapshot ?? {};
   const featSummary = serpSnap.serpFeatureSummary;
+
+  // Scanned count — prefer pre-aggregated summary, fall back for old analyses
   const scanned: number | null =
     featSummary?.scanned ??
     (Array.isArray(serpSnap.keywords) ? serpSnap.keywords.length : null) ??
     serpSnap.aioSummary?.total ??
     null;
-  const paaCount: number =
+  const sc = scanned ?? 0;
+
+  // PAA available = keywords that triggered a PAA box
+  // PAA acquired  = keywords where the client domain appeared in a PAA answer link (v7.15+)
+  const paaAvail: number =
     featSummary?.withPAA ??
     (Array.isArray(serpSnap.keywords)
       ? serpSnap.keywords.filter((k: any) => k.paaQuestions?.length > 0).length
       : 0);
-  const videoCount: number =
+  const paaAcq: number =
+    featSummary?.paaClientCited ??
+    (Array.isArray(serpSnap.keywords)
+      ? serpSnap.keywords.filter((k: any) => k.paaClientCited === true).length
+      : 0);
+  // Rate = acquired / available
+  const paaRate = paaAvail > 0 ? Math.round((paaAcq / paaAvail) * 100) : 0;
+
+  // Video available = keywords that triggered a video carousel
+  // Video acquired  = keywords where the client domain appeared in the carousel (v7.15+)
+  const videoAvail: number =
     featSummary?.withVideo ??
     (Array.isArray(serpSnap.keywords)
       ? serpSnap.keywords.filter((k: any) => k.serpFeatures?.includes('video_carousel')).length
       : 0);
+  const videoAcq: number =
+    featSummary?.videoClientCited ??
+    (Array.isArray(serpSnap.keywords)
+      ? serpSnap.keywords.filter((k: any) => k.videoClientCited === true).length
+      : 0);
+  // Rate = acquired / available
+  const videoRate = videoAvail > 0 ? Math.round((videoAcq / videoAvail) * 100) : 0;
 
-  const noSerpData = scanned === null || scanned === 0;
+  const noSerpData = sc === 0;
 
-  // ── DEBUG: temporary diagnostic — remove after confirming SERP data flows correctly ──
+  // ── Combined SERP coverage ──
+  // (total acquired across all 3 features) / (total available across all 3 features)
+  const totalAcquired  = aioAcq  + paaAcq  + videoAcq;
+  const totalAvailable = aioAvail + paaAvail + videoAvail;
+  const combinedRate   = totalAvailable > 0
+    ? Math.min(100, Math.round((totalAcquired / totalAvailable) * 100))
+    : 0;
+
+  // ── Debug (remove after confirming SERP data flows correctly) ──
   const _serpDebug = [
     `snapshot=${analysis.serpApiSnapshot === null ? 'null' : analysis.serpApiSnapshot === undefined ? 'undefined' : 'present'}`,
-    `keywords=${Array.isArray(analysis.serpApiSnapshot?.keywords) ? analysis.serpApiSnapshot.keywords.length : 'n/a'}`,
-    `aioTotal=${analysis.serpApiSnapshot?.aioSummary?.total ?? 'n/a'}`,
-    `featSummary=${featSummary ? `scanned=${featSummary.scanned}` : 'none'}`,
+    `keywords=${Array.isArray(serpSnap.keywords) ? serpSnap.keywords.length : 'n/a'}`,
+    `featSummary=${featSummary
+      ? `scanned=${featSummary.scanned} paaAcq=${featSummary.paaClientCited ?? 'n/a'} vidAcq=${featSummary.videoClientCited ?? 'n/a'}`
+      : 'none'}`,
   ].join(' | ');
 
-  // Donut arc lengths (out of 100)
-  const availArc = scanned && aioAvail > 0 ? Math.round((aioAvail / scanned) * 100) : 0;
-  const wonArc   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
-
-  // Y-axis grid lines
-  const ySteps = 4;
+  // ── Y-axis grid lines ──
+  const ySteps     = 4;
   const yGridLines = Array.from({ length: ySteps + 1 }, (_, i) => {
     const val = Math.round((maxCount / ySteps) * (ySteps - i));
     const y   = (i / ySteps) * CHART_H;
     return { val, y };
   });
 
-  // Factual SERP feature insight
+  // ── Factual SERP insight ──
   let serpInsight = '';
   if (noSerpData) {
     serpInsight = 'SERP feature data unavailable — run a fresh analysis to populate AI Overview, PAA, and video carousel counts.';
-  } else if (aioAvail === 0 && paaCount === 0 && videoCount === 0) {
-    serpInsight = `Of ${scanned} keywords scanned, none triggered an AI Overview, PAA box, or video carousel. Expand the keyword scan for a broader SERP feature picture.`;
+  } else if (aioAvail === 0 && paaAvail === 0 && videoAvail === 0) {
+    serpInsight = `Of ${sc} keywords scanned, none triggered an AI Overview, PAA box, or video carousel.`;
   } else {
     const parts: string[] = [];
-    if (aioAvail > 0) parts.push(`${aioAvail} trigger AI Overviews (client cited in ${aioAcq})`);
-    if (paaCount > 0)  parts.push(`${paaCount} trigger PAA boxes`);
-    if (videoCount > 0) parts.push(`${videoCount} trigger video carousels`);
-    serpInsight = `Of ${scanned} keywords scanned: ${parts.join(', ')}. Based on a live SerpAPI scan.`;
+    if (aioAvail > 0)   parts.push(`${aioAvail} trigger AI Overviews (client cited in ${aioAcq})`);
+    if (paaAvail > 0)   parts.push(`${paaAvail} trigger PAA boxes (client cited in ${paaAcq})`);
+    if (videoAvail > 0) parts.push(`${videoAvail} trigger video carousels (client cited in ${videoAcq})`);
+    serpInsight = `Of ${sc} keywords scanned: ${parts.join(', ')}. Source: SerpAPI live scan.`;
   }
 
   return (
@@ -86,170 +186,142 @@ export default function FootprintSection({ analysis }: Props) {
       {/* Header */}
       <div>
         <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Keyword Footprint</p>
-        <h3 className="text-orbit-primary text-lg font-semibold mt-1">Ranking Distribution &amp; AIO Coverage</h3>
+        <h3 className="text-orbit-primary text-lg font-semibold mt-1">Ranking Distribution &amp; SERP Coverage</h3>
       </div>
 
-      {/* ── Section 1: Ranking Distribution ── */}
-      <div className="flex flex-col gap-3">
-        <p className="text-orbit-secondary text-xs font-medium">Where Your Rankings Live</p>
-        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
-          <svg
-            viewBox={`0 0 ${CHART_W} ${CHART_H + 48}`}
-            width="100%"
-            aria-label="Bar chart of keyword ranking distribution"
-            role="img"
-          >
-            {/* Y-axis grid lines + labels */}
-            {yGridLines.map(({ val, y }) => (
-              <g key={y}>
-                <line
-                  x1={32} y1={y} x2={CHART_W} y2={y}
-                  stroke="rgba(255,255,255,0.06)" strokeWidth="1"
-                />
-                <text x={28} y={y + 4} textAnchor="end" fontSize="10" fill="#555570">{val}</text>
-              </g>
-            ))}
+      {/* Two-column layout: bar chart left | SERP features right */}
+      <div className="flex gap-4 items-start">
 
-            {/* Bars */}
-            {BUCKETS.map((b, i) => {
-              const count  = (positionDist[b.key] as number) ?? 0;
-              const pct    = totalKws > 0 ? Math.round((count / totalKws) * 100) : 0;
-              const barH   = count > 0 ? Math.max(4, (count / maxCount) * CHART_H) : 0;
-              const cx     = 32 + COL_STEP * i + COL_STEP / 2;
-              const barX   = cx - BAR_W / 2;
-              const barY   = CHART_H - barH;
-
-              return (
-                <g key={b.key}>
-                  {/* Bar */}
-                  {count > 0 && (
-                    <rect
-                      x={barX} y={barY}
-                      width={BAR_W} height={barH}
-                      fill={b.hex} rx="4"
-                    />
-                  )}
-                  {/* Count label above bar */}
-                  <text
-                    x={cx} y={count > 0 ? barY - 6 : CHART_H - 6}
-                    textAnchor="middle" fontSize="12" fontWeight="600" fill="#F0F0FF"
-                  >
-                    {count.toLocaleString()}
-                  </text>
-                  {/* X-axis label */}
-                  <text x={cx} y={CHART_H + 18} textAnchor="middle" fontSize="11" fill="#8888AA">{b.label}</text>
-                  {/* % sub-label */}
-                  <text x={cx} y={CHART_H + 32} textAnchor="middle" fontSize="10" fill="#555570">{pct}%</text>
+        {/* ── LEFT: Ranking Distribution ── */}
+        <div className="flex flex-col gap-3" style={{ flex: '0 0 52%' }}>
+          <p className="text-orbit-secondary text-xs font-medium">Where Your Rankings Live</p>
+          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
+            <svg
+              viewBox={`0 0 ${CHART_W} ${CHART_H + 44}`}
+              width="100%"
+              aria-label="Bar chart of keyword ranking distribution"
+              role="img"
+            >
+              {/* Y-axis grid + labels */}
+              {yGridLines.map(({ val, y }) => (
+                <g key={y}>
+                  <line x1={28} y1={y} x2={CHART_W} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                  <text x={24} y={y + 4} textAnchor="end" fontSize="9" fill="#555570">{val}</text>
                 </g>
-              );
-            })}
+              ))}
 
-            {/* X-axis baseline */}
-            <line x1={32} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="#1E1E2E" strokeWidth="1" />
-          </svg>
+              {/* Bars */}
+              {BUCKETS.map((b, i) => {
+                const count = (positionDist[b.key] as number) ?? 0;
+                const pct   = totalKws > 0 ? Math.round((count / totalKws) * 100) : 0;
+                const barH  = count > 0 ? Math.max(4, (count / maxCount) * CHART_H) : 0;
+                const cx    = 28 + COL_STEP * i + COL_STEP / 2;
+                const barX  = cx - BAR_W / 2;
+                const barY  = CHART_H - barH;
+
+                return (
+                  <g key={b.key}>
+                    {count > 0 && (
+                      <rect x={barX} y={barY} width={BAR_W} height={barH} fill={b.hex} rx="3" />
+                    )}
+                    <text
+                      x={cx} y={count > 0 ? barY - 5 : CHART_H - 5}
+                      textAnchor="middle" fontSize="10" fontWeight="600" fill="#F0F0FF"
+                    >
+                      {count.toLocaleString()}
+                    </text>
+                    <text x={cx} y={CHART_H + 14} textAnchor="middle" fontSize="9" fill="#8888AA">{b.label}</text>
+                    <text x={cx} y={CHART_H + 26} textAnchor="middle" fontSize="8" fill="#555570">{pct}%</text>
+                  </g>
+                );
+              })}
+
+              {/* X-axis baseline */}
+              <line x1={28} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="#1E1E2E" strokeWidth="1" />
+            </svg>
+          </div>
+        </div>
+
+        {/* ── RIGHT: SERP Features ── */}
+        <div className="flex flex-col gap-2" style={{ flex: 1 }}>
+          <p className="text-orbit-secondary text-xs font-medium">SERP Features</p>
+
+          {/* Combined donut: total acquired / total available across all 3 features */}
+          <div className="flex justify-center py-1">
+            <div className="relative" style={{ width: '96px', height: '96px' }}>
+              <svg viewBox="0 0 36 36" width="96" height="96" style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="3.2" />
+                <circle
+                  cx="18" cy="18" r="15.9"
+                  fill="none" stroke="#6C63FF" strokeWidth="3.2"
+                  strokeLinecap="round"
+                  strokeDasharray={`${combinedRate} 100`}
+                />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span style={{ color: '#6C63FF', fontWeight: 700, fontSize: '20px', lineHeight: 1 }}>
+                  {combinedRate}%
+                </span>
+                <span style={{ color: '#555570', fontSize: '8px', marginTop: '2px', textAlign: 'center', lineHeight: 1.2 }}>
+                  SERP<br />coverage
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* AIO: rate = aioAcq / aioAvail */}
+          <SerpFeatureCard
+            label="AI Overviews"
+            color="#6C63FF"
+            rate={aioRate}
+            acquired={aioAcq}
+            available={aioAvail}
+            acquiredLabel="cited"
+            availableLabel="available"
+            noData={noSerpData}
+          />
+
+          {/* PAA: rate = paaAcq / paaAvail */}
+          <SerpFeatureCard
+            label="People Also Ask"
+            color="#06B6D4"
+            rate={paaRate}
+            acquired={paaAcq}
+            available={paaAvail}
+            acquiredLabel="cited"
+            availableLabel="available"
+            noData={noSerpData}
+          />
+
+          {/* Video: rate = videoAcq / videoAvail */}
+          <SerpFeatureCard
+            label="Video Carousel"
+            color="#F59E0B"
+            rate={videoRate}
+            acquired={videoAcq}
+            available={videoAvail}
+            acquiredLabel="cited"
+            availableLabel="available"
+            noData={noSerpData}
+          />
         </div>
       </div>
 
-      {/* ── Section 2: SERP Features ── */}
-      <div className="flex flex-col gap-3">
-        <p className="text-orbit-secondary text-xs font-medium">SERP Features</p>
-
-        {/* AIO row: donut + Available + Covered */}
-        <div className="flex items-stretch gap-3">
-
-          {/* Donut */}
-          <div className="relative shrink-0" style={{ width: '110px', height: '110px' }}>
-            <svg viewBox="0 0 36 36" width="110" height="110" style={{ transform: 'rotate(-90deg)' }}>
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#2A2A3D" strokeWidth="3.2" />
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#6C63FF" strokeWidth="3.2"
-                strokeLinecap="round" strokeDasharray={`${availArc} 100`} />
-              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#22C55E" strokeWidth="3.2"
-                strokeLinecap="round" strokeDasharray={`${wonArc} 100`} opacity="0.85" />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-orbit-accent font-bold text-xl leading-none">{aioRate}%</span>
-              <span className="text-orbit-tertiary text-[9px] mt-0.5">AIO coverage</span>
-            </div>
-          </div>
-
-          {/* AIOs Available */}
-          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3 flex-1">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span className="w-2 h-2 rounded-full bg-orbit-accent inline-block" />
-              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">AI Overviews</span>
-            </div>
-            <p className="text-orbit-primary text-3xl font-semibold leading-none mb-1">{aioAvail}</p>
-            <p className="text-orbit-secondary text-[11px]">
-              {noSerpData
-                ? 'Re-run analysis to scan SERP features'
-                : `${aioAvail} of ${scanned} keywords scanned trigger AI Overviews`}
-            </p>
-          </div>
-
-          {/* AIOs Covered */}
-          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3 flex-1">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
-              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">AIOs Covered</span>
-            </div>
-            <p className="text-green-400 text-3xl font-semibold leading-none mb-1">{aioAcq}</p>
-            <p className="text-orbit-secondary text-[11px]">AI Overviews citing this site</p>
-            <p className="text-orbit-tertiary text-[9px] mt-1">Source: SerpAPI live SERP scan</p>
-          </div>
-
+      {/* AIO gap alert */}
+      {aioRate < 20 && aioAvail > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+          <p className="text-amber-400 text-xs">
+            <strong>AIO exposure gap:</strong> {aioAvail - aioAcq} AI Overviews run on this site&apos;s
+            target keywords without citing it. Each uncaptured AIO is a brand visibility moment lost to competitors.
+          </p>
         </div>
+      )}
 
-        {/* PAA + Video row */}
-        <div className="grid grid-cols-2 gap-3">
-
-          {/* PAA */}
-          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span className="w-2 h-2 rounded-full bg-cyan-500 inline-block" />
-              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">People Also Ask</span>
-            </div>
-            <p className="text-orbit-primary text-3xl font-semibold leading-none mb-1">{paaCount}</p>
-            <p className="text-orbit-secondary text-[11px]">
-              {noSerpData
-                ? 'Re-run analysis to scan SERP features'
-                : `${paaCount} of ${scanned} keywords trigger PAA boxes`}
-            </p>
-            <p className="text-orbit-tertiary text-[9px] mt-1">Source: SerpAPI live SERP scan</p>
-          </div>
-
-          {/* Video */}
-          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
-              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">Video Carousel</span>
-            </div>
-            <p className="text-orbit-primary text-3xl font-semibold leading-none mb-1">{videoCount}</p>
-            <p className="text-orbit-secondary text-[11px]">
-              {noSerpData
-                ? 'Re-run analysis to scan SERP features'
-                : `${videoCount} of ${scanned} keywords trigger video results`}
-            </p>
-            <p className="text-orbit-tertiary text-[9px] mt-1">Source: SerpAPI live SERP scan</p>
-          </div>
-
-        </div>
-
-        {/* AIO gap alert */}
-        {aioRate < 20 && aioAvail > 0 && (
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
-            <p className="text-amber-400 text-xs">
-              <strong>AIO exposure gap:</strong> {aioAvail - aioAcq} AI Overviews run on this site&apos;s target keywords without citing it. Each uncaptured AIO is a brand visibility moment lost to competitors.
-            </p>
-          </div>
-        )}
-
-        {/* Factual SERP insight */}
-        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
-          <p className="text-orbit-secondary text-xs leading-relaxed">{serpInsight}</p>
-          {/* DEBUG — remove once SERP data confirmed working */}
-          <p className="text-orbit-tertiary text-[9px] mt-2 font-mono">{_serpDebug}</p>
-        </div>
-
+      {/* Factual SERP insight */}
+      <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
+        <p className="text-orbit-secondary text-xs leading-relaxed">{serpInsight}</p>
+        {/* DEBUG — remove once SERP data confirmed working */}
+        <p className="text-orbit-tertiary text-[9px] mt-2 font-mono">{_serpDebug}</p>
       </div>
 
     </div>
