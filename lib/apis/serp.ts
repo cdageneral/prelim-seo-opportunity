@@ -52,6 +52,11 @@ export interface SerpApiSnapshot {
     aioRate:     number;   // withAIO / total
     clientAIORate: number; // clientCited / withAIO
   };
+  serpFeatureSummary: {
+    scanned:    number;   // Total keywords scanned
+    withPAA:    number;   // Keywords that triggered a People Also Ask box
+    withVideo:  number;   // Keywords that triggered a video carousel
+  };
   topAIOCompetitors: Array<{ domain: string; citedCount: number }>;
   fetchedAt: string;
 }
@@ -190,6 +195,18 @@ export async function batchKeywordScan(
   return results;
 }
 
+// ─── SERP Feature Summary ─────────────────────────────────────────────────────
+
+function buildSerpFeatureSummary(
+  keywords: KeywordSerpData[]
+): SerpApiSnapshot['serpFeatureSummary'] {
+  return {
+    scanned:   keywords.length,
+    withPAA:   keywords.filter(k => k.paaQuestions.length > 0).length,
+    withVideo: keywords.filter(k => k.serpFeatures.includes('video_carousel')).length,
+  };
+}
+
 // ─── AIO Summary ──────────────────────────────────────────────────────────────
 
 function buildAIOSummary(
@@ -247,6 +264,7 @@ export async function getSerpApiSnapshot(
     domain,
     keywords: keywordData,
     aioSummary: buildAIOSummary(keywordData, domain),
+    serpFeatureSummary: buildSerpFeatureSummary(keywordData),
     topAIOCompetitors: buildTopAIOCompetitors(keywordData, domain),
     fetchedAt: new Date().toISOString(),
   };
