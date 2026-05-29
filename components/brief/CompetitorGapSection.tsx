@@ -105,6 +105,26 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
   const topCompTraffic: number = topComp?.organicTraffic ?? 0;
   const topCompPct = totalMonthly > 0 ? (topCompTraffic / totalMonthly) * 100 : 0;
 
+  // Top SERP competitor (highest traffic, NOT in manualSet)
+  const topSerpComp = [...rawCompetitors]
+    .sort((a, b) => (b.organicTraffic ?? 0) - (a.organicTraffic ?? 0))
+    .find((c: any) => !manualSet.has(normalizeDomain(c.domain ?? '')));
+  const topSerpDomain  = topSerpComp?.domain ?? '—';
+  const topSerpTraffic: number = topSerpComp?.organicTraffic ?? 0;
+  const topSerpPct     = totalMonthly > 0 ? (topSerpTraffic / totalMonthly) * 100 : 0;
+
+  // Top manual/tracked competitor (highest traffic among manually added)
+  const topManualComp = [...rawCompetitors]
+    .sort((a, b) => (b.organicTraffic ?? 0) - (a.organicTraffic ?? 0))
+    .find((c: any) => manualSet.has(normalizeDomain(c.domain ?? '')));
+  const topManualDomain  = topManualComp?.domain ?? '—';
+  const topManualTraffic: number = topManualComp?.organicTraffic ?? 0;
+  const topManualPct     = totalMonthly > 0 ? (topManualTraffic / totalMonthly) * 100 : 0;
+
+  // Lead multipliers (client annual vs competitor annual)
+  const serpMultiplier   = topSerpTraffic   > 0 ? Math.round(clientTraffic / topSerpTraffic)   : null;
+  const manualMultiplier = topManualTraffic  > 0 ? Math.round(clientTraffic / topManualTraffic) : null;
+
   // Build player rows: client first, then competitors with source badge
   const players: PlayerRow[] = [
     { domain: clientName, traffic: clientTraffic, isClient: true, source: 'client' },
@@ -176,12 +196,73 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
         </div>
       </div>
 
-      {/* ── Callout ───────────────────────────────────────────────────────── */}
-      {calloutText ? (
-        <div className="bg-orbit-surface border-l-[3px] border-orbit-accent rounded-r-lg px-4 py-3">
-          <p className="text-orbit-secondary text-sm leading-relaxed">{firstSentences(calloutText, 2)}</p>
+      {/* ── Competitive insight: client vs top SERP vs top tracked ───────── */}
+      {totalMonthly > 0 && (
+        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex items-stretch gap-0">
+
+          {/* Client */}
+          <div style={{ flex: 1, paddingRight: '20px' }}>
+            <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: '0 0 4px' }}>Client</p>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#6C63FF', margin: 0 }}>
+              {totalMonthly > 0 ? ((clientTraffic / totalMonthly) * 100).toFixed(1) : '0'}%
+            </p>
+            <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>{clientName}</p>
+            <p className="text-orbit-tertiary" style={{ fontSize: '11px', margin: 0 }}>{fmtAnnual(clientTraffic)} annual searches</p>
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: '1px', background: '#1E1E2E', flexShrink: 0 }} />
+
+          {/* Top SERP competitor */}
+          <div style={{ flex: 1, padding: '0 20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: 0 }}>Top competitor</p>
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'rgba(6,182,212,0.15)', color: '#06B6D4' }}>SERP</span>
+            </div>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#06B6D4', margin: 0 }}>
+              {topSerpPct.toFixed(1)}%
+            </p>
+            <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>{topSerpDomain}</p>
+            <p className="text-orbit-tertiary" style={{ fontSize: '11px', margin: 0 }}>{fmtAnnual(topSerpTraffic)} annual searches</p>
+          </div>
+
+          {/* Divider */}
+          <div style={{ width: '1px', background: '#1E1E2E', flexShrink: 0 }} />
+
+          {/* Top manual/tracked competitor */}
+          <div style={{ flex: 1, paddingLeft: '20px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+              <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: 0 }}>Brand competitor</p>
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'rgba(245,158,11,0.15)', color: '#F59E0B' }}>Tracked</span>
+            </div>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#F59E0B', margin: 0 }}>
+              {topManualPct.toFixed(1)}%
+            </p>
+            <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>
+              {topManualDomain !== '—' ? topManualDomain : <span className="text-orbit-tertiary">No tracked competitor</span>}
+            </p>
+            <p className="text-orbit-tertiary" style={{ fontSize: '11px', margin: 0 }}>
+              {topManualDomain !== '—' ? `${fmtAnnual(topManualTraffic)} annual searches` : 'Add via Competitors panel'}
+            </p>
+          </div>
+
         </div>
-      ) : null}
+      )}
+
+      {/* ── Computed takeaway ─────────────────────────────────────────────── */}
+      {(serpMultiplier !== null || manualMultiplier !== null) && (
+        <p className="text-orbit-tertiary" style={{ fontSize: '12px', margin: '-8px 0 0', padding: '0 2px' }}>
+          Client leads the nearest SERP competitor by{' '}
+          {serpMultiplier !== null && (
+            <span className="text-orbit-primary font-semibold">{serpMultiplier}×</span>
+          )}
+          {manualMultiplier !== null && (
+            <> and the tracked brand competitor by{' '}
+            <span className="text-orbit-primary font-semibold">{manualMultiplier}×</span></>
+          )}{' '}
+          on annual search volume.
+        </p>
+      )}
 
       {/* ── Player Table ──────────────────────────────────────────────────── */}
       {totalMonthly > 0 && (
