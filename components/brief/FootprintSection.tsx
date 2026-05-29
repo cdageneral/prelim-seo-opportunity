@@ -91,6 +91,17 @@ export default function FootprintSection({ analysis }: Props) {
   const totalKws     = Object.values(positionDist as Record<string, number>).reduce((a, b) => a + b, 0);
   const maxCount     = Math.max(...BUCKETS.map(b => (positionDist[b.key] as number) ?? 0), 1);
 
+  // ── Volume outside top 3 (from topKeywords search volume) ──
+  const topKeywords: any[] = semrush.topKeywords ?? [];
+  const totalVolume     = topKeywords.reduce((sum: number, k: any) => sum + (k.searchVolume ?? 0), 0);
+  const volumeInTop3    = topKeywords
+    .filter((k: any) => k.position <= 3)
+    .reduce((sum: number, k: any) => sum + (k.searchVolume ?? 0), 0);
+  const volumeOutsideTop3 = totalVolume - volumeInTop3;
+  const pctOutsideTop3    = totalVolume > 0
+    ? Math.round((volumeOutsideTop3 / totalVolume) * 100)
+    : 0;
+
   // ── AIO data (stored as dedicated DB columns) ──
   const aioAvail = analysis.aioAvailable ?? 0;
   const aioAcq   = analysis.aioAcquired  ?? 0;
@@ -240,6 +251,34 @@ export default function FootprintSection({ analysis }: Props) {
               <line x1={28} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="#1E1E2E" strokeWidth="1" />
             </svg>
           </div>
+
+          {/* Volume outside top 3 stat — annualized (monthly × 12) */}
+          {totalVolume > 0 && (
+            <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3 flex items-center gap-4">
+              {/* Left: big % + label */}
+              <div className="shrink-0" style={{ textAlign: 'left' }}>
+                <p style={{ color: '#EF4444', fontSize: '32px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
+                  {pctOutsideTop3}%
+                </p>
+                <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.07em', margin: '4px 0 0', lineHeight: 1.3 }}>
+                  volume<br />outside top 3
+                </p>
+              </div>
+              {/* Divider */}
+              <div style={{ width: '1px', height: '48px', background: '#1E1E2E', flexShrink: 0 }} />
+              {/* Right: annualized counts */}
+              <div style={{ textAlign: 'left' }}>
+                <p style={{ color: '#F0F0FF', fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                  {(volumeOutsideTop3 * 12).toLocaleString()}
+                  {' '}<span style={{ color: '#555570', fontWeight: 400 }}>out of</span>{' '}
+                  {(totalVolume * 12).toLocaleString()}
+                </p>
+                <p style={{ color: '#8888AA', fontSize: '12px', margin: '4px 0 0' }}>
+                  annual searches outside top 3 ranks
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── RIGHT: SERP Features ── */}
