@@ -135,8 +135,8 @@ export function opportunityPrompt(
   const profoundScore = profound?.overallScore ?? 0;
   const brandMisalign = (profound?.brandContext?.misalignments ?? []).join('; ');
   const topicGaps     = (profound?.topicAuthority ?? [])
-    .filter(t => t.competitor && t.score < 50)
-    .map(t => `${t.topic} (owned by ${t.competitor})`)
+    .filter((t: any) => t.competitor && t.score < 50)
+    .map((t: any) => `${t.topic} (owned by ${t.competitor})`)
     .join(', ');
 
   return `You are a senior SEO and GEO strategist building a CMO-level opportunity brief.
