@@ -36,7 +36,7 @@ function buildKeywordRows(analysis: any): KeywordRow[] {
 
   const rows: KeywordRow[] = [];
 
-  // Ranked keywords (client has a position)
+  // Ranked keywords (client has a position) — all available
   for (const k of (semrush.topKeywords ?? [])) {
     const serp = serpMap[k.keyword?.toLowerCase()];
     rows.push({
@@ -56,7 +56,7 @@ function buildKeywordRows(analysis: any): KeywordRow[] {
     });
   }
 
-  // Gap keywords (competitor ranks, client doesn't)
+  // Gap keywords — all available
   const existing = new Set(rows.map(r => r.keyword.toLowerCase()));
   for (const k of (semrush.gapKeywords ?? [])) {
     if (existing.has(k.keyword?.toLowerCase())) continue;
@@ -151,7 +151,7 @@ function Pill({ active, cited, label }: { active: boolean; cited: boolean; label
       cited
         ? 'bg-green-500/10 border-green-500/30 text-green-400'
         : 'bg-orbit-muted border-orbit-border text-orbit-tertiary'
-    }`}>
+    }`} title={cited ? `Client cited in ${label}` : `${label} exists — client not cited`}>
       {cited ? `✓ ${label}` : label}
     </span>
   );
@@ -270,10 +270,11 @@ export default function KeywordsModal({ analysis, onClose }: Props) {
         </div>
 
         {/* Footer legend */}
-        <div className="px-6 py-3 border-t border-orbit-border shrink-0 flex items-center gap-4">
-          <span className="text-[10px] text-orbit-tertiary">SERP features based on keywords scanned by SerpAPI at analysis time</span>
-          <span className="text-[10px] bg-green-500/10 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded-full">✓ cited = client appears in this feature</span>
-          <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">gap = client not ranking</span>
+        <div className="px-6 py-3 border-t border-orbit-border shrink-0 flex items-center gap-4 flex-wrap">
+          <span className="text-[10px] text-orbit-tertiary">All ranked + gap keywords from Semrush · market metrics use top 20+20 · SERP features from SerpAPI scan (5 keywords)</span>
+          <span className="text-[10px] bg-green-500/10 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded-full">✓ AIO = client cited inside that AI Overview</span>
+          <span className="text-[10px] bg-orbit-muted border border-orbit-border text-orbit-tertiary px-1.5 py-0.5 rounded-full">AIO = feature exists, client not cited</span>
+          <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">gap = client not ranking for this keyword</span>
         </div>
       </div>
     </div>
