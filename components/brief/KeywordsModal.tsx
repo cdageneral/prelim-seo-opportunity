@@ -147,7 +147,7 @@ async function downloadXLSX(rows: KeywordRow[], clientName: string) {
 function Pill({ active, cited, label }: { active: boolean; cited: boolean; label: string }) {
   if (!active) return <span className="text-orbit-tertiary text-xs">—</span>;
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${
+    <span className={`text-[10px] px-2.5 py-1 rounded-full border font-medium ${
       cited
         ? 'bg-green-500/10 border-green-500/30 text-green-400'
         : 'bg-orbit-muted border-orbit-border text-orbit-tertiary'
@@ -234,7 +234,7 @@ export default function KeywordsModal({ analysis, onClose }: Props) {
                     <div className="flex items-center gap-2">
                       <span className="text-orbit-primary text-xs">{row.keyword}</span>
                       {row.type === 'gap' && (
-                        <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full shrink-0">gap</span>
+                        <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full shrink-0">gap</span>
                       )}
                     </div>
                   </td>
