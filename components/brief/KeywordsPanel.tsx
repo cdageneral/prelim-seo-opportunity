@@ -42,14 +42,40 @@ interface Props {
 }
 
 // ─── Branded detection ────────────────────────────────────────────────────────
-// Extracts the root brand name from a domain (strips TLD + www).
-// Returns true if the keyword contains any brand token from client or competitors.
+// Strips protocol, www, and TLD — returns lowercase alphanum brand root.
+//   "sonobello.com" → "sonobello"
 //
-// Handles compound-word domains where the keyword uses spaces:
-//   domain "sonobello.com"  → brand "sonobello"
-//   keyword "sono bello"    → kwNorm "sonobello" → match ✓
-//   keyword "sono bello atlanta" → kwNorm "sonobelloatlanta" → contains "sonobello" ✓
-//   keyword "sonobell"      → kwNorm "sonobell" → brand starts with kwNorm ✓
+// isBranded uses three layers to catch the client's brand (and competitors) in any keyword:
+//   1. Exact substring — normalized keyword contains brand token (or vice-versa)
+//   2. Sub-token split — compound brand (e.g. "sonobello") → halves ("sono", "bello");
+//      keyword containing either half is branded
+//   3. Fuzzy per-word — each word in the keyword vs each token, Levenshtein distance ≤
+//      max(1, floor(minLen/4)); catches misspellings & phonetic variants:
+//        "solobello" (ed=1 vs "sonobello") → branded
+//        "sonobella" (ed=1 vs "sonobello") → branded
+//        "sona"      (ed=1 vs "sono")      → branded
+//        "bella"     (ed=1 vs "bello")     → branded
+//        "sonabella" (ed=2 vs "sonobello") → branded
+
+// Compact 2-row Levenshtein (O(m×n) time, O(n) space)
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array<number>(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
 
 function extractBrand(domain: string): string {
   return domain
@@ -58,30 +84,58 @@ function extractBrand(domain: string): string {
     .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
     .split('.')[0]
     .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');  // strip hyphens/special chars
+    .replace(/[^a-z0-9]/g, '');
 }
 
 function isBranded(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
-  const kw     = keyword.toLowerCase();
-  // Normalize: remove spaces and non-alpha chars so "sono bello" → "sonobello"
+  if (!keyword) return false;
+  const kw     = keyword.toLowerCase().trim();
   const kwNorm = kw.replace(/[^a-z0-9]/g, '');
+  if (!kwNorm) return false;
 
-  const brands = [clientDomain, ...competitorDomains]
+  // Base brand tokens from client + competitor domains (min 4 chars)
+  const baseBrands = [clientDomain, ...competitorDomains]
     .map(extractBrand)
-    .filter(b => b.length >= 4);  // skip very short tokens to avoid false positives
+    .filter(b => b.length >= 4);
+  if (baseBrands.length === 0) return false;
 
-  return brands.some(brand => {
-    // 1. Keyword (with spaces) contains brand token (e.g. "bello" in "sono bello cost")
-    if (kw.includes(brand)) return true;
-    // 2. Keyword normalized (no spaces) contains brand (e.g. "sonobello" in "sonobelloatlanta")
-    if (kwNorm.includes(brand)) return true;
-    // 3. Brand starts with normalized keyword — catches truncated brand names
-    //    e.g. brand="sonobello", kwNorm="sonobell" → brand starts with kwNorm ✓
-    if (brand.length >= 5 && brand.startsWith(kwNorm) && kwNorm.length >= 5) return true;
-    // 4. Normalized keyword starts with brand — catches "sonobelloreview" etc.
-    if (kwNorm.startsWith(brand) && brand.length >= 5) return true;
-    return false;
-  });
+  // Expand: for compound brand names, add first-half and last-half as independent tokens
+  // e.g. "sonobello" (9) → "sono" (4) + "bello" (5)
+  // This lets us catch keywords that contain just one component of the brand name.
+  const allTokens = new Set<string>(baseBrands);
+  for (const brand of baseBrands) {
+    const half = Math.floor(brand.length / 2);
+    if (half >= 4)                  allTokens.add(brand.slice(0, half));
+    if (brand.length - half >= 4)   allTokens.add(brand.slice(half));
+  }
+
+  // ── Pass 1: exact substring checks ──────────────────────────────────────────
+  for (const token of allTokens) {
+    if (kwNorm.includes(token))                               return true;  // "sonobelloatlanta" ⊇ "sonobello"
+    if (token.includes(kwNorm) && kwNorm.length >= 4)        return true;  // keyword IS the brand
+    if (token.length >= 5 && kwNorm.length >= 4 &&
+        token.startsWith(kwNorm))                            return true;  // "sonobell" → "sonobello" truncated
+  }
+
+  // ── Pass 2: fuzzy per-word matching ─────────────────────────────────────────
+  // Split keyword into individual words; fuzzy-match each against every brand token.
+  // Threshold = max(1, floor(minLen / 4)) — allows 1 edit for short words, 2 for 8–11 chars.
+  const kwWords = kw
+    .split(/\s+/)
+    .map(w => w.replace(/[^a-z0-9]/g, ''))
+    .filter(w => w.length >= 4);
+
+  for (const word of kwWords) {
+    for (const token of allTokens) {
+      const minLen    = Math.min(word.length, token.length);
+      const threshold = Math.max(1, Math.floor(minLen / 4));
+      // Quick length guard: if lengths differ by more than threshold+1, skip
+      if (Math.abs(word.length - token.length) > threshold + 1) continue;
+      if (editDistance(word, token) <= threshold) return true;
+    }
+  }
+
+  return false;
 }
 
 // ─── Merge semrush + DB rows ──────────────────────────────────────────────────
@@ -194,14 +248,22 @@ function applyFilter(rows: KeywordRow[], filter: KwFilter): KeywordRow[] {
   switch (filter) {
     case 'branded':       return rows.filter(r => r.branded);
     case 'nonBranded':    return rows.filter(r => !r.branded);
-    case 'competitorGap': return rows.filter(r => !r.branded && r.type === 'gap' && r.searchVolume >= 2400);
+    case 'competitorGap': return rows.filter(r => !r.branded && r.type === 'gap');
     default:              return rows;
   }
 }
 
 // ─── Downloads ────────────────────────────────────────────────────────────────
 
-function downloadCSV(rows: KeywordRow[], clientName: string) {
+// Maps filter id → human label and filename slug
+const FILTER_META: Record<KwFilter, { label: string; slug: string }> = {
+  all:           { label: 'All',           slug: 'all'            },
+  branded:       { label: 'Branded',       slug: 'branded'        },
+  nonBranded:    { label: 'Non-branded',   slug: 'non-branded'    },
+  competitorGap: { label: 'Competitor Gap', slug: 'competitor-gap' },
+};
+
+function downloadCSV(rows: KeywordRow[], clientName: string, filterSlug: string) {
   const headers = ['Keyword','Search Volume','Client Rank','Type','Branded','Source','AI Overview','Client in AIO','PAA','Client in PAA','Video','Client in Video'];
   const lines   = [
     headers.join(','),
@@ -224,12 +286,12 @@ function downloadCSV(rows: KeywordRow[], clientName: string) {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `${clientName.replace(/\s+/g, '-')}-keywords.csv`;
+  a.download = `${clientName.replace(/\s+/g, '-')}-keywords-${filterSlug}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-async function downloadXLSX(rows: KeywordRow[], clientName: string) {
+async function downloadXLSX(rows: KeywordRow[], clientName: string, filterSlug: string) {
   const XLSX = await import('xlsx');
   const data = rows.map(r => ({
     'Keyword':          r.keyword,
@@ -252,7 +314,7 @@ async function downloadXLSX(rows: KeywordRow[], clientName: string) {
     { wch: 40 }, { wch: 14 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 9 },
     { wch: 13 }, { wch: 13 }, { wch: 16 }, { wch: 13 }, { wch: 15 }, { wch: 14 },
   ];
-  XLSX.writeFile(wb, `${clientName.replace(/\s+/g, '-')}-keywords.xlsx`);
+  XLSX.writeFile(wb, `${clientName.replace(/\s+/g, '-')}-keywords-${filterSlug}.xlsx`);
 }
 
 // ─── Pill ─────────────────────────────────────────────────────────────────────
@@ -476,24 +538,26 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
 
           {/* Download CSV */}
           <button
-            onClick={() => downloadCSV(visibleRows, clientName)}
+            onClick={() => downloadCSV(visibleRows, clientName, FILTER_META[filter].slug)}
+            title={`Download ${FILTER_META[filter].label} keywords as CSV`}
             className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            CSV
+            {filter === 'all' ? 'CSV' : <>{FILTER_META[filter].label}<span className="opacity-50 ml-0.5">CSV</span></>}
           </button>
 
           {/* Download Excel */}
           <button
-            onClick={() => downloadXLSX(visibleRows, clientName)}
+            onClick={() => downloadXLSX(visibleRows, clientName, FILTER_META[filter].slug)}
+            title={`Download ${FILTER_META[filter].label} keywords as Excel`}
             className="text-xs text-green-400 hover:text-green-300 border border-green-500/30 hover:border-green-500/60 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
             </svg>
-            Excel
+            {filter === 'all' ? 'Excel' : <>{FILTER_META[filter].label}<span className="opacity-50 ml-0.5">Excel</span></>}
           </button>
         </div>
       </div>
@@ -570,7 +634,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
         })}
         {filter === 'competitorGap' && (
           <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
-            non-branded · gap · vol ≥ 2,400/mo
+            non-branded · client not ranking
           </span>
         )}
       </div>
@@ -634,7 +698,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
                     onClick={() => handleDelete(row)}
                     disabled={deletingKey === row.key}
                     title="Remove keyword"
-                    className="opacity-0 group-hover:opacity-100 transition-opacity text-orbit-tertiary hover:text-red-400 disabled:opacity-30"
+                    className="opacity-30 hover:opacity-100 transition-opacity text-orbit-tertiary hover:text-red-400 disabled:opacity-20"
                   >
                     {deletingKey === row.key
                       ? <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
