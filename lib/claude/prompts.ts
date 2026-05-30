@@ -11,7 +11,7 @@
 
 import type { SemrushSnapshot, SemrushKeyword }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
-import type { ProfoundSnapshot } from '../apis/profound';
+
 
 // ─── Pass 2.5: Category Breakdown ────────────────────────────────────────────
 //
@@ -122,7 +122,7 @@ export function opportunityPrompt(
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot
+  profound: any
 ): string {
   const positionDist = JSON.stringify(semrush.positionDist);
   // Sort by organicTraffic so manually-added competitors (traffic=0) don't steal top spot
@@ -132,9 +132,9 @@ export function opportunityPrompt(
     .join(', ');
 
   const aioStats = serp.aioSummary;
-  const profoundScore = profound.overallScore;
-  const brandMisalign = profound.brandContext.misalignments.join('; ');
-  const topicGaps     = profound.topicAuthority
+  const profoundScore = profound?.overallScore ?? 0;
+  const brandMisalign = (profound?.brandContext?.misalignments ?? []).join('; ');
+  const topicGaps     = (profound?.topicAuthority ?? [])
     .filter(t => t.competitor && t.score < 50)
     .map(t => `${t.topic} (owned by ${t.competitor})`)
     .join(', ');
@@ -201,7 +201,7 @@ export function narrativePrompt(
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot,
+  profound: any,
   personas: any[],
   opportunities: any[],
   categoryBreakdown: { page1CaptureRate: number; totalMonthlyDemand: number; totalPage1Demand: number }
@@ -218,8 +218,8 @@ export function narrativePrompt(
   const topComp         = [...semrush.competitors].sort((a, b) => b.organicTraffic - a.organicTraffic)[0]?.domain ?? 'the market leader';
   const aioRate         = Math.round(serp.aioSummary.aioRate * 100);
   const clientAIORate   = Math.round(serp.aioSummary.clientAIORate * 100);
-  const profoundScore   = profound.overallScore;
-  const brandDescription = profound.brandContext.summary;
+  const profoundScore    = profound?.overallScore ?? 0;
+  const brandDescription = profound?.brandContext?.summary ?? 'not yet assessed';
 
   return `You are a senior growth strategist writing an executive narrative for a CMO at ${clientName}.
 
@@ -298,7 +298,7 @@ export function pptPromptGenerator(
   opportunities: any[],
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot
+  profound: any
 ): string {
   return `You are creating a structured prompt for the Claude PPTX skill to generate a CMO-level pitch deck.
 
@@ -327,10 +327,10 @@ Visual: Bar comparison of client vs. top competitors in AI citations
 Source: SerpAPI live SERP data
 
 SLIDE 5 — LLM Brand Visibility
-Score: ${profound.overallScore}/100
-How AI describes us: "${profound.brandContext.summary}"
-Platform breakdown: ${profound.platformScores.map(p => `${p.platform}: ${p.score}`).join(', ')}
-Source: Profound API
+Score: ${profound?.overallScore ?? 0}/100
+How AI describes us: "${profound?.brandContext?.summary ?? 'not yet assessed'}"
+Platform breakdown: ${(profound?.platformScores ?? []).map((p: any) => `${p.platform}: ${p.score}`).join(', ')}
+Source: Live AI Probe (Claude + ChatGPT)
 
 SLIDE 6 — Opportunity #1
 Title: ${opportunities[0]?.title ?? 'Top Opportunity'}

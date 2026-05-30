@@ -15,7 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
-import type { ProfoundSnapshot } from '../apis/profound';
+
 import {
   personaPrompt,
   opportunityPrompt,
@@ -93,7 +93,7 @@ export async function generateOpportunities(
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot
+  profound: any
 ): Promise<any[]> {
   const prompt = opportunityPrompt(domain, industry, semrush, serp, profound);
 
@@ -115,7 +115,7 @@ export async function generateNarrative(
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot,
+  profound: any,
   personas: any[],
   opportunities: any[],
   categoryBreakdown: CategoryBreakdownResult
@@ -277,7 +277,7 @@ export async function generatePPTPrompt(
   opportunities: any[],
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot
+  profound: any
 ): Promise<string> {
   const systemPrompt = pptPromptGenerator(
     clientName, domain, industry,
@@ -328,7 +328,7 @@ export async function runFullSynthesis(
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: ProfoundSnapshot
+  profound: any
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}`);
 
