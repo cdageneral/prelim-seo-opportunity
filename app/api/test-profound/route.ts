@@ -1,9 +1,9 @@
 /**
- * GET /api/test-profound?domain=sonobello.com
+ * GET /api/test-profound
  *
- * Diagnostic: fires one Profound API call and returns the raw result or error.
- * Visit this URL in the browser to confirm Profound connectivity without
- * needing to run a full analysis.
+ * Diagnostic: pings the real Profound API (api.tryprofound.com) to confirm
+ * the API key is valid and the account is accessible. Returns the list of
+ * configured categories (or a clear error) without needing a full analysis.
  *
  * Remove this file before going to production.
  */
@@ -12,10 +12,10 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const maxDuration = 30;
 
-export async function GET(req: NextRequest) {
-  const domain  = req.nextUrl.searchParams.get('domain') ?? 'example.com';
+const REAL_BASE_URL = 'https://api.tryprofound.com/v1';
+
+export async function GET(_req: NextRequest) {
   const API_KEY = process.env.PROFOUND_API_KEY;
-  const BASE_URL = process.env.PROFOUND_BASE_URL ?? 'https://api.profound.io/v1';
 
   const env = {
     PROFOUND_API_KEY:  !!process.env.PROFOUND_API_KEY,
@@ -32,14 +32,15 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const url = new URL(`${BASE_URL}/visibility/overview`);
-  url.searchParams.set('domain', domain);
+  // Hit /v1/org/categories — requires no category_id, so it's a clean auth test
+  const url = `${REAL_BASE_URL}/org/categories`;
 
   try {
-    const res = await fetch(url.toString(), {
+    const res = await fetch(url, {
+      method: 'GET',
       signal: AbortSignal.timeout(20_000),
       headers: {
-        'Authorization': `Bearer ${API_KEY}`,
+        'X-API-Key':     API_KEY,
         'Content-Type':  'application/json',
       },
     });
@@ -51,7 +52,10 @@ export async function GET(req: NextRequest) {
         ok:         false,
         httpStatus: res.status,
         error:      text,
-        url:        url.toString(),
+        note:       res.status === 401 ? 'API key is invalid or expired' :
+                    res.status === 403 ? 'API key has no access — contact Profound support' :
+                    'Unexpected error from Profound API',
+        url,
         env,
       });
     }
@@ -59,16 +63,10 @@ export async function GET(req: NextRequest) {
     const data = JSON.parse(text);
 
     return NextResponse.json({
-      ok:                 true,
-      domain,
-      overall_score:      data.overall_score ?? null,
-      total_prompts:      data.total_prompts ?? null,
-      platforms:          (data.platforms ?? []).map((p: any) => ({
-        platform:      p.platform,
-        score:         p.score,
-        citation_rate: p.citation_rate,
-      })),
-      raw: data,
+      ok:         true,
+      note:       'API key is valid. Categories below — use category IDs to pull visibility data.',
+      categories: data,
+      url,
       env,
     });
 
@@ -76,7 +74,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok:    false,
       error: err?.message ?? String(err),
-      url:   url.toString(),
+      note:  'Network error — check that api.tryprofound.com is reachable from Vercel',
+      url,
       env,
     });
   }

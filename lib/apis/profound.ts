@@ -11,7 +11,7 @@
  *  - Citation rate per platform (ChatGPT, Perplexity, Gemini, Claude)
  */
 
-const BASE_URL = process.env.PROFOUND_BASE_URL ?? 'https://api.profound.io/v1';;
+const BASE_URL = process.env.PROFOUND_BASE_URL ?? 'https://api.tryprofound.com/v1';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,8 +73,8 @@ async function profoundGet<T>(path: string, params?: Record<string, string>): Pr
   const res = await fetch(url.toString(), {
     signal: AbortSignal.timeout(20_000),
     headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type':  'application/json',
+      'X-API-Key':    API_KEY,
+      'Content-Type': 'application/json',
     },
   });
 

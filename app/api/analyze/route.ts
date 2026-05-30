@@ -26,7 +26,7 @@ import { analyses, projects } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 import { getSemrushSnapshot } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot } from '@/lib/apis/serp';
-import { getProfoundSnapshot } from '@/lib/apis/profound';
+import { getLLMProbeSnapshot } from '@/lib/apis/llmProbe';
 
 export const maxDuration = 300;
 
@@ -81,11 +81,11 @@ export async function POST(req: NextRequest) {
   }).returning();
 
   console.log(`[OrbitIQ] Phase 1 starting for ${analysis.id} (${domain})`);
-  console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, PROFOUND: ${!!process.env.PROFOUND_API_KEY}`);
+  console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, OPENAI: ${!!process.env.OPENAI_API_KEY}`);
 
   try {
     // ── Data APIs — fault-tolerant, each has AbortSignal timeout ─────────────
-    const [semrush, profound] = await Promise.all([
+    const [semrush, llmProbe] = await Promise.all([
       getSemrushSnapshot(domain).catch(err => {
         console.error(`[OrbitIQ] Semrush failed:`, err);
         return {
@@ -95,13 +95,12 @@ export async function POST(req: NextRequest) {
           fetchedAt: new Date().toISOString(),
         } as any;
       }),
-      getProfoundSnapshot(domain).catch(err => {
-        console.error(`[OrbitIQ] Profound failed (skipping LLM data):`, err);
+      getLLMProbeSnapshot(project.clientName, domain, industry).catch(err => {
+        console.error(`[OrbitIQ] LLM probe failed:`, err);
         return {
-          domain, overallScore: 0, platformScores: [],
-          brandContext: { summary: '', positioning: [], misalignments: [] },
-          competitors: [], topicAuthority: [], visibilityTrend: [],
-          totalPromptsCovered: 0, fetchedAt: new Date().toISOString(),
+          source: 'llm_probe', probedAt: new Date().toISOString(),
+          prompts: [], platforms: [], overallScore: 0,
+          overallMentions: 0, overallTotal: 0,
         } as any;
       }),
     ]);
@@ -144,9 +143,9 @@ export async function POST(req: NextRequest) {
     // Save snapshots — keep status 'running' so /api/synthesize knows to proceed
     await db.update(analyses)
       .set({
-        semrushSnapshot:  semrush as any,
-        serpApiSnapshot:  serp    as any,
-        profoundSnapshot: profound as any,
+        semrushSnapshot:  semrush  as any,
+        serpApiSnapshot:  serp     as any,
+        profoundSnapshot: llmProbe as any,
       })
       .where(eq(analyses.id, analysis.id));
 
