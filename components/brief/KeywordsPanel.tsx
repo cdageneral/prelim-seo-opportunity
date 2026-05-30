@@ -44,6 +44,12 @@ interface Props {
 // ─── Branded detection ────────────────────────────────────────────────────────
 // Extracts the root brand name from a domain (strips TLD + www).
 // Returns true if the keyword contains any brand token from client or competitors.
+//
+// Handles compound-word domains where the keyword uses spaces:
+//   domain "sonobello.com"  → brand "sonobello"
+//   keyword "sono bello"    → kwNorm "sonobello" → match ✓
+//   keyword "sono bello atlanta" → kwNorm "sonobelloatlanta" → contains "sonobello" ✓
+//   keyword "sonobell"      → kwNorm "sonobell" → brand starts with kwNorm ✓
 
 function extractBrand(domain: string): string {
   return domain
@@ -51,15 +57,31 @@ function extractBrand(domain: string): string {
     .replace(/^www\./i, '')
     .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
     .split('.')[0]
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');  // strip hyphens/special chars
 }
 
 function isBranded(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
   const kw     = keyword.toLowerCase();
+  // Normalize: remove spaces and non-alpha chars so "sono bello" → "sonobello"
+  const kwNorm = kw.replace(/[^a-z0-9]/g, '');
+
   const brands = [clientDomain, ...competitorDomains]
     .map(extractBrand)
-    .filter(b => b.length > 2);
-  return brands.some(b => kw.includes(b));
+    .filter(b => b.length >= 4);  // skip very short tokens to avoid false positives
+
+  return brands.some(brand => {
+    // 1. Keyword (with spaces) contains brand token (e.g. "bello" in "sono bello cost")
+    if (kw.includes(brand)) return true;
+    // 2. Keyword normalized (no spaces) contains brand (e.g. "sonobello" in "sonobelloatlanta")
+    if (kwNorm.includes(brand)) return true;
+    // 3. Brand starts with normalized keyword — catches truncated brand names
+    //    e.g. brand="sonobello", kwNorm="sonobell" → brand starts with kwNorm ✓
+    if (brand.length >= 5 && brand.startsWith(kwNorm) && kwNorm.length >= 5) return true;
+    // 4. Normalized keyword starts with brand — catches "sonobelloreview" etc.
+    if (kwNorm.startsWith(brand) && brand.length >= 5) return true;
+    return false;
+  });
 }
 
 // ─── Merge semrush + DB rows ──────────────────────────────────────────────────
@@ -537,9 +559,9 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
               onClick={() => setFilter(f.id)}
               className="text-[10px] px-3 py-1 rounded-full border transition-all"
               style={{
-                background:   active ? 'rgba(108,99,255,0.12)' : 'transparent',
-                borderColor:  active ? 'rgba(108,99,255,0.55)' : '#1E1E34',
-                color:        active ? '#8B85FF' : '#404068',
+                background:   active ? 'rgba(108,99,255,0.14)' : 'transparent',
+                borderColor:  active ? 'rgba(108,99,255,0.6)'  : '#3A3A5C',
+                color:        active ? '#9B96FF'                : '#8888B0',
               }}
             >
               {f.label}
