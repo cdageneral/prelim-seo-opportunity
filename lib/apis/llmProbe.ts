@@ -85,10 +85,10 @@ async function probeWithClaude(
   clientName: string,
   domain:     string
 ): Promise<PlatformProbeData> {
-  const client  = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const results: ProbePromptResult[] = [];
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  for (const prompt of prompts) {
+  // All 3 prompts in parallel — never sequential
+  const results = await Promise.all(prompts.map(async (prompt) => {
     try {
       const msg = await client.messages.create({
         model:      'claude-haiku-4-5-20251001',
@@ -102,12 +102,12 @@ async function probeWithClaude(
         .join('');
 
       const { mentioned, excerpt } = detectMention(text, clientName, domain);
-      results.push({ prompt, mentioned, excerpt });
+      return { prompt, mentioned, excerpt };
     } catch (err) {
       console.error('[LLMProbe] Claude prompt failed:', err);
-      results.push({ prompt, mentioned: false, excerpt: null });
+      return { prompt, mentioned: false, excerpt: null };
     }
-  }
+  }));
 
   const mentionCount = results.filter(r => r.mentioned).length;
   return {
@@ -129,9 +129,8 @@ async function probeWithChatGPT(
   const API_KEY = process.env.OPENAI_API_KEY;
   if (!API_KEY) throw new Error('OPENAI_API_KEY not set');
 
-  const results: ProbePromptResult[] = [];
-
-  for (const prompt of prompts) {
+  // All 3 prompts in parallel — never sequential
+  const results = await Promise.all(prompts.map(async (prompt) => {
     try {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method:  'POST',
@@ -156,12 +155,12 @@ async function probeWithChatGPT(
       const text = data.choices?.[0]?.message?.content ?? '';
 
       const { mentioned, excerpt } = detectMention(text, clientName, domain);
-      results.push({ prompt, mentioned, excerpt });
+      return { prompt, mentioned, excerpt };
     } catch (err) {
       console.error('[LLMProbe] ChatGPT prompt failed:', err);
-      results.push({ prompt, mentioned: false, excerpt: null });
+      return { prompt, mentioned: false, excerpt: null };
     }
-  }
+  }));
 
   const mentionCount = results.filter(r => r.mentioned).length;
   return {

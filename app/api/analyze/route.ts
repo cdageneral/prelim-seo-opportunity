@@ -85,25 +85,16 @@ export async function POST(req: NextRequest) {
 
   try {
     // ── Data APIs — fault-tolerant, each has AbortSignal timeout ─────────────
-    const [semrush, llmProbe] = await Promise.all([
-      getSemrushSnapshot(domain).catch(err => {
-        console.error(`[OrbitIQ] Semrush failed:`, err);
-        return {
-          domain,
-          overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
-          topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
-          fetchedAt: new Date().toISOString(),
-        } as any;
-      }),
-      getLLMProbeSnapshot(project.clientName, domain, industry).catch(err => {
-        console.error(`[OrbitIQ] LLM probe failed:`, err);
-        return {
-          source: 'llm_probe', probedAt: new Date().toISOString(),
-          prompts: [], platforms: [], overallScore: 0,
-          overallMentions: 0, overallTotal: 0,
-        } as any;
-      }),
-    ]);
+    // Step 1: Semrush only (needed for SerpAPI keyword list)
+    const semrush = await getSemrushSnapshot(domain).catch(err => {
+      console.error(`[OrbitIQ] Semrush failed:`, err);
+      return {
+        domain,
+        overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
+        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
+        fetchedAt: new Date().toISOString(),
+      } as any;
+    });
 
     // Merge manually-added competitors
     if ((project as any).competitors?.length > 0) {
@@ -120,7 +111,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // SerpAPI — 5 keywords, 15s timeout each
+    // Step 2: SerpAPI runs immediately after Semrush — LLM probe does NOT block this
     const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
     console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, keywords to scan=${Math.min(topKeywords.length, 5)} of ${topKeywords.length} available`);
     const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
@@ -139,6 +130,16 @@ export async function POST(req: NextRequest) {
       ` ${serp.aioSummary?.withAIO ?? 0} AIOs, PAA=${serp.serpFeatureSummary?.withPAA ?? 0},` +
       ` video=${serp.serpFeatureSummary?.withVideo ?? 0}`
     );
+
+    // Step 3: LLM probe runs after SerpAPI — all 6 calls in parallel (3 Claude + 3 ChatGPT)
+    const llmProbe = await getLLMProbeSnapshot(project.clientName, domain, industry).catch(err => {
+      console.error(`[OrbitIQ] LLM probe failed:`, err);
+      return {
+        source: 'llm_probe', probedAt: new Date().toISOString(),
+        prompts: [], platforms: [], overallScore: 0,
+        overallMentions: 0, overallTotal: 0,
+      } as any;
+    });
 
     // Save snapshots — keep status 'running' so /api/synthesize knows to proceed
     await db.update(analyses)
