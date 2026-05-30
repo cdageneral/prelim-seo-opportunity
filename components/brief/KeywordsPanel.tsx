@@ -102,12 +102,14 @@ function isBranded(keyword: string, clientDomain: string, competitorDomains: str
   // Expand: for compound brand names, add first-half and last-half as independent tokens
   // e.g. "sonobello" (9) → "sono" (4) + "bello" (5)
   // This lets us catch keywords that contain just one component of the brand name.
-  const allTokens = new Set<string>(baseBrands);
+  const tokenSet = new Set<string>(baseBrands);
   for (const brand of baseBrands) {
     const half = Math.floor(brand.length / 2);
-    if (half >= 4)                  allTokens.add(brand.slice(0, half));
-    if (brand.length - half >= 4)   allTokens.add(brand.slice(half));
+    if (half >= 4)                  tokenSet.add(brand.slice(0, half));
+    if (brand.length - half >= 4)   tokenSet.add(brand.slice(half));
   }
+  // Convert to array — Set iteration requires ES2015+ target which this project doesn't use
+  const allTokens: string[] = Array.from(tokenSet);
 
   // ── Pass 1: exact substring checks ──────────────────────────────────────────
   for (const token of allTokens) {
