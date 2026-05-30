@@ -12,6 +12,7 @@ import PersonasSection       from '@/components/brief/PersonasSection';
 import AnalysisRunningState  from '@/components/brief/AnalysisRunningState';
 import ReportsPanel          from '@/components/brief/ReportsPanel';
 import CompetitorsPanel      from '@/components/brief/CompetitorsPanel';
+import KeywordsModal         from '@/components/brief/KeywordsModal';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -51,8 +52,9 @@ export default function ProjectBriefPage() {
   const [loading, setLoading]     = useState(true);
   const [triggering, setTriggering] = useState(false);
   const [triggeredAt, setTriggeredAt] = useState<string | undefined>(undefined);
-  const [renaming, setRenaming]   = useState(false);
-  const [newName, setNewName]     = useState('');
+  const [renaming, setRenaming]       = useState(false);
+  const [newName, setNewName]         = useState('');
+  const [showKeywords, setShowKeywords] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const analysis   = project?.analyses?.[0] ?? null;
@@ -183,6 +185,17 @@ export default function ProjectBriefPage() {
             >
               Rename
             </button>
+            {hasResults && (
+              <button
+                onClick={() => setShowKeywords(true)}
+                className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h10" />
+                </svg>
+                Keywords
+              </button>
+            )}
             <button
               onClick={triggerAnalysis}
               disabled={isRunning}
@@ -222,6 +235,11 @@ export default function ProjectBriefPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Keywords modal */}
+      {showKeywords && analysis && (
+        <KeywordsModal analysis={analysis} onClose={() => setShowKeywords(false)} />
       )}
 
       <main className="relative max-w-7xl mx-auto px-6 py-10">
