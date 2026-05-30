@@ -12,7 +12,7 @@ import PersonasSection      from '@/components/brief/PersonasSection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
-import KeywordsModal        from '@/components/brief/KeywordsModal';
+import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -114,7 +114,8 @@ export default function ProjectBriefPage() {
   const [newName,       setNewName]       = useState('');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<NavSection>('overview');
-  const [showKeywords,  setShowKeywords]  = useState(false);
+  // hoveredNav tracks which nav item is hovered for the lighting effect
+  const [hoveredNav,    setHoveredNav]    = useState<NavSection | null>(null);
 
   const analysis   = project?.analyses?.[0] ?? null;
   const isRunning  = triggering;
@@ -183,14 +184,6 @@ export default function ProjectBriefPage() {
     router.push('/dashboard');
   }
 
-  function handleNavClick(item: NavItem) {
-    if (item.id === 'keywords') {
-      if (hasResults) setShowKeywords(true);
-      return;
-    }
-    setActiveSection(item.id);
-  }
-
   if (loading) return (
     <div className="min-h-screen bg-orbit-bg flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />
@@ -199,16 +192,62 @@ export default function ProjectBriefPage() {
 
   if (!project) return null;
 
-  const domainDisplay = project.websiteUrl.replace(/^https?:\/\/(www\.)?/, '');
+  const domainDisplay    = project.websiteUrl.replace(/^https?:\/\/(www\.)?/, '');
+  const competitorDomains = (project.competitors ?? []).map(c => c.domain);
 
   const scanDate = analysis?.completedAt
     ? (() => {
         const d = new Date(analysis.completedAt);
-        const date = d.toISOString().slice(0, 10);
-        const time = d.toISOString().slice(11, 16);
-        return `${date} · ${time} UTC`;
+        return `${d.toISOString().slice(0, 10)} · ${d.toISOString().slice(11, 16)} UTC`;
       })()
     : null;
+
+  // ── Nav item style helper ─────────────────────────────────────────────────
+
+  function navItemStyles(item: NavItem) {
+    const active   = activeSection === item.id;
+    const hovered  = hoveredNav === item.id && !active;
+    const hasData  = navScores[item.id] != null;
+
+    return {
+      btn: {
+        padding:    '5px 12px',
+        borderLeft: active   ? '2px solid #6C63FF'
+                  : hovered  ? '2px solid rgba(108,99,255,0.4)'
+                  :             '2px solid transparent',
+        background: active   ? '#14141F'
+                  : hovered  ? '#11111E'
+                  :             'transparent',
+        transition: 'background 0.12s, border-left-color 0.12s',
+      } as React.CSSProperties,
+      icon: {
+        fontSize: '12px', width: '13px', flexShrink: 0,
+        color: active  ? '#8B85FF'
+             : hovered ? '#5A5090'
+             : hasData ? '#3A3A60'
+             :            '#282840',
+        transition: 'color 0.12s',
+      } as React.CSSProperties,
+      label: {
+        flex: 1, fontSize: '10px', overflow: 'hidden',
+        textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+        color: active  ? '#D8D8F8'
+             : hovered ? '#7070A8'
+             : hasData ? '#505078'
+             :            '#343450',
+        transition: 'color 0.12s',
+      } as React.CSSProperties,
+      score: {
+        fontSize: '10px', fontWeight: 500,
+        fontVariantNumeric: 'tabular-nums' as const,
+        color: active  ? '#6C63FF'
+             : hovered ? '#504FA0'
+             : hasData ? '#484868'
+             :            '#232336',
+        transition: 'color 0.12s',
+      } as React.CSSProperties,
+    };
+  }
 
   return (
     <div className="h-screen bg-orbit-bg flex flex-col overflow-hidden">
@@ -241,19 +280,10 @@ export default function ProjectBriefPage() {
         </div>
       )}
 
-      {/* ── Keywords modal ── */}
-      {showKeywords && analysis && (
-        <KeywordsModal analysis={analysis} onClose={() => setShowKeywords(false)} />
-      )}
-
       {/* ════ GLOBAL HEADER ════ */}
       <header className="flex-shrink-0 h-14 border-b border-orbit-border bg-orbit-surface/80 backdrop-blur-sm flex items-center justify-between px-5 z-40">
-        {/* Breadcrumb */}
         <div className="flex items-center gap-2">
-          <Link
-            href="/dashboard"
-            className="text-orbit-secondary hover:text-orbit-primary transition-colors flex items-center"
-          >
+          <Link href="/dashboard" className="text-orbit-secondary hover:text-orbit-primary transition-colors flex items-center">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
@@ -264,7 +294,6 @@ export default function ProjectBriefPage() {
           <span className="text-orbit-primary text-sm font-medium">{project.clientName}</span>
         </div>
 
-        {/* Actions */}
         <div className="flex items-center gap-2">
           <button
             onClick={() => setRenaming(true)}
@@ -317,49 +346,29 @@ export default function ProjectBriefPage() {
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
-                    <div
-                      className="text-[8px] font-semibold tracking-[.1em] uppercase px-3 pt-2 pb-1"
-                      style={{ color: '#242438' }}
-                    >
+                    <div className="text-[8px] font-semibold tracking-[.1em] uppercase px-3 pt-2 pb-1" style={{ color: '#242438' }}>
                       {group}
                     </div>
                   )}
                   {items.map(item => {
-                    const score   = navScores[item.id];
-                    const hasData = score != null;
-                    const active  = activeSection === item.id && item.id !== 'keywords';
+                    const score  = navScores[item.id];
+                    const styles = navItemStyles(item);
                     return (
                       <button
                         key={item.id}
-                        onClick={() => handleNavClick(item)}
-                        className="w-full flex items-center gap-1.5 px-3 text-left transition-colors"
-                        style={{
-                          padding:    '5px 12px',
-                          borderLeft: active ? '2px solid #6C63FF' : '2px solid transparent',
-                          background: active ? '#14141F' : 'transparent',
-                        }}
-                        onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = '#111122'; }}
-                        onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                        onClick={() => setActiveSection(item.id)}
+                        onMouseEnter={() => setHoveredNav(item.id)}
+                        onMouseLeave={() => setHoveredNav(null)}
+                        className="w-full flex items-center gap-1.5 text-left"
+                        style={styles.btn}
                       >
                         <span style={{ fontSize: '9px', color: '#2C2C44', width: '13px', flexShrink: 0 }}>
                           {item.num}
                         </span>
-                        <i
-                          className={`ti ${item.icon}`}
-                          style={{ fontSize: '12px', width: '13px', flexShrink: 0, color: active ? '#8B85FF' : hasData ? '#3A3A60' : '#282840' }}
-                          aria-hidden="true"
-                        />
-                        <span
-                          style={{ flex: 1, fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: active ? '#D8D8F8' : hasData ? '#505078' : '#343450' }}
-                        >
-                          {item.label}
-                        </span>
-                        <span style={{ fontSize: '10px', fontWeight: 500, fontVariantNumeric: 'tabular-nums', color: active ? '#6C63FF' : hasData ? '#484868' : '#232336' }}>
-                          {score ?? '—'}
-                        </span>
-                        <span
-                          style={{ width: '4px', height: '4px', borderRadius: '50%', flexShrink: 0, background: hasData ? '#22C55E' : '#1E1E30' }}
-                        />
+                        <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
+                        <span style={styles.label}>{item.label}</span>
+                        <span style={styles.score}>{score ?? '—'}</span>
+                        <span style={{ width: '4px', height: '4px', borderRadius: '50%', flexShrink: 0, background: score != null ? '#22C55E' : '#1E1E30' }} />
                       </button>
                     );
                   })}
@@ -372,9 +381,7 @@ export default function ProjectBriefPage() {
           <div className="border-t border-orbit-border px-3 py-2.5">
             <div className="flex items-center gap-1.5 mb-1">
               <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22C55E', flexShrink: 0 }} />
-              <span style={{ fontSize: '8px', fontWeight: 600, letterSpacing: '.07em', color: '#22C55E' }}>
-                SYS:OPERATIONAL
-              </span>
+              <span style={{ fontSize: '8px', fontWeight: 600, letterSpacing: '.07em', color: '#22C55E' }}>SYS:OPERATIONAL</span>
             </div>
             <button
               className="w-full flex items-center gap-1.5 rounded-md text-[9px] transition-colors mt-1.5"
@@ -390,11 +397,11 @@ export default function ProjectBriefPage() {
         </aside>
 
         {/* ── MAIN ── */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-hidden flex flex-col">
 
           {/* Error banner */}
           {analysisError && (
-            <div className="m-3 bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+            <div className="flex-shrink-0 m-3 bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
               <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
@@ -412,7 +419,7 @@ export default function ProjectBriefPage() {
 
           {/* Running */}
           {isRunning && (
-            <div className="p-4">
+            <div className="flex-shrink-0 p-4">
               <AnalysisRunningState
                 clientName={project.clientName}
                 triggeredAt={triggeredAt}
@@ -423,7 +430,7 @@ export default function ProjectBriefPage() {
 
           {/* No results yet */}
           {!isRunning && !hasResults && (
-            <div className="p-4 flex flex-col gap-4">
+            <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
               <CompetitorsPanel
                 projectId={projectId}
                 competitors={project.competitors ?? []}
@@ -433,9 +440,18 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* Executive Overview — 2×2 grid */}
+          {/* ── Keyword Landscape — full panel ── */}
+          {hasResults && analysis && activeSection === 'keywords' && (
+            <KeywordsPanel
+              projectId={projectId}
+              analysis={analysis}
+              competitors={competitorDomains}
+            />
+          )}
+
+          {/* ── Executive Overview — 2×2 grid ── */}
           {hasResults && analysis && activeSection === 'overview' && (
-            <div className="p-3 flex flex-col gap-3 animate-fade-in">
+            <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
               <CompetitorsPanel
                 projectId={projectId}
                 competitors={project.competitors ?? []}
@@ -445,7 +461,7 @@ export default function ProjectBriefPage() {
                 <MarketGapSection analysis={analysis} />
                 <CompetitorGapSection
                   analysis={analysis}
-                  manualDomains={(project.competitors ?? []).map(c => c.domain)}
+                  manualDomains={competitorDomains}
                 />
                 <FootprintSection     analysis={analysis} />
                 <LLMVisibilitySection analysis={analysis} />
@@ -460,9 +476,9 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* Sections not yet built */}
+          {/* ── Coming soon sections ── */}
           {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && (
-            <div className="flex items-center justify-center" style={{ height: '60%' }}>
+            <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
                   <svg className="w-6 h-6 text-orbit-accent opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">

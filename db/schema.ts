@@ -1,5 +1,5 @@
 import {
-  pgTable, text, timestamp, uuid, integer, real, jsonb, pgEnum,
+  pgTable, text, timestamp, uuid, integer, real, jsonb, pgEnum, boolean, serial,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -56,6 +56,26 @@ export const analyses = pgTable('analyses', {
   topCompetitor:       text('top_competitor'),
 });
 
+// ─── Project Keywords ─────────────────────────────────────────────────────────
+//
+// Stores two kinds of records per project:
+//   source = 'custom' | 'csv'  → user-added keywords (shown in keyword panel)
+//   source = 'blocked'         → keywords from Semrush the user deleted (excluded from panel)
+//
+// NOTE: after deploying v7.19, run `npm run db:push` once to create this table.
+
+export const projectKeywords = pgTable('project_keywords', {
+  id:           serial('id').primaryKey(),
+  projectId:    uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  keyword:      text('keyword').notNull(),
+  searchVolume: integer('search_volume').notNull().default(0),
+  position:     integer('position'),                   // null = not ranked / gap
+  type:         text('type').notNull().default('gap'), // 'ranked' | 'gap'
+  branded:      boolean('branded').notNull().default(false),
+  source:       text('source').notNull(),              // 'custom' | 'csv' | 'blocked'
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+});
+
 // ─── Personas ─────────────────────────────────────────────────────────────────
 
 export const personas = pgTable('personas', {
@@ -103,12 +123,17 @@ export const reports = pgTable('reports', {
 // ─── Relations ────────────────────────────────────────────────────────────────
 
 export const projectsRelations = relations(projects, ({ many }) => ({
-  analyses:    many(analyses),
-  competitors: many(competitors),
+  analyses:        many(analyses),
+  competitors:     many(competitors),
+  projectKeywords: many(projectKeywords),
 }));
 
 export const competitorsRelations = relations(competitors, ({ one }) => ({
   project: one(projects, { fields: [competitors.projectId], references: [projects.id] }),
+}));
+
+export const projectKeywordsRelations = relations(projectKeywords, ({ one }) => ({
+  project: one(projects, { fields: [projectKeywords.projectId], references: [projects.id] }),
 }));
 
 export const analysesRelations = relations(analyses, ({ one, many }) => ({
@@ -132,12 +157,14 @@ export const reportsRelations = relations(reports, ({ one }) => ({
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type Project        = typeof projects.$inferSelect;
-export type NewProject     = typeof projects.$inferInsert;
-export type Competitor     = typeof competitors.$inferSelect;
-export type NewCompetitor  = typeof competitors.$inferInsert;
-export type Analysis       = typeof analyses.$inferSelect;
-export type NewAnalysis    = typeof analyses.$inferInsert;
-export type Persona        = typeof personas.$inferSelect;
-export type Opportunity    = typeof opportunities.$inferSelect;
-export type Report         = typeof reports.$inferSelect;
+export type Project           = typeof projects.$inferSelect;
+export type NewProject        = typeof projects.$inferInsert;
+export type Competitor        = typeof competitors.$inferSelect;
+export type NewCompetitor     = typeof competitors.$inferInsert;
+export type Analysis          = typeof analyses.$inferSelect;
+export type NewAnalysis       = typeof analyses.$inferInsert;
+export type Persona           = typeof personas.$inferSelect;
+export type Opportunity       = typeof opportunities.$inferSelect;
+export type Report            = typeof reports.$inferSelect;
+export type ProjectKeyword    = typeof projectKeywords.$inferSelect;
+export type NewProjectKeyword = typeof projectKeywords.$inferInsert;
