@@ -15,6 +15,8 @@ import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
+import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
+import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -88,17 +90,27 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
   const serpScore    = totalKws > 0 ? (page1Kws / totalKws) * 100 : null;
   const aioAvail     = analysis.aioAvailable ?? 0;
   const aioAcq       = analysis.aioAcquired  ?? 0;
-  const aioRate      = aioAvail > 0 ? (aioAcq / aioAvail) * 100 : null;
   const llmScore     = (analysis.profoundSnapshot as any)?.overallScore ?? null;
+
+  // Combined SERP feature coverage rate (AIO + PAA + Video)
+  const serpSnapForScore = analysis.serpApiSnapshot ?? {};
+  const featSumForScore  = serpSnapForScore.serpFeatureSummary;
+  const paaAvailScore    = featSumForScore?.withPAA          ?? 0;
+  const paaAcqScore      = featSumForScore?.paaClientCited   ?? 0;
+  const videoAvailScore  = featSumForScore?.withVideo         ?? 0;
+  const videoAcqScore    = featSumForScore?.videoClientCited  ?? 0;
+  const totalAvailScore  = aioAvail + paaAvailScore + videoAvailScore;
+  const totalAcqScore    = aioAcq   + paaAcqScore   + videoAcqScore;
+  const combinedSerpRate = totalAvailScore > 0 ? (totalAcqScore / totalAvailScore) * 100 : null;
 
   const scores: Partial<Record<NavSection, string>> = {};
   if (captureRate != null) {
     scores.overview  = (captureRate * 100).toFixed(1);
     scores.keywords  = (captureRate * 100).toFixed(1);
   }
-  if (serpScore    != null) scores.serp         = serpScore.toFixed(1);
-  if (aioRate      != null) scores.serpFeatures = aioRate.toFixed(1);
-  if (llmScore     != null) scores.llm          = String(llmScore);
+  if (serpScore          != null) scores.serp         = serpScore.toFixed(1);
+  if (combinedSerpRate   != null) scores.serpFeatures = combinedSerpRate.toFixed(1);
+  if (llmScore           != null) scores.llm          = String(llmScore);
   return scores;
 }
 
@@ -630,8 +642,18 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Google SERP ── */}
+          {hasResults && analysis && activeSection === 'serp' && (
+            <GoogleSerpSection analysis={analysis} />
+          )}
+
+          {/* ── SERP Features ── */}
+          {hasResults && analysis && activeSection === 'serpFeatures' && (
+            <SerpFeaturesSection analysis={analysis} />
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
