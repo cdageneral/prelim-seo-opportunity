@@ -649,7 +649,12 @@ export default function ProjectBriefPage() {
 
           {/* ── SERP Features ── */}
           {hasResults && analysis && activeSection === 'serpFeatures' && (
-            <SerpFeaturesSection analysis={analysis} />
+            <SerpFeaturesSection
+              analysis={analysis}
+              competitors={project.competitors}
+              clientName={project.clientName}
+              websiteUrl={project.websiteUrl}
+            />
           )}
 
           {/* ── Coming soon sections ── */}
