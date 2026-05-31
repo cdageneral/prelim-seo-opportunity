@@ -306,9 +306,9 @@ export default function ProjectBriefPage() {
 
     return {
       btn: {
-        padding:    '5px 12px',
+        padding:    '7px 12px',
         borderLeft: active   ? '2px solid #6C63FF'
-                  : hovered  ? '2px solid rgba(108,99,255,0.4)'
+                  : hovered  ? '2px solid rgba(108,99,255,0.45)'
                   :             '2px solid transparent',
         background: active   ? '#14141F'
                   : hovered  ? '#11111E'
@@ -316,29 +316,29 @@ export default function ProjectBriefPage() {
         transition: 'background 0.12s, border-left-color 0.12s',
       } as React.CSSProperties,
       icon: {
-        fontSize: '13px', width: '14px', flexShrink: 0,
+        fontSize: '14px', width: '15px', flexShrink: 0,
         color: active  ? '#8B85FF'
-             : hovered ? '#5A5090'
-             : hasData ? '#3A3A60'
-             :            '#282840',
+             : hovered ? '#6A65C0'
+             : hasData ? '#5858A0'
+             :            '#484878',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       label: {
-        flex: 1, fontSize: '12px', overflow: 'hidden',
+        flex: 1, fontSize: '13px', overflow: 'hidden',
         textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-        color: active  ? '#D8D8F8'
-             : hovered ? '#7070A8'
-             : hasData ? '#505078'
-             :            '#343450',
+        color: active  ? '#E0E0FF'
+             : hovered ? '#8080C0'
+             : hasData ? '#7878B0'
+             :            '#606090',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       score: {
         fontSize: '11px', fontWeight: 500,
         fontVariantNumeric: 'tabular-nums' as const,
         color: active  ? '#6C63FF'
-             : hovered ? '#504FA0'
-             : hasData ? '#484868'
-             :            '#232336',
+             : hovered ? '#6060B8'
+             : hasData ? '#6060A0'
+             :            '#484870',
         transition: 'color 0.12s',
       } as React.CSSProperties,
     };
@@ -441,15 +441,15 @@ export default function ProjectBriefPage() {
         {/* ── SIDEBAR ── */}
         <aside
           className="flex-shrink-0 border-r border-orbit-border flex flex-col"
-          style={{ width: '232px', background: '#0D0D16' }}
+          style={{ width: '252px', background: '#0D0D16' }}
         >
           <div className="px-3 py-3 border-b border-orbit-border">
-            <div className="text-orbit-primary text-[11px] font-semibold truncate">{domainDisplay}</div>
+            <div className="text-orbit-primary text-[12px] font-semibold truncate">{domainDisplay}</div>
             {project.industry && (
-              <div className="text-orbit-tertiary text-[10px] mt-0.5">{project.industry}</div>
+              <div className="text-[11px] mt-0.5" style={{ color: '#5858A0' }}>{project.industry}</div>
             )}
             {scanDate && (
-              <div className="text-[9px] mt-1.5" style={{ color: '#242438' }}>SCAN: {scanDate}</div>
+              <div className="text-[9px] mt-1.5" style={{ color: '#383858' }}>SCAN: {scanDate}</div>
             )}
           </div>
 
@@ -459,7 +459,7 @@ export default function ProjectBriefPage() {
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
-                    <div className="text-[9px] font-semibold tracking-[.08em] uppercase px-3 pt-2 pb-1" style={{ color: '#2E2E50' }}>
+                    <div className="text-[10px] font-semibold tracking-[.08em] uppercase px-3 pt-3 pb-1" style={{ color: '#4A4A72' }}>
                       {group}
                     </div>
                   )}
@@ -476,7 +476,7 @@ export default function ProjectBriefPage() {
                           className="w-full flex items-center gap-1.5 text-left"
                           style={styles.btn}
                         >
-                          <span style={{ fontSize: '10px', color: '#2C2C44', width: '14px', flexShrink: 0 }}>
+                          <span style={{ fontSize: '10px', color: '#505078', width: '15px', flexShrink: 0 }}>
                             {item.num}
                           </span>
                           <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
@@ -498,17 +498,17 @@ export default function ProjectBriefPage() {
                                   onClick={e => { e.stopPropagation(); setKeywordsSubView(sv); }}
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
-                                    padding: '5px 12px 5px 30px',
-                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.5)' : '2px solid transparent',
+                                    padding: '6px 12px 6px 32px',
+                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.6)' : '2px solid transparent',
                                     background: subActive ? '#0F0F1C' : 'transparent',
                                   }}
                                 >
                                   <i
                                     className={`ti ${subIcons[sv]}`}
-                                    style={{ fontSize: '11px', color: subActive ? '#6C63FF' : '#3A3A60', width: '13px', flexShrink: 0 }}
+                                    style={{ fontSize: '12px', color: subActive ? '#6C63FF' : '#545490', width: '14px', flexShrink: 0 }}
                                     aria-hidden="true"
                                   />
-                                  <span style={{ fontSize: '11px', color: subActive ? '#9090C0' : '#505070' }}>
+                                  <span style={{ fontSize: '12px', color: subActive ? '#A0A0D8' : '#6868A8' }}>
                                     {subLabels[sv]}
                                   </span>
                                 </button>
