@@ -40,6 +40,7 @@ interface Project {
   websiteUrl:  string;
   industry:    string | null;
   status:      string;
+  dataSource:  string;   // 'auto' | 'upload'
   analyses:    Analysis[];
   competitors: Competitor[];
 }
@@ -161,6 +162,10 @@ export default function ProjectBriefPage() {
     const data = await res.json();
     setProject(data.project);
     setNewName(data.project.clientName);
+    // Initialise data source from saved project preference
+    if (data.project.dataSource === 'upload' || data.project.dataSource === 'auto') {
+      setDataSource(data.project.dataSource as 'auto' | 'upload');
+    }
     setLoading(false);
   }, [projectId, router]);
 

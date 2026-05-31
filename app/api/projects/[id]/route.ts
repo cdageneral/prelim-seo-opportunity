@@ -1,25 +1,37 @@
 /**
  * /api/projects/[id]
  * GET    — project + analyses + competitors
- * PATCH  — update name, url, industry, notes
+ * PATCH  — update name, url, industry, notes, dataSource
  * DELETE — hard delete project
+ *
+ * v7.32: PATCH now accepts dataSource; auto-migrates data_source column.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z }      from 'zod';
 import { db }     from '@/db';
 import { projects } from '@/db/schema';
-import { eq }     from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
+
+async function ensureDataSourceColumn() {
+  try {
+    await db.execute(sql`
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_source TEXT NOT NULL DEFAULT 'auto'
+    `);
+  } catch { /* already exists */ }
+}
 
 const UpdateSchema = z.object({
-  clientName: z.string().min(1).optional(),
-  websiteUrl: z.string().url().optional(),
-  industry:   z.string().optional(),
-  notes:      z.string().optional(),
-  status:     z.enum(['active', 'archived', 'draft']).optional(),
+  clientName:  z.string().min(1).optional(),
+  websiteUrl:  z.string().url().optional(),
+  industry:    z.string().optional(),
+  notes:       z.string().optional(),
+  status:      z.enum(['active', 'archived', 'draft']).optional(),
+  dataSource:  z.enum(['auto', 'upload']).optional(),
 }).strict();
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDataSourceColumn();
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, params.id),
     with: {
@@ -40,6 +52,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDataSourceColumn();
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
