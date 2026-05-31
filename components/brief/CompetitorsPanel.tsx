@@ -1,14 +1,22 @@
 'use client';
 
 /**
- * CompetitorsPanel — v7.32
+ * CompetitorsPanel — v7.33
  *
- * Keyword upload additions:
- *  - Layout changed from pill chips to list rows to accommodate upload controls
- *  - After adding a competitor the upload zone opens automatically (forced choice)
- *  - User must either upload a CSV or click "Skip — use Semrush" to dismiss
- *  - Existing competitors have an "Upload keywords" toggle button
- *  - Uploads hit POST /api/projects/[id]/keywords/batch
+ * Data source choice (auto-discover vs upload CSV) now lives entirely
+ * inside the add-competitor form. Decision is made once at add time.
+ *
+ * Competitor rows are clean — favicon + name/domain + source badge + delete.
+ * No per-row upload buttons or expandable zones.
+ *
+ * Add flow:
+ *   1. Fill domain + name
+ *   2. Choose: Auto-discover | Upload CSV
+ *      — Upload: pick file → client-side parse → keywords held in state
+ *   3. Click Add
+ *      a. POST /api/projects/[id]/competitors
+ *      b. If upload: POST /api/projects/[id]/keywords/batch
+ *   4. Row appears with keyword count badge (upload) or "Auto-discover" label
  */
 
 import { useState, useRef } from 'react';
@@ -26,9 +34,13 @@ interface Props {
   onChange:    () => void;
 }
 
-// ── CSV parser (same logic as page.tsx) ──────────────────────────────────────
+type SrcChoice = 'auto' | 'upload' | null;
+interface ParsedKw { keyword: string; searchVolume: number; position?: number; }
+interface AddedSource { type: 'auto' | 'upload'; count?: number; }
 
-function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number }[] {
+// ── CSV parser ────────────────────────────────────────────────────────────────
+
+function parseCsvText(text: string): ParsedKw[] {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const firstLine = lines[0] ?? '';
@@ -46,29 +58,64 @@ function parseCsvText(text: string): { keyword: string; searchVolume: number; po
   }).filter(r => r.keyword && r.searchVolume > 0);
 }
 
-export default function CompetitorsPanel({ projectId, competitors, onChange }: Props) {
-  const [domain,          setDomain]          = useState('');
-  const [name,            setName]            = useState('');
-  const [adding,          setAdding]          = useState(false);
-  const [showForm,        setShowForm]        = useState(false);
-  const [formError,       setFormError]       = useState('');
+function normDomain(url: string): string {
+  return url.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+}
 
-  // Upload state
-  const [newlyAddedDomain, setNewlyAddedDomain] = useState<string | null>(null);
-  const [expandedUpload,   setExpandedUpload]   = useState<string | null>(null); // domain
-  const [uploadedCounts,   setUploadedCounts]   = useState<Record<string, number>>({});
-  const [skippedDomains,   setSkippedDomains]   = useState<Set<string>>(new Set());
-  const [uploadingDomain,  setUploadingDomain]  = useState<string | null>(null);
-  const [uploadError,      setUploadError]      = useState<string | null>(null);
-  const [uploadTarget,     setUploadTarget]     = useState<string | null>(null);
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function CompetitorsPanel({ projectId, competitors, onChange }: Props) {
+  const [domain,      setDomain]      = useState('');
+  const [name,        setName]        = useState('');
+  const [adding,      setAdding]      = useState(false);
+  const [showForm,    setShowForm]    = useState(false);
+  const [formError,   setFormError]   = useState('');
+
+  const [srcChoice,   setSrcChoice]   = useState<SrcChoice>(null);
+  const [parsedKws,   setParsedKws]   = useState<ParsedKw[]>([]);
+  const [fileReady,   setFileReady]   = useState(false);
+  const [fileName,    setFileName]    = useState('');
+  const [fileError,   setFileError]   = useState('');
+
+  // Tracks source info for competitors added in this session
+  const [addedSources, setAddedSources] = useState<Record<string, AddedSource>>({});
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function resetForm() {
+    setDomain(''); setName(''); setSrcChoice(null);
+    setParsedKws([]); setFileReady(false); setFileName('');
+    setFileError(''); setFormError('');
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text     = await file.text();
+      const keywords = parseCsvText(text);
+      if (keywords.length === 0) {
+        setFileError('No valid keywords found. Expected columns: keyword, search_volume');
+        return;
+      }
+      setParsedKws(keywords);
+      setFileReady(true);
+      setFileName(`${file.name} · ${keywords.length.toLocaleString()} rows`);
+      setFileError('');
+    } catch {
+      setFileError('Could not read file — try a different format');
+    }
+  }
 
   async function addCompetitor(e: React.FormEvent) {
     e.preventDefault();
-    if (!domain.trim()) return;
-    setAdding(true);
-    setFormError('');
+    if (!domain.trim() || !srcChoice) return;
+    if (srcChoice === 'upload' && !fileReady) return;
+    setAdding(true); setFormError('');
+
     try {
+      // 1. Create competitor record
       const res = await fetch(`/api/projects/${projectId}/competitors`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -76,15 +123,29 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
       });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error ?? 'Failed to add'); return; }
-      const addedDomain = domain.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-      setDomain('');
-      setName('');
+
+      const nd = normDomain(domain.trim());
+
+      // 2. If upload mode: batch-upload the parsed keywords
+      let uploadedCount: number | undefined;
+      if (srcChoice === 'upload' && parsedKws.length > 0) {
+        const upRes = await fetch(`/api/projects/${projectId}/keywords/batch`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ domain: nd, source: 'csv', keywords: parsedKws }),
+        });
+        if (upRes.ok) {
+          const upData = await upRes.json();
+          uploadedCount = upData.inserted as number;
+        }
+      }
+
+      setAddedSources(prev => ({ ...prev, [nd]: { type: srcChoice, count: uploadedCount } }));
+      resetForm();
       setShowForm(false);
-      setNewlyAddedDomain(addedDomain);
-      setExpandedUpload(addedDomain);
       onChange();
     } catch {
-      setFormError('Network error');
+      setFormError('Network error — please try again');
     } finally {
       setAdding(false);
     }
@@ -95,65 +156,29 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
     onChange();
   }
 
-  function triggerUpload(domain: string) {
-    setUploadTarget(domain);
-    setUploadError(null);
-    fileInputRef.current?.click();
-  }
+  const canAdd = domain.trim().length > 0 && srcChoice !== null &&
+    (srcChoice === 'auto' || fileReady);
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file || !uploadTarget) return;
-    const domain = uploadTarget;
-    setUploadingDomain(domain);
-    setUploadError(null);
-    try {
-      const text     = await file.text();
-      const keywords = parseCsvText(text);
-      if (keywords.length === 0) {
-        setUploadError(`No valid keywords in ${file.name}. Expected columns: keyword, search_volume`);
-        setUploadingDomain(null);
-        return;
-      }
-      const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ domain, source: 'csv', keywords }),
-      });
-      if (!res.ok) { setUploadError('Upload failed — try again'); setUploadingDomain(null); return; }
-      const { inserted } = await res.json();
-      setUploadedCounts(prev => ({ ...prev, [domain]: inserted }));
-      setNewlyAddedDomain(null);
-      setExpandedUpload(null);
-    } catch {
-      setUploadError('Upload failed — check file and try again');
-    } finally {
-      setUploadingDomain(null);
-    }
-  }
-
-  function skipUpload(domain: string) {
-    setSkippedDomains(prev => new Set([...Array.from(prev), domain]));
-    setNewlyAddedDomain(null);
-    setExpandedUpload(null);
-  }
-
-  function toggleExpand(domain: string) {
-    setExpandedUpload(prev => prev === domain ? null : domain);
-    setUploadError(null);
-  }
+  // Card style for source choice buttons
+  const srcStyle = (choice: 'auto' | 'upload'): React.CSSProperties => ({
+    flex: 1, textAlign: 'left', cursor: 'pointer',
+    background: srcChoice === choice
+      ? (choice === 'auto' ? '#14142A' : '#071E1C')
+      : '#0C0C1E',
+    border: `1.5px solid ${srcChoice === choice
+      ? (choice === 'auto' ? '#6C63FF' : '#00C9B1')
+      : '#1E1E35'}`,
+    borderRadius: '8px', padding: '11px 12px',
+    transition: 'border-color .15s, background .15s',
+  });
 
   return (
     <div className="orbit-card p-5 flex flex-col gap-4">
 
-      {/* Hidden file input — shared across all competitors */}
+      {/* Hidden file input */}
       <input
-        type="file"
-        accept=".csv,.txt"
-        ref={fileInputRef}
-        style={{ display: 'none' }}
-        onChange={handleFileChange}
+        type="file" accept=".csv,.txt" ref={fileInputRef}
+        style={{ display: 'none' }} onChange={handleFileChange}
       />
 
       {/* Header */}
@@ -163,7 +188,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
           <h3 className="text-orbit-primary text-base font-semibold mt-0.5">Tracked Competitors</h3>
         </div>
         <button
-          onClick={() => { setShowForm(f => !f); setFormError(''); }}
+          onClick={() => { setShowForm(f => !f); if (showForm) resetForm(); }}
           className="flex items-center gap-1.5 text-xs text-orbit-accent hover:text-orbit-accent-light border border-orbit-accent/30 hover:border-orbit-accent/60 px-3 py-1.5 rounded-lg transition-all"
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -173,16 +198,19 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
         </button>
       </div>
 
-      {/* Add competitor form */}
+      {/* ── Add competitor form ── */}
       {showForm && (
-        <form onSubmit={addCompetitor} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3 animate-fade-in">
+        <form onSubmit={addCompetitor}
+          className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3 animate-fade-in">
+
+          {/* Domain + Name */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-orbit-secondary text-[10px] font-medium block mb-1">Domain *</label>
               <input
-                type="text" value={domain}
+                type="text" value={domain} required
                 onChange={e => setDomain(e.target.value)}
-                placeholder="competitor.com" required
+                placeholder="competitor.com"
                 className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-orbit-primary text-xs placeholder:text-orbit-tertiary focus:outline-none focus:border-orbit-accent transition-colors"
               />
             </div>
@@ -196,175 +224,149 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
               />
             </div>
           </div>
+
+          {/* Source choice — required */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '10px', color: '#8888B0', fontWeight: 500 }}>Keyword data source</span>
+              {!srcChoice && (
+                <span style={{ fontSize: '10px', color: '#F87171', background: '#2B0D0D', padding: '2px 7px', borderRadius: '10px' }}>Required</span>
+              )}
+              {srcChoice && (
+                <span style={{ fontSize: '10px', color: '#4ADE80', background: '#0D2B1D', padding: '2px 7px', borderRadius: '10px' }}>Selected</span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+
+              {/* Auto-discover */}
+              <button type="button" style={srcStyle('auto')} onClick={() => setSrcChoice('auto')}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                  <i className="ti ti-antenna"
+                    style={{ fontSize: '15px', color: srcChoice === 'auto' ? '#7B68EE' : '#505070' }}
+                    aria-hidden="true" />
+                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '10px', background: '#2B0D0D', color: '#F87171', fontWeight: 500 }}>~600 units</span>
+                </div>
+                <p style={{ fontSize: '12px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 2px' }}>Auto-discover</p>
+                <p style={{ fontSize: '11px', color: '#707090', margin: 0, lineHeight: 1.4 }}>Semrush crawls on analysis run.</p>
+              </button>
+
+              {/* Upload CSV */}
+              <button type="button" style={srcStyle('upload')} onClick={() => setSrcChoice('upload')}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                  <i className="ti ti-upload"
+                    style={{ fontSize: '15px', color: srcChoice === 'upload' ? '#00C9B1' : '#505070' }}
+                    aria-hidden="true" />
+                  <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '10px', background: '#0D2B1D', color: '#4ADE80', fontWeight: 500 }}>0 units</span>
+                </div>
+                <p style={{ fontSize: '12px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 2px' }}>Upload CSV</p>
+                <p style={{ fontSize: '11px', color: '#707090', margin: 0, lineHeight: 1.4 }}>Upload their keyword export now.</p>
+              </button>
+
+            </div>
+          </div>
+
+          {/* CSV upload zone — visible when upload selected */}
+          {srcChoice === 'upload' && (
+            <div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  width: '100%', cursor: 'pointer', textAlign: 'center',
+                  background: fileReady ? '#071A10' : '#0C0C1E',
+                  border: `1.5px ${fileReady ? 'solid #22C55E' : 'dashed #2D2D55'}`,
+                  borderRadius: '7px', padding: '12px',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+                  transition: 'border-color .15s',
+                }}
+              >
+                {fileReady ? (
+                  <>
+                    <i className="ti ti-circle-check" style={{ fontSize: '18px', color: '#4ADE80' }} aria-hidden="true" />
+                    <span style={{ fontSize: '11px', color: '#4ADE80' }}>{fileName}</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="ti ti-file-text" style={{ fontSize: '18px', color: '#505070' }} aria-hidden="true" />
+                    <span style={{ fontSize: '11px', color: '#505070' }}>Click to upload · CSV</span>
+                    <span style={{ fontSize: '10px', color: '#404060' }}>
+                      Columns: <code style={{ background: '#1A1A30', padding: '0 4px', borderRadius: '3px', color: '#8080C0' }}>keyword, search_volume</code> · optional: <code style={{ background: '#1A1A30', padding: '0 4px', borderRadius: '3px', color: '#8080C0' }}>position</code>
+                    </span>
+                  </>
+                )}
+              </button>
+              {fileError && (
+                <p style={{ fontSize: '11px', color: '#F87171', marginTop: '5px' }}>{fileError}</p>
+              )}
+            </div>
+          )}
+
           {formError && <p className="text-red-400 text-xs">{formError}</p>}
+
           <div className="flex gap-2">
-            <button type="button" onClick={() => { setShowForm(false); setDomain(''); setName(''); }}
+            <button type="button"
+              onClick={() => { setShowForm(false); resetForm(); }}
               className="flex-1 text-xs text-orbit-secondary border border-orbit-border py-1.5 rounded-lg hover:text-orbit-primary transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={adding}
-              className="flex-1 text-xs bg-orbit-accent hover:bg-orbit-accent-light text-white py-1.5 rounded-lg transition-colors disabled:opacity-50">
+            <button type="submit" disabled={!canAdd || adding}
+              className="flex-1 text-xs bg-orbit-accent hover:bg-orbit-accent-light text-white py-1.5 rounded-lg transition-colors disabled:opacity-35">
               {adding ? 'Adding...' : 'Add'}
             </button>
           </div>
         </form>
       )}
 
-      {/* Competitors list */}
+      {/* ── Competitor rows — clean, no upload actions ── */}
       {competitors.length === 0 ? (
         <div className="text-center py-4">
           <p className="text-orbit-tertiary text-xs">No competitors tracked yet.</p>
           <p className="text-orbit-tertiary text-[10px] mt-1">Add competitors to include them in gap analysis.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {competitors.map(comp => {
-            const normDomain    = comp.domain.toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-            const isNew         = normDomain === newlyAddedDomain;
-            const isExpanded    = expandedUpload === normDomain;
-            const uploadCount   = uploadedCounts[normDomain];
-            const wasSkipped    = skippedDomains.has(normDomain);
-            const isUploading   = uploadingDomain === normDomain;
-
+            const nd     = normDomain(comp.domain);
+            const source = addedSources[nd];
             return (
-              <div key={comp.id}
-                style={{
-                  background: '#141428',
-                  border: `0.5px solid ${isNew ? '#3A3A6A' : '#2A2A4A'}`,
-                  borderRadius: '8px', padding: '11px 13px',
-                }}
-              >
-                {/* Competitor row */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  {/* Favicon */}
-                  <img
-                    src={`https://www.google.com/s2/favicons?domain=${comp.domain}&sz=16`}
-                    alt="" style={{ width: '16px', height: '16px', borderRadius: '3px', opacity: 0.7, flexShrink: 0 }}
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                  />
-                  {/* Domain + name */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: '12px', fontWeight: 500, color: '#C0C0E0', margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {comp.name ?? comp.domain}
-                    </p>
-                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                      {comp.name && (
-                        <span style={{ fontSize: '10px', color: '#555575' }}>{comp.domain}</span>
-                      )}
-                      {uploadCount != null && (
-                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '10px', background: '#0D2B1D', color: '#4ADE80' }}>
-                          {uploadCount.toLocaleString()} keywords
-                        </span>
-                      )}
-                      {wasSkipped && !uploadCount && (
-                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '10px', background: '#1A1A30', color: '#8080B0' }}>
-                          Semrush auto-discover
-                        </span>
-                      )}
-                      {isNew && !uploadCount && !wasSkipped && (
-                        <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '10px', background: '#2D2D6A', color: '#A090FF' }}>
-                          Just added
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Upload button or status */}
-                  {uploadCount != null ? (
-                    <button
-                      onClick={() => toggleExpand(normDomain)}
-                      style={{ background: 'none', border: '0.5px solid #1A4030', borderRadius: '6px', padding: '4px 10px', color: '#4ADE80', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}
-                    >
-                      <i className="ti ti-circle-check" style={{ fontSize: '12px' }} aria-hidden="true" />
-                      Re-upload
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => toggleExpand(normDomain)}
-                      style={{ background: 'none', border: `0.5px solid ${isExpanded ? '#3A3A6A' : '#2A2A4A'}`, borderRadius: '6px', padding: '4px 10px', color: isExpanded ? '#A090FF' : '#707090', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}
-                    >
-                      <i className="ti ti-upload" style={{ fontSize: '12px' }} aria-hidden="true" />
-                      Upload keywords
-                    </button>
+              <div key={comp.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#141428', border: '0.5px solid #2A2A4A', borderRadius: '8px', padding: '10px 13px' }}>
+                {/* Favicon */}
+                <img
+                  src={`https://www.google.com/s2/favicons?domain=${comp.domain}&sz=16`}
+                  alt="" style={{ width: '16px', height: '16px', borderRadius: '3px', opacity: 0.7, flexShrink: 0 }}
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                {/* Name + domain */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <p style={{ fontSize: '12px', fontWeight: 500, color: '#C0C0E0', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {comp.name ?? comp.domain}
+                  </p>
+                  {comp.name && (
+                    <p style={{ fontSize: '10px', color: '#555575', margin: '2px 0 0' }}>{comp.domain}</p>
                   )}
-
-                  {/* Delete */}
-                  <button
-                    onClick={() => removeCompetitor(comp.id)}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#404060', padding: '4px', marginLeft: '2px' }}
-                    title="Remove competitor"
-                  >
-                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
                 </div>
-
-                {/* Upload zone — auto-open for newly added, toggleable for existing */}
-                {isExpanded && (
-                  <div style={{ background: '#0E0E20', border: '0.5px solid #2A2A4A', borderRadius: '7px', padding: '12px', marginTop: '10px' }}>
-                    {isNew && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '11px', color: '#8080C0', fontWeight: 500 }}>
-                          Keyword footprint for {normDomain}
-                        </span>
-                        <span style={{ fontSize: '10px', color: '#F87171', background: '#2B0D0D', padding: '2px 7px', borderRadius: '10px' }}>
-                          Action required
-                        </span>
-                      </div>
-                    )}
-
-                    <p style={{ fontSize: '11px', color: '#606080', margin: '0 0 9px', lineHeight: 1.5 }}>
-                      {isNew
-                        ? 'Upload a keyword CSV, or skip to let Semrush auto-discover this competitor\'s footprint when you run analysis.'
-                        : `Upload a keyword CSV for ${normDomain}. Columns: keyword, search_volume · optional: position`}
-                    </p>
-
-                    {/* Drop zone */}
-                    <button
-                      onClick={() => triggerUpload(normDomain)}
-                      disabled={isUploading}
-                      style={{
-                        width: '100%', cursor: isUploading ? 'wait' : 'pointer',
-                        background: '#141428', border: '1.5px dashed #2D2D55',
-                        borderRadius: '7px', padding: '12px', textAlign: 'center',
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
-                      }}
-                    >
-                      {isUploading ? (
-                        <span style={{ fontSize: '12px', color: '#707090' }}>Uploading…</span>
-                      ) : (
-                        <>
-                          <i className="ti ti-file-text" style={{ fontSize: '16px', color: '#505070' }} aria-hidden="true" />
-                          <span style={{ fontSize: '11px', color: '#505070' }}>Click to upload · CSV</span>
-                        </>
-                      )}
-                    </button>
-
-                    {uploadError && uploadTarget === normDomain && (
-                      <p style={{ fontSize: '11px', color: '#F87171', marginTop: '6px' }}>{uploadError}</p>
-                    )}
-
-                    {/* Skip option — only shown for newly added (forced-choice context) */}
-                    {isNew && (
-                      <button
-                        onClick={() => skipUpload(normDomain)}
-                        style={{ width: '100%', marginTop: '8px', background: '#141428', border: '0.5px solid #2A2A4A', borderRadius: '7px', padding: '8px', color: '#707090', fontSize: '12px', cursor: 'pointer' }}
-                      >
-                        Skip — use Semrush auto-discover instead
-                      </button>
-                    )}
-                    {/* Non-new: just a close link */}
-                    {!isNew && (
-                      <button
-                        onClick={() => setExpandedUpload(null)}
-                        style={{ display: 'block', marginTop: '8px', background: 'none', border: 'none', color: '#555575', fontSize: '11px', cursor: 'pointer', padding: 0 }}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </div>
+                {/* Source badge */}
+                {source?.type === 'upload' && source.count != null && (
+                  <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '10px', background: '#0D2B1D', color: '#4ADE80', whiteSpace: 'nowrap' }}>
+                    {source.count.toLocaleString()} keywords
+                  </span>
                 )}
+                {source?.type === 'auto' && (
+                  <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '10px', background: '#1A1A30', color: '#8080B0', whiteSpace: 'nowrap' }}>
+                    Auto-discover
+                  </span>
+                )}
+                {/* Delete */}
+                <button
+                  onClick={() => removeCompetitor(comp.id)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#404060', padding: '4px' }}
+                  title="Remove competitor"
+                >
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
             );
           })}
