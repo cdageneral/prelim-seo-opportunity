@@ -160,14 +160,13 @@ export async function getKeywordGap(
   clientDomain: string,
   competitorDomain: string
 ): Promise<SemrushKeywordGap[]> {
-  // Fetch competitor's top organic keywords — these are the gap opportunities.
-  // (phrase_kdi is keyword difficulty, not gap analysis. The correct approach
-  //  is to pull the competitor's top-traffic keywords and let Claude cross-reference.)
+  // Fetch up to 100 of the competitor's top organic keywords.
+  // We fetch 100 so we have enough candidates after the vol ≥ 2400 filter.
   const raw = await semrushGet({
     type:           'domain_organic',
     domain:         competitorDomain,
     database:       'us',
-    display_limit:  '40',
+    display_limit:  '100',
     display_sort:   'tr_desc',
     export_columns: 'Ph,Po,Nq,Cp',
   });
@@ -175,11 +174,33 @@ export async function getKeywordGap(
   return parseSemrushCSV(raw).map(row => ({
     keyword:            row['Keyword'] ?? '',
     searchVolume:       parseInt(row['Search Volume'] ?? '0'),
-    clientPosition:     null,   // Unknown without a second API call; Claude uses this as "gap"
+    clientPosition:     null,
     competitor:         competitorDomain,
     competitorPosition: parseInt(row['Position'] ?? '0'),
     cpc:                parseFloat(row['CPC'] ?? '0'),
   }));
+}
+
+// ─── Brand token helper (mirrors KeywordsPanel logic) ─────────────────────────
+// Extracts the root brand name from a domain.
+function extractBrandToken(domain: string): string {
+  return domain
+    .replace(/^https?:\/\//i, '')
+    .replace(/^www\./i, '')
+    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
+    .split('.')[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+// Returns true if the keyword contains any competitor brand token.
+// Used to strip competitor-branded terms from the gap keyword list.
+function isCompetitorBranded(keyword: string, competitorDomains: string[]): boolean {
+  const kw = keyword.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+  return competitorDomains
+    .map(extractBrandToken)
+    .filter(t => t.length >= 4)
+    .some(token => kw.replace(/\s/g, '').includes(token) || kw.includes(token));
 }
 
 // ─── Position Distribution ────────────────────────────────────────────────────
@@ -197,19 +218,61 @@ function buildPositionDistribution(keywords: SemrushKeyword[]): Record<string, n
 
 // ─── Full Snapshot (main entry point) ─────────────────────────────────────────
 
-export async function getSemrushSnapshot(domain: string): Promise<SemrushSnapshot> {
+export async function getSemrushSnapshot(
+  domain: string,
+  manualCompetitors: string[] = [],   // domains from project.competitors
+): Promise<SemrushSnapshot> {
   // Parallel fetch of independent endpoints
-  const [overview, topKeywords, competitors] = await Promise.all([
+  const [overview, topKeywords, autoCompetitors] = await Promise.all([
     getDomainOverview(domain),
     getOrganicKeywords(domain),
     getCompetitors(domain),
   ]);
 
-  // Gap analysis against top competitor
-  const topCompetitor = competitors[0]?.domain ?? '';
-  const gapKeywords = topCompetitor
-    ? await getKeywordGap(domain, topCompetitor)
-    : [];
+  // Build the full competitor list: auto-discovered + manually tracked (deduplicated)
+  const autoSet   = new Set(autoCompetitors.map(c => c.domain));
+  const allCompetitorDomains: string[] = [
+    ...autoCompetitors.map(c => c.domain),
+    ...manualCompetitors.filter(d => !autoSet.has(d)),
+  ];
+
+  // Query gap keywords from EVERY competitor, then merge + deduplicate.
+  // Criteria (per product spec):
+  //   - vol ≥ 2,400/mo
+  //   - not competitor-branded (but client-branded terms are allowed)
+  const competitorDomainsForBrandFilter = allCompetitorDomains;
+
+  const gapResults = await Promise.all(
+    allCompetitorDomains.slice(0, 5).map(comp =>   // cap at 5 competitors to limit API calls
+      getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
+    )
+  );
+
+  // Merge, filter, deduplicate
+  const seen  = new Set<string>();
+  const gapKeywords: SemrushKeywordGap[] = [];
+
+  for (const batch of gapResults) {
+    for (const kw of batch) {
+      const key = kw.keyword.toLowerCase().trim();
+      if (seen.has(key)) continue;                          // deduplicate across competitors
+      if (kw.searchVolume < 2400) continue;                 // volume threshold
+      if (isCompetitorBranded(kw.keyword, competitorDomainsForBrandFilter)) continue; // strip competitor brand terms
+      seen.add(key);
+      gapKeywords.push(kw);
+    }
+  }
+
+  // Sort by search volume descending so highest-value gaps appear first
+  gapKeywords.sort((a, b) => b.searchVolume - a.searchVolume);
+
+  // Merge auto + manual competitors for the competitors list stored in snapshot
+  const competitors = [
+    ...autoCompetitors,
+    ...manualCompetitors
+      .filter(d => !autoSet.has(d))
+      .map(d => ({ domain: d, commonKeywords: 0, organicKeywords: 0, organicTraffic: 0, relevance: 1 })),
+  ];
 
   const positionDist = buildPositionDistribution(topKeywords);
 

@@ -86,7 +86,12 @@ export async function POST(req: NextRequest) {
   try {
     // ── Data APIs — fault-tolerant, each has AbortSignal timeout ─────────────
     // Step 1: Semrush only (needed for SerpAPI keyword list)
-    const semrush = await getSemrushSnapshot(domain).catch(err => {
+    // Collect manually-tracked competitor domains before calling Semrush
+    const manualCompetitorDomains: string[] = ((project as any).competitors ?? [])
+      .map((c: { domain: string }) => c.domain)
+      .filter(Boolean);
+
+    const semrush = await getSemrushSnapshot(domain, manualCompetitorDomains).catch(err => {
       console.error(`[OrbitIQ] Semrush failed:`, err);
       return {
         domain,
@@ -96,20 +101,7 @@ export async function POST(req: NextRequest) {
       } as any;
     });
 
-    // Merge manually-added competitors
-    if ((project as any).competitors?.length > 0) {
-      const existing = new Set(semrush.competitors.map((c: { domain: string }) => c.domain));
-      for (const mc of (project as any).competitors) {
-        if (!existing.has(mc.domain)) {
-          // push (not unshift) — manual competitors go to the end so
-          // Semrush-discovered competitors (sorted by relevance/traffic) stay at [0]
-          semrush.competitors.push({
-            domain: mc.domain, commonKeywords: 0, organicKeywords: 0,
-            organicTraffic: 0, relevance: 1,
-          });
-        }
-      }
-    }
+    // Manual competitors are now handled inside getSemrushSnapshot (passed above).
 
     // Step 2: SerpAPI runs immediately after Semrush — LLM probe does NOT block this
     const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
