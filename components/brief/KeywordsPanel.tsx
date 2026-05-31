@@ -644,7 +644,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
       {/* ── Table ── */}
       <div className="overflow-auto flex-1">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
+          <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>
               <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-4 py-2.5 w-[37%]">Keyword</th>
               <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Search Vol</th>
@@ -671,6 +671,9 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
                     )}
                     {row.branded && (
                       <span className="text-[9px] bg-purple-500/10 border border-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full shrink-0">branded</span>
+                    )}
+                    {!row.branded && (
+                      <span className="text-[9px] bg-sky-500/10 border border-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded-full shrink-0">non-branded</span>
                     )}
                     <SourceBadge source={row.source} />
                   </div>
@@ -700,7 +703,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
                     onClick={() => handleDelete(row)}
                     disabled={deletingKey === row.key}
                     title="Remove keyword"
-                    className="opacity-30 hover:opacity-100 transition-opacity text-orbit-tertiary hover:text-red-400 disabled:opacity-20"
+                    className="opacity-60 hover:opacity-100 transition-opacity text-orbit-secondary hover:text-red-400 disabled:opacity-20"
                   >
                     {deletingKey === row.key
                       ? <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
