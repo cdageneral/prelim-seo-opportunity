@@ -164,6 +164,8 @@ export interface CategoryBreakdownResult {
   nonBrandedPage1Demand:   number;   // page1 from procedure categories only
   totalKeywordsAnalyzed:   number;
   page1CaptureRate:        number;
+  // v7.34: keyword→category map for ThemeClustersPanel (lowercase keyword → category name)
+  keywordCategories:       Record<string, string>;
 }
 
 export async function generateCategoryBreakdown(
@@ -205,7 +207,7 @@ export async function generateCategoryBreakdown(
   }
 
   if (merged.length === 0) {
-    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0 };
+    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} };
   }
 
   const prompt = categoryBreakdownPrompt(domain, industry, merged);
@@ -231,6 +233,7 @@ export async function generateCategoryBreakdown(
     nonBrandedPage1Demand: 0,
     totalKeywordsAnalyzed: merged.length,
     page1CaptureRate:      0,
+    keywordCategories:     {},  // v7.34: populated below
   };
 
   for (const cat of parsed.categories) {
@@ -246,6 +249,8 @@ export async function generateCategoryBreakdown(
       monthlyDemand += vol;
       if (kw.clientPosition !== null && kw.clientPosition <= 10) page1Demand += vol;
       if (kw.clientPosition !== null && kw.clientPosition <= 3)  top3Demand  += vol;
+      // v7.34: store keyword→category mapping for ThemeClustersPanel
+      result.keywordCategories[kw.keyword.toLowerCase()] = cat.name;
     }
 
     result.categories.push({ name: cat.name, type: catType, monthlyDemand, page1Demand, top3Demand });
@@ -338,7 +343,7 @@ export async function runFullSynthesis(
     generateOpportunities(domain, industry, semrush, serp, profound),
     generateCategoryBreakdown(domain, industry, semrush).catch(err => {
       console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
-      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0 } as CategoryBreakdownResult;
+      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;
     }),
   ]);
   console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}, Categories: ${categoryBreakdown.categories.length}`);

@@ -13,6 +13,7 @@ import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
+import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
@@ -140,6 +141,7 @@ export default function ProjectBriefPage() {
   const [analysisError,    setAnalysisError]    = useState<string | null>(null);
   const [activeSection,    setActiveSection]    = useState<NavSection>('overview');
   const [hoveredNav,       setHoveredNav]       = useState<NavSection | null>(null);
+  const [keywordsSubView,  setKeywordsSubView]  = useState<'list' | 'clusters'>('list');
 
   // Data source state
   const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
@@ -452,23 +454,57 @@ export default function ProjectBriefPage() {
                   {items.map(item => {
                     const score  = navScores[item.id];
                     const styles = navItemStyles(item);
+                    const isActiveItem = activeSection === item.id;
                     return (
-                      <button
-                        key={item.id}
-                        onClick={() => setActiveSection(item.id)}
-                        onMouseEnter={() => setHoveredNav(item.id)}
-                        onMouseLeave={() => setHoveredNav(null)}
-                        className="w-full flex items-center gap-1.5 text-left"
-                        style={styles.btn}
-                      >
-                        <span style={{ fontSize: '9px', color: '#2C2C44', width: '13px', flexShrink: 0 }}>
-                          {item.num}
-                        </span>
-                        <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
-                        <span style={styles.label}>{item.label}</span>
-                        <span style={styles.score}>{score ?? '—'}</span>
-                        <span style={{ width: '4px', height: '4px', borderRadius: '50%', flexShrink: 0, background: score != null ? '#22C55E' : '#1E1E30' }} />
-                      </button>
+                      <div key={item.id}>
+                        <button
+                          onClick={() => setActiveSection(item.id)}
+                          onMouseEnter={() => setHoveredNav(item.id)}
+                          onMouseLeave={() => setHoveredNav(null)}
+                          className="w-full flex items-center gap-1.5 text-left"
+                          style={styles.btn}
+                        >
+                          <span style={{ fontSize: '9px', color: '#2C2C44', width: '13px', flexShrink: 0 }}>
+                            {item.num}
+                          </span>
+                          <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
+                          <span style={styles.label}>{item.label}</span>
+                          <span style={styles.score}>{score ?? '—'}</span>
+                          <span style={{ width: '4px', height: '4px', borderRadius: '50%', flexShrink: 0, background: score != null ? '#22C55E' : '#1E1E30' }} />
+                        </button>
+
+                        {/* ── Keywords sub-nav ── */}
+                        {item.id === 'keywords' && isActiveItem && hasResults && (
+                          <div style={{ background: '#060610', borderTop: '1px solid #0E0E1E' }}>
+                            {(['list', 'clusters'] as const).map(sv => {
+                              const subActive = keywordsSubView === sv;
+                              const subLabels = { list: 'Keyword list', clusters: 'Theme clusters' };
+                              const subIcons  = { list: 'ti-list', clusters: 'ti-hierarchy-2' };
+                              return (
+                                <button
+                                  key={sv}
+                                  onClick={e => { e.stopPropagation(); setKeywordsSubView(sv); }}
+                                  className="w-full flex items-center gap-1.5 text-left"
+                                  style={{
+                                    padding: '4px 12px 4px 28px',
+                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.5)' : '2px solid transparent',
+                                    background: subActive ? '#0F0F1C' : 'transparent',
+                                  }}
+                                >
+                                  <i
+                                    className={`ti ${subIcons[sv]}`}
+                                    style={{ fontSize: '10px', color: subActive ? '#6C63FF' : '#3A3A60', width: '11px', flexShrink: 0 }}
+                                    aria-hidden="true"
+                                  />
+                                  <span style={{ fontSize: '9px', color: subActive ? '#9090C0' : '#484868' }}>
+                                    {subLabels[sv]}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -551,9 +587,16 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* ── Keyword Landscape — full panel ── */}
-          {hasResults && analysis && activeSection === 'keywords' && (
+          {/* ── Keyword Landscape — list or clusters sub-view ── */}
+          {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'list' && (
             <KeywordsPanel
+              projectId={projectId}
+              analysis={analysis}
+              competitors={competitorDomains}
+            />
+          )}
+          {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
+            <ThemeClustersPanel
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
