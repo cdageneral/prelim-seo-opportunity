@@ -2,35 +2,36 @@
  * POST /api/analyze  — Phase 1: data gathering (SYNCHRONOUS)
  * GET  /api/analyze  — poll analysis status (backup / debug)
  *
- * v7.2 architecture — no fire-and-forget:
- *   The POST handler awaits all data API calls before returning.
- *   This keeps the Vercel Lambda alive for the full duration (the HTTP
- *   connection is open, so Vercel does not terminate the function early).
+ * v7.31 additions:
+ *   • mode='full' (default) — original behaviour: Semrush + SerpAPI + LLM probe
+ *   • mode='gaps'           — gap scan: reuses existing footprint, fetches ONLY
+ *                             net-new competitor keywords, runs SerpAPI on those
+ *                             only, reuses last LLM probe data (no re-probe)
+ *   • Upload detection      — if project has csv-sourced keywords in
+ *                             project_keywords, Semrush is skipped entirely;
+ *                             snapshot is built from uploads instead
  *
- *   Previously, fire-and-forget was used (return response, work continues).
- *   On Vercel App Router, the Lambda is terminated when the response is sent
- *   unless waitUntil() is used — so fire-and-forget was silently killing the
- *   background work every time. This caused the DB to stay in 'running' state
- *   and the 8-minute client timer to fire.
- *
- * Client flow:
- *   1. POST /api/analyze       → awaits (~25–80s) → returns { analysisId }
- *   2. POST /api/synthesize    → awaits (~30–100s) → returns { status: 'completed' }
- *   3. fetchProject()          → renders brief
+ * Architecture note (v7.2+): no fire-and-forget. Lambda stays alive because
+ * the HTTP connection is open. Client awaits Phase 1, then awaits Phase 2.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z }       from 'zod';
 import { db }      from '@/db';
-import { analyses, projects } from '@/db/schema';
-import { eq }      from 'drizzle-orm';
-import { getSemrushSnapshot } from '@/lib/apis/semrush';
-import { getSerpApiSnapshot } from '@/lib/apis/serp';
+import { analyses, projects, projectKeywords } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
+import { getSemrushSnapshot, getKeywordGap } from '@/lib/apis/semrush';
+import { getSerpApiSnapshot }  from '@/lib/apis/serp';
 import { getLLMProbeSnapshot } from '@/lib/apis/llmProbe';
+import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
+import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 
 export const maxDuration = 300;
 
-const AnalyzeSchema = z.object({ projectId: z.string().uuid() });
+const AnalyzeSchema = z.object({
+  projectId: z.string().uuid(),
+  mode:      z.enum(['full', 'gaps']).optional().default('full'),
+});
 
 function normalizeDomain(url: string): string {
   try {
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { projectId } = parsed.data;
+  const { projectId, mode } = parsed.data;
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),
@@ -63,7 +64,6 @@ export async function POST(req: NextRequest) {
 
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
-  // Pre-flight: fail fast before burning any API credits
   if (!process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(
       { error: 'ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.' },
@@ -74,66 +74,162 @@ export async function POST(req: NextRequest) {
   const domain   = normalizeDomain(project.websiteUrl);
   const industry = project.industry ?? 'General';
 
+  const manualCompetitorDomains: string[] = ((project as any).competitors ?? [])
+    .map((c: { domain: string }) => c.domain)
+    .filter(Boolean);
+
   const [analysis] = await db.insert(analyses).values({
     projectId,
     status:      'running',
     triggeredAt: new Date(),
   }).returning();
 
-  console.log(`[OrbitIQ] Phase 1 starting for ${analysis.id} (${domain})`);
+  console.log(`[OrbitIQ] Phase 1 starting — mode=${mode}, analysisId=${analysis.id}, domain=${domain}`);
   console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, OPENAI: ${!!process.env.OPENAI_API_KEY}`);
 
   try {
-    // ── Data APIs — fault-tolerant, each has AbortSignal timeout ─────────────
-    // Step 1: Semrush only (needed for SerpAPI keyword list)
-    // Collect manually-tracked competitor domains before calling Semrush
-    const manualCompetitorDomains: string[] = ((project as any).competitors ?? [])
-      .map((c: { domain: string }) => c.domain)
-      .filter(Boolean);
 
-    const semrush = await getSemrushSnapshot(domain, manualCompetitorDomains).catch(err => {
-      console.error(`[OrbitIQ] Semrush failed:`, err);
-      return {
-        domain,
-        overview: { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
-        topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
-        fetchedAt: new Date().toISOString(),
-      } as any;
-    });
+    // ══════════════════════════════════════════════════════════════════════════
+    // GAP SCAN mode — reuse existing footprint, fetch only net-new keywords
+    // ══════════════════════════════════════════════════════════════════════════
 
-    // Manual competitors are now handled inside getSemrushSnapshot (passed above).
+    if (mode === 'gaps') {
+      const lastAnalysis = await db.query.analyses.findFirst({
+        where: and(
+          eq(analyses.projectId, projectId),
+          eq(analyses.status, 'completed'),
+        ),
+      });
 
-    // Step 2: SerpAPI runs immediately after Semrush — LLM probe does NOT block this
-    const topKeywords = semrush.topKeywords.slice(0, 50).map((k: { keyword: string }) => k.keyword);
-    console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, keywords to scan=${Math.min(topKeywords.length, 5)} of ${topKeywords.length} available`);
+      if (!lastAnalysis?.semrushSnapshot) {
+        console.log(`[OrbitIQ] Gap scan: no completed analysis found — falling back to full mode`);
+        // Fall through to full mode below
+      } else {
+        const existingSnapshot = lastAnalysis.semrushSnapshot as SemrushSnapshot;
+        const existingRanked   = new Set(
+          (existingSnapshot.topKeywords ?? []).map((k: any) => (k.keyword as string).toLowerCase().trim())
+        );
+        const existingGaps     = new Set(
+          (existingSnapshot.gapKeywords ?? []).map((k: any) => (k.keyword as string).toLowerCase().trim())
+        );
+
+        console.log(`[OrbitIQ] Gap scan: ${existingRanked.size} ranked + ${existingGaps.size} gap keywords already tracked`);
+
+        const allCompetitorDomains = [
+          ...(existingSnapshot.competitors ?? []).map((c: any) => c.domain as string),
+          ...manualCompetitorDomains,
+        ].filter((d, i, arr) => d && arr.indexOf(d) === i);
+
+        const gapResults = await Promise.all(
+          allCompetitorDomains.slice(0, 5).map(comp =>
+            getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
+          )
+        );
+
+        const seen = new Set<string>();
+        const newGapKeywords: SemrushKeywordGap[] = [];
+        for (const batch of gapResults) {
+          for (const kw of batch) {
+            const key = kw.keyword.toLowerCase().trim();
+            if (seen.has(key) || existingRanked.has(key) || existingGaps.has(key)) continue;
+            if (kw.searchVolume < 2400) continue;
+            seen.add(key);
+            newGapKeywords.push(kw);
+          }
+        }
+
+        console.log(`[OrbitIQ] Gap scan: ${newGapKeywords.length} net-new gap keywords found`);
+
+        const mergedSnapshot: SemrushSnapshot = {
+          ...existingSnapshot,
+          gapKeywords: [
+            ...(existingSnapshot.gapKeywords ?? []),
+            ...newGapKeywords,
+          ].sort((a, b) => b.searchVolume - a.searchVolume),
+          fetchedAt: new Date().toISOString(),
+        };
+
+        const gapKeywordTexts = newGapKeywords.slice(0, 5).map(k => k.keyword);
+        const serp = gapKeywordTexts.length > 0
+          ? await getSerpApiSnapshot(domain, gapKeywordTexts).catch(err => {
+              console.error(`[OrbitIQ] SerpAPI (gap) failed:`, err);
+              return lastAnalysis.serpApiSnapshot as any;
+            })
+          : (lastAnalysis.serpApiSnapshot as any);
+
+        const llmProbe = lastAnalysis.profoundSnapshot as any;
+
+        await db.update(analyses)
+          .set({
+            semrushSnapshot:  mergedSnapshot as any,
+            serpApiSnapshot:  serp           as any,
+            profoundSnapshot: llmProbe       as any,
+          })
+          .where(eq(analyses.id, analysis.id));
+
+        console.log(`[OrbitIQ] Gap scan Phase 1 complete for ${analysis.id}`);
+        return NextResponse.json({
+          analysisId:  analysis.id,
+          triggeredAt: analysis.triggeredAt,
+          status:      'data_ready',
+          gapMode:     true,
+          newGapsFound: newGapKeywords.length,
+        });
+      }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // FULL mode — check for uploaded footprint first, then Semrush
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Check for uploaded keywords (source='csv') — skips Semrush if found
+    const uploadedSnapshot = await buildSnapshotFromUploads(
+      projectId, domain, manualCompetitorDomains
+    ).catch(() => null);
+
+    let semrush: SemrushSnapshot;
+
+    if (uploadedSnapshot) {
+      console.log(`[OrbitIQ] Using uploaded footprint — ${uploadedSnapshot.topKeywords.length} client kws, ${uploadedSnapshot.gapKeywords.length} gap kws — Semrush skipped`);
+      semrush = uploadedSnapshot;
+    } else {
+      console.log(`[OrbitIQ] Auto-discovering keyword footprint via Semrush`);
+      semrush = await getSemrushSnapshot(domain, manualCompetitorDomains).catch(err => {
+        console.error(`[OrbitIQ] Semrush failed:`, err);
+        return {
+          domain,
+          overview:    { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
+          topKeywords: [], competitors: [], gapKeywords: [], positionDist: {},
+          fetchedAt:   new Date().toISOString(),
+        } as SemrushSnapshot;
+      });
+    }
+
+    // SerpAPI — runs on a sample of top keywords regardless of source
+    const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
+    console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, scanning ${Math.min(topKeywords.length, 5)} of ${topKeywords.length} keywords`);
     const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
       console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
       return {
         domain, keywords: [],
-        aioSummary: { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
+        aioSummary:         { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
         serpFeatureSummary: { scanned: 0, withPAA: 0, paaClientCited: 0, withVideo: 0, videoClientCited: 0 },
         topAIOCompetitors: [], fetchedAt: new Date().toISOString(),
       } as any;
     });
 
-    // Diagnostic log — always fires so we can confirm SerpAPI results in Vercel logs
     console.log(
       `[OrbitIQ] SerpAPI scan: ${serp.keywords?.length ?? 0} keywords scanned,` +
       ` ${serp.aioSummary?.withAIO ?? 0} AIOs, PAA=${serp.serpFeatureSummary?.withPAA ?? 0},` +
       ` video=${serp.serpFeatureSummary?.withVideo ?? 0}`
     );
 
-    // Step 3: LLM probe runs after SerpAPI — all 6 calls in parallel (3 Claude + 3 ChatGPT)
+    // LLM Probe
     const llmProbe = await getLLMProbeSnapshot(project.clientName, domain, industry).catch(err => {
       console.error(`[OrbitIQ] LLM probe failed:`, err);
-      return {
-        source: 'llm_probe', probedAt: new Date().toISOString(),
-        prompts: [], platforms: [], overallScore: 0,
-        overallMentions: 0, overallTotal: 0,
-      } as any;
+      return { source: 'llm_probe', probedAt: new Date().toISOString(), prompts: [], platforms: [], overallScore: 0, overallMentions: 0, overallTotal: 0 } as any;
     });
 
-    // Save snapshots — keep status 'running' so /api/synthesize knows to proceed
     await db.update(analyses)
       .set({
         semrushSnapshot:  semrush  as any,
@@ -142,13 +238,12 @@ export async function POST(req: NextRequest) {
       })
       .where(eq(analyses.id, analysis.id));
 
-    console.log(`[OrbitIQ] Phase 1 complete for ${analysis.id}`);
-
-    // Return analysisId so the client can immediately call /api/synthesize
+    console.log(`[OrbitIQ] Phase 1 complete for ${analysis.id} (uploadMode=${!!uploadedSnapshot})`);
     return NextResponse.json({
       analysisId:  analysis.id,
       triggeredAt: analysis.triggeredAt,
       status:      'data_ready',
+      usedUploads: !!uploadedSnapshot,
     });
 
   } catch (err) {

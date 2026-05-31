@@ -33,8 +33,13 @@ async function ensureTable() {
         type          TEXT      NOT NULL DEFAULT 'gap',
         branded       BOOLEAN   NOT NULL DEFAULT false,
         source        TEXT      NOT NULL,
+        domain        TEXT,
         created_at    TIMESTAMP NOT NULL DEFAULT NOW()
       )
+    `);
+    // v7.31: add domain column to tables created before this version
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS domain TEXT
     `);
   } catch {
     // Table already exists or DB not available — safe to continue
@@ -68,7 +73,7 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { keyword, searchVolume = 0, position = null, type = 'gap', branded = false, source } = body;
+  const { keyword, searchVolume = 0, position = null, type = 'gap', branded = false, source, domain = null } = body;
 
   if (!keyword || typeof keyword !== 'string' || !keyword.trim()) {
     return NextResponse.json({ error: 'keyword is required' }, { status: 400 });
@@ -107,6 +112,7 @@ export async function POST(
       type:         type === 'ranked' ? 'ranked' : 'gap',
       branded:      Boolean(branded),
       source,
+      domain:       domain ?? null,
     })
     .returning();
 

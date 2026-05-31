@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import MarketGapSection     from '@/components/brief/MarketGapSection';
@@ -13,6 +13,7 @@ import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
+import RefreshModal         from '@/components/brief/RefreshModal';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -99,6 +100,29 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
   return scores;
 }
 
+// ── CSV / XLSX parser (client-side) ──────────────────────────────────────────
+
+function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number }[] {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const firstLine  = lines[0] ?? '';
+  const delimiter  = firstLine.includes(';') ? ';' : ',';
+  const headers    = firstLine.split(delimiter).map(h => h.trim().replace(/"/g, '').toLowerCase());
+
+  return lines.slice(1).map(line => {
+    const vals: Record<string, string> = {};
+    line.split(delimiter).forEach((v, i) => { vals[headers[i] ?? i] = v.trim().replace(/"/g, ''); });
+
+    // Semrush column aliases: Ph=Keyword, Nq=Volume, Po=Position
+    const kw  = (vals['keyword'] || vals['ph'] || vals['phrase'] || '').toLowerCase().trim();
+    const vol = parseInt(vals['search volume'] || vals['nq'] || vals['volume'] || vals['searches'] || '0') || 0;
+    const posRaw = vals['position'] || vals['po'] || '';
+    const pos    = posRaw ? parseInt(posRaw) : undefined;
+
+    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined };
+  }).filter(r => r.keyword && r.searchVolume > 0);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ProjectBriefPage() {
@@ -106,16 +130,25 @@ export default function ProjectBriefPage() {
   const router    = useRouter();
   const projectId = params.id as string;
 
-  const [project,       setProject]       = useState<Project | null>(null);
-  const [loading,       setLoading]       = useState(true);
-  const [triggering,    setTriggering]    = useState(false);
-  const [triggeredAt,   setTriggeredAt]   = useState<string | undefined>(undefined);
-  const [renaming,      setRenaming]      = useState(false);
-  const [newName,       setNewName]       = useState('');
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<NavSection>('overview');
-  // hoveredNav tracks which nav item is hovered for the lighting effect
-  const [hoveredNav,    setHoveredNav]    = useState<NavSection | null>(null);
+  const [project,          setProject]          = useState<Project | null>(null);
+  const [loading,          setLoading]          = useState(true);
+  const [triggering,       setTriggering]       = useState(false);
+  const [triggeredAt,      setTriggeredAt]      = useState<string | undefined>(undefined);
+  const [renaming,         setRenaming]         = useState(false);
+  const [newName,          setNewName]          = useState('');
+  const [analysisError,    setAnalysisError]    = useState<string | null>(null);
+  const [activeSection,    setActiveSection]    = useState<NavSection>('overview');
+  const [hoveredNav,       setHoveredNav]       = useState<NavSection | null>(null);
+
+  // Data source state
+  const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
+  const [uploadedDomains,  setUploadedDomains]  = useState<Set<string>>(new Set());
+  const [uploadingDomain,  setUploadingDomain]  = useState<string | null>(null);
+  const [uploadError,      setUploadError]      = useState<string | null>(null);
+  const fileInputRefs      = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // Refresh modal state
+  const [showRefreshModal, setShowRefreshModal] = useState(false);
 
   const analysis   = project?.analyses?.[0] ?? null;
   const isRunning  = triggering;
@@ -133,15 +166,16 @@ export default function ProjectBriefPage() {
 
   useEffect(() => { fetchProject(); }, [fetchProject]);
 
-  async function triggerAnalysis() {
+  async function triggerAnalysis(mode: 'full' | 'gaps' = 'full') {
     setTriggering(true);
     setAnalysisError(null);
     setTriggeredAt(new Date().toISOString());
+    setShowRefreshModal(false);
     try {
       const res1  = await fetch('/api/analyze', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ projectId }),
+        body:    JSON.stringify({ projectId, mode }),
       });
       const data1 = await res1.json();
       if (!res1.ok) {
@@ -165,6 +199,48 @@ export default function ProjectBriefPage() {
       setTriggering(false);
     }
   }
+
+  // ── File upload handler ───────────────────────────────────────────────────
+
+  async function handleFileUpload(file: File, domain: string) {
+    setUploadingDomain(domain);
+    setUploadError(null);
+    try {
+      const text     = await file.text();
+      const keywords = parseCsvText(text);
+
+      if (keywords.length === 0) {
+        setUploadError(`No valid keywords found in ${file.name}. Expected columns: keyword, search_volume`);
+        return;
+      }
+
+      const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ domain, source: 'csv', keywords }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        setUploadError(d?.error ?? 'Upload failed');
+        return;
+      }
+
+      const { inserted } = await res.json();
+      if (inserted === 0) {
+        setUploadError(`All keywords in ${file.name} were already uploaded for this domain.`);
+        return;
+      }
+
+      setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
+    } catch (err) {
+      setUploadError('Upload failed — check file format and try again.');
+    } finally {
+      setUploadingDomain(null);
+    }
+  }
+
+  // ── Rename / delete ───────────────────────────────────────────────────────
 
   async function saveRename() {
     const trimmed = newName.trim();
@@ -192,7 +268,7 @@ export default function ProjectBriefPage() {
 
   if (!project) return null;
 
-  const domainDisplay    = project.websiteUrl.replace(/^https?:\/\/(www\.)?/, '');
+  const domainDisplay     = project.websiteUrl.replace(/^https?:\/\/(www\.)?/, '');
   const competitorDomains = (project.competitors ?? []).map(c => c.domain);
 
   const scanDate = analysis?.completedAt
@@ -280,6 +356,20 @@ export default function ProjectBriefPage() {
         </div>
       )}
 
+      {/* ── Refresh modal ── */}
+      {showRefreshModal && analysis && (
+        <RefreshModal
+          clientName={project.clientName}
+          lastAnalyzed={analysis.completedAt}
+          keywordsCount={
+            (analysis.semrushSnapshot?.topKeywords?.length ?? 0) +
+            (analysis.semrushSnapshot?.gapKeywords?.length ?? 0)
+          }
+          onClose={() => setShowRefreshModal(false)}
+          onRun={mode => triggerAnalysis(mode)}
+        />
+      )}
+
       {/* ════ GLOBAL HEADER ════ */}
       <header className="flex-shrink-0 h-14 border-b border-orbit-border bg-orbit-surface/80 backdrop-blur-sm flex items-center justify-between px-5 z-40">
         <div className="flex items-center gap-2">
@@ -302,7 +392,13 @@ export default function ProjectBriefPage() {
             Rename
           </button>
           <button
-            onClick={triggerAnalysis}
+            onClick={() => {
+              if (hasResults) {
+                setShowRefreshModal(true);
+              } else {
+                triggerAnalysis('full');
+              }
+            }}
             disabled={isRunning}
             className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-xs font-medium px-4 py-1.5 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
           >
@@ -328,7 +424,6 @@ export default function ProjectBriefPage() {
           className="flex-shrink-0 border-r border-orbit-border flex flex-col"
           style={{ width: '214px', background: '#0D0D16' }}
         >
-          {/* Client identity */}
           <div className="px-3 py-3 border-b border-orbit-border">
             <div className="text-orbit-primary text-[11px] font-semibold truncate">{domainDisplay}</div>
             {project.industry && (
@@ -339,7 +434,6 @@ export default function ProjectBriefPage() {
             )}
           </div>
 
-          {/* Nav items */}
           <nav className="flex-1 overflow-y-auto py-1.5">
             {NAV_GROUPS.map(group => {
               const items = NAV_ITEMS.filter(i => i.group === group);
@@ -377,7 +471,6 @@ export default function ProjectBriefPage() {
             })}
           </nav>
 
-          {/* Footer */}
           <div className="border-t border-orbit-border px-3 py-2.5">
             <div className="flex items-center gap-1.5 mb-1">
               <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22C55E', flexShrink: 0 }} />
@@ -436,7 +529,20 @@ export default function ProjectBriefPage() {
                 competitors={project.competitors ?? []}
                 onChange={fetchProject}
               />
-              <NoAnalysisState clientName={project.clientName} onRun={triggerAnalysis} />
+
+              {/* ── Data Source Card ── */}
+              <DataSourceCard
+                clientDomain={domainDisplay}
+                competitors={project.competitors ?? []}
+                dataSource={dataSource}
+                onSelectSource={setDataSource}
+                uploadedDomains={uploadedDomains}
+                uploadingDomain={uploadingDomain}
+                uploadError={uploadError}
+                fileInputRefs={fileInputRefs}
+                onFileSelect={handleFileUpload}
+                onRun={() => triggerAnalysis('full')}
+              />
             </div>
           )}
 
@@ -497,28 +603,221 @@ export default function ProjectBriefPage() {
   );
 }
 
-// ── No Analysis State ─────────────────────────────────────────────────────────
+// ── Data Source Card ──────────────────────────────────────────────────────────
 
-function NoAnalysisState({ clientName, onRun }: { clientName: string; onRun: () => void }) {
+interface DataSourceCardProps {
+  clientDomain:    string;
+  competitors:     { id: string; domain: string; name: string | null }[];
+  dataSource:      'auto' | 'upload';
+  onSelectSource:  (s: 'auto' | 'upload') => void;
+  uploadedDomains: Set<string>;
+  uploadingDomain: string | null;
+  uploadError:     string | null;
+  fileInputRefs:   React.MutableRefObject<Record<string, HTMLInputElement | null>>;
+  onFileSelect:    (file: File, domain: string) => void;
+  onRun:           () => void;
+}
+
+function DataSourceCard({
+  clientDomain, competitors, dataSource, onSelectSource,
+  uploadedDomains, uploadingDomain, uploadError, fileInputRefs, onFileSelect, onRun,
+}: DataSourceCardProps) {
+  // All domains that need uploads: client + each competitor
+  const allDomains = [clientDomain, ...competitors.map(c => c.domain)];
+  const allUploaded = dataSource === 'upload' && allDomains.every(d => uploadedDomains.has(d));
+  const someUploaded = dataSource === 'upload' && uploadedDomains.size > 0;
+
+  const cardStyle = (selected: boolean): React.CSSProperties => ({
+    flex: 1, textAlign: 'left', cursor: 'pointer',
+    background: selected ? '#14142C' : '#0F0F1E',
+    border: `1.5px solid ${selected ? '#6C63FF' : '#1E1E35'}`,
+    borderRadius: '10px', padding: '16px',
+    transition: 'border-color .15s, background .15s',
+  });
+
+  function triggerFileInput(domain: string) {
+    fileInputRefs.current[domain]?.click();
+  }
+
   return (
-    <div className="orbit-card p-12 flex flex-col items-center gap-6 text-center">
-      <div className="w-20 h-20 rounded-2xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center">
-        <svg className="w-10 h-10 text-orbit-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-        </svg>
+    <div className="orbit-card p-5">
+      <p className="text-orbit-secondary text-xs mb-3 font-medium">How should OrbitIQ source keyword footprint data?</p>
+
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+
+        {/* Auto-discover */}
+        <button style={cardStyle(dataSource === 'auto')} onClick={() => onSelectSource('auto')}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+            <i className="ti ti-antenna" style={{ fontSize: '18px', color: dataSource === 'auto' ? '#7B68EE' : '#404060' }} aria-hidden="true" />
+            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>~2,400 units</span>
+          </div>
+          <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Auto-discover</p>
+          <p style={{ fontSize: '11px', color: '#707090', margin: '0 0 6px', lineHeight: 1.5 }}>
+            Semrush crawls the client and all competitors automatically on run.
+          </p>
+          <p style={{ fontSize: '10px', color: '#404060', margin: 0 }}>Current behavior</p>
+        </button>
+
+        {/* Upload footprints */}
+        <button style={cardStyle(dataSource === 'upload')} onClick={() => onSelectSource('upload')}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+            <i className="ti ti-upload" style={{ fontSize: '18px', color: dataSource === 'upload' ? '#00C9B1' : '#404060' }} aria-hidden="true" />
+            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#0D2B1D', color: '#4ADE80' }}>0 units</span>
+          </div>
+          <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Upload footprints</p>
+          <p style={{ fontSize: '11px', color: '#707090', margin: '0 0 6px', lineHeight: 1.5 }}>
+            Import CSV keyword exports. Semrush skipped — saves ~2,000 units on creation.
+          </p>
+          <p style={{ fontSize: '10px', color: '#404060', margin: 0 }}>SerpAPI still runs for live SERP features</p>
+        </button>
+
       </div>
-      <div>
-        <h3 className="text-orbit-primary text-xl font-semibold">Ready to analyze {clientName}</h3>
-        <p className="text-orbit-secondary text-sm mt-2 max-w-md">
-          Add competitors above, then run the analysis. OrbitIQ will query Semrush, SerpAPI, and probe live LLMs to synthesize a CMO-level brief.
-        </p>
-      </div>
+
+      {/* Auto-discover info panel */}
+      {dataSource === 'auto' && (
+        <div style={{ background: '#0F0F1E', border: '0.5px solid #1E1E35', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+            <i className="ti ti-info-circle" style={{ fontSize: '13px', color: '#6C63FF' }} aria-hidden="true" />
+            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch top 40 keywords for each domain</span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <DomainPill domain={clientDomain} label="client" />
+            {competitors.map(c => <DomainPill key={c.id} domain={c.domain} />)}
+            {competitors.length === 0 && (
+              <span style={{ fontSize: '10px', color: '#404060' }}>Add competitors above to include their footprints</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Upload zones */}
+      {dataSource === 'upload' && (
+        <div style={{ marginBottom: '16px' }}>
+          <p style={{ fontSize: '11px', color: '#707090', marginBottom: '10px' }}>
+            Upload a CSV per domain. Required columns:{' '}
+            <code style={{ color: '#8080C0', fontSize: '10px', background: '#1A1A30', padding: '1px 5px', borderRadius: '3px' }}>keyword, search_volume</code>
+            {' '}· optional:{' '}
+            <code style={{ color: '#8080C0', fontSize: '10px', background: '#1A1A30', padding: '1px 5px', borderRadius: '3px' }}>position</code>
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <UploadZone
+              domain={clientDomain}
+              label="client"
+              uploaded={uploadedDomains.has(clientDomain)}
+              uploading={uploadingDomain === clientDomain}
+              onTrigger={() => triggerFileInput(clientDomain)}
+              inputRef={el => { fileInputRefs.current[clientDomain] = el; }}
+              onFileChange={f => onFileSelect(f, clientDomain)}
+            />
+            {competitors.map(c => (
+              <UploadZone
+                key={c.id}
+                domain={c.domain}
+                uploaded={uploadedDomains.has(c.domain)}
+                uploading={uploadingDomain === c.domain}
+                onTrigger={() => triggerFileInput(c.domain)}
+                inputRef={el => { fileInputRefs.current[c.domain] = el; }}
+                onFileChange={f => onFileSelect(f, c.domain)}
+              />
+            ))}
+            {competitors.length === 0 && (
+              <p style={{ fontSize: '10px', color: '#404060', margin: '4px 0 0' }}>
+                <i className="ti ti-info-circle" style={{ fontSize: '11px', marginRight: '4px' }} aria-hidden="true" />
+                Add competitors above to include their keyword footprints in the upload
+              </p>
+            )}
+          </div>
+          {uploadError && (
+            <p style={{ fontSize: '11px', color: '#F87171', marginTop: '8px' }}>{uploadError}</p>
+          )}
+        </div>
+      )}
+
+      {/* Run button */}
       <button
         onClick={onRun}
-        className="bg-orbit-accent hover:bg-orbit-accent-light text-white font-medium px-8 py-3 rounded-lg transition-colors text-sm"
+        disabled={dataSource === 'upload' && !someUploaded}
+        className="w-full bg-orbit-accent hover:bg-orbit-accent-light text-white font-medium py-2.5 rounded-lg transition-colors text-sm disabled:opacity-40"
       >
-        Run Organic Intelligence Analysis
+        {dataSource === 'upload' && !someUploaded
+          ? 'Upload at least one keyword file to continue'
+          : 'Run Organic Intelligence Analysis'}
       </button>
     </div>
+  );
+}
+
+// ── Upload zone sub-component ─────────────────────────────────────────────────
+
+interface UploadZoneProps {
+  domain:    string;
+  label?:    string;
+  uploaded:  boolean;
+  uploading: boolean;
+  onTrigger: () => void;
+  inputRef:  (el: HTMLInputElement | null) => void;
+  onFileChange: (file: File) => void;
+}
+
+function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, onFileChange }: UploadZoneProps) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      {/* Domain label */}
+      <div style={{ width: '140px', flexShrink: 0 }}>
+        <span style={{ fontSize: '11px', color: '#C0C0D8' }}>{domain}</span>
+        {label && (
+          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: '#2A2A5A', color: '#9090C0', marginLeft: '5px' }}>{label}</span>
+        )}
+      </div>
+
+      {/* Drop zone */}
+      <button
+        onClick={onTrigger}
+        disabled={uploading}
+        style={{
+          flex: 1, cursor: uploading ? 'wait' : 'pointer',
+          background: uploaded ? '#071A10' : '#0F0F1E',
+          border: `1.5px ${uploaded ? 'solid #22C55E' : 'dashed #2A2A4A'}`,
+          borderRadius: '7px', padding: '10px 14px', textAlign: 'center',
+          transition: 'border-color .15s',
+        }}
+      >
+        {uploading ? (
+          <span style={{ fontSize: '11px', color: '#707090' }}>Uploading…</span>
+        ) : uploaded ? (
+          <span style={{ fontSize: '11px', color: '#4ADE80', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+            <i className="ti ti-circle-check" style={{ fontSize: '13px' }} aria-hidden="true" /> Uploaded
+          </span>
+        ) : (
+          <span style={{ fontSize: '11px', color: '#505070', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+            <i className="ti ti-file-text" style={{ fontSize: '13px' }} aria-hidden="true" /> Click to upload · CSV
+          </span>
+        )}
+      </button>
+
+      {/* Hidden file input */}
+      <input
+        type="file"
+        accept=".csv,.txt"
+        style={{ display: 'none' }}
+        ref={inputRef}
+        onChange={e => {
+          const file = e.target.files?.[0];
+          if (file) onFileChange(file);
+          e.target.value = '';   // reset so same file can be re-selected
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Domain pill helper ────────────────────────────────────────────────────────
+
+function DomainPill({ domain, label }: { domain: string; label?: string }) {
+  return (
+    <span style={{ fontSize: '10px', background: '#1A1A30', border: '0.5px solid #2A2A50', borderRadius: '5px', padding: '3px 8px', color: '#B0B0D0' }}>
+      {domain}
+      {label && <span style={{ color: '#6C63FF', marginLeft: '4px', fontSize: '9px' }}>{label}</span>}
+    </span>
   );
 }

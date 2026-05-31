@@ -73,6 +73,7 @@ export const projectKeywords = pgTable('project_keywords', {
   type:         text('type').notNull().default('gap'), // 'ranked' | 'gap'
   branded:      boolean('branded').notNull().default(false),
   source:       text('source').notNull(),              // 'custom' | 'csv' | 'blocked'
+  domain:       text('domain'),                        // null = client keyword; set = competitor domain (uploaded footprints)
   createdAt:    timestamp('created_at').defaultNow().notNull(),
 });
 
