@@ -15,6 +15,7 @@ interface KeywordRow {
   type:         'ranked' | 'gap';
   branded:      boolean;
   source:       KwSource;
+  competitor:   string | null;   // domain that ranks for this keyword (gap rows only)
   // SERP features (only on semrush rows)
   hasAIO:        boolean;
   clientInAIO:   boolean;
@@ -176,6 +177,7 @@ function buildRows(
       type:         'ranked',
       branded:      isBranded(k.keyword, clientDomain, competitorDomains),
       source:       'semrush',
+      competitor:   null,
       hasAIO:       serp?.hasAIO ?? false,
       clientInAIO:  serp
         ? (serp.aioSources ?? []).some(
@@ -203,6 +205,7 @@ function buildRows(
       type:         'gap',
       branded:      isBranded(k.keyword, clientDomain, competitorDomains),
       source:       'semrush',
+      competitor:   (k as any).competitor ?? null,
       hasAIO:       serp?.hasAIO ?? false,
       clientInAIO:  false,
       hasPAA:       (serp?.paaQuestions ?? []).length > 0,
@@ -226,6 +229,7 @@ function buildRows(
       type:          dbKw.type === 'ranked' ? 'ranked' : 'gap',
       branded:       dbKw.branded,
       source:        dbKw.source as KwSource,
+      competitor:    null,
       hasAIO:        false,
       clientInAIO:   false,
       hasPAA:        false,
@@ -266,11 +270,12 @@ const FILTER_META: Record<KwFilter, { label: string; slug: string }> = {
 };
 
 function downloadCSV(rows: KeywordRow[], clientName: string, filterSlug: string) {
-  const headers = ['Keyword','Search Volume','Client Rank','Type','Branded','Source','AI Overview','Client in AIO','PAA','Client in PAA','Video','Client in Video'];
+  const headers = ['Keyword','Competitor','Monthly Search Volume','Client Rank','Type','Branded','Source','AI Overview','Client in AIO','PAA','Client in PAA','Video','Client in Video'];
   const lines   = [
     headers.join(','),
     ...rows.map(r => [
       `"${r.keyword}"`,
+      r.competitor ? extractBrand(r.competitor) : '—',
       r.searchVolume,
       r.position ?? 'Not ranked',
       r.type,
@@ -297,7 +302,8 @@ async function downloadXLSX(rows: KeywordRow[], clientName: string, filterSlug: 
   const XLSX = await import('xlsx');
   const data = rows.map(r => ({
     'Keyword':          r.keyword,
-    'Search Volume':    r.searchVolume,
+    'Competitor':       r.competitor ? extractBrand(r.competitor) : '—',
+    'Monthly Search Volume': r.searchVolume,
     'Client Rank':      r.position ?? 'Not ranked',
     'Type':             r.type === 'ranked' ? 'Ranked' : 'Gap',
     'Branded':          r.branded ? 'Yes' : 'No',
@@ -646,8 +652,9 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>
-              <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-4 py-2.5 w-[37%]">Keyword</th>
-              <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Search Vol</th>
+              <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-4 py-2.5 w-[30%]">Keyword</th>
+              <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Competitor</th>
+              <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Monthly Search Vol</th>
               <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Rank</th>
               <th className="text-center text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">AI Overview</th>
               <th className="text-center text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">PAA</th>
@@ -679,7 +686,15 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
                   </div>
                 </td>
 
-                {/* Volume */}
+                {/* Competitor */}
+                <td className="px-3 py-2 text-left">
+                  {row.competitor
+                    ? <span className="text-[10px] text-orbit-secondary font-mono">{extractBrand(row.competitor)}</span>
+                    : <span className="text-orbit-tertiary text-xs">—</span>
+                  }
+                </td>
+
+                {/* Monthly Volume */}
                 <td className="px-3 py-2 text-right">
                   <span className="text-orbit-secondary text-xs">{row.searchVolume.toLocaleString()}</span>
                 </td>
@@ -715,7 +730,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
             ))}
             {visibleRows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-16 text-center text-orbit-tertiary text-sm">
+                <td colSpan={8} className="px-4 py-16 text-center text-orbit-tertiary text-sm">
                   {allRows.length === 0
                     ? 'No keyword data — run an analysis first.'
                     : 'No keywords match this filter.'}
