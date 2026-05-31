@@ -14,7 +14,32 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db }               from '@/db';
 import { projectKeywords }  from '@/db/schema';
-import { and, eq }          from 'drizzle-orm';
+import { and, eq, sql }     from 'drizzle-orm';
+
+// ─── Auto-migration ───────────────────────────────────────────────────────────
+// project_keywords was added in v7.19 and requires a manual db:push that
+// non-technical users never run. This creates the table on first API call
+// if it doesn't exist yet — completely idempotent, no-op when table exists.
+
+async function ensureTable() {
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS project_keywords (
+        id            SERIAL    PRIMARY KEY,
+        project_id    UUID      NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        keyword       TEXT      NOT NULL,
+        search_volume INTEGER   NOT NULL DEFAULT 0,
+        position      INTEGER,
+        type          TEXT      NOT NULL DEFAULT 'gap',
+        branded       BOOLEAN   NOT NULL DEFAULT false,
+        source        TEXT      NOT NULL,
+        created_at    TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch {
+    // Table already exists or DB not available — safe to continue
+  }
+}
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
@@ -22,6 +47,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  await ensureTable();
   const rows = await db
     .select()
     .from(projectKeywords)
@@ -36,6 +62,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  await ensureTable();
   let body: any;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -92,6 +119,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
+  await ensureTable();
   let body: any;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
