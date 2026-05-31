@@ -304,7 +304,7 @@ export default function ProjectBriefPage() {
         transition: 'background 0.12s, border-left-color 0.12s',
       } as React.CSSProperties,
       icon: {
-        fontSize: '12px', width: '13px', flexShrink: 0,
+        fontSize: '13px', width: '14px', flexShrink: 0,
         color: active  ? '#8B85FF'
              : hovered ? '#5A5090'
              : hasData ? '#3A3A60'
@@ -312,7 +312,7 @@ export default function ProjectBriefPage() {
         transition: 'color 0.12s',
       } as React.CSSProperties,
       label: {
-        flex: 1, fontSize: '10px', overflow: 'hidden',
+        flex: 1, fontSize: '12px', overflow: 'hidden',
         textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
         color: active  ? '#D8D8F8'
              : hovered ? '#7070A8'
@@ -321,7 +321,7 @@ export default function ProjectBriefPage() {
         transition: 'color 0.12s',
       } as React.CSSProperties,
       score: {
-        fontSize: '10px', fontWeight: 500,
+        fontSize: '11px', fontWeight: 500,
         fontVariantNumeric: 'tabular-nums' as const,
         color: active  ? '#6C63FF'
              : hovered ? '#504FA0'
@@ -429,7 +429,7 @@ export default function ProjectBriefPage() {
         {/* ── SIDEBAR ── */}
         <aside
           className="flex-shrink-0 border-r border-orbit-border flex flex-col"
-          style={{ width: '214px', background: '#0D0D16' }}
+          style={{ width: '232px', background: '#0D0D16' }}
         >
           <div className="px-3 py-3 border-b border-orbit-border">
             <div className="text-orbit-primary text-[11px] font-semibold truncate">{domainDisplay}</div>
@@ -447,7 +447,7 @@ export default function ProjectBriefPage() {
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
-                    <div className="text-[8px] font-semibold tracking-[.1em] uppercase px-3 pt-2 pb-1" style={{ color: '#242438' }}>
+                    <div className="text-[9px] font-semibold tracking-[.08em] uppercase px-3 pt-2 pb-1" style={{ color: '#2E2E50' }}>
                       {group}
                     </div>
                   )}
@@ -464,7 +464,7 @@ export default function ProjectBriefPage() {
                           className="w-full flex items-center gap-1.5 text-left"
                           style={styles.btn}
                         >
-                          <span style={{ fontSize: '9px', color: '#2C2C44', width: '13px', flexShrink: 0 }}>
+                          <span style={{ fontSize: '10px', color: '#2C2C44', width: '14px', flexShrink: 0 }}>
                             {item.num}
                           </span>
                           <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
@@ -486,17 +486,17 @@ export default function ProjectBriefPage() {
                                   onClick={e => { e.stopPropagation(); setKeywordsSubView(sv); }}
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
-                                    padding: '4px 12px 4px 28px',
+                                    padding: '5px 12px 5px 30px',
                                     borderLeft: subActive ? '2px solid rgba(108,99,255,0.5)' : '2px solid transparent',
                                     background: subActive ? '#0F0F1C' : 'transparent',
                                   }}
                                 >
                                   <i
                                     className={`ti ${subIcons[sv]}`}
-                                    style={{ fontSize: '10px', color: subActive ? '#6C63FF' : '#3A3A60', width: '11px', flexShrink: 0 }}
+                                    style={{ fontSize: '11px', color: subActive ? '#6C63FF' : '#3A3A60', width: '13px', flexShrink: 0 }}
                                     aria-hidden="true"
                                   />
-                                  <span style={{ fontSize: '9px', color: subActive ? '#9090C0' : '#484868' }}>
+                                  <span style={{ fontSize: '11px', color: subActive ? '#9090C0' : '#505070' }}>
                                     {subLabels[sv]}
                                   </span>
                                 </button>
