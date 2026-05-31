@@ -254,7 +254,7 @@ function applyFilter(rows: KeywordRow[], filter: KwFilter): KeywordRow[] {
   switch (filter) {
     case 'branded':       return rows.filter(r => r.branded);
     case 'nonBranded':    return rows.filter(r => !r.branded);
-    case 'competitorGap': return rows.filter(r => !r.branded && r.type === 'gap');
+    case 'competitorGap': return rows.filter(r => r.type === 'gap' && !!r.competitor);
     default:              return rows;
   }
 }
@@ -642,7 +642,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
         })}
         {filter === 'competitorGap' && (
           <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
-            non-branded · client not ranking
+            from competitor · client not ranking
           </span>
         )}
       </div>
