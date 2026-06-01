@@ -573,6 +573,8 @@ function ClustersTab({
   const ann = (stats: ClusterStat[]) =>
     stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
 
+  const totalAnnualVol = clusterStats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
+
   // Filtered grid clusters
   const filtered: ThemeCluster[] =
     filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
@@ -639,7 +641,72 @@ function ClustersTab({
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
       {/* ── Summary filter cards ─────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+
+        {/* ── All Clusters (reset) card ── */}
+        {(() => {
+          const allActive  = filter === 'all';
+          const allAccent  = '#9B96FF';
+          const allActBg   = 'rgba(108,99,255,0.10)';
+          const allActBdr  = 'rgba(108,99,255,0.45)';
+          const allDimBg   = 'rgba(108,99,255,0.04)';
+          const allDimBdr  = 'rgba(108,99,255,0.15)';
+          return (
+            <button
+              onClick={() => setFilter('all')}
+              style={{
+                background:   allActive ? allActBg : allDimBg,
+                border:       `1px solid ${allActive ? allActBdr : allDimBdr}`,
+                borderRadius: 10,
+                padding:      '12px 14px',
+                cursor:       'pointer',
+                textAlign:    'left',
+                transition:   'all 0.15s',
+                outline:      'none',
+                boxShadow:    allActive ? `0 0 0 1px ${allActBdr}` : 'none',
+              }}
+              onMouseEnter={e => {
+                if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = allActBdr;
+              }}
+              onMouseLeave={e => {
+                if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = allDimBdr;
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <i className="ti ti-layout-grid" style={{ fontSize: 13, color: allAccent }} aria-hidden="true" />
+                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: allAccent }}>
+                  All Clusters
+                </span>
+                {allActive && (
+                  <span style={{
+                    marginLeft: 'auto', fontSize: 8, fontWeight: 700,
+                    background: allActBg, border: `1px solid ${allActBdr}`,
+                    color: allAccent, borderRadius: 20, padding: '2px 7px',
+                  }}>
+                    ACTIVE
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
+                <span style={{
+                  fontSize: 34, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
+                  color: allActive ? allAccent : '#E8E8FF',
+                }}>
+                  {clusters.length}
+                </span>
+                <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: allAccent, marginBottom: 3 }}>
+                {fmtVol(totalAnnualVol)}
+                <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
+                Total keyword footprint
+              </div>
+            </button>
+          );
+        })()}
+
         {SUMMARY_CARDS.map(card => {
           const active = filter === card.key;
           return (
