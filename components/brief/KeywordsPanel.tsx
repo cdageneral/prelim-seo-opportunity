@@ -711,8 +711,10 @@ export default function KeywordsPanel({
   // ── Clear all custom/CSV/blocked keywords ──
   async function handleClearAll() {
     setClearLoading(true);
-    const toDelete = dbKeywords.filter(k => ['csv', 'custom', 'blocked'].includes(k.source));
     const BATCH = 10;
+
+    // Step 1: hard-delete all csv/custom uploads and existing blocked records
+    const toDelete = dbKeywords.filter((k: DbKeyword) => ['csv', 'custom', 'blocked'].includes(k.source));
     for (let i = 0; i < toDelete.length; i += BATCH) {
       await Promise.all(toDelete.slice(i, i + BATCH).map((kw: DbKeyword) =>
         fetch(`/api/projects/${projectId}/keywords`, {
@@ -721,6 +723,23 @@ export default function KeywordsPanel({
         }).catch(() => null)
       ));
     }
+
+    // Step 2: block all Semrush analysis keywords so they don't show
+    // These live in the analysis snapshot and can't be deleted — only hidden
+    const semSnap = analysis?.semrushSnapshot ?? {};
+    const semKws: Array<{ keyword: string }> = [
+      ...(semSnap.topKeywords ?? []),
+      ...(semSnap.gapKeywords ?? []),
+    ];
+    for (let i = 0; i < semKws.length; i += BATCH) {
+      await Promise.all(semKws.slice(i, i + BATCH).map((kw: { keyword: string }) =>
+        fetch(`/api/projects/${projectId}/keywords`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: kw.keyword, source: 'blocked' }),
+        }).catch(() => null)
+      ));
+    }
+
     await fetchDb();
     setClearLoading(false);
     setShowClearConfirm(false);
@@ -772,7 +791,7 @@ export default function KeywordsPanel({
             {showClearConfirm && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
                 <span className="text-[11px]" style={{ color: '#f87171' }}>
-                  Delete {dbKeywords.filter(k => ['csv','custom','blocked'].includes(k.source)).length} keyword{dbKeywords.filter(k => ['csv','custom','blocked'].includes(k.source)).length !== 1 ? 's' : ''}?
+                  Clear all keywords (uploads + Semrush analysis)?
                 </span>
                 <button
                   onClick={handleClearAll}
