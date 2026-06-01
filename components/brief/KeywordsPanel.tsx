@@ -662,34 +662,34 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
                   }}
                 >
                   {/* Icon + label */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-                    <i className={`ti ${card.icon}`} style={{ fontSize: 11, color: card.accent }} aria-hidden="true" />
-                    <span style={{ fontSize: 10, fontWeight: 600, color: active ? card.accent : '#6060A0', letterSpacing: '.02em' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                    <i className={`ti ${card.icon}`} style={{ fontSize: 13, color: card.accent }} aria-hidden="true" />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: card.accent, letterSpacing: '.04em' }}>
                       {card.label}
                     </span>
                     {active && (
-                      <span style={{ marginLeft: 'auto', fontSize: 7, fontWeight: 700, background: card.activeBg, border: `1px solid ${card.activeBdr}`, color: card.accent, borderRadius: 20, padding: '1px 5px' }}>
+                      <span style={{ marginLeft: 'auto', fontSize: 8, fontWeight: 700, background: card.activeBg, border: `1px solid ${card.activeBdr}`, color: card.accent, borderRadius: 20, padding: '2px 7px' }}>
                         ACTIVE
                       </span>
                     )}
                   </div>
 
                   {/* Count */}
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginBottom: 3 }}>
-                    <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#D8D8F8' }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
+                    <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#E8E8FF' }}>
                       {card.count.toLocaleString()}
                     </span>
-                    <span style={{ fontSize: 10, color: '#484868' }}>kws</span>
+                    <span style={{ fontSize: 12, color: '#9090B8' }}>keywords</span>
                   </div>
 
                   {/* Annual volume */}
-                  <div style={{ fontSize: 11, fontWeight: 600, color: active ? card.accent : '#6868A0' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
                     {fmtVol(card.vol)}
-                    <span style={{ fontSize: 9, color: '#404060', fontWeight: 400, marginLeft: 3 }}>annual vol</span>
+                    <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
 
                   {/* Subtitle */}
-                  <div style={{ fontSize: 9, color: '#383858', marginTop: 3 }}>
+                  <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
                     {card.subtitle}
                   </div>
                 </button>

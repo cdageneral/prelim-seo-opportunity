@@ -17,6 +17,7 @@ import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
 import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
+import ContentMapSection    from '@/components/brief/ContentMapSection';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -51,7 +52,7 @@ interface Project {
 // ── Nav config ────────────────────────────────────────────────────────────────
 
 type NavSection =
-  | 'overview' | 'keywords' | 'personas' | 'journeys'
+  | 'overview' | 'keywords' | 'personas' | 'journeys' | 'content'
   | 'serp' | 'serpFeatures'
   | 'llm'
   | 'local'
@@ -71,14 +72,15 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'keywords',     num: '02', icon: 'ti-search',           label: 'Keyword Landscape',      group: 'Foundation' },
   { id: 'personas',     num: '03', icon: 'ti-users',            label: 'Personas',               group: 'Foundation' },
   { id: 'journeys',     num: '04', icon: 'ti-route',            label: 'Journeys',               group: 'Foundation' },
-  { id: 'serp',         num: '05', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
-  { id: 'serpFeatures', num: '06', icon: 'ti-star',             label: 'SERP Features',          group: 'Google Platform' },
-  { id: 'llm',          num: '07', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
-  { id: 'local',        num: '08', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
-  { id: 'authority',    num: '09', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
-  { id: 'entity',       num: '10', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
-  { id: 'urlTax',       num: '11', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
-  { id: 'techHygiene',  num: '12', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
+  { id: 'content',      num: '05', icon: 'ti-map-2',            label: 'Content Map',            group: 'Foundation' },
+  { id: 'serp',         num: '06', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
+  { id: 'serpFeatures', num: '07', icon: 'ti-star',             label: 'SERP Features',          group: 'Google Platform' },
+  { id: 'llm',          num: '08', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
+  { id: 'local',        num: '09', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
+  { id: 'authority',    num: '10', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
+  { id: 'entity',       num: '11', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
+  { id: 'urlTax',       num: '12', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
+  { id: 'techHygiene',  num: '13', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
 ];
 
 const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Local Search', 'Page & Entity Authority', 'Technical Authority'];
@@ -648,6 +650,15 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Content Map ── */}
+          {hasResults && analysis && activeSection === 'content' && (
+            <ContentMapSection
+              projectId={projectId}
+              analysis={analysis}
+              competitors={competitorDomains}
+            />
+          )}
+
           {/* ── Google SERP ── */}
           {hasResults && analysis && activeSection === 'serp' && (
             <GoogleSerpSection analysis={analysis} />
@@ -671,7 +682,7 @@ export default function ProjectBriefPage() {
           )}
 
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
