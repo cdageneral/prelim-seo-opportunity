@@ -154,17 +154,9 @@ function SegmentDetail({ segment, accent, label }: {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <div className="text-right">
-              <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
-              <p className={`text-xl font-bold ${accent.heading}`}>{segment.volumePct}%</p>
-            </div>
-            <div className="w-10 h-10 rounded-lg bg-orbit-surface flex items-end overflow-hidden border border-orbit-border">
-              <div
-                className={`w-full rounded-sm ${accent.bar} transition-all`}
-                style={{ height: `${segment.volumePct}%`, opacity: 0.8 }}
-              />
-            </div>
+          <div className="text-right">
+            <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
+            <p className={`text-xl font-bold ${accent.heading}`}>{segment.volumePct}%</p>
           </div>
         </div>
 
@@ -325,27 +317,58 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
         <EmptyState />
       ) : (
         <>
-          {/* Segment tab selector */}
-          <div className="flex gap-2 flex-wrap">
+          {/* ── Clickable summary cards ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
             {segments.map((seg, i) => {
-              const acc = SEGMENT_ACCENTS[i % SEGMENT_ACCENTS.length];
-              const isActive = i === active;
+              const acc   = SEGMENT_ACCENTS[i % SEGMENT_ACCENTS.length];
+              const isAct = i === active;
               return (
                 <button
                   key={seg.id}
                   onClick={() => setActive(i)}
-                  className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg border text-[11px] font-semibold transition-all ${
-                    isActive
-                      ? `${acc.tab} bg-orbit-surface`
-                      : acc.tabOff
+                  className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer ${
+                    isAct
+                      ? 'ring-1 ring-inset ' + acc.tab.split(' ')[0].replace('border-', 'ring-')
+                      : 'opacity-70 hover:opacity-100'
                   }`}
+                  style={isAct ? { borderTopWidth: '2px', borderTopColor: 'currentColor' } : {}}
                 >
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? acc.dot : 'bg-orbit-tertiary/40'}`} />
-                  <span className="text-[10px] text-orbit-tertiary">{segmentLabels[i]}</span>
-                  <span className="mx-0.5 text-orbit-tertiary/40">·</span>
-                  <span>{seg.volumePct}%</span>
-                  <span className="text-orbit-tertiary/60">—</span>
-                  <span className="font-bold">{seg.name}</span>
+                  {/* Card header */}
+                  <div className="flex items-start justify-between gap-2">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${acc.badge}`}>
+                      {segmentLabels[i]}
+                    </span>
+                    <div className="text-right">
+                      <p className={`text-xl font-bold leading-none ${acc.heading}`}>{seg.volumePct}%</p>
+                      <p className="text-orbit-tertiary text-[9px] uppercase tracking-widest mt-0.5">of volume</p>
+                    </div>
+                  </div>
+
+                  {/* Name */}
+                  <div>
+                    <p className={`text-[13px] font-semibold ${isAct ? acc.heading : 'text-orbit-primary'}`}>
+                      {seg.name}
+                    </p>
+                  </div>
+
+                  {/* Who they are — short summary */}
+                  <p className="text-orbit-secondary text-[11px] leading-relaxed line-clamp-3">
+                    {seg.whoTheyAre.demographics}
+                  </p>
+
+                  {/* Click hint when inactive */}
+                  {!isAct && (
+                    <p className={`text-[10px] font-medium ${acc.heading} opacity-60 flex items-center gap-1`}>
+                      <i className="ti ti-arrow-right text-[10px]" />
+                      View deep-dive
+                    </p>
+                  )}
+                  {isAct && (
+                    <p className={`text-[10px] font-medium ${acc.heading} flex items-center gap-1`}>
+                      <i className="ti ti-check text-[10px]" />
+                      Active
+                    </p>
+                  )}
                 </button>
               );
             })}
