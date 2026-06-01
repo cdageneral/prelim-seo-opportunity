@@ -145,6 +145,7 @@ RULES:
 - All prompts must feel like real search queries or LLM inputs, not descriptions
 - Messaging, creative, and channel sections must be specific and actionable — not generic
 - Base everything on the actual keyword and PAA data provided — no generic industry assumptions
+- CONCISENESS: demographics 2 sentences max · trigger 1 sentence · influencerRole 1 sentence · touchpoint descriptions 2 sentences max · messagingAndTone/creativeDirection/channelApproach 3-4 bullet-style points as a single string separated by newlines
 - No markdown, no explanation — pure JSON array only`;
 }
 

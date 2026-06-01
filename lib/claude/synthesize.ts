@@ -78,12 +78,19 @@ export async function generatePersonas(
 
   const response = await getClient().messages.create({
     model:      MODELS.default,  // sonnet — deep segment profiles need richer reasoning than haiku
-    max_tokens: 3500,
+    max_tokens: 5000,            // rich 3-segment JSON; needs room (3 segs × ~1200 tokens each)
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 100_000 });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
-  return extractJSON<any[]>(text);
+  try {
+    return extractJSON<any[]>(text);
+  } catch (err) {
+    // Non-fatal: if audience segment generation fails, return empty array
+    // rather than crashing the whole synthesis pipeline.
+    console.error('[OrbitIQ] Audience segment JSON parse failed (non-fatal):', (err as any)?.message);
+    return [];
+  }
 }
 
 // ─── Pass 2: Opportunity Scoring ──────────────────────────────────────────────
