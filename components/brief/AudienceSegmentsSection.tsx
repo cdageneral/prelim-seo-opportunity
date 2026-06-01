@@ -292,17 +292,11 @@ function SegmentDetail({ segment, accent, label }: {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-// Determine if a persona object is the new rich format or the old simple format.
-// Old format has `segmentName`; new format has `name` + `whoTheyAre`.
-function isNewFormat(p: any): p is AudienceSegment {
-  return p && typeof p.name === 'string' && p.whoTheyAre !== undefined;
-}
-
 export default function AudienceSegmentsSection({ analysis }: Props) {
-  // Data lives in analysis.personas — new analyses use the rich AudienceSegment
-  // format; old analyses used a simpler format which we filter out gracefully.
-  const raw: any[] = analysis?.personas ?? [];
-  const segments: AudienceSegment[] = raw.filter(isNewFormat);
+  // Rich segment data is stored in semrushSnapshot._audienceSegments (JSONB blob).
+  // This avoids the old personas relational table whose rigid schema is incompatible
+  // with the new AudienceSegment shape.
+  const segments: AudienceSegment[] = analysis?.semrushSnapshot?._audienceSegments ?? [];
   const [active, setActive] = useState(0);
 
   const segmentLabels = ['Segment A', 'Segment B', 'Segment C', 'Segment D'];

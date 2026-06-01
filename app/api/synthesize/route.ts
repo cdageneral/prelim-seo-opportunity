@@ -90,20 +90,10 @@ export async function POST(req: NextRequest) {
         throw new Error(`Claude synthesis failed: ${msg}`);
       });
 
-    if (synthesis.personas.length > 0) {
-      await db.insert(personas).values(
-        synthesis.personas.map((p: any) => ({
-          analysisId,
-          segmentName:         p.segmentName,
-          description:         p.description,
-          intentStage:         p.intentStage,
-          primaryQueries:      p.primaryQueries,
-          painPoints:          p.painPoints,
-          aiDiscoveryBehavior: p.aiDiscoveryBehavior,
-          contentGaps:         p.contentGaps,
-        }))
-      );
-    }
+    // Audience segments (new rich format) are stored in semrushSnapshot._audienceSegments
+    // alongside _narrative, _pptPrompt, _categoryBreakdown — no schema change needed.
+    // The old `personas` relational table insert is intentionally skipped; the rigid
+    // segment_name NOT NULL constraint is incompatible with the new AudienceSegment shape.
 
     if (synthesis.opportunities.length > 0) {
       await db.insert(opportunities).values(
@@ -139,6 +129,7 @@ export async function POST(req: NextRequest) {
           _narrative:          synthesis.narrative,
           _pptPrompt:          synthesis.pptPrompt,
           _categoryBreakdown:  synthesis.categoryBreakdown,
+          _audienceSegments:   synthesis.personas,
         } as any,
       })
       .where(eq(analyses.id, analysisId));
