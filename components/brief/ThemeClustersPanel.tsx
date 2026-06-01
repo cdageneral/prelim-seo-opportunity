@@ -527,6 +527,14 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
 // ─── Clusters Tab ─────────────────────────────────────────────────────────────
 
+type ClusterFilter = 'all' | 'leading' | 'trailing' | 'opportunity';
+
+interface ClusterStat {
+  cluster:     ThemeCluster;
+  isLeading:   boolean;
+  compGapPct:  number; // fraction of cluster total vol owned by gap keywords
+}
+
 function ClustersTab({
   clusters,
   clientDomain,
@@ -536,33 +544,193 @@ function ClustersTab({
   clientDomain:  string;
   loadingClaude: boolean;
 }) {
-  const leading  = clusters.filter(c => {
-    const rankedVol  = c.keywords.filter(k => k.position !== null && k.position <= 20).reduce((s, k) => s + k.searchVolume, 0);
-    const compVols   = Object.values(
-      c.keywords.filter(k => k.isGap).reduce((acc: Record<string, number>, k) => {
-        const d = k.competitor ?? 'Unknown';
-        acc[d] = (acc[d] ?? 0) + k.searchVolume;
-        return acc;
-      }, {}),
-    );
-    const topComp = compVols.length > 0 ? Math.max(...compVols) : 0;
-    return rankedVol >= topComp;
-  }).length;
-  const trailing = clusters.length - leading;
+  const [filter, setFilter] = useState<ClusterFilter>('all');
+
+  // ── Per-cluster classification ─────────────────────────────────────────────
+  const clusterStats: ClusterStat[] = clusters.map(c => {
+    const rankedVol = c.keywords
+      .filter(k => k.position !== null && k.position <= 20)
+      .reduce((s, k) => s + k.searchVolume, 0);
+
+    const compVolByDom: Record<string, number> = {};
+    for (const kw of c.keywords.filter(k => k.isGap)) {
+      const d = kw.competitor ?? 'Unknown';
+      compVolByDom[d] = (compVolByDom[d] ?? 0) + kw.searchVolume;
+    }
+    const compVals = Object.values(compVolByDom);
+    const topComp  = compVals.length > 0 ? Math.max(...compVals) : 0;
+    const gapVol   = c.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
+    const compGapPct = c.totalVolume > 0 ? gapVol / c.totalVolume : 0;
+
+    return { cluster: c, isLeading: rankedVol >= topComp, compGapPct };
+  });
+
+  const leadingStats  = clusterStats.filter(s =>  s.isLeading);
+  const trailingStats = clusterStats.filter(s => !s.isLeading);
+  // Opportunity = competitor gap vol < 25% of cluster total — competitors least present
+  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25);
+
+  // Annualise monthly volume × 12
+  const ann = (stats: ClusterStat[]) =>
+    stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
+
+  // Filtered grid clusters
+  const filtered: ThemeCluster[] =
+    filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
+    filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
+    filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
+    clusters;
+
+  // ── Summary card definitions ───────────────────────────────────────────────
+  const SUMMARY_CARDS: Array<{
+    key:      Exclude<ClusterFilter, 'all'>;
+    label:    string;
+    count:    number;
+    vol:      number;
+    subtitle: string;
+    accent:   string;
+    activeBg: string;
+    activeBdr:string;
+    dimBg:    string;
+    dimBdr:   string;
+    icon:     string;
+  }> = [
+    {
+      key:      'leading',
+      label:    'Leading',
+      count:    leadingStats.length,
+      vol:      ann(leadingStats),
+      subtitle: 'Clusters you are winning',
+      accent:   '#4ADE80',
+      activeBg: 'rgba(74,222,128,0.10)',
+      activeBdr:'rgba(74,222,128,0.45)',
+      dimBg:    'rgba(74,222,128,0.04)',
+      dimBdr:   'rgba(74,222,128,0.15)',
+      icon:     'ti-trophy',
+    },
+    {
+      key:      'trailing',
+      label:    'Trailing',
+      count:    trailingStats.length,
+      vol:      ann(trailingStats),
+      subtitle: 'Clusters competitors lead',
+      accent:   '#F472B6',
+      activeBg: 'rgba(244,114,182,0.10)',
+      activeBdr:'rgba(244,114,182,0.45)',
+      dimBg:    'rgba(244,114,182,0.04)',
+      dimBdr:   'rgba(244,114,182,0.15)',
+      icon:     'ti-trending-down',
+    },
+    {
+      key:      'opportunity',
+      label:    'Low Competition',
+      count:    oppStats.length,
+      vol:      ann(oppStats),
+      subtitle: 'Competitors least present',
+      accent:   '#38BDF8',
+      activeBg: 'rgba(56,189,248,0.10)',
+      activeBdr:'rgba(56,189,248,0.45)',
+      dimBg:    'rgba(56,189,248,0.04)',
+      dimBdr:   'rgba(56,189,248,0.15)',
+      icon:     'ti-target',
+    },
+  ];
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
-      {/* Summary row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 8, height: 8, borderRadius: 2, background: '#4ADE80' }} />
-          <span style={{ fontSize: 11, color: '#4A7A5A' }}>Leading <strong style={{ color: '#4ADE80' }}>{leading}</strong></span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <div style={{ width: 8, height: 8, borderRadius: 2, background: '#F472B6' }} />
-          <span style={{ fontSize: 11, color: '#7A4A5A' }}>Trailing <strong style={{ color: '#F472B6' }}>{trailing}</strong></span>
-        </div>
+      {/* ── Summary filter cards ─────────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+        {SUMMARY_CARDS.map(card => {
+          const active = filter === card.key;
+          return (
+            <button
+              key={card.key}
+              onClick={() => setFilter(f => (f === card.key ? 'all' : card.key))}
+              style={{
+                background:   active ? card.activeBg : card.dimBg,
+                border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
+                borderRadius: 10,
+                padding:      '12px 14px',
+                cursor:       'pointer',
+                textAlign:    'left',
+                transition:   'all 0.15s',
+                outline:      'none',
+                boxShadow:    active ? `0 0 0 1px ${card.activeBdr}` : 'none',
+              }}
+              onMouseEnter={e => {
+                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
+              }}
+              onMouseLeave={e => {
+                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
+              }}
+            >
+              {/* Icon + label row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <i className={`ti ${card.icon}`} style={{ fontSize: 13, color: card.accent }} aria-hidden="true" />
+                <span style={{
+                  fontSize: 11, fontWeight: 600, letterSpacing: '.02em',
+                  color: active ? card.accent : '#6060A0',
+                }}>
+                  {card.label}
+                </span>
+                {active && (
+                  <span style={{
+                    marginLeft: 'auto', fontSize: 8, fontWeight: 700,
+                    background: card.activeBg, border: `1px solid ${card.activeBdr}`,
+                    color: card.accent, borderRadius: 20, padding: '1px 7px',
+                  }}>
+                    ACTIVE
+                  </span>
+                )}
+              </div>
+
+              {/* Big count */}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 5 }}>
+                <span style={{
+                  fontSize: 34, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
+                  color: active ? card.accent : '#D8D8F8',
+                }}>
+                  {card.count}
+                </span>
+                <span style={{ fontSize: 11, color: '#484868' }}>clusters</span>
+              </div>
+
+              {/* Annualized volume */}
+              <div style={{ fontSize: 12, fontWeight: 600, color: active ? card.accent : '#7878A0' }}>
+                {fmtVol(card.vol)}
+                <span style={{ fontSize: 9, color: '#404060', fontWeight: 400, marginLeft: 3 }}>annual vol</span>
+              </div>
+
+              {/* Subtitle */}
+              <div style={{ fontSize: 9, color: '#383858', marginTop: 4 }}>
+                {card.subtitle}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Status / filter bar ──────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        {filter !== 'all' && (
+          <button
+            onClick={() => setFilter('all')}
+            style={{
+              fontSize: 10, color: '#6C63FF', background: 'none',
+              border: 'none', cursor: 'pointer', padding: 0,
+              display: 'flex', alignItems: 'center', gap: 3,
+            }}
+          >
+            <i className="ti ti-x" style={{ fontSize: 10 }} aria-hidden="true" />
+            Clear filter
+          </button>
+        )}
+        <span style={{ fontSize: 10, color: '#484868' }}>
+          {filter === 'all'
+            ? `${clusters.length} clusters`
+            : `Showing ${filtered.length} of ${clusters.length} clusters`}
+        </span>
         {loadingClaude && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF' }}>
             <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -574,16 +742,18 @@ function ClustersTab({
         <span style={{ marginLeft: 'auto', fontSize: 10, color: '#2E2E50' }}>Click any card to expand keywords</span>
       </div>
 
-      {/* 4-column card grid */}
+      {/* ── 4-column cluster grid ────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
-        {clusters.map(cluster => (
+        {filtered.map(cluster => (
           <ClusterCard key={cluster.id} cluster={cluster} clientDomain={clientDomain} />
         ))}
       </div>
 
-      {clusters.length === 0 && (
+      {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#404060', fontSize: 13 }}>
-          No cluster data — run an analysis first.
+          {filter === 'opportunity' && clusters.length > 0
+            ? 'No clusters with competitor coverage below 25% — competition is active across all clusters.'
+            : 'No cluster data — run an analysis first.'}
         </div>
       )}
 
