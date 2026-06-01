@@ -9,6 +9,7 @@ import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
 import FootprintSection     from '@/components/brief/FootprintSection';
 import OpportunitiesSection from '@/components/brief/OpportunitiesSection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
+import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
@@ -705,8 +706,17 @@ export default function ProjectBriefPage() {
             <AudienceSegmentsSection analysis={analysis} />
           )}
 
+          {/* ── Journeys ── */}
+          {hasResults && analysis && activeSection === 'journeys' && (
+            <JourneySection
+              projectId={projectId}
+              analysis={analysis}
+              competitors={competitorDomains}
+            />
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
