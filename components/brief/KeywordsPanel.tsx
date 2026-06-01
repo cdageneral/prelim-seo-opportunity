@@ -40,6 +40,7 @@ interface Props {
   projectId:   string;
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
+  domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
 }
 
 // ─── Branded detection ────────────────────────────────────────────────────────
@@ -164,10 +165,12 @@ function buildRows(
 
   const rows: KeywordRow[] = [];
 
-  // ── Semrush ranked keywords (excluding blocked) ──
+  // ── Semrush ranked keywords (excluding blocked, deduped by keyword text) ──
+  const rankedSeen = new Set<string>();
   for (const k of (semSnap.topKeywords ?? [])) {
     const kwLower = (k.keyword ?? '').toLowerCase();
-    if (blocked.has(kwLower)) continue;
+    if (blocked.has(kwLower) || rankedSeen.has(kwLower)) continue;
+    rankedSeen.add(kwLower);
     const serp = serpMap[kwLower];
     rows.push({
       key:          `sem-ranked-${kwLower}`,
@@ -191,11 +194,17 @@ function buildRows(
     });
   }
 
-  // ── Semrush gap keywords (excluding blocked, deduped) ──
-  const existing = new Set(rows.map(r => r.keyword.toLowerCase()));
+  // ── Semrush gap keywords (excluding blocked, deduped, client-branded excluded) ──
+  // Use trimmed lowercase for all comparisons to catch whitespace mismatches from the API.
+  const existing = new Set(rows.map(r => r.keyword.toLowerCase().trim()));
   for (const k of (semSnap.gapKeywords ?? [])) {
-    const kwLower = (k.keyword ?? '').toLowerCase();
+    const kwLower = (k.keyword ?? '').toLowerCase().trim();
     if (blocked.has(kwLower) || existing.has(kwLower)) continue;
+    // Skip client-branded gap keywords — these are terms the client already owns.
+    // Belt-and-suspenders: getSemrushSnapshot already filters these at snapshot build time,
+    // but this guard protects existing snapshots stored before that fix was deployed.
+    if (isBranded(k.keyword, clientDomain, competitorDomains)) continue;
+    existing.add(kwLower);  // keep existing growing so same kw from 2 competitors isn't added twice
     const serp = serpMap[kwLower];
     rows.push({
       key:          `sem-gap-${kwLower}`,
@@ -203,7 +212,7 @@ function buildRows(
       searchVolume: k.searchVolume ?? 0,
       position:     null,
       type:         'gap',
-      branded:      isBranded(k.keyword, clientDomain, competitorDomains),
+      branded:      false,  // already guaranteed non-branded by the isBranded() check above
       source:       'semrush',
       competitor:   (k as any).competitor ?? null,
       hasAIO:       serp?.hasAIO ?? false,
@@ -227,7 +236,7 @@ function buildRows(
       searchVolume:  dbKw.searchVolume,
       position:      dbKw.position,
       type:          dbKw.type === 'ranked' ? 'ranked' : 'gap',
-      branded:       dbKw.branded,
+      branded:       isBranded(dbKw.keyword, clientDomain, competitorDomains),
       source:        dbKw.source as KwSource,
       competitor:    null,
       hasAIO:        false,
@@ -374,8 +383,8 @@ const FILTERS: { id: KwFilter; label: string }[] = [
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function KeywordsPanel({ projectId, analysis, competitors }: Props) {
-  const clientDomain      = (analysis?.semrushSnapshot?.domain as string) ?? '';
+export default function KeywordsPanel({ projectId, analysis, competitors, domain }: Props) {
+  const clientDomain      = (analysis?.semrushSnapshot?.domain as string) || domain || '';
   const competitorDomains = competitors;
   const clientName        = clientDomain || 'keywords';
 

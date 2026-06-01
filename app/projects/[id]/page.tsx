@@ -613,6 +613,7 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
+              domain={domainDisplay}
             />
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
