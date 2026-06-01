@@ -6,6 +6,8 @@ import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 
 type KwSource = 'semrush' | 'custom' | 'csv';
 type KwFilter = 'all' | 'branded' | 'nonBranded' | 'competitorGap';
+type SortCol  = 'keyword' | 'competitor' | 'volume' | 'rank' | null;
+type SortDir  = 'asc' | 'desc';
 
 interface KeywordRow {
   key:          string;          // unique key for React
@@ -273,6 +275,42 @@ function applyFilter(rows: KeywordRow[], filter: KwFilter, volMin: number = 0): 
   }
 }
 
+// ─── Sort ─────────────────────────────────────────────────────────────────────
+
+function applySort(rows: KeywordRow[], col: SortCol, dir: SortDir): KeywordRow[] {
+  if (!col) return rows;
+  return [...rows].sort((a, b) => {
+    let cmp = 0;
+    switch (col) {
+      case 'keyword':
+        cmp = a.keyword.localeCompare(b.keyword);
+        break;
+      case 'competitor':
+        cmp = (a.competitor ?? '').localeCompare(b.competitor ?? '');
+        break;
+      case 'volume':
+        cmp = a.searchVolume - b.searchVolume;
+        break;
+      case 'rank':
+        // null positions always go last regardless of direction
+        if (a.position === null && b.position === null) cmp = 0;
+        else if (a.position === null) return 1;
+        else if (b.position === null) return -1;
+        else cmp = a.position - b.position;
+        break;
+    }
+    return dir === 'asc' ? cmp : -cmp;
+  });
+}
+
+// Default direction per column (first click)
+const SORT_DEFAULT_DIR: Record<NonNullable<SortCol>, SortDir> = {
+  keyword:    'asc',
+  competitor: 'asc',
+  volume:     'desc',
+  rank:       'asc',
+};
+
 // ─── Downloads ────────────────────────────────────────────────────────────────
 
 // Maps filter id → human label and filename slug
@@ -377,6 +415,48 @@ function fmtVol(v: number): string {
   return String(v);
 }
 
+// ─── Sort header cell ─────────────────────────────────────────────────────────
+
+function SortHeader({
+  label, col, activeCol, dir, align, width, onClick,
+}: {
+  label:     string;
+  col:       NonNullable<SortCol>;
+  activeCol: SortCol;
+  dir:       SortDir;
+  align:     'left' | 'right' | 'center';
+  width?:    string;
+  onClick:   (col: NonNullable<SortCol>) => void;
+}) {
+  const active = activeCol === col;
+  return (
+    <th
+      onClick={() => onClick(col)}
+      className={`text-[9px] font-medium uppercase tracking-widest px-3 py-2.5 cursor-pointer select-none text-${align}`}
+      style={{ width, userSelect: 'none' }}
+    >
+      <span
+        className="inline-flex items-center gap-1 transition-colors"
+        style={{ color: active ? '#9B96FF' : '#555575' }}
+        onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#8080A8'; }}
+        onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#555575'; }}
+      >
+        {align === 'right' && (
+          <span style={{ fontSize: '8px', opacity: active ? 1 : 0.35, lineHeight: 1 }}>
+            {active ? (dir === 'asc' ? '▲' : '▼') : '⇅'}
+          </span>
+        )}
+        {label}
+        {align !== 'right' && (
+          <span style={{ fontSize: '8px', opacity: active ? 1 : 0.35, lineHeight: 1 }}>
+            {active ? (dir === 'asc' ? '▲' : '▼') : '⇅'}
+          </span>
+        )}
+      </span>
+    </th>
+  );
+}
+
 // ─── Filter pills ─────────────────────────────────────────────────────────────
 
 const FILTERS: { id: KwFilter; label: string }[] = [
@@ -406,8 +486,11 @@ export default function KeywordsPanel({
   const [addError,    setAddError]    = useState('');
   const [addLoading,  setAddLoading]  = useState(false);
   const [deletingKey,   setDeletingKey]   = useState<string | null>(null);
-  // volThreshold initialises from the project-level setting; user can override with the Min Vol buttons
-  const [volThreshold,  setVolThreshold]  = useState<number>(defaultCompetitorThreshold);
+  // volThreshold comes from the project-level setting (Edit Project); not adjustable inline
+  const [volThreshold] = useState<number>(defaultCompetitorThreshold);
+  // Column sort
+  const [sortCol,  setSortCol]  = useState<SortCol>(null);
+  const [sortDir,  setSortDir]  = useState<SortDir>('desc');
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -427,9 +510,21 @@ export default function KeywordsPanel({
     [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold],
   );
   const visibleRows = useMemo(
-    () => applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
-    [allRows, filter, volThreshold],
+    () => applySort(
+      applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
+      sortCol, sortDir,
+    ),
+    [allRows, filter, volThreshold, sortCol, sortDir],
   );
+
+  function handleSort(col: NonNullable<SortCol>) {
+    if (sortCol === col) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortCol(col);
+      setSortDir(SORT_DEFAULT_DIR[col]);
+    }
+  }
 
   const ranked = visibleRows.filter(r => r.type === 'ranked').length;
   const gap    = visibleRows.filter(r => r.type === 'gap').length;
@@ -794,29 +889,9 @@ export default function KeywordsPanel({
           );
         })}
         {filter === 'competitorGap' && (
-          <>
-            {/* Volume threshold controls */}
-            <div className="flex items-center gap-1.5 ml-3 pl-3" style={{ borderLeft: '1px solid #1E1E38' }}>
-              <span className="text-[9px] font-semibold uppercase tracking-widest mr-0.5" style={{ color: '#6060A0' }}>Min Vol</span>
-              {([0, 500, 1000, 2400, 5000] as number[]).map(t => (
-                <button
-                  key={t}
-                  onClick={() => setVolThreshold(t)}
-                  className="text-[10px] px-2.5 py-1 rounded-full border transition-all"
-                  style={{
-                    background:  volThreshold === t ? 'rgba(245,158,11,0.14)' : 'transparent',
-                    borderColor: volThreshold === t ? 'rgba(245,158,11,0.6)'  : '#3A3A5C',
-                    color:       volThreshold === t ? '#F59E0B'                : '#8888B0',
-                  }}
-                >
-                  {t === 0 ? 'All' : t >= 1000 ? `${t / 1000}K+` : `${t}+`}
-                </button>
-              ))}
-            </div>
-            <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
-              from competitor · client not ranking
-            </span>
-          </>
+          <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
+            from competitor · client not ranking
+          </span>
         )}
       </div>
 
@@ -825,10 +900,10 @@ export default function KeywordsPanel({
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>
-              <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-4 py-2.5 w-[30%]">Keyword</th>
-              <th className="text-left text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Competitor</th>
-              <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Monthly Search Vol</th>
-              <th className="text-right text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Rank</th>
+              <SortHeader label="Keyword"           col="keyword"    activeCol={sortCol} dir={sortDir} align="left"  width="30%" onClick={handleSort} />
+              <SortHeader label="Competitor"        col="competitor" activeCol={sortCol} dir={sortDir} align="left"             onClick={handleSort} />
+              <SortHeader label="Monthly Search Vol" col="volume"    activeCol={sortCol} dir={sortDir} align="right"            onClick={handleSort} />
+              <SortHeader label="Rank"              col="rank"       activeCol={sortCol} dir={sortDir} align="right"            onClick={handleSort} />
               <th className="text-center text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">AI Overview</th>
               <th className="text-center text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">PAA</th>
               <th className="text-center text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest px-3 py-2.5">Video</th>
