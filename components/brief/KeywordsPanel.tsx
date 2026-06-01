@@ -355,6 +355,14 @@ function SourceBadge({ source }: { source: KwSource }) {
   );
 }
 
+// ─── Format volume ────────────────────────────────────────────────────────────
+
+function fmtVol(v: number): string {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000)     return `${(v / 1_000).toFixed(0)}K`;
+  return String(v);
+}
+
 // ─── Filter pills ─────────────────────────────────────────────────────────────
 
 const FILTERS: { id: KwFilter; label: string }[] = [
@@ -402,6 +410,24 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
 
   const ranked = visibleRows.filter(r => r.type === 'ranked').length;
   const gap    = visibleRows.filter(r => r.type === 'gap').length;
+
+  // ── Summary card stats — always computed from full allRows, annualised × 12 ──
+  const kwSummary = useMemo(() => {
+    const brandedRows  = allRows.filter(r =>  r.branded);
+    const nonBrandRows = allRows.filter(r => !r.branded);
+    const gapRows      = allRows.filter(r => r.type === 'gap' && !!r.competitor);
+    const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
+    return {
+      allCount:      allRows.length,
+      allVol:        ann(allRows),
+      brandedCount:  brandedRows.length,
+      brandedVol:    ann(brandedRows),
+      nonBrandCount: nonBrandRows.length,
+      nonBrandVol:   ann(nonBrandRows),
+      gapCount:      gapRows.length,
+      gapVol:        ann(gapRows),
+    };
+  }, [allRows]);
 
   // ── Add keyword ──
   async function handleAdd() {
@@ -569,6 +595,109 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
           </button>
         </div>
       </div>
+
+      {/* ── Summary filter cards ── */}
+      {(() => {
+        const KW_CARDS: Array<{
+          id:       KwFilter;
+          label:    string;
+          count:    number;
+          vol:      number;
+          accent:   string;
+          activeBg: string;
+          activeBdr:string;
+          dimBg:    string;
+          dimBdr:   string;
+          icon:     string;
+          subtitle: string;
+        }> = [
+          {
+            id: 'all', label: 'All Keywords', count: kwSummary.allCount, vol: kwSummary.allVol,
+            accent: '#9B96FF', activeBg: 'rgba(108,99,255,0.10)', activeBdr: 'rgba(108,99,255,0.45)',
+            dimBg: 'rgba(108,99,255,0.04)', dimBdr: 'rgba(108,99,255,0.15)',
+            icon: 'ti-list', subtitle: 'Total keyword footprint',
+          },
+          {
+            id: 'branded', label: 'Branded', count: kwSummary.brandedCount, vol: kwSummary.brandedVol,
+            accent: '#C882FF', activeBg: 'rgba(200,130,255,0.10)', activeBdr: 'rgba(200,130,255,0.45)',
+            dimBg: 'rgba(200,130,255,0.04)', dimBdr: 'rgba(200,130,255,0.15)',
+            icon: 'ti-tag', subtitle: 'Client or competitor brand',
+          },
+          {
+            id: 'nonBranded', label: 'Non-branded', count: kwSummary.nonBrandCount, vol: kwSummary.nonBrandVol,
+            accent: '#38BDF8', activeBg: 'rgba(56,189,248,0.10)', activeBdr: 'rgba(56,189,248,0.45)',
+            dimBg: 'rgba(56,189,248,0.04)', dimBdr: 'rgba(56,189,248,0.15)',
+            icon: 'ti-search', subtitle: 'Generic / category terms',
+          },
+          {
+            id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,
+            accent: '#F59E0B', activeBg: 'rgba(245,158,11,0.10)', activeBdr: 'rgba(245,158,11,0.45)',
+            dimBg: 'rgba(245,158,11,0.04)', dimBdr: 'rgba(245,158,11,0.15)',
+            icon: 'ti-arrows-diff', subtitle: 'Competitor ranks, client doesn\'t',
+          },
+        ];
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid #111120', background: '#0A0A14', flexShrink: 0 }}>
+            {KW_CARDS.map(card => {
+              const active = filter === card.id;
+              return (
+                <button
+                  key={card.id}
+                  onClick={() => setFilter(card.id)}
+                  style={{
+                    background:   active ? card.activeBg : card.dimBg,
+                    border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
+                    borderRadius: 8,
+                    padding:      '10px 12px',
+                    cursor:       'pointer',
+                    textAlign:    'left',
+                    transition:   'all 0.15s',
+                    outline:      'none',
+                  }}
+                  onMouseEnter={e => {
+                    if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
+                  }}
+                  onMouseLeave={e => {
+                    if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
+                  }}
+                >
+                  {/* Icon + label */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+                    <i className={`ti ${card.icon}`} style={{ fontSize: 11, color: card.accent }} aria-hidden="true" />
+                    <span style={{ fontSize: 10, fontWeight: 600, color: active ? card.accent : '#6060A0', letterSpacing: '.02em' }}>
+                      {card.label}
+                    </span>
+                    {active && (
+                      <span style={{ marginLeft: 'auto', fontSize: 7, fontWeight: 700, background: card.activeBg, border: `1px solid ${card.activeBdr}`, color: card.accent, borderRadius: 20, padding: '1px 5px' }}>
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Count */}
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginBottom: 3 }}>
+                    <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#D8D8F8' }}>
+                      {card.count.toLocaleString()}
+                    </span>
+                    <span style={{ fontSize: 10, color: '#484868' }}>kws</span>
+                  </div>
+
+                  {/* Annual volume */}
+                  <div style={{ fontSize: 11, fontWeight: 600, color: active ? card.accent : '#6868A0' }}>
+                    {fmtVol(card.vol)}
+                    <span style={{ fontSize: 9, color: '#404060', fontWeight: 400, marginLeft: 3 }}>annual vol</span>
+                  </div>
+
+                  {/* Subtitle */}
+                  <div style={{ fontSize: 9, color: '#383858', marginTop: 3 }}>
+                    {card.subtitle}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── Add keyword form ── */}
       {showAdd && (
