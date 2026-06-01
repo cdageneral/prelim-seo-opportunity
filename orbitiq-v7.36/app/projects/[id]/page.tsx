@@ -15,9 +15,6 @@ import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
-import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
-import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
-import ContentMapSection    from '@/components/brief/ContentMapSection';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -52,12 +49,8 @@ interface Project {
 // ── Nav config ────────────────────────────────────────────────────────────────
 
 type NavSection =
-  | 'overview' | 'keywords' | 'personas' | 'journeys' | 'content'
-  | 'serp' | 'serpFeatures'
-  | 'llm'
-  | 'local'
-  | 'authority' | 'entity'
-  | 'urlTax' | 'techHygiene';
+  | 'overview' | 'keywords' | 'serp' | 'serpFeatures' | 'authority'
+  | 'llm' | 'entity' | 'local' | 'urlTax' | 'techHygiene';
 
 interface NavItem {
   id:    NavSection;
@@ -68,22 +61,19 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { id: 'overview',     num: '01', icon: 'ti-layout-dashboard', label: 'Executive Summary',      group: '' },
-  { id: 'keywords',     num: '02', icon: 'ti-search',           label: 'Keyword Landscape',      group: 'Foundation' },
-  { id: 'personas',     num: '03', icon: 'ti-users',            label: 'Personas',               group: 'Foundation' },
-  { id: 'journeys',     num: '04', icon: 'ti-route',            label: 'Journeys',               group: 'Foundation' },
-  { id: 'content',      num: '05', icon: 'ti-map-2',            label: 'Content Map',            group: 'Foundation' },
-  { id: 'serp',         num: '06', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
-  { id: 'serpFeatures', num: '07', icon: 'ti-star',             label: 'SERP Features',          group: 'Google Platform' },
-  { id: 'llm',          num: '08', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
-  { id: 'local',        num: '09', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
-  { id: 'authority',    num: '10', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
-  { id: 'entity',       num: '11', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
-  { id: 'urlTax',       num: '12', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
-  { id: 'techHygiene',  num: '13', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
+  { id: 'overview',     num: '01', icon: 'ti-layout-dashboard', label: 'Executive Overview', group: '' },
+  { id: 'keywords',     num: '02', icon: 'ti-search',           label: 'Keyword Landscape',  group: 'Search' },
+  { id: 'serp',         num: '03', icon: 'ti-trophy',           label: 'Google SERP',        group: 'Search' },
+  { id: 'serpFeatures', num: '04', icon: 'ti-star',             label: 'SERP Features',      group: 'Search' },
+  { id: 'authority',    num: '05', icon: 'ti-shield',           label: 'Google Authority',   group: 'Search' },
+  { id: 'llm',          num: '06', icon: 'ti-robot',            label: 'LLM Visibility',     group: 'AI Visibility' },
+  { id: 'entity',       num: '07', icon: 'ti-target',           label: 'Entity Authority',   group: 'Entity & Local' },
+  { id: 'local',        num: '08', icon: 'ti-map-pin',          label: 'Local Presence',     group: 'Entity & Local' },
+  { id: 'urlTax',       num: '09', icon: 'ti-link',             label: 'URL Taxonomy',       group: 'Technical' },
+  { id: 'techHygiene',  num: '10', icon: 'ti-tool',             label: 'Tech Hygiene',       group: 'Technical' },
 ];
 
-const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Local Search', 'Page & Entity Authority', 'Technical Authority'];
+const NAV_GROUPS = ['', 'Search', 'AI Visibility', 'Entity & Local', 'Technical'];
 
 // ── Score calculator ──────────────────────────────────────────────────────────
 
@@ -98,27 +88,17 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
   const serpScore    = totalKws > 0 ? (page1Kws / totalKws) * 100 : null;
   const aioAvail     = analysis.aioAvailable ?? 0;
   const aioAcq       = analysis.aioAcquired  ?? 0;
+  const aioRate      = aioAvail > 0 ? (aioAcq / aioAvail) * 100 : null;
   const llmScore     = (analysis.profoundSnapshot as any)?.overallScore ?? null;
-
-  // Combined SERP feature coverage rate (AIO + PAA + Video)
-  const serpSnapForScore = analysis.serpApiSnapshot ?? {};
-  const featSumForScore  = serpSnapForScore.serpFeatureSummary;
-  const paaAvailScore    = featSumForScore?.withPAA          ?? 0;
-  const paaAcqScore      = featSumForScore?.paaClientCited   ?? 0;
-  const videoAvailScore  = featSumForScore?.withVideo         ?? 0;
-  const videoAcqScore    = featSumForScore?.videoClientCited  ?? 0;
-  const totalAvailScore  = aioAvail + paaAvailScore + videoAvailScore;
-  const totalAcqScore    = aioAcq   + paaAcqScore   + videoAcqScore;
-  const combinedSerpRate = totalAvailScore > 0 ? (totalAcqScore / totalAvailScore) * 100 : null;
 
   const scores: Partial<Record<NavSection, string>> = {};
   if (captureRate != null) {
     scores.overview  = (captureRate * 100).toFixed(1);
     scores.keywords  = (captureRate * 100).toFixed(1);
   }
-  if (serpScore          != null) scores.serp         = serpScore.toFixed(1);
-  if (combinedSerpRate   != null) scores.serpFeatures = combinedSerpRate.toFixed(1);
-  if (llmScore           != null) scores.llm          = String(llmScore);
+  if (serpScore    != null) scores.serp         = serpScore.toFixed(1);
+  if (aioRate      != null) scores.serpFeatures = aioRate.toFixed(1);
+  if (llmScore     != null) scores.llm          = String(llmScore);
   return scores;
 }
 
@@ -314,9 +294,9 @@ export default function ProjectBriefPage() {
 
     return {
       btn: {
-        padding:    '7px 12px',
+        padding:    '5px 12px',
         borderLeft: active   ? '2px solid #6C63FF'
-                  : hovered  ? '2px solid rgba(108,99,255,0.45)'
+                  : hovered  ? '2px solid rgba(108,99,255,0.4)'
                   :             '2px solid transparent',
         background: active   ? '#14141F'
                   : hovered  ? '#11111E'
@@ -324,29 +304,29 @@ export default function ProjectBriefPage() {
         transition: 'background 0.12s, border-left-color 0.12s',
       } as React.CSSProperties,
       icon: {
-        fontSize: '14px', width: '15px', flexShrink: 0,
+        fontSize: '13px', width: '14px', flexShrink: 0,
         color: active  ? '#8B85FF'
-             : hovered ? '#6A65C0'
-             : hasData ? '#5858A0'
-             :            '#484878',
+             : hovered ? '#5A5090'
+             : hasData ? '#3A3A60'
+             :            '#282840',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       label: {
-        flex: 1, fontSize: '13px', overflow: 'hidden',
+        flex: 1, fontSize: '12px', overflow: 'hidden',
         textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-        color: active  ? '#E0E0FF'
-             : hovered ? '#8080C0'
-             : hasData ? '#7878B0'
-             :            '#606090',
+        color: active  ? '#D8D8F8'
+             : hovered ? '#7070A8'
+             : hasData ? '#505078'
+             :            '#343450',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       score: {
         fontSize: '11px', fontWeight: 500,
         fontVariantNumeric: 'tabular-nums' as const,
         color: active  ? '#6C63FF'
-             : hovered ? '#6060B8'
-             : hasData ? '#6060A0'
-             :            '#484870',
+             : hovered ? '#504FA0'
+             : hasData ? '#484868'
+             :            '#232336',
         transition: 'color 0.12s',
       } as React.CSSProperties,
     };
@@ -449,15 +429,15 @@ export default function ProjectBriefPage() {
         {/* ── SIDEBAR ── */}
         <aside
           className="flex-shrink-0 border-r border-orbit-border flex flex-col"
-          style={{ width: '252px', background: '#0D0D16' }}
+          style={{ width: '232px', background: '#0D0D16' }}
         >
           <div className="px-3 py-3 border-b border-orbit-border">
-            <div className="text-orbit-primary text-[12px] font-semibold truncate">{domainDisplay}</div>
+            <div className="text-orbit-primary text-[11px] font-semibold truncate">{domainDisplay}</div>
             {project.industry && (
-              <div className="text-[11px] mt-0.5" style={{ color: '#5858A0' }}>{project.industry}</div>
+              <div className="text-orbit-tertiary text-[10px] mt-0.5">{project.industry}</div>
             )}
             {scanDate && (
-              <div className="text-[9px] mt-1.5" style={{ color: '#383858' }}>SCAN: {scanDate}</div>
+              <div className="text-[9px] mt-1.5" style={{ color: '#242438' }}>SCAN: {scanDate}</div>
             )}
           </div>
 
@@ -467,7 +447,7 @@ export default function ProjectBriefPage() {
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
-                    <div className="text-[10px] font-semibold tracking-[.08em] uppercase px-3 pt-3 pb-1" style={{ color: '#4A4A72' }}>
+                    <div className="text-[9px] font-semibold tracking-[.08em] uppercase px-3 pt-2 pb-1" style={{ color: '#2E2E50' }}>
                       {group}
                     </div>
                   )}
@@ -484,7 +464,7 @@ export default function ProjectBriefPage() {
                           className="w-full flex items-center gap-1.5 text-left"
                           style={styles.btn}
                         >
-                          <span style={{ fontSize: '10px', color: '#505078', width: '15px', flexShrink: 0 }}>
+                          <span style={{ fontSize: '10px', color: '#2C2C44', width: '14px', flexShrink: 0 }}>
                             {item.num}
                           </span>
                           <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
@@ -506,17 +486,17 @@ export default function ProjectBriefPage() {
                                   onClick={e => { e.stopPropagation(); setKeywordsSubView(sv); }}
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
-                                    padding: '6px 12px 6px 32px',
-                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.6)' : '2px solid transparent',
+                                    padding: '5px 12px 5px 30px',
+                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.5)' : '2px solid transparent',
                                     background: subActive ? '#0F0F1C' : 'transparent',
                                   }}
                                 >
                                   <i
                                     className={`ti ${subIcons[sv]}`}
-                                    style={{ fontSize: '12px', color: subActive ? '#6C63FF' : '#545490', width: '14px', flexShrink: 0 }}
+                                    style={{ fontSize: '11px', color: subActive ? '#6C63FF' : '#3A3A60', width: '13px', flexShrink: 0 }}
                                     aria-hidden="true"
                                   />
-                                  <span style={{ fontSize: '12px', color: subActive ? '#A0A0D8' : '#6868A8' }}>
+                                  <span style={{ fontSize: '11px', color: subActive ? '#9090C0' : '#505070' }}>
                                     {subLabels[sv]}
                                   </span>
                                 </button>
@@ -650,39 +630,8 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* ── Content Map ── */}
-          {hasResults && analysis && activeSection === 'content' && (
-            <ContentMapSection
-              projectId={projectId}
-              analysis={analysis}
-              competitors={competitorDomains}
-            />
-          )}
-
-          {/* ── Google SERP ── */}
-          {hasResults && analysis && activeSection === 'serp' && (
-            <GoogleSerpSection analysis={analysis} />
-          )}
-
-          {/* ── SERP Features ── */}
-          {hasResults && analysis && activeSection === 'serpFeatures' && (
-            <SerpFeaturesSection
-              analysis={analysis}
-              competitors={project.competitors}
-              clientName={project.clientName}
-              websiteUrl={project.websiteUrl}
-            />
-          )}
-
-          {/* ── LLM Visibility ── */}
-          {hasResults && analysis && activeSection === 'llm' && (
-            <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
-              <LLMVisibilitySection analysis={analysis} />
-            </div>
-          )}
-
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">

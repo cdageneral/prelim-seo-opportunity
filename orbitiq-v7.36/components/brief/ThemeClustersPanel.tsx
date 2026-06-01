@@ -6,6 +6,7 @@ import { useMemo, useState, useEffect, useCallback } from 'react';
 
 type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
 type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retention';
+type ClusterTab   = 'clusters' | 'contentMap';
 
 interface KwItem {
   keyword:      string;
@@ -322,6 +323,27 @@ function fmtVol(v: number): string {
   return String(v);
 }
 
+function fmtAnnual(monthly: number): string {
+  const a = monthly * 12;
+  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
+  if (a >= 1_000)     return `${(a / 1_000).toFixed(0)}K`;
+  return String(a);
+}
+
+/** Returns true if the client is leading this cluster (client coverage ≥ top competitor). */
+function clusterIsLeading(cluster: ThemeCluster): boolean {
+  const rankedVol = cluster.keywords
+    .filter(k => k.position !== null && k.position <= 20)
+    .reduce((s, k) => s + k.searchVolume, 0);
+  const compVolMap: Record<string, number> = {};
+  for (const kw of cluster.keywords.filter(k => k.isGap)) {
+    const d = kw.competitor ?? 'Unknown';
+    compVolMap[d] = (compVolMap[d] ?? 0) + kw.searchVolume;
+  }
+  const topComp = Object.values(compVolMap).length > 0 ? Math.max(...Object.values(compVolMap)) : 0;
+  return rankedVol >= topComp;
+}
+
 function pct(num: number, den: number): number {
   if (den === 0) return 0;
   return Math.round((num / den) * 100);
@@ -418,6 +440,19 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
       <div style={{ fontSize: 10, color: '#484868', marginBottom: 14 }}>
         {cluster.keywords.length} kws &nbsp;·&nbsp; {rankedKws.length} ranked
         {avgRank !== null && <> &nbsp;·&nbsp; Avg #{avgRank}</>}
+      </div>
+
+      {/* ── Annual demand callout ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10,
+        padding: '5px 10px', background: '#0A0A14', borderRadius: 6,
+        border: '1px solid #141428',
+      }}>
+        <i className="ti ti-chart-bar" style={{ fontSize: 11, color: '#6C63FF', flexShrink: 0 }} aria-hidden="true" />
+        <span style={{ fontSize: 11, color: '#9090C0', fontWeight: 600 }}>
+          {fmtAnnual(totalVol)}
+        </span>
+        <span style={{ fontSize: 10, color: '#383858' }}>annual searches in this cluster</span>
       </div>
 
       {/* ── Big metric: content coverage ── */}
@@ -526,14 +561,6 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
 // ─── Clusters Tab ─────────────────────────────────────────────────────────────
 
-type ClusterFilter = 'all' | 'leading' | 'trailing' | 'opportunity';
-
-interface ClusterStat {
-  cluster:     ThemeCluster;
-  isLeading:   boolean;
-  compGapPct:  number; // fraction of cluster total vol owned by gap keywords
-}
-
 function ClustersTab({
   clusters,
   clientDomain,
@@ -543,277 +570,248 @@ function ClustersTab({
   clientDomain:  string;
   loadingClaude: boolean;
 }) {
-  const [filter, setFilter] = useState<ClusterFilter>('all');
+  const leadingClusters  = clusters.filter(clusterIsLeading);
+  const trailingClusters = clusters.filter(c => !clusterIsLeading(c));
 
-  // ── Per-cluster classification ─────────────────────────────────────────────
-  const clusterStats: ClusterStat[] = clusters.map(c => {
-    const rankedVol = c.keywords
-      .filter(k => k.position !== null && k.position <= 20)
-      .reduce((s, k) => s + k.searchVolume, 0);
-
-    const compVolByDom: Record<string, number> = {};
-    for (const kw of c.keywords.filter(k => k.isGap)) {
-      const d = kw.competitor ?? 'Unknown';
-      compVolByDom[d] = (compVolByDom[d] ?? 0) + kw.searchVolume;
-    }
-    const compVals = Object.values(compVolByDom);
-    const topComp  = compVals.length > 0 ? Math.max(...compVals) : 0;
-    const gapVol   = c.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
-    const compGapPct = c.totalVolume > 0 ? gapVol / c.totalVolume : 0;
-
-    return { cluster: c, isLeading: rankedVol >= topComp, compGapPct };
-  });
-
-  const leadingStats  = clusterStats.filter(s =>  s.isLeading);
-  const trailingStats = clusterStats.filter(s => !s.isLeading);
-  // Opportunity = competitor gap vol < 25% of cluster total — competitors least present
-  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25);
-
-  // Annualise monthly volume × 12
-  const ann = (stats: ClusterStat[]) =>
-    stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
-
-  // Filtered grid clusters
-  const filtered: ThemeCluster[] =
-    filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
-    filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
-    filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
-    clusters;
-
-  // ── Summary card definitions ───────────────────────────────────────────────
-  const SUMMARY_CARDS: Array<{
-    key:      Exclude<ClusterFilter, 'all'>;
-    label:    string;
-    count:    number;
-    vol:      number;
-    subtitle: string;
-    accent:   string;
-    activeBg: string;
-    activeBdr:string;
-    dimBg:    string;
-    dimBdr:   string;
-    icon:     string;
-  }> = [
-    {
-      key:      'leading',
-      label:    'Leading',
-      count:    leadingStats.length,
-      vol:      ann(leadingStats),
-      subtitle: 'Clusters you are winning',
-      accent:   '#4ADE80',
-      activeBg: 'rgba(74,222,128,0.10)',
-      activeBdr:'rgba(74,222,128,0.45)',
-      dimBg:    'rgba(74,222,128,0.04)',
-      dimBdr:   'rgba(74,222,128,0.15)',
-      icon:     'ti-trophy',
-    },
-    {
-      key:      'trailing',
-      label:    'Trailing',
-      count:    trailingStats.length,
-      vol:      ann(trailingStats),
-      subtitle: 'Clusters competitors lead',
-      accent:   '#F472B6',
-      activeBg: 'rgba(244,114,182,0.10)',
-      activeBdr:'rgba(244,114,182,0.45)',
-      dimBg:    'rgba(244,114,182,0.04)',
-      dimBdr:   'rgba(244,114,182,0.15)',
-      icon:     'ti-trending-down',
-    },
-    {
-      key:      'opportunity',
-      label:    'Low Competition',
-      count:    oppStats.length,
-      vol:      ann(oppStats),
-      subtitle: 'Competitors least present',
-      accent:   '#38BDF8',
-      activeBg: 'rgba(56,189,248,0.10)',
-      activeBdr:'rgba(56,189,248,0.45)',
-      dimBg:    'rgba(56,189,248,0.04)',
-      dimBdr:   'rgba(56,189,248,0.15)',
-      icon:     'ti-target',
-    },
-  ];
-
-  // ── Totals for hero block ──────────────────────────────────────────────
-  const totalMonthlyVol = clusters.reduce((s, c) => s + c.totalVolume, 0);
-  const totalAnnualVol  = totalMonthlyVol * 12;
-
-  function fmtHero(v: number): string {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000)     return `${(v / 1_000).toFixed(0)}K`;
-    return String(v);
-  }
+  const totalMonthly    = clusters.reduce((s, c) => s + c.totalVolume, 0);
+  const leadingMonthly  = leadingClusters.reduce((s, c) => s + c.totalVolume, 0);
+  const trailingMonthly = trailingClusters.reduce((s, c) => s + c.totalVolume, 0);
+  const allKwsFlat      = clusters.flatMap(c => c.keywords);
+  const clientCovVol    = allKwsFlat.filter(k => k.position !== null && k.position <= 20).reduce((s, k) => s + k.searchVolume, 0);
+  const clientCovPctAll = pct(clientCovVol, totalMonthly);
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
-      {/* ── Hero: total clusters + search volumes ────────────────────────── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32,
-        padding: '20px 32px', background: '#0A0A16', border: '1px solid #1A1A30',
-        borderRadius: 12, marginBottom: 16,
-      }}>
-        {/* Big total count */}
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#585878', marginBottom: 4 }}>
-            Total clusters
+      {/* ── Summary stat cards ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 16 }}>
+
+        {/* Total annual demand */}
+        <div style={{ background: '#0F0F1E', border: '1px solid #1C1C30', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, color: '#484868', fontWeight: 500, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.06em' }}>Total Annual Demand</div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: '#D8D8F8', letterSpacing: '-1px', lineHeight: 1 }}>
+            {fmtAnnual(totalMonthly)}
           </div>
-          <div style={{ fontSize: 72, fontWeight: 700, lineHeight: 1, letterSpacing: -4, color: '#E8E8FF' }}>
-            {clusters.length}
+          <div style={{ fontSize: 10, color: '#383858', marginTop: 6 }}>
+            {fmtVol(totalMonthly)}/mo across {clusters.length} clusters
           </div>
-          <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>categories identified</div>
+          {loadingClaude && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 9, color: '#6C63FF' }}>
+              <svg style={{ width: 9, height: 9, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Refining clusters…
+            </div>
+          )}
         </div>
 
-        {/* Vertical rule */}
-        <div style={{ width: 1, height: 72, background: '#1E1E34', flexShrink: 0 }} />
-
-        {/* Volume stats */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total annual search volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: '#9B96FF' }}>
-                {fmtHero(totalAnnualVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#484868' }}>searches / yr</span>
-            </div>
+        {/* Leading */}
+        <div style={{ background: '#0A1A10', border: '1px solid #143020', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 500, color: '#2A5040', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.06em' }}>Leading Clusters</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color: '#4ADE80', letterSpacing: '-1px', lineHeight: 1 }}>
+              {leadingClusters.length}
+            </span>
+            <span style={{ fontSize: 12, color: '#2A6040' }}>of {clusters.length}</span>
           </div>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total monthly volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: '#6A6A90' }}>
-                {fmtHero(totalMonthlyVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#383858' }}>searches / mo</span>
-            </div>
+          <div style={{ fontSize: 11, color: '#4ADE80', fontWeight: 600, marginTop: 6 }}>
+            {fmtAnnual(leadingMonthly)}<span style={{ fontSize: 9, color: '#2A6040', fontWeight: 400 }}>/yr</span>
+          </div>
+          <div style={{ fontSize: 10, color: '#2A5040', marginTop: 2 }}>
+            {pct(leadingMonthly, totalMonthly)}% of total demand
+          </div>
+        </div>
+
+        {/* Trailing */}
+        <div style={{ background: '#1A0A12', border: '1px solid #301422', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 500, color: '#502A38', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.06em' }}>Trailing Clusters</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color: '#F472B6', letterSpacing: '-1px', lineHeight: 1 }}>
+              {trailingClusters.length}
+            </span>
+            <span style={{ fontSize: 12, color: '#603050' }}>of {clusters.length}</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#F472B6', fontWeight: 600, marginTop: 6 }}>
+            {fmtAnnual(trailingMonthly)}<span style={{ fontSize: 9, color: '#603050', fontWeight: 400 }}>/yr</span>
+          </div>
+          <div style={{ fontSize: 10, color: '#502A38', marginTop: 2 }}>
+            {pct(trailingMonthly, totalMonthly)}% of total demand
+          </div>
+        </div>
+
+        {/* Client content coverage */}
+        <div style={{ background: '#0D0D20', border: '1px solid #1E1E3C', borderRadius: 10, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, fontWeight: 500, color: '#30305A', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '.06em' }}>Client Coverage</div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: '#9B96FF', letterSpacing: '-1px', lineHeight: 1 }}>
+            {clientCovPctAll}%
+          </div>
+          <div style={{ fontSize: 10, color: '#40406A', marginTop: 6 }}>
+            of annual demand covered
+          </div>
+          <div style={{ marginTop: 6, height: 3, borderRadius: 2, background: '#1A1A30', overflow: 'hidden' }}>
+            <div style={{ width: `${clientCovPctAll}%`, height: '100%', background: '#6C63FF', borderRadius: 2 }} />
           </div>
         </div>
       </div>
 
-      {/* ── Summary filter cards ─────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
-        {SUMMARY_CARDS.map(card => {
-          const active = filter === card.key;
-          return (
-            <button
-              key={card.key}
-              onClick={() => setFilter(f => (f === card.key ? 'all' : card.key))}
-              style={{
-                background:   active ? card.activeBg : card.dimBg,
-                border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
-                borderRadius: 10,
-                padding:      '12px 14px',
-                cursor:       'pointer',
-                textAlign:    'left',
-                transition:   'all 0.15s',
-                outline:      'none',
-                boxShadow:    active ? `0 0 0 1px ${card.activeBdr}` : 'none',
-              }}
-              onMouseEnter={e => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
-              }}
-              onMouseLeave={e => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
-              }}
-            >
-              {/* Icon + label row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <i className={`ti ${card.icon}`} style={{ fontSize: 13, color: card.accent }} aria-hidden="true" />
-                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: card.accent }}>
-                  {card.label}
-                </span>
-                {active && (
-                  <span style={{
-                    marginLeft: 'auto', fontSize: 8, fontWeight: 700,
-                    background: card.activeBg, border: `1px solid ${card.activeBdr}`,
-                    color: card.accent, borderRadius: 20, padding: '2px 7px',
-                  }}>
-                    ACTIVE
-                  </span>
-                )}
-              </div>
-
-              {/* Big count */}
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
-                <span style={{
-                  fontSize: 34, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
-                  color: active ? card.accent : '#E8E8FF',
-                }}>
-                  {card.count}
-                </span>
-                <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
-              </div>
-
-              {/* Annualized volume */}
-              <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
-                {fmtVol(card.vol)}
-                <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
-              </div>
-
-              {/* Subtitle */}
-              <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
-                {card.subtitle}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Divider ──────────────────────────────────────────────────────── */}
-      <div style={{ height: 1, background: '#181828', marginBottom: 14 }} />
-
-      {/* ── Status / filter bar ──────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        {filter !== 'all' && (
-          <button
-            onClick={() => setFilter('all')}
-            style={{
-              fontSize: 10, color: '#6C63FF', background: 'none',
-              border: 'none', cursor: 'pointer', padding: 0,
-              display: 'flex', alignItems: 'center', gap: 3,
-            }}
-          >
-            <i className="ti ti-x" style={{ fontSize: 10 }} aria-hidden="true" />
-            Clear filter
-          </button>
-        )}
-        <span style={{ fontSize: 10, color: '#484868' }}>
-          {filter === 'all'
-            ? `${clusters.length} clusters`
-            : `Showing ${filtered.length} of ${clusters.length} clusters`}
-        </span>
-        {loadingClaude && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF' }}>
-            <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refining intent classification…
-          </div>
-        )}
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: '#2E2E50' }}>Click any card to expand keywords</span>
-      </div>
-
-      {/* ── 4-column cluster grid ────────────────────────────────────────── */}
+      {/* 4-column card grid */}
+      <div style={{ fontSize: 9, color: '#252545', marginBottom: 8 }}>Click any card to expand keywords</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
-        {filtered.map(cluster => (
+        {clusters.map(cluster => (
           <ClusterCard key={cluster.id} cluster={cluster} clientDomain={clientDomain} />
         ))}
       </div>
 
-      {filtered.length === 0 && (
+      {clusters.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#404060', fontSize: 13 }}>
-          {filter === 'opportunity' && clusters.length > 0
-            ? 'No clusters with competitor coverage below 25% — competition is active across all clusters.'
-            : 'No cluster data — run an analysis first.'}
+          No cluster data — run an analysis first.
         </div>
       )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ─── Content Map Tab ──────────────────────────────────────────────────────────
+
+function CoverageBar({ clientPct, compPct, height = 4 }: { clientPct: number; compPct: number; height?: number }) {
+  const uncoveredPct = Math.max(0, 100 - clientPct - compPct);
+  return (
+    <div style={{ display: 'flex', height, borderRadius: 2, overflow: 'hidden', background: '#1A1A30', width: '100%' }}>
+      {clientPct > 0 && <div style={{ width: `${clientPct}%`, background: '#22C55E', transition: 'width 0.3s' }} />}
+      {compPct   > 0 && <div style={{ width: `${compPct}%`,   background: '#F59E0B', transition: 'width 0.3s' }} />}
+      {uncoveredPct > 0 && <div style={{ width: `${uncoveredPct}%`, background: '#1E1E38' }} />}
+    </div>
+  );
+}
+
+function TypePill({ type }: { type: 'procedure' | 'brand' | 'location' }) {
+  const styles: Record<string, React.CSSProperties> = {
+    procedure: { background: 'rgba(108,99,255,0.12)', border: '1px solid rgba(108,99,255,0.3)', color: '#9B96FF' },
+    brand:     { background: 'rgba(216,130,255,0.10)', border: '1px solid rgba(216,130,255,0.25)', color: '#C882FF' },
+    location:  { background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.2)', color: '#4ADE80' },
+  };
+  const labels = { procedure: 'Procedure', brand: 'Brand', location: 'Location' };
+  return (
+    <span style={{ ...styles[type], fontSize: '9px', fontWeight: 600, letterSpacing: '.04em', padding: '2px 8px', borderRadius: '20px', flexShrink: 0, textTransform: 'uppercase' }}>
+      {labels[type]}
+    </span>
+  );
+}
+
+function ContentMapTab({ clusters }: { clusters: ThemeCluster[] }) {
+  const stageMap = new Map<JourneyStage, Array<{ cluster: ThemeCluster; sc: { intent: IntentType; stage: JourneyStage; contentType: string; contentIcon: string; keywords: KwItem[]; totalVolume: number; clientVolume: number; competitorVolume: number } }>>();
+  JOURNEY_ORDER.forEach(s => stageMap.set(s, []));
+
+  for (const cluster of clusters) {
+    for (const sc of cluster.subClusters) {
+      stageMap.get(sc.stage)!.push({ cluster, sc });
+    }
+  }
+
+  const allKws    = clusters.flatMap(c => c.keywords);
+  const totalVol  = allKws.reduce((s, k) => s + k.searchVolume, 0);
+  const clientVol = allKws.filter(k => k.position !== null && k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const compVol   = allKws.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
+  const clientPct = pct(clientVol, totalVol);
+  const compPct   = pct(compVol, totalVol);
+  const gapPct    = Math.max(0, 100 - clientPct - compPct);
+
+  const STAGE_HEADER: Record<JourneyStage, { bg: string; border: string; color: string }> = {
+    awareness:     { bg: '#0D1A28', border: '#1A3450', color: '#5B9EC9' },
+    consideration: { bg: '#1C1208', border: '#342207', color: '#C99C4A' },
+    decision:      { bg: '#0B190B', border: '#142A14', color: '#4ADE80' },
+    retention:     { bg: '#160B26', border: '#281444', color: '#C882FF' },
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+      <div style={{ background: '#0F0F1C', border: '1px solid #1C1C30', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 500, color: '#D8D8F8' }}>Overall keyword coverage</span>
+          <span style={{ fontSize: 10, color: '#404060' }}>{allKws.length} keywords · {fmtVol(totalVol)}/mo total demand</span>
+        </div>
+        <CoverageBar clientPct={clientPct} compPct={compPct} height={6} />
+        <div style={{ display: 'flex', gap: 16, marginTop: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: '#22C55E', flexShrink: 0 }} />
+            <span style={{ fontSize: 10, color: '#4A7A5A' }}>Client owns <strong style={{ color: '#22C55E' }}>{clientPct}%</strong></span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: '#F59E0B', flexShrink: 0 }} />
+            <span style={{ fontSize: 10, color: '#7A6A2A' }}>Competitor gap <strong style={{ color: '#F59E0B' }}>{compPct}%</strong></span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: '#1E1E38', border: '1px solid #2E2E50', flexShrink: 0 }} />
+            <span style={{ fontSize: 10, color: '#404060' }}>Uncaptured <strong style={{ color: '#555575' }}>{gapPct}%</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        {JOURNEY_ORDER.map(stage => {
+          const stageMeta  = STAGE_HEADER[stage];
+          const items      = stageMap.get(stage) ?? [];
+          const stageVol   = items.reduce((s, { sc }) => s + sc.totalVolume, 0);
+          const stageKws   = items.reduce((s, { sc }) => s + sc.keywords.length, 0);
+          const stageClV   = items.reduce((s, { sc }) => s + sc.clientVolume, 0);
+          const stageCoV   = items.reduce((s, { sc }) => s + sc.competitorVolume, 0);
+          const sClP       = pct(stageClV, stageVol);
+          const sCoP       = pct(stageCoV, stageVol);
+
+          return (
+            <div key={stage} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ background: stageMeta.bg, border: `1px solid ${stageMeta.border}`, borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: stageMeta.color, marginBottom: 2 }}>{JOURNEY_LABELS[stage]}</div>
+                <div style={{ fontSize: 9, color: '#404060' }}>{stageKws} kws · {fmtVol(stageVol)}/mo</div>
+                <CoverageBar clientPct={sClP} compPct={sCoP} height={3} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+                  <span style={{ fontSize: 8, color: '#22C55E' }}>You {sClP}%</span>
+                  <span style={{ fontSize: 8, color: '#F59E0B' }}>Comp {sCoP}%</span>
+                </div>
+              </div>
+
+              {items.map(({ cluster, sc }) => {
+                const clPct = pct(sc.clientVolume, sc.totalVolume);
+                const coPct = pct(sc.competitorVolume, sc.totalVolume);
+                const isGap = coPct > clPct;
+                const meta  = INTENT_META[sc.intent];
+                return (
+                  <div key={`${cluster.id}-${sc.intent}`} style={{
+                    background: '#0F0F1C', border: `1px solid ${isGap ? '#2E1A08' : '#1C1C30'}`, borderRadius: 8, padding: '8px 10px',
+                  }}>
+                    {isGap && (
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 8, fontWeight: 700, background: '#2E1208', border: '1px solid #4A2008', borderRadius: 4, padding: '1px 5px', color: '#F59E0B', marginBottom: 5 }}>
+                        <i className="ti ti-alert-triangle" style={{ fontSize: 8 }} aria-hidden="true" /> COMPETITOR GAP
+                      </div>
+                    )}
+                    <div style={{ fontSize: 10, fontWeight: 500, color: '#C0C0E0', marginBottom: 2, lineHeight: 1.3 }}>{cluster.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6 }}>
+                      <TypePill type={cluster.type} />
+                      <span style={{ fontSize: 8, color: '#383858' }}>{sc.keywords.length} kws · {fmtVol(sc.totalVolume)}/mo</span>
+                    </div>
+                    <CoverageBar clientPct={clPct} compPct={coPct} height={4} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+                      <span style={{ fontSize: 8, color: '#22C55E' }}>You {clPct}%</span>
+                      <span style={{ fontSize: 8, color: '#F59E0B' }}>Comp {coPct}%</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 6, fontSize: 8, color: '#3A3A58' }}>
+                      <i className={`ti ${meta.contentIcon}`} style={{ fontSize: 8 }} aria-hidden="true" />
+                      {meta.contentType}
+                    </div>
+                  </div>
+                );
+              })}
+              {items.length === 0 && (
+                <div style={{ background: '#0A0A14', border: '1px dashed #1A1A2A', borderRadius: 8, padding: '16px 10px', textAlign: 'center', fontSize: 9, color: '#2A2A40' }}>
+                  No clusters
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -826,6 +824,7 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
   const industry      = (analysis as any)?._industry ?? 'General';
   const analysisId    = analysis?.id ?? 'unknown';
 
+  const [tab,           setTab]           = useState<ClusterTab>('clusters');
   const [loadingClaude, setLoadingClaude] = useState(false);
   const [claudeAssigns, setClaudeAssigns] = useState<Record<string, IntentType>>({});
 
@@ -890,7 +889,27 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
         </div>
       </div>
 
-      <ClustersTab clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />
+      {/* Tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderBottom: '1px solid #111120', background: '#0C0C18', flexShrink: 0 }}>
+        {(['clusters', 'contentMap'] as ClusterTab[]).map(t => {
+          const labels: Record<ClusterTab, string> = { clusters: 'Clusters', contentMap: 'Content Map' };
+          const active = tab === t;
+          return (
+            <button key={t} onClick={() => setTab(t)} style={{
+              fontSize: 10, padding: '3px 12px', borderRadius: 20, border: '1px solid transparent',
+              cursor: 'pointer',
+              background:  active ? 'rgba(108,99,255,0.12)' : 'transparent',
+              borderColor: active ? 'rgba(108,99,255,0.35)' : 'transparent',
+              color:       active ? '#9B96FF' : '#484868',
+            }}>
+              {labels[t]}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'clusters'   && <ClustersTab  clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />}
+      {tab === 'contentMap' && <ContentMapTab clusters={baseClusters} />}
     </div>
   );
 }
