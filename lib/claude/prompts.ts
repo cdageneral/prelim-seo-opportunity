@@ -77,7 +77,7 @@ Return JSON ONLY — no markdown, no explanation. Category names must come from 
 }`;
 }
 
-// ─── Pass 1: Persona Generation ───────────────────────────────────────────────
+// ─── Pass 1: Audience Segment Generation ─────────────────────────────────────
 
 export function personaPrompt(
   domain: string,
@@ -85,34 +85,67 @@ export function personaPrompt(
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot
 ): string {
-  const topKws = semrush.topKeywords.slice(0, 20).map(k => k.keyword).join(', ');
-  const paa = serp.keywords.flatMap(k => k.paaQuestions).slice(0, 20).join('\n- ');
+  const topKws = semrush.topKeywords.slice(0, 25).map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
+  const gapKws = semrush.gapKeywords.slice(0, 15).map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
+  const paa    = serp.keywords.flatMap(k => k.paaQuestions).slice(0, 25).join('\n- ');
 
-  return `You are an audience strategist analyzing organic search behavior to uncover buyer personas.
+  return `You are a senior audience strategist building deep-dive segment profiles from real organic search data.
 
 WEBSITE: ${domain}
 INDUSTRY: ${industry}
 
-ACTUAL SEARCH DATA (Semrush — top 20 organic keywords):
-${topKws}
+── REAL SEARCH DATA ──────────────────────────────────────────────────────────
 
-ACTUAL "PEOPLE ALSO ASK" QUESTIONS (SerpAPI — 20 samples):
+TOP ORGANIC KEYWORDS (client currently ranks for these):
+- ${topKws}
+
+GAP KEYWORDS (competitors rank, client does not):
+- ${gapKws}
+
+PEOPLE ALSO ASK QUESTIONS (live SERP data):
 - ${paa}
 
-Based only on this real search behavior data, identify 2-3 distinct buyer personas.
+── YOUR TASK ─────────────────────────────────────────────────────────────────
 
-For each persona, return a JSON object with:
-{
-  "segmentName": "short memorable name (e.g. The Scaling Ops Lead)",
-  "description": "2-sentence profile: who they are and what problem they're solving",
-  "intentStage": "Awareness | Consideration | Decision",
-  "primaryQueries": ["array of 3-5 actual queries they use"],
-  "painPoints": ["3-4 pain points inferred from their search behavior"],
-  "aiDiscoveryBehavior": "1 sentence: how they'd ask an AI assistant about this topic",
-  "contentGaps": ["2-3 content types this persona needs but client doesn't have"]
-}
+From this real search behavior, identify 2-3 distinct audience segments. Each segment represents a meaningfully different type of person with a different motivation, timeline, and decision journey.
 
-Return an array of persona objects. No markdown, no explanation — pure JSON array only.`;
+For each segment, generate a full deep-dive profile. Return a JSON array of objects with EXACTLY this structure:
+
+[
+  {
+    "id": "segment-a",
+    "name": "The [Memorable Archetype Name]",
+    "tagline": "A first-person quote that captures this segment's core mindset and urgency — 1-2 sentences as if the person is speaking",
+    "volumePct": 40,
+    "whoTheyAre": {
+      "demographics": "Age range, life stage, financial/professional situation, how they make decisions, typical purchase timeline",
+      "trigger": "The specific life event or situation that triggers their search journey — be precise",
+      "influencerRole": "Who else influences or gates their decision (partner, advisor, adult child, colleague) — omit if not applicable"
+    },
+    "preLLMPrompts": [
+      "life-problem prompt they use BEFORE they think of the product (5-6 prompts that signal intent upstream)"
+    ],
+    "productPrompts": [
+      "direct product or solution search they use once they know what they want (4-5 prompts)"
+    ],
+    "touchpoints": [
+      { "stage": "Stage 1 — AI / LLM", "description": "How and why they start in an AI chat tool, what they ask, what content must be there to intercept them" },
+      { "stage": "Stage 2 — Google Search", "description": "What they search on Google after LLM, which query types, what they need to find" },
+      { "stage": "Stage 3 — Website", "description": "What they do on the client website — which pages, tools, CTAs matter most" },
+      { "stage": "Stage 4 — Conversion", "description": "How they convert — call, form, chat, walk-in — and what triggers the final decision" }
+    ],
+    "messagingAndTone": "3-4 specific messaging directions for this segment: what to lead with, what tone to use, what to avoid, which objections to address first",
+    "creativeDirection": "3-4 specific creative and imagery directions: what scenes/moments to show, what to avoid, any specific ad formats or content types that will resonate",
+    "channelApproach": "3-4 specific channel recommendations: which paid/organic/social channels, why, and what content type works on each for this segment"
+  }
+]
+
+RULES:
+- volumePct values must sum to 100 across all segments
+- All prompts must feel like real search queries or LLM inputs, not descriptions
+- Messaging, creative, and channel sections must be specific and actionable — not generic
+- Base everything on the actual keyword and PAA data provided — no generic industry assumptions
+- No markdown, no explanation — pure JSON array only`;
 }
 
 // ─── Pass 2: Opportunity Scoring ──────────────────────────────────────────────

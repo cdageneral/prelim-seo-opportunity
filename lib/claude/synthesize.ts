@@ -77,8 +77,8 @@ export async function generatePersonas(
   const prompt = personaPrompt(domain, industry, semrush, serp);
 
   const response = await getClient().messages.create({
-    model:      MODELS.fast,
-    max_tokens: 1500,
+    model:      MODELS.default,  // sonnet — deep segment profiles need richer reasoning than haiku
+    max_tokens: 3500,
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 100_000 });
 
