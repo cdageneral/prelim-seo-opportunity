@@ -8,7 +8,7 @@ import CompetitorGapSection from '@/components/brief/CompetitorGapSection';
 import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
 import FootprintSection     from '@/components/brief/FootprintSection';
 import OpportunitiesSection from '@/components/brief/OpportunitiesSection';
-import PersonasSection      from '@/components/brief/PersonasSection';
+import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
@@ -56,7 +56,7 @@ interface Project {
 // ── Nav config ────────────────────────────────────────────────────────────────
 
 type NavSection =
-  | 'overview' | 'keywords' | 'personas' | 'journeys' | 'content'
+  | 'overview' | 'keywords' | 'audienceSegments' | 'journeys' | 'content'
   | 'serp' | 'serpFeatures'
   | 'llm'
   | 'local'
@@ -74,7 +74,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: 'overview',     num: '01', icon: 'ti-layout-dashboard', label: 'Executive Summary',      group: '' },
   { id: 'keywords',     num: '02', icon: 'ti-search',           label: 'Keyword Landscape',      group: 'Foundation' },
-  { id: 'personas',     num: '03', icon: 'ti-users',            label: 'Personas',               group: 'Foundation' },
+  { id: 'audienceSegments', num: '03', icon: 'ti-users',        label: 'Audience Segments',      group: 'Foundation' },
   { id: 'journeys',     num: '04', icon: 'ti-route',            label: 'Journeys',               group: 'Foundation' },
   { id: 'content',      num: '05', icon: 'ti-map-2',            label: 'Content Map',            group: 'Foundation' },
   { id: 'serp',         num: '06', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
@@ -661,7 +661,6 @@ export default function ProjectBriefPage() {
                 <LLMVisibilitySection analysis={analysis} />
               </div>
               <OpportunitiesSection analysis={analysis} />
-              <PersonasSection      analysis={analysis} />
               <ReportsPanel
                 analysisId={analysis.id}
                 projectId={project.id}
@@ -701,8 +700,13 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Audience Segments ── */}
+          {hasResults && analysis && activeSection === 'audienceSegments' && (
+            <AudienceSegmentsSection analysis={analysis} />
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
