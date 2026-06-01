@@ -703,16 +703,20 @@ export default function ProjectBriefPage() {
 
           {/* ── Audience Segments ── */}
           {hasResults && analysis && activeSection === 'audienceSegments' && (
-            <AudienceSegmentsSection analysis={analysis} />
+            <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
+              <AudienceSegmentsSection analysis={analysis} />
+            </div>
           )}
 
           {/* ── Journeys ── */}
           {hasResults && analysis && activeSection === 'journeys' && (
-            <JourneySection
-              projectId={projectId}
-              analysis={analysis}
-              competitors={competitorDomains}
-            />
+            <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
+              <JourneySection
+                projectId={projectId}
+                analysis={analysis}
+                competitors={competitorDomains}
+              />
+            </div>
           )}
 
           {/* ── Coming soon sections ── */}

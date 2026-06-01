@@ -491,6 +491,7 @@ export default function KeywordsPanel({
   // Column sort
   const [sortCol,  setSortCol]  = useState<SortCol>(null);
   const [sortDir,  setSortDir]  = useState<SortDir>('desc');
+  const [csvStatus, setCsvStatus] = useState<{ type: 'loading' | 'success' | 'error'; msg: string } | null>(null);
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -620,25 +621,68 @@ export default function KeywordsPanel({
   async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const csvRows = text.split('\n').slice(1);
-    let added = 0;
-    for (const line of csvRows) {
-      const cols = line.split(',').map(c => c.replace(/^"|"$/g, '').trim());
+
+    setCsvStatus({ type: 'loading', msg: 'Uploading keywords…' });
+
+    let text: string;
+    try { text = await file.text(); } catch {
+      setCsvStatus({ type: 'error', msg: 'Could not read file.' });
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+
+    // Normalise line endings (Windows \r\n or bare \r) then split
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
+
+    if (dataLines.length === 0) {
+      setCsvStatus({ type: 'error', msg: 'CSV is empty — needs a header row and at least one data row.' });
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+
+    // Parse: handle quoted fields and trailing \r
+    const parsed: Array<{ keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }> = [];
+    for (const line of dataLines) {
+      const cols = line.split(',').map((c: string) => c.replace(/^\"|"$/g, '').replace(/\r$/, '').trim());
       const kwText = cols[0];
       if (!kwText) continue;
-      const vol     = parseInt(cols[1]) || 0;
-      const type    = cols[2] === 'ranked' ? 'ranked' : 'gap';
+      const vol     = parseInt(cols[1] ?? '0') || 0;
+      const kwType: 'ranked' | 'gap'  = (cols[2] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap';
       const branded = isBranded(kwText, clientDomain, competitorDomains);
-      const res = await fetch(`/api/projects/${projectId}/keywords`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ keyword: kwText, searchVolume: vol, type, branded, source: 'csv' }),
-      });
-      if (res.status === 201) added++;
+      parsed.push({ keyword: kwText, searchVolume: vol, type: kwType, branded });
     }
+
+    if (parsed.length === 0) {
+      setCsvStatus({ type: 'error', msg: 'No valid rows found. Expected columns: keyword, search_volume, type' });
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+
+    // Upload in parallel batches of 10
+    let added = 0; let skipped = 0;
+    const BATCH = 10;
+    for (let i = 0; i < parsed.length; i += BATCH) {
+      const chunk = parsed.slice(i, i + BATCH);
+      const statuses = await Promise.all(chunk.map((row: { keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }) =>
+        fetch(`/api/projects/${projectId}/keywords`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: row.keyword, searchVolume: row.searchVolume, type: row.type, branded: row.branded, source: 'csv' }),
+        }).then((r: Response) => r.status).catch(() => 500)
+      ));
+      for (const s of statuses) { if (s === 201) added++; else skipped++; }
+    }
+
     if (csvRef.current) csvRef.current.value = '';
     await fetchDb();
+
+    if (added === 0) {
+      setCsvStatus({ type: 'error', msg: `All ${skipped} keyword${skipped !== 1 ? 's' : ''} already exist — duplicates skipped.` });
+    } else {
+      const skipNote = skipped > 0 ? ` · ${skipped} skipped (duplicates)` : '';
+      setCsvStatus({ type: 'success', msg: `${added} keyword${added !== 1 ? 's' : ''} uploaded${skipNote}.` });
+    }
+    setTimeout(() => setCsvStatus(null), 6000);
   }
 
   // ─── Render ───────────────────────────────────────────────────────────────
@@ -657,21 +701,43 @@ export default function KeywordsPanel({
         <div className="flex items-center gap-2">
           {/* CSV upload */}
           <label
-            className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
+            className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
             title="Upload CSV (columns: keyword, search_volume, type)"
+            style={{
+              color: csvStatus?.type === 'loading' ? '#7070A0' : '#7070A0',
+              opacity: csvStatus?.type === 'loading' ? 0.6 : 1,
+              pointerEvents: csvStatus?.type === 'loading' ? 'none' : 'auto',
+            }}
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            Upload CSV
+            {csvStatus?.type === 'loading' ? (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+            )}
+            {csvStatus?.type === 'loading' ? 'Uploading…' : 'Upload CSV'}
             <input
               ref={csvRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.txt"
               className="hidden"
               onChange={handleCsvUpload}
             />
           </label>
+          {/* CSV status toast */}
+          {csvStatus && csvStatus.type !== 'loading' && (
+            <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
+              background: csvStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
+              color:      csvStatus.type === 'success' ? '#34d399' : '#f87171',
+              borderColor: csvStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
+            }}>
+              {csvStatus.msg}
+            </span>
+          )}
 
           {/* Add keyword */}
           <button
