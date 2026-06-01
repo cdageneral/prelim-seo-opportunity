@@ -21,7 +21,9 @@ export const projects = pgTable('projects', {
   industry:    text('industry'),
   notes:       text('notes'),
   status:      projectStatusEnum('status').default('active').notNull(),
-  dataSource:  text('data_source').default('auto').notNull(),  // 'auto' | 'upload'
+  dataSource:               text('data_source').default('auto').notNull(),  // 'auto' | 'upload'
+  kwVolThresholdClient:     integer('kw_vol_threshold_client').default(0).notNull(),
+  kwVolThresholdCompetitor: integer('kw_vol_threshold_competitor').default(0).notNull(),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });

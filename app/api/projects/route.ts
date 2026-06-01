@@ -13,24 +13,30 @@ import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 
-async function ensureDataSourceColumn() {
+async function ensureColumns() {
   try {
-    await db.execute(sql`
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_source TEXT NOT NULL DEFAULT 'auto'
-    `);
-  } catch { /* column already exists or DB unavailable */ }
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_source TEXT NOT NULL DEFAULT 'auto'`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS kw_vol_threshold_client INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS kw_vol_threshold_competitor INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* already exists */ }
 }
 
 const CreateProjectSchema = z.object({
-  clientName:  z.string().min(1).max(200),
-  websiteUrl:  z.string().url(),
-  industry:    z.string().optional(),
-  notes:       z.string().optional(),
-  dataSource:  z.enum(['auto', 'upload']).optional().default('auto'),
+  clientName:               z.string().min(1).max(200),
+  websiteUrl:               z.string().url(),
+  industry:                 z.string().optional(),
+  notes:                    z.string().optional(),
+  dataSource:               z.enum(['auto', 'upload']).optional().default('auto'),
+  kwVolThresholdClient:     z.number().int().min(0).optional().default(0),
+  kwVolThresholdCompetitor: z.number().int().min(0).optional().default(0),
 });
 
 export async function GET() {
-  await ensureDataSourceColumn();
+  await ensureColumns();
   const rows = await db.select().from(projects)
     .where(eq(projects.status, 'active'))
     .orderBy(desc(projects.createdAt));
@@ -38,7 +44,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  await ensureDataSourceColumn();
+  await ensureColumns();
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -49,11 +55,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { dataSource, ...rest } = parsed.data;
+  const { dataSource, kwVolThresholdClient, kwVolThresholdCompetitor, ...rest } = parsed.data;
 
   const [project] = await db.insert(projects).values({
     ...rest,
     dataSource,
+    kwVolThresholdClient:     kwVolThresholdClient     ?? 0,
+    kwVolThresholdCompetitor: kwVolThresholdCompetitor ?? 0,
     clerkOrgId:  'default',
     clerkUserId: 'default',
   }).returning();

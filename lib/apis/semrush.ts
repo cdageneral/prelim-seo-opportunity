@@ -248,6 +248,24 @@ export async function getSemrushSnapshot(
     )
   );
 
+  // Build a set of keywords the client already ranks for (from topKeywords).
+  // These should never appear as gap keywords — competitor ranking for them too is not a gap.
+  const clientRankedTexts = new Set(topKeywords.map(k => k.keyword.toLowerCase().trim()));
+
+  // Build client brand token to filter out client-branded terms from gap keywords.
+  const clientBrandToken = extractBrandToken(domain);   // e.g. "sonobello"
+  const clientHalfLen    = Math.floor(clientBrandToken.length / 2);
+  const clientSubTokens  = [
+    clientBrandToken,
+    ...(clientHalfLen >= 4 ? [clientBrandToken.slice(0, clientHalfLen)] : []),
+    ...(clientBrandToken.length - clientHalfLen >= 4 ? [clientBrandToken.slice(clientHalfLen)] : []),
+  ].filter(t => t.length >= 4);
+
+  function isClientBranded(keyword: string): boolean {
+    const norm = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return clientSubTokens.some(t => norm.includes(t));
+  }
+
   // Merge, filter, deduplicate
   const seen  = new Set<string>();
   const gapKeywords: SemrushKeywordGap[] = [];
@@ -257,6 +275,8 @@ export async function getSemrushSnapshot(
       const key = kw.keyword.toLowerCase().trim();
       if (seen.has(key)) continue;                          // deduplicate across competitors
       if (kw.searchVolume < 2400) continue;                 // volume threshold
+      if (clientRankedTexts.has(key)) continue;             // client already ranks for this — not a gap
+      if (isClientBranded(kw.keyword)) continue;            // client-branded term — not an opportunity gap
       if (isCompetitorBranded(kw.keyword, competitorDomainsForBrandFilter)) continue; // strip competitor brand terms
       seen.add(key);
       gapKeywords.push(kw);

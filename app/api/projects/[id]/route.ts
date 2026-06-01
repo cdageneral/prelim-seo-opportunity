@@ -13,25 +13,31 @@ import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 
-async function ensureDataSourceColumn() {
+async function ensureColumns() {
   try {
-    await db.execute(sql`
-      ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_source TEXT NOT NULL DEFAULT 'auto'
-    `);
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS data_source TEXT NOT NULL DEFAULT 'auto'`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS kw_vol_threshold_client INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS kw_vol_threshold_competitor INTEGER NOT NULL DEFAULT 0`);
   } catch { /* already exists */ }
 }
 
 const UpdateSchema = z.object({
-  clientName:  z.string().min(1).optional(),
-  websiteUrl:  z.string().url().optional(),
-  industry:    z.string().optional(),
-  notes:       z.string().optional(),
-  status:      z.enum(['active', 'archived', 'draft']).optional(),
-  dataSource:  z.enum(['auto', 'upload']).optional(),
+  clientName:               z.string().min(1).optional(),
+  websiteUrl:               z.string().url().optional(),
+  industry:                 z.string().optional(),
+  notes:                    z.string().optional(),
+  status:                   z.enum(['active', 'archived', 'draft']).optional(),
+  dataSource:               z.enum(['auto', 'upload']).optional(),
+  kwVolThresholdClient:     z.number().int().min(0).optional(),
+  kwVolThresholdCompetitor: z.number().int().min(0).optional(),
 }).strict();
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  await ensureDataSourceColumn();
+  await ensureColumns();
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, params.id),
     with: {
@@ -52,7 +58,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  await ensureDataSourceColumn();
+  await ensureColumns();
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });

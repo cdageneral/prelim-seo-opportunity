@@ -15,6 +15,7 @@ import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
+import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
 import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 import ContentMapSection    from '@/components/brief/ContentMapSection';
@@ -39,14 +40,17 @@ interface Analysis {
   personas:            any[];
 }
 interface Project {
-  id:          string;
-  clientName:  string;
-  websiteUrl:  string;
-  industry:    string | null;
-  status:      string;
-  dataSource:  string;   // 'auto' | 'upload'
-  analyses:    Analysis[];
-  competitors: Competitor[];
+  id:                       string;
+  clientName:               string;
+  websiteUrl:               string;
+  industry:                 string | null;
+  notes:                    string | null;
+  status:                   string;
+  dataSource:               string;   // 'auto' | 'upload'
+  kwVolThresholdClient:     number;
+  kwVolThresholdCompetitor: number;
+  analyses:                 Analysis[];
+  competitors:              Competitor[];
 }
 
 // ── Nav config ────────────────────────────────────────────────────────────────
@@ -171,7 +175,9 @@ export default function ProjectBriefPage() {
   const fileInputRefs      = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Refresh modal state
-  const [showRefreshModal, setShowRefreshModal] = useState(false);
+  const [showRefreshModal,  setShowRefreshModal]  = useState(false);
+  // Edit project modal
+  const [showEditProject,   setShowEditProject]   = useState(false);
 
   const analysis   = project?.analyses?.[0] ?? null;
   const isRunning  = triggering;
@@ -383,6 +389,23 @@ export default function ProjectBriefPage() {
         </div>
       )}
 
+      {/* ── Edit Project modal ── */}
+      {showEditProject && project && (
+        <EditProjectModal
+          projectId={projectId}
+          clientName={project.clientName}
+          websiteUrl={project.websiteUrl}
+          industry={project.industry}
+          notes={project.notes}
+          dataSource={project.dataSource as 'auto' | 'upload'}
+          competitors={project.competitors ?? []}
+          kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
+          kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
+          onClose={() => setShowEditProject(false)}
+          onSaved={fetchProject}
+        />
+      )}
+
       {/* ── Refresh modal ── */}
       {showRefreshModal && analysis && (
         <RefreshModal
@@ -413,10 +436,14 @@ export default function ProjectBriefPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setRenaming(true)}
-            className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all"
+            onClick={() => setShowEditProject(true)}
+            className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
           >
-            Rename
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Edit Project
           </button>
           <button
             onClick={() => {
@@ -585,11 +612,6 @@ export default function ProjectBriefPage() {
           {/* No results yet */}
           {!isRunning && !hasResults && (
             <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
-              <CompetitorsPanel
-                projectId={projectId}
-                competitors={project.competitors ?? []}
-                onChange={fetchProject}
-              />
 
               {/* ── Data Source Card ── */}
               <DataSourceCard
@@ -613,6 +635,9 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
+              domain={domainDisplay}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}
+              defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
             />
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
@@ -626,11 +651,6 @@ export default function ProjectBriefPage() {
           {/* ── Executive Overview — 2×2 grid ── */}
           {hasResults && analysis && activeSection === 'overview' && (
             <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
-              <CompetitorsPanel
-                projectId={projectId}
-                competitors={project.competitors ?? []}
-                onChange={fetchProject}
-              />
               <div className="grid grid-cols-2 gap-3">
                 <MarketGapSection analysis={analysis} />
                 <CompetitorGapSection

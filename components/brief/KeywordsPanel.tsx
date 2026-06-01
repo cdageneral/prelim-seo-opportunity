@@ -40,6 +40,9 @@ interface Props {
   projectId:   string;
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
+  domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
+  defaultClientThreshold?:     number;  // project-level min vol for client ranked keywords
+  defaultCompetitorThreshold?: number;  // project-level min vol for competitor gap keywords
 }
 
 // ─── Branded detection ────────────────────────────────────────────────────────
@@ -148,6 +151,8 @@ function buildRows(
   dbKeywords: DbKeyword[],
   clientDomain: string,
   competitorDomains: string[],
+  clientVolMin: number = 0,
+  competitorVolMin: number = 0,
 ): KeywordRow[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const serpSnap = analysis?.serpApiSnapshot ?? {};
@@ -164,10 +169,13 @@ function buildRows(
 
   const rows: KeywordRow[] = [];
 
-  // ── Semrush ranked keywords (excluding blocked) ──
+  // ── Semrush ranked keywords (excluding blocked, deduped, below client vol threshold) ──
+  const rankedSeen = new Set<string>();
   for (const k of (semSnap.topKeywords ?? [])) {
     const kwLower = (k.keyword ?? '').toLowerCase();
-    if (blocked.has(kwLower)) continue;
+    if (blocked.has(kwLower) || rankedSeen.has(kwLower)) continue;
+    if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
+    rankedSeen.add(kwLower);
     const serp = serpMap[kwLower];
     rows.push({
       key:          `sem-ranked-${kwLower}`,
@@ -191,11 +199,17 @@ function buildRows(
     });
   }
 
-  // ── Semrush gap keywords (excluding blocked, deduped) ──
-  const existing = new Set(rows.map(r => r.keyword.toLowerCase()));
+  // ── Semrush gap keywords (excluding blocked, deduped, client-branded excluded, below competitor vol threshold) ──
+  // Use trimmed lowercase for all comparisons to catch whitespace mismatches from the API.
+  const existing = new Set(rows.map(r => r.keyword.toLowerCase().trim()));
   for (const k of (semSnap.gapKeywords ?? [])) {
-    const kwLower = (k.keyword ?? '').toLowerCase();
+    const kwLower = (k.keyword ?? '').toLowerCase().trim();
     if (blocked.has(kwLower) || existing.has(kwLower)) continue;
+    // Skip client-branded gap keywords — these are terms the client already owns.
+    if (isBranded(k.keyword, clientDomain, competitorDomains)) continue;
+    // Skip below competitor volume threshold (project-level setting)
+    if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
+    existing.add(kwLower);  // keep existing growing so same kw from 2 competitors isn't added twice
     const serp = serpMap[kwLower];
     rows.push({
       key:          `sem-gap-${kwLower}`,
@@ -203,7 +217,7 @@ function buildRows(
       searchVolume: k.searchVolume ?? 0,
       position:     null,
       type:         'gap',
-      branded:      isBranded(k.keyword, clientDomain, competitorDomains),
+      branded:      false,  // already guaranteed non-branded by the isBranded() check above
       source:       'semrush',
       competitor:   (k as any).competitor ?? null,
       hasAIO:       serp?.hasAIO ?? false,
@@ -227,7 +241,7 @@ function buildRows(
       searchVolume:  dbKw.searchVolume,
       position:      dbKw.position,
       type:          dbKw.type === 'ranked' ? 'ranked' : 'gap',
-      branded:       dbKw.branded,
+      branded:       isBranded(dbKw.keyword, clientDomain, competitorDomains),
       source:        dbKw.source as KwSource,
       competitor:    null,
       hasAIO:        false,
@@ -250,11 +264,11 @@ function buildRows(
 
 // ─── Filter ───────────────────────────────────────────────────────────────────
 
-function applyFilter(rows: KeywordRow[], filter: KwFilter): KeywordRow[] {
+function applyFilter(rows: KeywordRow[], filter: KwFilter, volMin: number = 0): KeywordRow[] {
   switch (filter) {
     case 'branded':       return rows.filter(r => r.branded);
     case 'nonBranded':    return rows.filter(r => !r.branded);
-    case 'competitorGap': return rows.filter(r => r.type === 'gap' && !!r.competitor);
+    case 'competitorGap': return rows.filter(r => r.type === 'gap' && !!r.competitor && r.searchVolume >= volMin);
     default:              return rows;
   }
 }
@@ -374,8 +388,12 @@ const FILTERS: { id: KwFilter; label: string }[] = [
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function KeywordsPanel({ projectId, analysis, competitors }: Props) {
-  const clientDomain      = (analysis?.semrushSnapshot?.domain as string) ?? '';
+export default function KeywordsPanel({
+  projectId, analysis, competitors, domain,
+  defaultClientThreshold     = 0,
+  defaultCompetitorThreshold = 0,
+}: Props) {
+  const clientDomain      = (analysis?.semrushSnapshot?.domain as string) || domain || '';
   const competitorDomains = competitors;
   const clientName        = clientDomain || 'keywords';
 
@@ -387,7 +405,9 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
   const [newType,     setNewType]     = useState<'ranked' | 'gap'>('gap');
   const [addError,    setAddError]    = useState('');
   const [addLoading,  setAddLoading]  = useState(false);
-  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const [deletingKey,   setDeletingKey]   = useState<string | null>(null);
+  // volThreshold initialises from the project-level setting; user can override with the Min Vol buttons
+  const [volThreshold,  setVolThreshold]  = useState<number>(defaultCompetitorThreshold);
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -401,12 +421,15 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
 
   useEffect(() => { fetchDb(); }, [fetchDb]);
 
-  // ── Build merged rows ──
+  // ── Build merged rows (project-level thresholds applied at build time) ──
   const allRows = useMemo(
-    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains),
-    [analysis, dbKeywords, clientDomain, competitorDomains],
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold),
+    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold],
   );
-  const visibleRows = useMemo(() => applyFilter(allRows, filter), [allRows, filter]);
+  const visibleRows = useMemo(
+    () => applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
+    [allRows, filter, volThreshold],
+  );
 
   const ranked = visibleRows.filter(r => r.type === 'ranked').length;
   const gap    = visibleRows.filter(r => r.type === 'gap').length;
@@ -416,6 +439,7 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
     const brandedRows  = allRows.filter(r =>  r.branded);
     const nonBrandRows = allRows.filter(r => !r.branded);
     const gapRows      = allRows.filter(r => r.type === 'gap' && !!r.competitor);
+    const gapFiltered  = gapRows.filter(r => r.searchVolume >= volThreshold);
     const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
     return {
       allCount:      allRows.length,
@@ -424,10 +448,10 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
       brandedVol:    ann(brandedRows),
       nonBrandCount: nonBrandRows.length,
       nonBrandVol:   ann(nonBrandRows),
-      gapCount:      gapRows.length,
-      gapVol:        ann(gapRows),
+      gapCount:      gapFiltered.length,
+      gapVol:        ann(gapFiltered),
     };
-  }, [allRows]);
+  }, [allRows, volThreshold]);
 
   // ── Add keyword ──
   async function handleAdd() {
@@ -770,9 +794,29 @@ export default function KeywordsPanel({ projectId, analysis, competitors }: Prop
           );
         })}
         {filter === 'competitorGap' && (
-          <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
-            from competitor · client not ranking
-          </span>
+          <>
+            {/* Volume threshold controls */}
+            <div className="flex items-center gap-1.5 ml-3 pl-3" style={{ borderLeft: '1px solid #1E1E38' }}>
+              <span className="text-[9px] font-semibold uppercase tracking-widest mr-0.5" style={{ color: '#6060A0' }}>Min Vol</span>
+              {([0, 500, 1000, 2400, 5000] as number[]).map(t => (
+                <button
+                  key={t}
+                  onClick={() => setVolThreshold(t)}
+                  className="text-[10px] px-2.5 py-1 rounded-full border transition-all"
+                  style={{
+                    background:  volThreshold === t ? 'rgba(245,158,11,0.14)' : 'transparent',
+                    borderColor: volThreshold === t ? 'rgba(245,158,11,0.6)'  : '#3A3A5C',
+                    color:       volThreshold === t ? '#F59E0B'                : '#8888B0',
+                  }}
+                >
+                  {t === 0 ? 'All' : t >= 1000 ? `${t / 1000}K+` : `${t}+`}
+                </button>
+              ))}
+            </div>
+            <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
+              from competitor · client not ranking
+            </span>
+          </>
         )}
       </div>
 

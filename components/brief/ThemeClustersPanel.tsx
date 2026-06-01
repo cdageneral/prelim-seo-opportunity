@@ -566,13 +566,14 @@ function ClustersTab({
 
   const leadingStats  = clusterStats.filter(s =>  s.isLeading);
   const trailingStats = clusterStats.filter(s => !s.isLeading);
-  // Opportunity = competitor gap vol < 25% of cluster total AND client not already leading
-  // (isLeading clusters with 0 gap kws would also score compGapPct=0, but those are "won", not "opportunity")
-  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25 && !s.isLeading);
+  // Opportunity = competitor gap vol < 25% of cluster total — competitors least present
+  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25);
 
   // Annualise monthly volume × 12
   const ann = (stats: ClusterStat[]) =>
     stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
+
+  const totalAnnualVol = clusterStats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
 
   // Filtered grid clusters
   const filtered: ThemeCluster[] =
@@ -636,68 +637,76 @@ function ClustersTab({
     },
   ];
 
-  // ── Totals for hero block ──────────────────────────────────────────────
-  const totalMonthlyVol = clusters.reduce((s, c) => s + c.totalVolume, 0);
-  const totalAnnualVol  = totalMonthlyVol * 12;
-
-  function fmtHero(v: number): string {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000)     return `${(v / 1_000).toFixed(0)}K`;
-    return String(v);
-  }
-
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
-      {/* ── Hero: total clusters + search volumes ────────────────────────── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32,
-        padding: '20px 32px', background: '#0A0A16', border: '1px solid #1A1A30',
-        borderRadius: 12, marginBottom: 16,
-      }}>
-        {/* Big total count */}
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#585878', marginBottom: 4 }}>
-            Total clusters
-          </div>
-          <div style={{ fontSize: 72, fontWeight: 700, lineHeight: 1, letterSpacing: -4, color: '#E8E8FF' }}>
-            {clusters.length}
-          </div>
-          <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>categories identified</div>
-        </div>
-
-        {/* Vertical rule */}
-        <div style={{ width: 1, height: 72, background: '#1E1E34', flexShrink: 0 }} />
-
-        {/* Volume stats */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total annual search volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: '#9B96FF' }}>
-                {fmtHero(totalAnnualVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#484868' }}>searches / yr</span>
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total monthly volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: '#6A6A90' }}>
-                {fmtHero(totalMonthlyVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#383858' }}>searches / mo</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* ── Summary filter cards ─────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+
+        {/* ── All Clusters (reset) card ── */}
+        {(() => {
+          const allActive  = filter === 'all';
+          const allAccent  = '#9B96FF';
+          const allActBg   = 'rgba(108,99,255,0.10)';
+          const allActBdr  = 'rgba(108,99,255,0.45)';
+          const allDimBg   = 'rgba(108,99,255,0.04)';
+          const allDimBdr  = 'rgba(108,99,255,0.15)';
+          return (
+            <button
+              onClick={() => setFilter('all')}
+              style={{
+                background:   allActive ? allActBg : allDimBg,
+                border:       `1px solid ${allActive ? allActBdr : allDimBdr}`,
+                borderRadius: 10,
+                padding:      '12px 14px',
+                cursor:       'pointer',
+                textAlign:    'left',
+                transition:   'all 0.15s',
+                outline:      'none',
+                boxShadow:    allActive ? `0 0 0 1px ${allActBdr}` : 'none',
+              }}
+              onMouseEnter={e => {
+                if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = allActBdr;
+              }}
+              onMouseLeave={e => {
+                if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = allDimBdr;
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <i className="ti ti-layout-grid" style={{ fontSize: 13, color: allAccent }} aria-hidden="true" />
+                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: allAccent }}>
+                  All Clusters
+                </span>
+                {allActive && (
+                  <span style={{
+                    marginLeft: 'auto', fontSize: 8, fontWeight: 700,
+                    background: allActBg, border: `1px solid ${allActBdr}`,
+                    color: allAccent, borderRadius: 20, padding: '2px 7px',
+                  }}>
+                    ACTIVE
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
+                <span style={{
+                  fontSize: 34, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
+                  color: allActive ? allAccent : '#E8E8FF',
+                }}>
+                  {clusters.length}
+                </span>
+                <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: allAccent, marginBottom: 3 }}>
+                {fmtVol(totalAnnualVol)}
+                <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
+                Total keyword footprint
+              </div>
+            </button>
+          );
+        })()}
+
         {SUMMARY_CARDS.map(card => {
           const active = filter === card.key;
           return (
@@ -764,9 +773,6 @@ function ClustersTab({
           );
         })}
       </div>
-
-      {/* ── Divider ──────────────────────────────────────────────────────── */}
-      <div style={{ height: 1, background: '#181828', marginBottom: 14 }} />
 
       {/* ── Status / filter bar ──────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
