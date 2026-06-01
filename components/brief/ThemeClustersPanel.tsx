@@ -566,8 +566,9 @@ function ClustersTab({
 
   const leadingStats  = clusterStats.filter(s =>  s.isLeading);
   const trailingStats = clusterStats.filter(s => !s.isLeading);
-  // Opportunity = competitor gap vol < 25% of cluster total — competitors least present
-  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25);
+  // Opportunity = competitor gap vol < 25% of cluster total AND client not already leading
+  // (isLeading clusters with 0 gap kws would also score compGapPct=0, but those are "won", not "opportunity")
+  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25 && !s.isLeading);
 
   // Annualise monthly volume × 12
   const ann = (stats: ClusterStat[]) =>
