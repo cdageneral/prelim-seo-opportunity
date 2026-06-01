@@ -491,7 +491,10 @@ export default function KeywordsPanel({
   // Column sort
   const [sortCol,  setSortCol]  = useState<SortCol>(null);
   const [sortDir,  setSortDir]  = useState<SortDir>('desc');
-  const [csvStatus, setCsvStatus] = useState<{ type: 'loading' | 'success' | 'error'; msg: string } | null>(null);
+  const [csvStatus,   setCsvStatus]   = useState<{ type: 'loading' | 'success' | 'error'; msg: string } | null>(null);
+  const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearLoading,     setClearLoading]     = useState(false);
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -659,19 +662,39 @@ export default function KeywordsPanel({
       return;
     }
 
-    // Upload in parallel batches of 10
+    // Send all keywords to the batch endpoint in chunks of 500
+    // This avoids 3000+ individual DB connections and is far more reliable
     let added = 0; let skipped = 0;
-    const BATCH = 10;
-    for (let i = 0; i < parsed.length; i += BATCH) {
-      const chunk = parsed.slice(i, i + BATCH);
-      const statuses = await Promise.all(chunk.map((row: { keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }) =>
-        fetch(`/api/projects/${projectId}/keywords`, {
+    const CHUNK = 500;
+    setCsvProgress({ current: 0, total: parsed.length });
+    for (let i = 0; i < parsed.length; i += CHUNK) {
+      const chunk = parsed.slice(i, i + CHUNK);
+      try {
+        const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: row.keyword, searchVolume: row.searchVolume, type: row.type, branded: row.branded, source: 'csv' }),
-        }).then((r: Response) => r.status).catch(() => 500)
-      ));
-      for (const s of statuses) { if (s === 201) added++; else skipped++; }
+          body: JSON.stringify({
+            domain: '',
+            source: 'csv',
+            keywords: chunk.map((row: { keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }) => ({
+              keyword:      row.keyword,
+              searchVolume: row.searchVolume,
+              type:         row.type,
+            })),
+          }),
+        });
+        if (res.ok) {
+          const d = await res.json();
+          added   += d.inserted ?? 0;
+          skipped += d.skipped  ?? 0;
+        } else {
+          skipped += chunk.length;
+        }
+      } catch {
+        skipped += chunk.length;
+      }
+      setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
     }
+    setCsvProgress(null);
 
     if (csvRef.current) csvRef.current.value = '';
     await fetchDb();
@@ -685,6 +708,24 @@ export default function KeywordsPanel({
     setTimeout(() => setCsvStatus(null), 6000);
   }
 
+  // ── Clear all custom/CSV/blocked keywords ──
+  async function handleClearAll() {
+    setClearLoading(true);
+    const toDelete = dbKeywords.filter(k => ['csv', 'custom', 'blocked'].includes(k.source));
+    const BATCH = 10;
+    for (let i = 0; i < toDelete.length; i += BATCH) {
+      await Promise.all(toDelete.slice(i, i + BATCH).map((kw: DbKeyword) =>
+        fetch(`/api/projects/${projectId}/keywords`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keyword: kw.keyword, source: kw.source }),
+        }).catch(() => null)
+      ));
+    }
+    await fetchDb();
+    setClearLoading(false);
+    setShowClearConfirm(false);
+  }
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -692,52 +733,75 @@ export default function KeywordsPanel({
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>
-        <div>
-          <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
-          <p className="text-orbit-tertiary text-[11px] mt-0.5">
-            {ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* CSV upload */}
-          <label
-            className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
-            title="Upload CSV (columns: keyword, search_volume, type)"
-            style={{
-              color: csvStatus?.type === 'loading' ? '#7070A0' : '#7070A0',
-              opacity: csvStatus?.type === 'loading' ? 0.6 : 1,
-              pointerEvents: csvStatus?.type === 'loading' ? 'none' : 'auto',
-            }}
-          >
-            {csvStatus?.type === 'loading' ? (
-              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-              </svg>
-            ) : (
+          <div>
+            <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
+            <p className="text-orbit-tertiary text-[11px] mt-0.5">
+              {ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Upload CSV */}
+            <label
+              className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
+              title="Upload CSV (columns: keyword, search_volume, type)"
+              style={{ color: '#7070A0', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}
+            >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
               </svg>
+              Upload CSV
+              <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCsvUpload} />
+            </label>
+
+            {/* Clear All */}
+            {dbKeywords.length > 0 && !showClearConfirm && !csvProgress && (
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+                style={{ color: '#7070A0' }}
+                title="Remove all uploaded/custom keywords and unblock any hidden Semrush keywords"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Clear All
+              </button>
             )}
-            {csvStatus?.type === 'loading' ? 'Uploading…' : 'Upload CSV'}
-            <input
-              ref={csvRef}
-              type="file"
-              accept=".csv,.txt"
-              className="hidden"
-              onChange={handleCsvUpload}
-            />
-          </label>
-          {/* CSV status toast */}
-          {csvStatus && csvStatus.type !== 'loading' && (
-            <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
-              background: csvStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
-              color:      csvStatus.type === 'success' ? '#34d399' : '#f87171',
-              borderColor: csvStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
-            }}>
-              {csvStatus.msg}
-            </span>
-          )}
+
+            {/* Clear All — inline confirm */}
+            {showClearConfirm && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
+                <span className="text-[11px]" style={{ color: '#f87171' }}>
+                  Delete {dbKeywords.filter(k => ['csv','custom','blocked'].includes(k.source)).length} keyword{dbKeywords.filter(k => ['csv','custom','blocked'].includes(k.source)).length !== 1 ? 's' : ''}?
+                </span>
+                <button
+                  onClick={handleClearAll}
+                  disabled={clearLoading}
+                  className="text-[11px] font-semibold px-2 py-0.5 rounded"
+                  style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
+                >
+                  {clearLoading ? 'Clearing…' : 'Yes, clear'}
+                </button>
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="text-[11px] px-2 py-0.5 rounded"
+                  style={{ color: '#6060A0' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
+            {/* Result toast */}
+            {csvStatus && !csvProgress && (
+              <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
+                background:  csvStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
+                color:       csvStatus.type === 'success' ? '#34d399' : '#f87171',
+                borderColor: csvStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
+              }}>
+                {csvStatus.msg}
+              </span>
+            )}
 
           {/* Add keyword */}
           <button
@@ -931,6 +995,41 @@ export default function KeywordsPanel({
           <p className="text-orbit-tertiary text-[10px] mt-1.5">
             Branded flag auto-detected from client + competitor domains. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume, type</span>
           </p>
+        </div>
+      )}
+
+      {/* ── Upload progress bar ── */}
+      {csvProgress && (
+        <div style={{ background: '#0D0D18', borderBottom: '1px solid #1A1A30', padding: '10px 20px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <svg style={{ width: 13, height: 13, animation: 'spin 1s linear infinite', flexShrink: 0, color: '#6C63FF' }} fill="none" viewBox="0 0 24 24">
+                <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+              </svg>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#8888C8', letterSpacing: '0.01em' }}>
+                Uploading keywords
+              </span>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#6060A0', fontVariantNumeric: 'tabular-nums' }}>
+              {csvProgress.current} <span style={{ opacity: 0.45, fontWeight: 400 }}>/ {csvProgress.total}</span>
+            </span>
+          </div>
+          <div style={{ height: 5, borderRadius: 3, background: '#14142A', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 3,
+              background: 'linear-gradient(90deg, #5A52E8, #8B85FF)',
+              width: csvProgress.total > 0 ? `${Math.round((csvProgress.current / csvProgress.total) * 100)}%` : '0%',
+              transition: 'width 0.25s ease',
+              boxShadow: '0 0 10px rgba(108,99,255,0.7)',
+            }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
+            <span style={{ fontSize: 10, color: '#4040608' }} />
+            <span style={{ fontSize: 10, color: '#4A4A70' }}>
+              {csvProgress.total > 0 ? Math.round((csvProgress.current / csvProgress.total) * 100) : 0}%
+            </span>
+          </div>
         </div>
       )}
 

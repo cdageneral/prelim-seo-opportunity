@@ -208,6 +208,7 @@ function buildThemeClusters(
   claudeAssignments: Record<string, IntentType>,
   clientDomain:      string,
   competitorDomains: string[],
+  uploadedKeywords:  any[] = [],
 ): ThemeCluster[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const cb       = semSnap._categoryBreakdown ?? null;
@@ -248,6 +249,19 @@ function buildThemeClusters(
       position:     null,
       isGap:        true,
       competitor:   (kw as any).competitor ?? null,
+    });
+  }
+  // Uploaded / CSV keywords — no cap, full set
+  for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
+    const kwLow = (kw.keyword ?? '').toLowerCase();
+    if (!kwLow || seen.has(kwLow)) continue;
+    seen.add(kwLow);
+    pool.push({
+      keyword:      kw.keyword,
+      searchVolume: kw.search_volume ?? kw.searchVolume ?? 0,
+      position:     kw.position ?? null,
+      isGap:        kw.type === 'gap',
+      competitor:   null,
     });
   }
 
@@ -823,11 +837,13 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
   const analysisId    = analysis?.id ?? 'unknown';
 
   const [loadingClaude, setLoadingClaude] = useState(false);
-  const [claudeAssigns, setClaudeAssigns] = useState<Record<string, IntentType>>({});
+  const [claudeAssigns,    setClaudeAssigns]    = useState<Record<string, IntentType>>({});
+  const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
+  const [refreshingKws,     setRefreshingKws]     = useState(false);
 
   const baseClusters = useMemo(
-    () => buildThemeClusters(analysis, claudeAssigns, clientDomain, competitors),
-    [analysis, claudeAssigns, clientDomain, competitors],
+    () => buildThemeClusters(analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords),
+    [analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords],
   );
 
   const runClaudePass = useCallback(async () => {
@@ -866,6 +882,21 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
 
   useEffect(() => { runClaudePass(); }, [runClaudePass]);
 
+  // Fetch uploaded/CSV keywords from DB (merged into clusters with no cap)
+  const refreshUploadedKeywords = useCallback(async (showSpinner = false) => {
+    if (!projectId) return;
+    if (showSpinner) setRefreshingKws(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords`);
+      const d   = res.ok ? await res.json() : { keywords: [] };
+      setUploadedKeywords(d.keywords ?? []);
+    } catch { /* silent */ } finally {
+      if (showSpinner) setRefreshingKws(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { refreshUploadedKeywords(); }, [refreshUploadedKeywords]);
+
   const totalKws   = baseClusters.reduce((s, c) => s + c.keywords.length, 0);
   const clusterCnt = baseClusters.length;
 
@@ -880,12 +911,41 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
             {totalKws} keywords grouped by category · {clusterCnt} clusters · click any card to see keywords
           </p>
         </div>
-        <div style={{ fontSize: 10, color: '#383858', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span><span style={{ color: '#4ADE80' }}>■</span> Client ranked</span>
-          <span><span style={{ color: '#F59E0B' }}>■</span> Competitor gap</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 10, color: '#383858', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span><span style={{ color: '#4ADE80' }}>■</span> Client ranked</span>
+            <span><span style={{ color: '#F59E0B' }}>■</span> Competitor gap</span>
+          </div>
+          <button
+            onClick={() => refreshUploadedKeywords(true)}
+            disabled={refreshingKws}
+            title="Refresh clusters with latest uploaded keywords"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: 10, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
+              background: refreshingKws ? 'rgba(108,99,255,0.15)' : 'rgba(108,99,255,0.08)',
+              border: '1px solid rgba(108,99,255,0.3)', color: '#8B85FF',
+              cursor: refreshingKws ? 'default' : 'pointer', transition: 'all 0.15s',
+            }}
+          >
+            {refreshingKws ? (
+              <svg className="animate-spin" style={{ width: 11, height: 11, flexShrink: 0 }} fill='none' viewBox='0 0 24 24'>
+                <circle style={{ opacity: 0.25 }} cx='12' cy='12' r='10' stroke='currentColor' strokeWidth='4'/>
+                <path style={{ opacity: 0.85 }} fill='currentColor' d='M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z'/>
+              </svg>
+            ) : (
+              <svg style={{ width: 11, height: 11, flexShrink: 0 }} fill='none' viewBox='0 0 24 24' stroke='currentColor'>
+                <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' />
+              </svg>
+            )}
+            {refreshingKws ? 'Refreshing…' : 'Refresh Clusters'}
+          </button>
         </div>
       </div>
 
+      {refreshingKws && (
+        <div className="animate-pulse" style={{ height: 3, background: 'rgba(108,99,255,0.35)', flexShrink: 0 }} />
+      )}
       <ClustersTab clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />
     </div>
   );

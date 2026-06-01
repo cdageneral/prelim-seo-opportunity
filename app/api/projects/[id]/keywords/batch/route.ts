@@ -60,11 +60,8 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { domain, source = 'csv', keywords } = body;
+  const { domain = '', source = 'csv', keywords } = body;
 
-  if (!domain || typeof domain !== 'string') {
-    return NextResponse.json({ error: 'domain is required' }, { status: 400 });
-  }
   if (!Array.isArray(keywords) || keywords.length === 0) {
     return NextResponse.json({ error: 'keywords must be a non-empty array' }, { status: 400 });
   }
@@ -79,8 +76,6 @@ export async function POST(
     .where(and(
       eq(projectKeywords.projectId, projectId),
       eq(projectKeywords.source, source),
-      // domain can be null for client keywords — compare as string
-      sql`COALESCE(${projectKeywords.domain}, '') = ${domainNorm}`,
     ));
 
   const existingSet = new Set(existing.map(r => r.keyword));
@@ -89,7 +84,7 @@ export async function POST(
   const rows = keywords
     .filter((k: any) => {
       const kw = (k.keyword ?? '').trim().toLowerCase();
-      return kw.length > 0 && Number(k.searchVolume) > 0 && !existingSet.has(kw);
+      return kw.length > 0 && !existingSet.has(kw);
     })
     .map((k: any) => {
       const kw   = (k.keyword ?? '').trim().toLowerCase();

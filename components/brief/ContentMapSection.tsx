@@ -202,6 +202,7 @@ function buildClusters(
   claudeAssignments: Record<string, IntentType>,
   clientDomain: string,
   competitorDomains: string[],
+  uploadedKeywords: any[] = [],
 ): ThemeCluster[] {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
@@ -224,6 +225,19 @@ function buildClusters(
     if (seen.has(kwLow)) continue;
     seen.add(kwLow);
     pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null });
+  }
+  // Uploaded/CSV keywords from DB — no cap, full set
+  for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
+    const kwLow = (kw.keyword ?? '').toLowerCase();
+    if (!kwLow || seen.has(kwLow)) continue;
+    seen.add(kwLow);
+    pool.push({
+      keyword:      kw.keyword,
+      searchVolume: kw.search_volume ?? kw.searchVolume ?? 0,
+      position:     kw.position ?? null,
+      isGap:        kw.type === 'gap',
+      competitor:   null,
+    });
   }
 
   const catMap = new Map<string, KwItem[]>();
@@ -502,8 +516,9 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ContentMapSection({ projectId: _projectId, analysis, competitors }: Props) {
-  const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
+export default function ContentMapSection({ projectId, analysis, competitors }: Props) {
+  const [claudeAssignments,  setClaudeAssignments]  = useState<Record<string, IntentType>>({});
+  const [uploadedKeywords,   setUploadedKeywords]   = useState<any[]>([]);
   const [filterStage,   setFilterStage]   = useState<JourneyStage | 'all'>('all');
   const [filterSegment, setFilterSegment] = useState<string>('all');
   const [filterGap,     setFilterGap]     = useState<GapType | 'all'>('all');
@@ -527,9 +542,18 @@ export default function ContentMapSection({ projectId: _projectId, analysis, com
     } catch {}
   }, [analysis?.id]);
 
+  // Fetch uploaded/CSV keywords from DB — re-runs when projectId changes
+  useEffect(() => {
+    if (!projectId) return;
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then((r: Response) => r.ok ? r.json() : { keywords: [] })
+      .then((d: any) => setUploadedKeywords(d.keywords ?? []))
+      .catch(() => {});
+  }, [projectId]);
+
   const clusters = useMemo(
-    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? []),
-    [analysis, claudeAssignments, clientDomain, competitors],
+    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords),
+    [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords],
   );
 
   const allGaps = useMemo(() => buildContentGaps(clusters, segments), [clusters, segments]);
