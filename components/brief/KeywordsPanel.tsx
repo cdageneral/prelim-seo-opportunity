@@ -245,7 +245,7 @@ function buildRows(
       type:          dbKw.type === 'ranked' ? 'ranked' : 'gap',
       branded:       isBranded(dbKw.keyword, clientDomain, competitorDomains),
       source:        dbKw.source as KwSource,
-      competitor:    null,
+      competitor:    (dbKw as any).domain || null,
       hasAIO:        false,
       clientInAIO:   false,
       hasPAA:        false,
@@ -493,8 +493,11 @@ export default function KeywordsPanel({
   const [sortDir,  setSortDir]  = useState<SortDir>('desc');
   const [csvStatus,   setCsvStatus]   = useState<{ type: 'loading' | 'success' | 'error'; msg: string } | null>(null);
   const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const [clearLoading,     setClearLoading]     = useState(false);
+  const [showClearConfirm,     setShowClearConfirm]     = useState(false);
+  const [clearLoading,         setClearLoading]         = useState(false);
+  const [showCompUpload,        setShowCompUpload]        = useState(false);
+  const [selectedCompDomain,    setSelectedCompDomain]    = useState('');
+  const [compUploadStatus,      setCompUploadStatus]      = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -709,35 +712,80 @@ export default function KeywordsPanel({
   }
 
   // ── Clear all custom/CSV/blocked keywords ──
+  // ── Competitor CSV upload ──
+  async function handleCompetitorUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !selectedCompDomain) return;
+    setCompUploadStatus(null);
+    setCsvProgress({ current: 0, total: 1 });
+    let text = '';
+    try { text = await file.text(); } catch {
+      setCompUploadStatus({ type: 'error', msg: 'Could not read file.' });
+      setCsvProgress(null); return;
+    }
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
+    const parsed = dataLines.map((line: string) => {
+      const cols = line.split(',').map((c: string) => c.replace(/^"|"$/g, '').replace(/\r$/, '').trim());
+      return { keyword: cols[0] ?? '', searchVolume: parseInt(cols[1] ?? '0') || 0 };
+    }).filter((r: { keyword: string; searchVolume: number }) => r.keyword.length > 0);
+    if (!parsed.length) {
+      setCompUploadStatus({ type: 'error', msg: 'No valid rows found.' });
+      setCsvProgress(null); return;
+    }
+    let added = 0; let skipped = 0;
+    const CHUNK = 500;
+    setCsvProgress({ current: 0, total: parsed.length });
+    for (let i = 0; i < parsed.length; i += CHUNK) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: selectedCompDomain, source: 'csv', keywords: parsed.slice(i, i + CHUNK) }),
+        });
+        if (res.ok) { const d = await res.json(); added += d.inserted ?? 0; skipped += d.skipped ?? 0; }
+        else skipped += Math.min(CHUNK, parsed.length - i);
+      } catch { skipped += Math.min(CHUNK, parsed.length - i); }
+      setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
+    }
+    setCsvProgress(null);
+    await fetchDb();
+    if (e.target) e.target.value = '';
+    const skipNote = skipped > 0 ? ` · ${skipped} skipped` : '';
+    setCompUploadStatus(added > 0
+      ? { type: 'success', msg: `${added} competitor keywords uploaded${skipNote}.` }
+      : { type: 'error', msg: `All keywords already exist for this competitor.` }
+    );
+    setTimeout(() => { setCompUploadStatus(null); setShowCompUpload(false); }, 5000);
+  }
+
   async function handleClearAll() {
     setClearLoading(true);
-    const BATCH = 10;
 
-    // Step 1: hard-delete all csv/custom uploads and existing blocked records
-    const toDelete = dbKeywords.filter((k: DbKeyword) => ['csv', 'custom', 'blocked'].includes(k.source));
-    for (let i = 0; i < toDelete.length; i += BATCH) {
-      await Promise.all(toDelete.slice(i, i + BATCH).map((kw: DbKeyword) =>
-        fetch(`/api/projects/${projectId}/keywords`, {
-          method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: kw.keyword, source: kw.source }),
-        }).catch(() => null)
-      ));
-    }
+    // Step 1: bulk-delete all csv/custom/blocked rows in a single SQL statement
+    // (individual DELETEs exhaust Neon serverless connections on large sets)
+    await fetch(`/api/projects/${projectId}/keywords/clear`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sources: ['csv', 'custom', 'blocked'] }),
+    }).catch(() => null);
 
-    // Step 2: block all Semrush analysis keywords so they don't show
-    // These live in the analysis snapshot and can't be deleted — only hidden
-    const semSnap = analysis?.semrushSnapshot ?? {};
+    // Step 2: block all Semrush analysis keywords via batch endpoint
+    // They live in the analysis snapshot and can't be deleted — only hidden
+    const semSnap = (analysis?.semrushSnapshot ?? {}) as any;
     const semKws: Array<{ keyword: string }> = [
       ...(semSnap.topKeywords ?? []),
       ...(semSnap.gapKeywords ?? []),
     ];
-    for (let i = 0; i < semKws.length; i += BATCH) {
-      await Promise.all(semKws.slice(i, i + BATCH).map((kw: { keyword: string }) =>
-        fetch(`/api/projects/${projectId}/keywords`, {
+    if (semKws.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < semKws.length; i += CHUNK) {
+        await fetch(`/api/projects/${projectId}/keywords/batch`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keyword: kw.keyword, source: 'blocked' }),
-        }).catch(() => null)
-      ));
+          body: JSON.stringify({
+            domain: '', source: 'blocked',
+            keywords: semKws.slice(i, i + CHUNK).map((k: { keyword: string }) => ({ keyword: k.keyword, searchVolume: 0 })),
+          }),
+        }).catch(() => null);
+      }
     }
 
     await fetchDb();
@@ -809,6 +857,21 @@ export default function KeywordsPanel({
                   Cancel
                 </button>
               </div>
+            )}
+
+            {/* Competitor Keywords upload */}
+            {!showClearConfirm && !csvProgress && (
+              <button
+                onClick={() => { setShowCompUpload(v => !v); setCompUploadStatus(null); }}
+                className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+                style={{ color: showCompUpload ? '#F59E0B' : '#7070A0', borderColor: showCompUpload ? 'rgba(245,158,11,0.4)' : '', background: showCompUpload ? 'rgba(245,158,11,0.06)' : '' }}
+                title="Upload a competitor's keyword CSV to populate Competitor Gap"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+                Competitor Gap
+              </button>
             )}
 
             {/* Result toast */}
@@ -968,6 +1031,51 @@ export default function KeywordsPanel({
       })()}
 
       {/* ── Add keyword form ── */}
+      {/* ── Competitor keyword upload panel ── */}
+      {showCompUpload && (
+        <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>
+          <p className="text-[11px] font-semibold mb-2" style={{ color: '#F59E0B' }}>Upload Competitor Keywords</p>
+          <p className="text-[10px] text-orbit-tertiary mb-3">
+            These will appear in the <strong>Competitor Gap</strong> filter. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume</span>
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={selectedCompDomain}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedCompDomain(e.target.value)}
+              className="bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2 text-orbit-secondary text-xs focus:outline-none focus:border-orbit-accent"
+            >
+              <option value="">Select competitor…</option>
+              {(competitors ?? []).map((domain: string) => (
+                <option key={domain} value={domain}>{domain}</option>
+              ))}
+            </select>
+            <label
+              className="text-xs border border-orbit-border px-3 py-2 rounded-lg cursor-pointer flex items-center gap-1.5"
+              style={{ color: selectedCompDomain ? '#F59E0B' : '#5A5A7A', pointerEvents: selectedCompDomain ? 'auto' : 'none', opacity: selectedCompDomain ? 1 : 0.5 }}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              Choose CSV
+              <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCompetitorUpload} disabled={!selectedCompDomain} />
+            </label>
+            {compUploadStatus && (
+              <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
+                background:  compUploadStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
+                color:       compUploadStatus.type === 'success' ? '#34d399' : '#f87171',
+                borderColor: compUploadStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
+              }}>
+                {compUploadStatus.msg}
+              </span>
+            )}
+            <button
+              onClick={() => { setShowCompUpload(false); setCompUploadStatus(null); }}
+              className="text-orbit-tertiary text-xs px-2"
+            >Cancel</button>
+          </div>
+        </div>
+      )}
+
       {showAdd && (
         <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>
           <div className="flex items-center gap-2">
