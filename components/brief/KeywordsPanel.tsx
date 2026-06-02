@@ -495,6 +495,7 @@ export default function KeywordsPanel({
   const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
   const [showClearConfirm,     setShowClearConfirm]     = useState(false);
   const [clearLoading,         setClearLoading]         = useState(false);
+  const [clearStep,            setClearStep]            = useState('');
   const [showCompUpload,        setShowCompUpload]        = useState(false);
   const [selectedCompDomain,    setSelectedCompDomain]    = useState('');
   const [compUploadStatus,      setCompUploadStatus]      = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -760,16 +761,16 @@ export default function KeywordsPanel({
 
   async function handleClearAll() {
     setClearLoading(true);
+    setClearStep('Deleting uploaded keywords…');
 
     // Step 1: bulk-delete all csv/custom/blocked rows in a single SQL statement
-    // (individual DELETEs exhaust Neon serverless connections on large sets)
     await fetch(`/api/projects/${projectId}/keywords/clear`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sources: ['csv', 'custom', 'blocked'] }),
     }).catch(() => null);
 
     // Step 2: block all Semrush analysis keywords via batch endpoint
-    // They live in the analysis snapshot and can't be deleted — only hidden
+    setClearStep('Hiding Semrush keywords…');
     const semSnap = (analysis?.semrushSnapshot ?? {}) as any;
     const semKws: Array<{ keyword: string }> = [
       ...(semSnap.topKeywords ?? []),
@@ -788,8 +789,10 @@ export default function KeywordsPanel({
       }
     }
 
+    setClearStep('Refreshing…');
     await fetchDb();
     setClearLoading(false);
+    setClearStep('');
     setShowClearConfirm(false);
   }
 
@@ -838,24 +841,35 @@ export default function KeywordsPanel({
             {/* Clear All — inline confirm */}
             {showClearConfirm && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
-                <span className="text-[11px]" style={{ color: '#f87171' }}>
-                  Clear all keywords (uploads + Semrush analysis)?
-                </span>
-                <button
-                  onClick={handleClearAll}
-                  disabled={clearLoading}
-                  className="text-[11px] font-semibold px-2 py-0.5 rounded"
-                  style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
-                >
-                  {clearLoading ? 'Clearing…' : 'Yes, clear'}
-                </button>
-                <button
-                  onClick={() => setShowClearConfirm(false)}
-                  className="text-[11px] px-2 py-0.5 rounded"
-                  style={{ color: '#6060A0' }}
-                >
-                  Cancel
-                </button>
+                {clearLoading ? (
+                  <>
+                    <svg className="animate-spin shrink-0" style={{ width: 12, height: 12, color: '#f87171' }} fill="none" viewBox="0 0 24 24">
+                      <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                    </svg>
+                    <span className="text-[11px] font-medium" style={{ color: '#f87171' }}>{clearStep}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[11px]" style={{ color: '#f87171' }}>
+                      Clear all keywords (uploads + Semrush analysis)?
+                    </span>
+                    <button
+                      onClick={handleClearAll}
+                      className="text-[11px] font-semibold px-2 py-0.5 rounded"
+                      style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
+                    >
+                      Yes, clear
+                    </button>
+                    <button
+                      onClick={() => setShowClearConfirm(false)}
+                      className="text-[11px] px-2 py-0.5 rounded"
+                      style={{ color: '#6060A0' }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                )}
               </div>
             )}
 
@@ -1126,6 +1140,10 @@ export default function KeywordsPanel({
       )}
 
       {/* ── Upload progress bar ── */}
+      {clearLoading && (
+        <div className="animate-pulse" style={{ height: 3, background: 'rgba(239,68,68,0.45)', flexShrink: 0 }} />
+      )}
+
       {csvProgress && (
         <div style={{ background: '#0D0D18', borderBottom: '1px solid #1A1A30', padding: '10px 20px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>

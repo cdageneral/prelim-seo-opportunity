@@ -228,8 +228,17 @@ function buildThemeClusters(
     rankedMap.set((kw.keyword ?? '').toLowerCase(), kw.position ?? 0);
   }
 
+  // Respect blocked list — blocked keywords hidden in KeywordsPanel hide from clusters too
+  const blockedSet = new Set(
+    uploadedKeywords
+      .filter((k: any) => k.source === 'blocked')
+      .map((k: any) => (k.keyword ?? '').toLowerCase())
+  );
+
   const pool: KwItem[] = [];
   for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+    const kwLow = (kw.keyword ?? '').toLowerCase();
+    if (blockedSet.has(kwLow)) continue;
     pool.push({
       keyword:      kw.keyword,
       searchVolume: kw.searchVolume ?? 0,
@@ -241,7 +250,7 @@ function buildThemeClusters(
   const seen = new Set(pool.map(k => k.keyword.toLowerCase()));
   for (const kw of (semSnap.gapKeywords ?? []).slice(0, MVP_LIMIT)) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (seen.has(kwLow)) continue;
+    if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      kw.keyword,

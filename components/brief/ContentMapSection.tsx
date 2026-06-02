@@ -215,14 +215,23 @@ function buildClusters(
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
   const MVP_LIMIT = 20;
+  // Respect the blocked list — same keywords hidden in KeywordsPanel hide from clusters too
+  const blockedSet = new Set(
+    uploadedKeywords
+      .filter((k: any) => k.source === 'blocked')
+      .map((k: any) => (k.keyword ?? '').toLowerCase())
+  );
+
   const pool: KwItem[] = [];
   for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+    const kwLow = (kw.keyword ?? '').toLowerCase();
+    if (blockedSet.has(kwLow)) continue;
     pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null });
   }
   const seen = new Set(pool.map((k: KwItem) => k.keyword.toLowerCase()));
   for (const kw of (semSnap.gapKeywords ?? []).slice(0, MVP_LIMIT)) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (seen.has(kwLow)) continue;
+    if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     seen.add(kwLow);
     pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null });
   }
