@@ -47,6 +47,28 @@ interface Props {
   defaultCompetitorThreshold?: number;  // project-level min vol for competitor gap keywords
 }
 
+// ─── Category breakdown types ─────────────────────────────────────────────────
+
+interface KwCategoryRow {
+  name:          string;
+  type:          'procedure' | 'brand' | 'location';
+  monthlyDemand: number;
+  page1Demand:   number;
+}
+
+interface KwCategoryBreakdown {
+  categories:        KwCategoryRow[];
+  totalMonthlyDemand: number;
+  totalPage1Demand:   number;
+  keywordCategories:  Record<string, string>; // lowercase kw → category name
+}
+
+interface KwCatStats {
+  total:   number;  // keywords in this category from allRows
+  ranked:  number;  // ranked keywords (have position)
+  posSum:  number;  // sum of positions (for avg calculation)
+}
+
 // ─── Branded detection ────────────────────────────────────────────────────────
 // Strips protocol, www, and TLD — returns lowercase alphanum brand root.
 //   "sonobello.com" → "sonobello"
@@ -478,6 +500,7 @@ export default function KeywordsPanel({
   const clientName        = clientDomain || 'keywords';
 
   const [dbKeywords,  setDbKeywords]  = useState<DbKeyword[]>([]);
+  const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [showAdd,     setShowAdd]     = useState(false);
   const [newKw,       setNewKw]       = useState('');
@@ -507,7 +530,9 @@ export default function KeywordsPanel({
       const res  = await fetch(`/api/projects/${projectId}/keywords`);
       const data = await res.json();
       setDbKeywords(data.keywords ?? []);
-    } catch { /* silent */ }
+    } catch { /* silent */ } finally {
+      setDbLoaded(true);
+    }
   }, [projectId]);
 
   useEffect(() => { fetchDb(); }, [fetchDb]);
@@ -555,6 +580,27 @@ export default function KeywordsPanel({
       gapVol:        ann(gapFiltered),
     };
   }, [allRows, volThreshold]);
+
+  // ── Category stats — per-category keyword counts from full allRows ────────────
+  // Reads _categoryBreakdown stored by synthesis, then maps allRows keywords
+  // via keywordCategories (lowercase kw → category name) to produce per-category
+  // counts and average positions that reflect the FULL keyword footprint.
+  const cb = (analysis?.semrushSnapshot?._categoryBreakdown ?? null) as KwCategoryBreakdown | null;
+  const catStats = useMemo<Record<string, KwCatStats>>(() => {
+    if (!cb?.keywordCategories) return {};
+    const stats: Record<string, KwCatStats> = {};
+    for (const row of allRows) {
+      const cat = cb.keywordCategories[row.keyword.toLowerCase().trim()];
+      if (!cat) continue;
+      if (!stats[cat]) stats[cat] = { total: 0, ranked: 0, posSum: 0 };
+      stats[cat].total++;
+      if (row.type === 'ranked' && row.position !== null) {
+        stats[cat].ranked++;
+        stats[cat].posSum += row.position;
+      }
+    }
+    return stats;
+  }, [allRows, cb]);
 
   // ── Add keyword ──
   async function handleAdd() {
@@ -832,14 +878,17 @@ export default function KeywordsPanel({
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 animate-fade-in">
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden animate-fade-in">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>
           <div>
             <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
             <p className="text-orbit-tertiary text-[11px] mt-0.5">
-              {ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing
+              {dbLoaded
+                ? <>{ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing</>
+                : <span style={{ color: '#333350' }}>Loading keywords…</span>
+              }
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1055,14 +1104,14 @@ export default function KeywordsPanel({
                   {/* Count */}
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
                     <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#E8E8FF' }}>
-                      {card.count.toLocaleString()}
+                      {dbLoaded ? card.count.toLocaleString() : '—'}
                     </span>
                     <span style={{ fontSize: 12, color: '#9090B8' }}>keywords</span>
                   </div>
 
                   {/* Annual volume */}
                   <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
-                    {fmtVol(card.vol)}
+                    {dbLoaded ? fmtVol(card.vol) : '—'}
                     <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
 
@@ -1076,6 +1125,11 @@ export default function KeywordsPanel({
           </div>
         );
       })()}
+
+      {/* ── Category breakdown ── */}
+      {cb && cb.categories && cb.categories.length > 0 && dbLoaded && (
+        <KwCategorySection cb={cb} catStats={catStats} />
+      )}
 
       {/* ── Add keyword form ── */}
       {/* ── Competitor keyword upload panel ── */}
@@ -1239,7 +1293,7 @@ export default function KeywordsPanel({
       </div>
 
       {/* ── Table ── */}
-      <div className="overflow-auto flex-1">
+      <div className="overflow-auto flex-1 min-h-0">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>
@@ -1339,6 +1393,168 @@ export default function KeywordsPanel({
         <span className="text-[10px] bg-orbit-muted border border-orbit-border text-orbit-tertiary px-1.5 py-0.5 rounded-full">AIO = feature exists, not cited</span>
         <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">gap = client not ranking</span>
         <span className="text-[10px] bg-purple-500/10 border border-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full">branded = client or competitor name</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Keyword Landscape category section ──────────────────────────────────────
+
+function fmtKwAnn(monthly: number): string {
+  const a = monthly * 12;
+  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
+  return a.toLocaleString();
+}
+
+const KW_RANK_BUCKETS = [
+  { color: '#6C63FF', label: '1–3'  },
+  { color: '#06B6D4', label: '4–10' },
+  { color: '#F59E0B', label: 'P2'   },
+  { color: '#EF4444', label: 'P3+'  },
+];
+
+function KwCategorySection({
+  cb,
+  catStats,
+}: {
+  cb:       KwCategoryBreakdown;
+  catStats: Record<string, KwCatStats>;
+}) {
+  const procedureCats = cb.categories.filter(c => c.type === 'procedure');
+  const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
+  if (procedureCats.length === 0 && navCats.length === 0) return null;
+
+  const totalMonthly = cb.totalMonthlyDemand;
+  const totalPage1   = cb.totalPage1Demand;
+  const overallShare = totalMonthly > 0 ? (totalPage1 / totalMonthly) * 100 : 0;
+
+  return (
+    <div style={{ borderBottom: '1px solid #111120', background: '#07070F', flexShrink: 0 }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px 6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#9090C0', letterSpacing: '.04em' }}>Category Breakdown</span>
+          <span style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'rgba(108,99,255,0.1)', border: '1px solid rgba(108,99,255,0.25)', color: '#8080C0' }}>
+            {overallShare.toFixed(1)}% page 1 capture
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {KW_RANK_BUCKETS.map(b => (
+            <span key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '9px', color: b.color }}>
+              <span style={{ width: 6, height: 6, borderRadius: 1, background: b.color, display: 'inline-block' }} />
+              {b.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Table header */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '4px 20px 4px', borderBottom: '1px solid #0E0E1E' }}>
+        {[
+          { label: 'Category',       align: 'left'   },
+          { label: 'Annual Demand',  align: 'right'  },
+          { label: 'Page 1',         align: 'right'  },
+          { label: 'Share',          align: 'right'  },
+          { label: 'Avg Pos',        align: 'right'  },
+          { label: 'Keywords',       align: 'center' },
+        ].map(h => (
+          <span key={h.label} style={{ fontSize: '9px', fontWeight: 500, color: '#404060', textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: h.align as any }}>
+            {h.label}
+          </span>
+        ))}
+      </div>
+
+      {/* Procedure rows */}
+      {procedureCats.length > 0 && (
+        <div style={{ padding: '4px 20px 2px' }}>
+          <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Procedure Lines</span>
+        </div>
+      )}
+      {procedureCats.map(cat => (
+        <KwCatRow key={cat.name} cat={cat} stats={catStats[cat.name]} dimmed={false} />
+      ))}
+
+      {/* Brand & navigation rows */}
+      {navCats.length > 0 && (
+        <div style={{ padding: '6px 20px 2px', borderTop: '1px solid #0E0E1E', marginTop: 2 }}>
+          <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Brand &amp; Navigation</span>
+        </div>
+      )}
+      {navCats.map(cat => (
+        <KwCatRow key={cat.name} cat={cat} stats={catStats[cat.name]} dimmed={true} />
+      ))}
+
+      {/* Overall rollup */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '6px 20px 8px', borderTop: '1px solid #111120' }}>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8' }}>Overall</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(totalMonthly)}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8B85FF', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(totalPage1)}</span>
+        <span style={{ fontSize: '12px', fontWeight: 700, color: '#6C63FF', textAlign: 'right' }}>{overallShare.toFixed(1)}%</span>
+        <span />
+        <span />
+      </div>
+    </div>
+  );
+}
+
+function KwCatRow({
+  cat,
+  stats,
+  dimmed,
+}: {
+  cat:    KwCategoryRow;
+  stats?: KwCatStats;
+  dimmed: boolean;
+}) {
+  const share    = cat.monthlyDemand > 0 ? (cat.page1Demand / cat.monthlyDemand) * 100 : 0;
+  const barW     = Math.max(cat.page1Demand > 0 ? 1 : 0, share);
+  const hasPage1 = cat.page1Demand > 0;
+  const avgPos   = stats && stats.ranked > 0 ? stats.posSum / stats.ranked : null;
+  const kwCount  = stats?.total ?? 0;
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 105px 80px 52px 60px 100px',
+        alignItems: 'center',
+        padding: '5px 20px',
+        borderBottom: '1px solid rgba(255,255,255,0.03)',
+        opacity: dimmed ? 0.5 : 1,
+      }}
+    >
+      {/* Category name + mini bar */}
+      <div>
+        <span style={{ fontSize: '12px', color: dimmed ? '#606078' : '#D0D0F0' }}>{cat.name}</span>
+        <div style={{ marginTop: '4px', height: '2px', width: '80%', background: '#111120', borderRadius: '1px', overflow: 'hidden' }}>
+          <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#404060' : '#6C63FF', borderRadius: '1px', transition: 'width 0.6s ease' }} />
+        </div>
+      </div>
+      {/* Annual demand */}
+      <span style={{ fontSize: '11px', color: '#7070A0', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {fmtKwAnn(cat.monthlyDemand)}
+      </span>
+      {/* Page 1 */}
+      <span style={{ fontSize: '11px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#505070' : '#8B85FF') : '#333350', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {hasPage1 ? fmtKwAnn(cat.page1Demand) : '—'}
+      </span>
+      {/* Share */}
+      <span style={{ fontSize: '12px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#505070' : '#E0E0FF') : '#333350', textAlign: 'right' }}>
+        {hasPage1 ? `${share.toFixed(1)}%` : '—'}
+      </span>
+      {/* Avg position */}
+      <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#333350' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
+        {avgPos !== null ? avgPos.toFixed(1) : '—'}
+      </span>
+      {/* Keywords count from allRows */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+        {kwCount > 0 ? (
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#6060A0', background: '#0F0F1E', border: '1px solid #1E1E30', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
+            {kwCount}
+          </span>
+        ) : (
+          <span style={{ fontSize: '10px', color: '#282838' }}>—</span>
+        )}
       </div>
     </div>
   );
