@@ -35,11 +35,35 @@ interface DbKeyword {
 
 type BucketKey = 'all' | '1-3' | '4-10' | '11-20' | '21+';
 
+// ── Category breakdown types (mirrors MarketGapSection) ────────────────────────
+interface CategoryRow {
+  name:          string;
+  type:          'procedure' | 'brand' | 'location';
+  monthlyDemand: number;
+  page1Demand:   number;
+  top3Demand:    number;
+}
+
+interface CategoryBreakdown {
+  categories:            CategoryRow[];
+  totalMonthlyDemand:    number;
+  totalPage1Demand:      number;
+  keywordCategories:     Record<string, string>;  // lowercase kw → category name
+}
+
+// Per-category rank statistics computed from the live topKws list
+interface CatRankStats {
+  count:   number;
+  posSum:  number;
+  dist:    Record<string, number>;  // '1-3' | '4-10' | '11-20' | '21+'
+}
+
 interface Props {
-  analysis:     any;
-  projectId:    string;
-  domain?:      string;
-  competitors?: string[];
+  analysis:               any;
+  projectId:              string;
+  domain?:                string;
+  competitors?:           string[];
+  defaultClientThreshold?: number;  // min monthly vol for ranked keywords — must match KeywordsPanel
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -110,6 +134,139 @@ function StatCard({ label, value, sub, color }: { label: string; value: string; 
   );
 }
 
+// ── Category Performance Section ──────────────────────────────────────────────
+
+const RANK_BUCKET_META = [
+  { key: '1-3',   color: '#6C63FF', label: '1–3'  },
+  { key: '4-10',  color: '#06B6D4', label: '4–10' },
+  { key: '11-20', color: '#F59E0B', label: 'P2'   },
+  { key: '21+',   color: '#EF4444', label: 'P3+'  },
+];
+
+function fmtAnn(monthly: number): string {
+  const a = monthly * 12;
+  if (a >= 1_000_000) return `${(a / 1_000_000).toFixed(1)}M`;
+  return a.toLocaleString();
+}
+
+function CategoryPerformanceSection({
+  cb,
+  categoryRankStats,
+}: {
+  cb: CategoryBreakdown;
+  categoryRankStats: Record<string, CatRankStats>;
+}) {
+  const procedureCats = cb.categories.filter(c => c.type === 'procedure');
+  const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
+  if (procedureCats.length === 0 && navCats.length === 0) return null;
+
+  return (
+    <div className="orbit-card p-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Category Performance</p>
+          <p className="text-orbit-primary text-sm font-semibold mt-0.5">Demand &amp; ranking by category</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {RANK_BUCKET_META.map(b => (
+            <span key={b.key} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '10px', color: b.color }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: b.color, display: 'inline-block', flexShrink: 0 }} />
+              {b.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Table header */}
+      <div className="grid pb-2 border-b border-orbit-border" style={{ gridTemplateColumns: '1fr 110px 90px 58px 70px 120px' }}>
+        {['Category', 'Annual Demand', 'Page 1', 'Share', 'Avg Pos', 'Rank Split'].map((h, i) => (
+          <span key={h} style={{ fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i === 0 ? 'left' : i === 5 ? 'center' : 'right' as const }}>
+            {h}
+          </span>
+        ))}
+      </div>
+
+      {/* Procedure section */}
+      {procedureCats.length > 0 && (
+        <p style={{ fontSize: '9px', fontWeight: 600, color: '#4A4A72', letterSpacing: '.08em', textTransform: 'uppercase', padding: '6px 0 2px' }}>
+          Procedure Lines
+        </p>
+      )}
+      {procedureCats.map(cat => (
+        <CatRow key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={false} />
+      ))}
+
+      {/* Brand & navigation section */}
+      {navCats.length > 0 && (
+        <p style={{ fontSize: '9px', fontWeight: 600, color: '#4A4A72', letterSpacing: '.08em', textTransform: 'uppercase', padding: '8px 0 2px', borderTop: '1px solid #111120', marginTop: '4px' }}>
+          Brand &amp; Navigation
+        </p>
+      )}
+      {navCats.map(cat => (
+        <CatRow key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={true} />
+      ))}
+    </div>
+  );
+}
+
+function CatRow({ cat, stats, dimmed }: { cat: CategoryRow; stats?: CatRankStats; dimmed: boolean }) {
+  const share      = cat.monthlyDemand > 0 ? (cat.page1Demand / cat.monthlyDemand) * 100 : 0;
+  const barW       = Math.max(cat.page1Demand > 0 ? 1 : 0, share);
+  const hasPage1   = cat.page1Demand > 0;
+  const avgPos     = stats && stats.count > 0 ? stats.posSum / stats.count : null;
+  const totalInCat = stats ? Object.values(stats.dist).reduce((a, b) => a + b, 0) : 0;
+
+  return (
+    <div className="grid items-center border-b border-orbit-border/40 py-2.5" style={{ gridTemplateColumns: '1fr 110px 90px 58px 70px 120px', opacity: dimmed ? 0.5 : 1 }}>
+      {/* Category name + mini share bar */}
+      <div>
+        <span style={{ fontSize: '13px', color: dimmed ? '#666680' : '#F0F0FF' }}>{cat.name}</span>
+        <div style={{ marginTop: '5px', height: '3px', width: '85%', background: '#1E1E2E', borderRadius: '2px', overflow: 'hidden' }}>
+          <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#555570' : '#6C63FF', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+        </div>
+      </div>
+      {/* Annual demand */}
+      <span style={{ fontSize: '12px', color: '#8888AA', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {fmtAnn(cat.monthlyDemand)}
+      </span>
+      {/* Page 1 */}
+      <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#555570' : '#8B85FF') : '#444458', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {hasPage1 ? fmtAnn(cat.page1Demand) : '—'}
+      </span>
+      {/* Share */}
+      <span style={{ fontSize: '13px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#555570' : '#F0F0FF') : '#444458', textAlign: 'right' }}>
+        {hasPage1 ? `${share.toFixed(1)}%` : '—'}
+      </span>
+      {/* Avg position — colour-coded by bucket */}
+      <span style={{ fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#444458' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
+        {avgPos !== null ? avgPos.toFixed(1) : '—'}
+      </span>
+      {/* Rank split — stacked bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '8px' }}>
+        {totalInCat > 0 ? (
+          <>
+            <div style={{ flex: 1, height: '8px', display: 'flex', borderRadius: '4px', overflow: 'hidden', gap: '1px' }}>
+              {RANK_BUCKET_META.map(b => {
+                const count = stats?.dist[b.key] ?? 0;
+                const pct   = (count / totalInCat) * 100;
+                if (pct === 0) return null;
+                return (
+                  <div key={b.key} title={`${b.label}: ${count} kw${count !== 1 ? 's' : ''}`}
+                    style={{ width: `${pct}%`, height: '100%', background: b.color, minWidth: '3px' }} />
+                );
+              })}
+            </div>
+            <span style={{ fontSize: '9px', color: '#555570', flexShrink: 0 }}>{totalInCat}</span>
+          </>
+        ) : (
+          <span style={{ fontSize: '10px', color: '#333350' }}>—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Position Badge ─────────────────────────────────────────────────────────────
 
 function PosBadge({ pos }: { pos: number }) {
@@ -150,7 +307,7 @@ function FeaturePill({ feature }: { feature: string }) {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis, projectId }: Props) {
+export default function GoogleSerpSection({ analysis, projectId, defaultClientThreshold = 0 }: Props) {
   const [filter,     setFilter]     = useState<BucketKey>('all');
   const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
   const [sortAsc,    setSortAsc]    = useState(true);
@@ -170,28 +327,47 @@ export default function GoogleSerpSection({ analysis, projectId }: Props) {
 
   // Merge semrush topKeywords + ranked DB keywords so this panel reflects
   // the full keyword footprint shown in the Keyword Landscape panel.
+  // Rules mirror KeywordsPanel.buildRows exactly:
+  //   - Skip blocked keywords
+  //   - Skip keywords without a position (gap/unranked)
+  //   - Apply defaultClientThreshold volume filter (same as KeywordsPanel)
+  //   - Dedup: track existingKeys as we go to prevent duplicates within dbKeywords itself
+  //   - Use Number() on position to guarantee numeric comparison (not string coercion)
   const topKws: SemKw[] = useMemo(() => {
-    const semKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
+    const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
 
-    // Build a dedup set from the Semrush list
-    const existingKeys = new Set(semKws.map((k: SemKw) => k.keyword.toLowerCase().trim()));
+    // Normalise Semrush keywords: ensure position is always a number
+    const semKws: SemKw[] = rawSemKws.map(k => ({
+      ...k,
+      position: Number(k.position),
+    }));
 
-    // Add DB keywords that have a position (ranked) and aren't blocked or already present
-    const dbRanked: SemKw[] = dbKeywords
-      .filter(k =>
-        k.source !== 'blocked' &&
-        k.position !== null &&
-        !existingKeys.has(k.keyword.toLowerCase().trim()),
-      )
-      .map(k => ({
+    // Seed the dedup set from the Semrush list
+    const existingKeys = new Set(semKws.map(k => k.keyword.toLowerCase().trim()));
+
+    // Add DB keywords, iterating so we can grow existingKeys and prevent
+    // duplicates both against semrush AND within the DB list itself.
+    const dbRanked: SemKw[] = [];
+    for (const k of dbKeywords) {
+      if (k.source === 'blocked') continue;
+      if (k.position === null || k.position === undefined) continue;
+      const pos = Number(k.position);
+      if (!isFinite(pos) || pos <= 0) continue;
+      // Apply the same volume threshold as KeywordsPanel (project.kwVolThresholdClient)
+      if (defaultClientThreshold > 0 && k.searchVolume < defaultClientThreshold) continue;
+      const kwKey = k.keyword.toLowerCase().trim();
+      if (existingKeys.has(kwKey)) continue;
+      existingKeys.add(kwKey);  // prevents duplicates within dbKeywords (e.g. CSV uploaded twice)
+      dbRanked.push({
         keyword:      k.keyword,
-        position:     k.position as number,
+        position:     pos,
         searchVolume: k.searchVolume,
         branded:      k.branded,
-      }));
+      });
+    }
 
     return [...semKws, ...dbRanked];
-  }, [analysis, dbKeywords]);
+  }, [analysis, dbKeywords, defaultClientThreshold]);
 
   // Recompute positionDist from the FULL merged keyword set.
   // The stored semrushSnapshot.positionDist was built from only the 40 Semrush keywords.
@@ -237,6 +413,30 @@ export default function GoogleSerpSection({ analysis, projectId }: Props) {
     val: Math.round((maxCount / ySteps) * (ySteps - i)),
     y:   (i / ySteps) * CHART_H,
   }));
+
+  // ── Category Performance ──────────────────────────────────────────────────
+  // Read category breakdown stored by the synthesis pipeline
+  const cb = (analysis.semrushSnapshot?._categoryBreakdown ?? null) as CategoryBreakdown | null;
+
+  // Compute per-category rank stats from the full merged topKws list.
+  // keywordCategories maps lowercase keyword → category name (from synthesis pass 2.5).
+  const categoryRankStats = useMemo<Record<string, CatRankStats>>(() => {
+    if (!cb?.keywordCategories) return {};
+    const stats: Record<string, CatRankStats> = {};
+    for (const kw of topKws) {
+      const cat = cb.keywordCategories[kw.keyword.toLowerCase().trim()];
+      if (!cat) continue;
+      if (!stats[cat]) stats[cat] = { count: 0, posSum: 0, dist: { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 } };
+      stats[cat].count++;
+      stats[cat].posSum += kw.position;
+      const p = kw.position;
+      if (p <= 3)       stats[cat].dist['1-3']++;
+      else if (p <= 10) stats[cat].dist['4-10']++;
+      else if (p <= 20) stats[cat].dist['11-20']++;
+      else              stats[cat].dist['21+']++;
+    }
+    return stats;
+  }, [topKws, cb]);
 
   // ── Keyword Table ─────────────────────────────────────────────────────────
   const filteredKws = useMemo(() => {
@@ -476,6 +676,14 @@ export default function GoogleSerpSection({ analysis, projectId }: Props) {
         </div>
       </div>
 
+      {/* ── Category Performance ── */}
+      {cb && cb.categories && cb.categories.length > 0 && (
+        <CategoryPerformanceSection
+          cb={cb}
+          categoryRankStats={categoryRankStats}
+        />
+      )}
+
       {/* ── Keyword Table ── */}
       <div className="orbit-card p-5 flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -604,3 +812,4 @@ export default function GoogleSerpSection({ analysis, projectId }: Props) {
     </div>
   );
 }
+

@@ -686,6 +686,7 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               domain={domainDisplay}
               competitors={competitorDomains}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}
             />
           )}
 
