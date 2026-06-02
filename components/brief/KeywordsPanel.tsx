@@ -648,16 +648,48 @@ export default function KeywordsPanel({
       return;
     }
 
-    // Parse: handle quoted fields and trailing \r
-    const parsed: Array<{ keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }> = [];
+    // Parse CSV — detect column layout from header row
+    // Supports: simple (keyword, search_volume, type) AND Semrush Positions export
+    const headerLine = lines[0] ?? '';
+    const headerCols = headerLine.split(',').map((c: string) => c.replace(/^\"|"$/g, '').trim().toLowerCase());
+    const kwCol   = Math.max(0, headerCols.findIndex((h: string) => h === 'keyword' || h === 'keywords'));
+    const volCol  = (() => {
+      const idx = headerCols.findIndex((h: string) =>
+        h === 'search volume' || h === 'search_volume' || h === 'searchvolume' || h === 'volume' || h === 'monthly volume');
+      return idx >= 0 ? idx : 1; // fallback: col 1
+    })();
+    const posCol  = (() => {
+      const idx = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position');
+      return idx >= 0 ? idx : -1; // -1 = not found
+    })();
+    const typeCol = headerCols.findIndex((h: string) => h === 'type');
+
+    // Parse CSV rows using a proper quoted-field splitter
+    function splitCsvLine(line: string): string[] {
+      const result: string[] = [];
+      let cur = ''; let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; }
+        else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+        else { cur += ch; }
+      }
+      result.push(cur.replace(/\r$/, '').trim());
+      return result;
+    }
+
+    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean }> = [];
     for (const line of dataLines) {
-      const cols = line.split(',').map((c: string) => c.replace(/^\"|"$/g, '').replace(/\r$/, '').trim());
-      const kwText = cols[0];
+      const cols  = splitCsvLine(line);
+      const kwText = (cols[kwCol] ?? '').replace(/^"|"$/g, '').trim();
       if (!kwText) continue;
-      const vol     = parseInt(cols[1] ?? '0') || 0;
-      const kwType: 'ranked' | 'gap'  = (cols[2] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap';
+      const vol     = parseInt(cols[volCol] ?? '0') || 0;
+      const pos     = posCol >= 0 ? (parseInt(cols[posCol] ?? '') || null) : null;
+      const kwType: 'ranked' | 'gap' = typeCol >= 0
+        ? ((cols[typeCol] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap')
+        : (pos !== null && pos <= 100 ? 'ranked' : 'gap');
       const branded = isBranded(kwText, clientDomain, competitorDomains);
-      parsed.push({ keyword: kwText, searchVolume: vol, type: kwType, branded });
+      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded });
     }
 
     if (parsed.length === 0) {
@@ -679,9 +711,10 @@ export default function KeywordsPanel({
           body: JSON.stringify({
             domain: '',
             source: 'csv',
-            keywords: chunk.map((row: { keyword: string; searchVolume: number; type: 'ranked' | 'gap'; branded: boolean }) => ({
+            keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean }) => ({
               keyword:      row.keyword,
               searchVolume: row.searchVolume,
+              position:     row.position,
               type:         row.type,
             })),
           }),
