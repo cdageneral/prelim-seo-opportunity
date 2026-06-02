@@ -878,7 +878,7 @@ export default function KeywordsPanel({
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-full animate-fade-in">
+    <div className="flex flex-col h-full overflow-hidden animate-fade-in">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>
@@ -1293,7 +1293,7 @@ export default function KeywordsPanel({
       </div>
 
       {/* ── Table ── */}
-      <div className="overflow-auto flex-1">
+      <div className="overflow-auto flex-1 min-h-0">
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>

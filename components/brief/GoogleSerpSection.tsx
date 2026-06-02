@@ -53,9 +53,11 @@ interface CategoryBreakdown {
 
 // Per-category rank statistics computed from the live topKws list
 interface CatRankStats {
-  count:   number;
-  posSum:  number;
-  dist:    Record<string, number>;  // '1-3' | '4-10' | '11-20' | '21+'
+  count:      number;
+  posSum:     number;
+  monthlyVol: number;  // sum of searchVolume for all matched ranked keywords
+  page1Vol:   number;  // sum of searchVolume for pos ≤ 10 keywords
+  dist:       Record<string, number>;  // '1-3' | '4-10' | '11-20' | '21+'
 }
 
 interface Props {
@@ -122,6 +124,41 @@ function buildPositionDist(kws: SemKw[]): Record<string, number> {
   return dist;
 }
 
+// ── Category inference ─────────────────────────────────────────────────────────
+// Maps a keyword to a category name using three tiers:
+//   1. Exact lookup in keywordCategories (the 40-keyword MVP map from synthesis)
+//   2. ALL significant words (4+ chars) of the category appear in the keyword
+//      → sorted longest-name-first so "Fat Transfer Breast Augmentation" beats "Liposuction"
+//   3. ANY long word (5+ chars) from the category appears in the keyword
+// This extends coverage to the full CSV keyword list without needing re-synthesis.
+function inferCategoryForKw(
+  keyword:          string,
+  keywordCategories: Record<string, string>,
+  categories:        CategoryRow[],
+): string | null {
+  const kwLower = keyword.toLowerCase().trim();
+
+  // Tier 1 — exact map
+  if (keywordCategories[kwLower]) return keywordCategories[kwLower];
+
+  // Sort categories longest-name-first so specific multi-word categories win over short ones
+  const byLen = [...categories].sort((a, b) => b.name.length - a.name.length);
+
+  // Tier 2 — ALL words of category name (4+ chars) present in keyword
+  for (const cat of byLen) {
+    const words = cat.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4);
+    if (words.length > 0 && words.every(w => kwLower.includes(w))) return cat.name;
+  }
+
+  // Tier 3 — ANY long word (5+ chars) from category name present in keyword
+  for (const cat of byLen) {
+    const words = cat.name.toLowerCase().split(/\s+/).filter(w => w.length >= 5);
+    if (words.some(w => kwLower.includes(w))) return cat.name;
+  }
+
+  return null;
+}
+
 // ── Stat Card ──────────────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color?: string }) {
@@ -152,13 +189,29 @@ function fmtAnn(monthly: number): string {
 function CategoryPerformanceSection({
   cb,
   categoryRankStats,
+  topKws,
 }: {
-  cb: CategoryBreakdown;
+  cb:                CategoryBreakdown;
   categoryRankStats: Record<string, CatRankStats>;
+  topKws:            SemKw[];
 }) {
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
+
   const procedureCats = cb.categories.filter(c => c.type === 'procedure');
   const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
   if (procedureCats.length === 0 && navCats.length === 0) return null;
+
+  // Keywords for the currently expanded category, sorted by position
+  const expandedKws = useMemo(() => {
+    if (!expandedCat) return [];
+    return topKws
+      .filter(kw => inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories) === expandedCat)
+      .sort((a, b) => a.position - b.position);
+  }, [expandedCat, topKws, cb]);
+
+  function toggle(name: string) {
+    setExpandedCat(prev => (prev === name ? null : name));
+  }
 
   return (
     <div className="orbit-card p-5">
@@ -166,7 +219,7 @@ function CategoryPerformanceSection({
       <div className="flex items-center justify-between mb-4">
         <div>
           <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Category Performance</p>
-          <p className="text-orbit-primary text-sm font-semibold mt-0.5">Demand &amp; ranking by category</p>
+          <p className="text-orbit-primary text-sm font-semibold mt-0.5">Demand &amp; ranking by category · click a row to expand</p>
         </div>
         <div className="flex items-center gap-3">
           {RANK_BUCKET_META.map(b => (
@@ -179,9 +232,9 @@ function CategoryPerformanceSection({
       </div>
 
       {/* Table header */}
-      <div className="grid pb-2 border-b border-orbit-border" style={{ gridTemplateColumns: '1fr 110px 90px 58px 70px 120px' }}>
-        {['Category', 'Annual Demand', 'Page 1', 'Share', 'Avg Pos', 'Rank Split'].map((h, i) => (
-          <span key={h} style={{ fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i === 0 ? 'left' : i === 5 ? 'center' : 'right' as const }}>
+      <div className="grid pb-2 border-b border-orbit-border" style={{ gridTemplateColumns: '24px 1fr 110px 90px 58px 70px 120px' }}>
+        {['', 'Category', 'Annual Demand', 'Page 1', 'Share', 'Avg Pos', 'Rank Split'].map((h, i) => (
+          <span key={i} style={{ fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i <= 1 ? 'left' : i === 6 ? 'center' : 'right' as const }}>
             {h}
           </span>
         ))}
@@ -194,7 +247,10 @@ function CategoryPerformanceSection({
         </p>
       )}
       {procedureCats.map(cat => (
-        <CatRow key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={false} />
+        <CatRow
+          key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={false}
+          isExpanded={expandedCat === cat.name} onToggle={toggle} expandedKws={expandedKws}
+        />
       ))}
 
       {/* Brand & navigation section */}
@@ -204,66 +260,138 @@ function CategoryPerformanceSection({
         </p>
       )}
       {navCats.map(cat => (
-        <CatRow key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={true} />
+        <CatRow
+          key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={true}
+          isExpanded={expandedCat === cat.name} onToggle={toggle} expandedKws={expandedKws}
+        />
       ))}
     </div>
   );
 }
 
-function CatRow({ cat, stats, dimmed }: { cat: CategoryRow; stats?: CatRankStats; dimmed: boolean }) {
-  const share      = cat.monthlyDemand > 0 ? (cat.page1Demand / cat.monthlyDemand) * 100 : 0;
-  const barW       = Math.max(cat.page1Demand > 0 ? 1 : 0, share);
-  const hasPage1   = cat.page1Demand > 0;
-  const avgPos     = stats && stats.count > 0 ? stats.posSum / stats.count : null;
-  const totalInCat = stats ? Object.values(stats.dist).reduce((a, b) => a + b, 0) : 0;
+// ── Category row (with expand) ─────────────────────────────────────────────────
+
+function CatRow({
+  cat, stats, dimmed, isExpanded, onToggle, expandedKws,
+}: {
+  cat:         CategoryRow;
+  stats?:      CatRankStats;
+  dimmed:      boolean;
+  isExpanded:  boolean;
+  onToggle:    (name: string) => void;
+  expandedKws: SemKw[];
+}) {
+  // Use stats-derived vol data (full keyword list) for Page 1 / Share.
+  // Fall back to _categoryBreakdown values if stats have no coverage.
+  const page1Monthly = (stats?.page1Vol ?? 0) > 0 ? (stats?.page1Vol ?? 0) : cat.page1Demand;
+  const annualDemand = cat.monthlyDemand;
+  const share        = annualDemand > 0 ? (page1Monthly / annualDemand) * 100 : 0;
+  const barW         = Math.max(page1Monthly > 0 ? 1 : 0, Math.min(100, share));
+  const hasPage1     = page1Monthly > 0;
+  const avgPos       = stats && stats.count > 0 ? stats.posSum / stats.count : null;
+  const totalInCat   = stats ? Object.values(stats.dist).reduce((a, b) => a + b, 0) : 0;
 
   return (
-    <div className="grid items-center border-b border-orbit-border/40 py-2.5" style={{ gridTemplateColumns: '1fr 110px 90px 58px 70px 120px', opacity: dimmed ? 0.5 : 1 }}>
-      {/* Category name + mini share bar */}
-      <div>
-        <span style={{ fontSize: '13px', color: dimmed ? '#666680' : '#F0F0FF' }}>{cat.name}</span>
-        <div style={{ marginTop: '5px', height: '3px', width: '85%', background: '#1E1E2E', borderRadius: '2px', overflow: 'hidden' }}>
-          <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#555570' : '#6C63FF', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+    <>
+      {/* Main row */}
+      <div
+        onClick={() => onToggle(cat.name)}
+        className="grid items-center border-b border-orbit-border/40 py-2.5 cursor-pointer"
+        style={{
+          gridTemplateColumns: '24px 1fr 110px 90px 58px 70px 120px',
+          opacity:    dimmed ? 0.55 : 1,
+          background: isExpanded ? 'rgba(108,99,255,0.06)' : 'transparent',
+          transition: 'background 0.1s',
+        }}
+        onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; }}
+        onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+      >
+        {/* Chevron */}
+        <span style={{ fontSize: '10px', color: isExpanded ? '#8B85FF' : '#444458', transition: 'transform 0.15s', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none' }}>
+          ▶
+        </span>
+
+        {/* Category name + mini share bar */}
+        <div>
+          <span style={{ fontSize: '13px', color: dimmed ? '#666680' : (isExpanded ? '#C0B8FF' : '#F0F0FF') }}>{cat.name}</span>
+          <div style={{ marginTop: '5px', height: '3px', width: '85%', background: '#1E1E2E', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#555570' : '#6C63FF', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+          </div>
+        </div>
+
+        {/* Annual demand (total market demand from synthesis) */}
+        <span style={{ fontSize: '12px', color: '#8888AA', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+          {fmtAnn(annualDemand)}
+        </span>
+
+        {/* Page 1 (from full keyword footprint via inferCategoryForKw) */}
+        <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#555570' : '#8B85FF') : '#444458', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+          {hasPage1 ? fmtAnn(page1Monthly) : '—'}
+        </span>
+
+        {/* Share */}
+        <span style={{ fontSize: '13px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#555570' : '#F0F0FF') : '#444458', textAlign: 'right' }}>
+          {hasPage1 ? `${share.toFixed(1)}%` : '—'}
+        </span>
+
+        {/* Avg position */}
+        <span style={{ fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#444458' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
+          {avgPos !== null ? avgPos.toFixed(1) : '—'}
+        </span>
+
+        {/* Rank split stacked bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '8px' }}>
+          {totalInCat > 0 ? (
+            <>
+              <div style={{ flex: 1, height: '8px', display: 'flex', borderRadius: '4px', overflow: 'hidden', gap: '1px' }}>
+                {RANK_BUCKET_META.map(b => {
+                  const count = stats?.dist[b.key] ?? 0;
+                  const pct   = (count / totalInCat) * 100;
+                  if (pct === 0) return null;
+                  return (
+                    <div key={b.key} title={`${b.label}: ${count} kw${count !== 1 ? 's' : ''}`}
+                      style={{ width: `${pct}%`, height: '100%', background: b.color, minWidth: '3px' }} />
+                  );
+                })}
+              </div>
+              <span style={{ fontSize: '9px', color: '#555570', flexShrink: 0 }}>{totalInCat}</span>
+            </>
+          ) : (
+            <span style={{ fontSize: '10px', color: '#333350' }}>—</span>
+          )}
         </div>
       </div>
-      {/* Annual demand */}
-      <span style={{ fontSize: '12px', color: '#8888AA', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {fmtAnn(cat.monthlyDemand)}
-      </span>
-      {/* Page 1 */}
-      <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#555570' : '#8B85FF') : '#444458', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {hasPage1 ? fmtAnn(cat.page1Demand) : '—'}
-      </span>
-      {/* Share */}
-      <span style={{ fontSize: '13px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#555570' : '#F0F0FF') : '#444458', textAlign: 'right' }}>
-        {hasPage1 ? `${share.toFixed(1)}%` : '—'}
-      </span>
-      {/* Avg position — colour-coded by bucket */}
-      <span style={{ fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#444458' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
-        {avgPos !== null ? avgPos.toFixed(1) : '—'}
-      </span>
-      {/* Rank split — stacked bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingLeft: '8px' }}>
-        {totalInCat > 0 ? (
-          <>
-            <div style={{ flex: 1, height: '8px', display: 'flex', borderRadius: '4px', overflow: 'hidden', gap: '1px' }}>
-              {RANK_BUCKET_META.map(b => {
-                const count = stats?.dist[b.key] ?? 0;
-                const pct   = (count / totalInCat) * 100;
-                if (pct === 0) return null;
-                return (
-                  <div key={b.key} title={`${b.label}: ${count} kw${count !== 1 ? 's' : ''}`}
-                    style={{ width: `${pct}%`, height: '100%', background: b.color, minWidth: '3px' }} />
-                );
-              })}
-            </div>
-            <span style={{ fontSize: '9px', color: '#555570', flexShrink: 0 }}>{totalInCat}</span>
-          </>
-        ) : (
-          <span style={{ fontSize: '10px', color: '#333350' }}>—</span>
-        )}
-      </div>
-    </div>
+
+      {/* Expanded keyword sub-table */}
+      {isExpanded && (
+        <div style={{ background: '#070710', borderBottom: '1px solid #1A1A30', padding: '0 12px 12px 36px' }}>
+          {expandedKws.length === 0 ? (
+            <p style={{ fontSize: '11px', color: '#444458', padding: '12px 0' }}>No ranked keywords found for this category in your current footprint.</p>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '8px 0 4px', borderBottom: '1px solid #111120' }}>
+                {['Pos', 'Keyword', 'Vol / mo', 'Annual Vol'].map((h, i) => (
+                  <span key={h} style={{ fontSize: '9px', color: '#404060', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i > 1 ? 'right' : 'left' as const }}>{h}</span>
+                ))}
+              </div>
+              {expandedKws.slice(0, 25).map((kw, idx) => (
+                <div key={kw.keyword} style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                  <PosBadge pos={kw.position} />
+                  <span style={{ fontSize: '12px', color: '#C0C0E0', alignSelf: 'center', paddingLeft: '4px' }}>{kw.keyword}</span>
+                  <span style={{ fontSize: '11px', color: '#666688', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{kw.searchVolume.toLocaleString()}</span>
+                  <span style={{ fontSize: '11px', color: '#505070', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{fmtAnn(kw.searchVolume)}</span>
+                </div>
+              ))}
+              {expandedKws.length > 25 && (
+                <p style={{ fontSize: '10px', color: '#444458', paddingTop: '8px', textAlign: 'center' }}>
+                  Showing 25 of {expandedKws.length} keywords · use the keyword table below to see all
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -418,17 +546,24 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
   // Read category breakdown stored by the synthesis pipeline
   const cb = (analysis.semrushSnapshot?._categoryBreakdown ?? null) as CategoryBreakdown | null;
 
-  // Compute per-category rank stats from the full merged topKws list.
-  // keywordCategories maps lowercase keyword → category name (from synthesis pass 2.5).
+  // Compute per-category rank stats from the FULL merged topKws list.
+  // Uses inferCategoryForKw so CSV keywords that weren't in the 40-keyword
+  // MVP synthesis map still get assigned to the right category via text matching.
   const categoryRankStats = useMemo<Record<string, CatRankStats>>(() => {
-    if (!cb?.keywordCategories) return {};
+    if (!cb?.keywordCategories || !cb?.categories) return {};
     const stats: Record<string, CatRankStats> = {};
+    const empty = (): CatRankStats => ({
+      count: 0, posSum: 0, monthlyVol: 0, page1Vol: 0,
+      dist: { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 },
+    });
     for (const kw of topKws) {
-      const cat = cb.keywordCategories[kw.keyword.toLowerCase().trim()];
+      const cat = inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories);
       if (!cat) continue;
-      if (!stats[cat]) stats[cat] = { count: 0, posSum: 0, dist: { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 } };
+      if (!stats[cat]) stats[cat] = empty();
       stats[cat].count++;
-      stats[cat].posSum += kw.position;
+      stats[cat].posSum     += kw.position;
+      stats[cat].monthlyVol += kw.searchVolume;
+      if (kw.position <= 10) stats[cat].page1Vol += kw.searchVolume;
       const p = kw.position;
       if (p <= 3)       stats[cat].dist['1-3']++;
       else if (p <= 10) stats[cat].dist['4-10']++;
@@ -681,6 +816,7 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
         <CategoryPerformanceSection
           cb={cb}
           categoryRankStats={categoryRankStats}
+          topKws={topKws}
         />
       )}
 
