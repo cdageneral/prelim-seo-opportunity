@@ -16,7 +16,7 @@ interface SerpKw {
 
 interface SemKw {
   keyword:      string;
-  position:     number;
+  position:     number | null;  // null = ranked but position not yet known (CSV upload without position column)
   searchVolume: number;
   branded?:     boolean;
 }
@@ -116,6 +116,7 @@ function buildPositionDist(kws: SemKw[]): Record<string, number> {
   const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
   for (const kw of kws) {
     const pos = kw.position;
+    if (pos === null) continue;   // skip keywords without a known position
     if (pos <= 3)       dist['1-3']++;
     else if (pos <= 10) dist['4-10']++;
     else if (pos <= 20) dist['11-20']++;
@@ -206,7 +207,7 @@ function CategoryPerformanceSection({
     if (!expandedCat) return [];
     return topKws
       .filter(kw => inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories) === expandedCat)
-      .sort((a, b) => a.position - b.position);
+      .sort((a, b) => (a.position ?? 9999) - (b.position ?? 9999));
   }, [expandedCat, topKws, cb]);
 
   function toggle(name: string) {
@@ -397,7 +398,17 @@ function CatRow({
 
 // ── Position Badge ─────────────────────────────────────────────────────────────
 
-function PosBadge({ pos }: { pos: number }) {
+function PosBadge({ pos }: { pos: number | null }) {
+  if (pos === null) {
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: '32px', height: '22px', borderRadius: '5px',
+        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+        color: '#444458', fontSize: '11px', flexShrink: 0,
+      }}>—</span>
+    );
+  }
   const color = bucketHex(pos);
   return (
     <span
@@ -455,47 +466,44 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
 
   // Merge semrush topKeywords + ranked DB keywords so this panel reflects
   // the full keyword footprint shown in the Keyword Landscape panel.
-  // Rules mirror KeywordsPanel.buildRows exactly:
-  //   - Skip blocked keywords
-  //   - Skip keywords without a position (gap/unranked)
-  //   - Apply defaultClientThreshold volume filter (same as KeywordsPanel)
-  //   - Dedup: track existingKeys as we go to prevent duplicates within dbKeywords itself
-  //   - Use Number() on position to guarantee numeric comparison (not string coercion)
+  // Mirror KeywordsPanel.buildRows exactly:
+  //   - Semrush topKeywords always have positions
+  //   - DB keywords: include ALL type='ranked' regardless of position or volume
+  //     (KeywordsPanel shows type='ranked' DB keywords even without positions;
+  //      volume threshold is only applied to Semrush keywords in KeywordsPanel, not DB keywords)
+  //   - Dedup within dbKeywords using existingKeys set
+  //   - position: number | null — null = ranked but no position data in CSV
   const topKws: SemKw[] = useMemo(() => {
     const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
 
-    // Normalise Semrush keywords: ensure position is always a number
+    // Semrush keywords always have numeric positions
     const semKws: SemKw[] = rawSemKws.map(k => ({
       ...k,
       position: Number(k.position),
     }));
 
-    // Seed the dedup set from the Semrush list
     const existingKeys = new Set(semKws.map(k => k.keyword.toLowerCase().trim()));
 
-    // Add DB keywords, iterating so we can grow existingKeys and prevent
-    // duplicates both against semrush AND within the DB list itself.
     const dbRanked: SemKw[] = [];
     for (const k of dbKeywords) {
       if (k.source === 'blocked') continue;
-      if (k.position === null || k.position === undefined) continue;
-      const pos = Number(k.position);
-      if (!isFinite(pos) || pos <= 0) continue;
-      // Apply the same volume threshold as KeywordsPanel (project.kwVolThresholdClient)
-      if (defaultClientThreshold > 0 && k.searchVolume < defaultClientThreshold) continue;
+      if (k.type !== 'ranked') continue;  // only ranked keywords (matches KeywordsPanel count)
       const kwKey = k.keyword.toLowerCase().trim();
       if (existingKeys.has(kwKey)) continue;
-      existingKeys.add(kwKey);  // prevents duplicates within dbKeywords (e.g. CSV uploaded twice)
+      existingKeys.add(kwKey);
+      // Allow null positions — keyword is ranked but position wasn't in the CSV
+      const rawPos = k.position;
+      const pos = rawPos != null ? Number(rawPos) : null;
       dbRanked.push({
         keyword:      k.keyword,
-        position:     pos,
+        position:     pos != null && pos > 0 && isFinite(pos) ? pos : null,
         searchVolume: k.searchVolume,
         branded:      k.branded,
       });
     }
 
     return [...semKws, ...dbRanked];
-  }, [analysis, dbKeywords, defaultClientThreshold]);
+  }, [analysis, dbKeywords]);
 
   // Recompute positionDist from the FULL merged keyword set.
   // The stored semrushSnapshot.positionDist was built from only the 40 Semrush keywords.
@@ -515,23 +523,26 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
   const serpScannedCount = ((analysis.serpApiSnapshot?.keywords ?? []) as SerpKw[]).length;
 
   // ── Computed Stats ────────────────────────────────────────────────────────
-  const totalKws    = topKws.length;
-  const page1Kws    = topKws.filter(k => k.position <= 10).length;
-  const top3Kws     = topKws.filter(k => k.position <= 3).length;
-  const totalVol    = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-  const top3Vol     = topKws.filter(k => k.position <= 3)
-                            .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-  const page1Vol    = topKws.filter(k => k.position <= 10)
-                            .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  // posKws = subset with real numeric positions, used for distribution/coverage stats.
+  // totalKws uses the full topKws so it matches the Keyword Landscape count.
+  const posKws   = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
+  const totalKws = topKws.length;                               // all ranked (matches Keyword Landscape)
+  const page1Kws = posKws.filter(k => k.position <= 10).length;
+  const top3Kws  = posKws.filter(k => k.position <= 3).length;
+  const totalVol = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  const top3Vol  = posKws.filter(k => k.position <= 3) .reduce((s, k) => s + k.searchVolume, 0);
+  const page1Vol = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const posVol   = posKws.reduce((s, k) => s + k.searchVolume, 0);
 
-  const weightedPos = totalVol > 0
-    ? topKws.reduce((s, k) => s + (k.position ?? 0) * (k.searchVolume ?? 0), 0) / totalVol
+  const weightedPos = posVol > 0
+    ? posKws.reduce((s, k) => s + k.position * k.searchVolume, 0) / posVol
     : 0;
 
-  const volOutsideTop3    = totalVol - top3Vol;
-  const pctOutsideTop3    = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
-  const top3VolPct        = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
-  const page1Pct          = totalKws  > 0 ? Math.round((page1Kws / totalKws) * 100) : 0;
+  const volOutsideTop3 = totalVol - top3Vol;
+  const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
+  const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
+  // Coverage % is over keywords with position data (not total, which may include no-position kws)
+  const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
 
   // ── Bar chart ─────────────────────────────────────────────────────────────
   const maxCount = Math.max(...POSITION_BUCKETS.map(b => posDist[b.key] ?? 0), 1);
@@ -560,9 +571,10 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
       const cat = inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories);
       if (!cat) continue;
       if (!stats[cat]) stats[cat] = empty();
+      stats[cat].monthlyVol += kw.searchVolume;
+      if (kw.position === null) continue;  // no position — count vol only
       stats[cat].count++;
       stats[cat].posSum     += kw.position;
-      stats[cat].monthlyVol += kw.searchVolume;
       if (kw.position <= 10) stats[cat].page1Vol += kw.searchVolume;
       const p = kw.position;
       if (p <= 3)       stats[cat].dist['1-3']++;
@@ -578,13 +590,17 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
     let kws = [...topKws];
 
     if (filter !== 'all') {
+      // Position bucket filters only match keywords with a known position
       const b = POSITION_BUCKETS.find(b => b.key === filter);
-      if (b) kws = kws.filter(k => k.position >= b.min && k.position <= b.max);
+      if (b) kws = kws.filter(k => k.position !== null && k.position >= b.min && k.position <= b.max);
     }
 
     kws.sort((a, b) => {
       if (sortCol === 'position') {
-        const diff = (a.position ?? 999) - (b.position ?? 999);
+        // null positions always sort to the end (below all ranked positions)
+        const pa = a.position ?? 9999;
+        const pb = b.position ?? 9999;
+        const diff = pa - pb;
         return sortAsc ? diff : -diff;
       } else {
         const diff = (b.searchVolume ?? 0) - (a.searchVolume ?? 0);
@@ -641,12 +657,14 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
         <StatCard
           label="Total Keywords"
           value={dbLoaded ? totalKws.toLocaleString() : '—'}
-          sub={dbLoaded ? `${top3Kws} in top 3` : 'Loading…'}
+          sub={dbLoaded
+            ? `${top3Kws} in top 3${posKws.length < totalKws ? ` · ${posKws.length} with position data` : ''}`
+            : 'Loading…'}
         />
         <StatCard
           label="Page 1 Coverage"
           value={dbLoaded ? `${page1Pct}%` : '—'}
-          sub={dbLoaded ? `${page1Kws} of ${totalKws} keywords` : 'Loading…'}
+          sub={dbLoaded ? `${page1Kws} of ${posKws.length} ranked keywords` : 'Loading…'}
           color="#6C63FF"
         />
         <StatCard
