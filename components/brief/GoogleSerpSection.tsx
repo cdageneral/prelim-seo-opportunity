@@ -699,7 +699,7 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
     );
     const existingKeys = new Set([
       ...semKws.map(k => k.keyword.toLowerCase().trim()),
-      ...gapKeywordKeys,
+      ...Array.from(gapKeywordKeys),
     ]);
 
     const dbRanked: SemKw[] = [];
