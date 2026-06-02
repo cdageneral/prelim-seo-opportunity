@@ -1126,11 +1126,6 @@ export default function KeywordsPanel({
         );
       })()}
 
-      {/* ── Category breakdown ── */}
-      {cb && cb.categories && cb.categories.length > 0 && dbLoaded && (
-        <KwCategorySection cb={cb} catStats={catStats} />
-      )}
-
       {/* ── Add keyword form ── */}
       {/* ── Competitor keyword upload panel ── */}
       {showCompUpload && (
@@ -1292,8 +1287,14 @@ export default function KeywordsPanel({
         )}
       </div>
 
-      {/* ── Table ── */}
+      {/* ── Scrollable area: category breakdown + keyword table ── */}
       <div className="overflow-auto flex-1 min-h-0">
+
+        {/* Category breakdown — inside scroll so it doesn't eat fixed height above the table */}
+        {cb && cb.categories && cb.categories.length > 0 && dbLoaded && (
+          <KwCategorySection cb={cb} catStats={catStats} />
+        )}
+
         <table className="w-full text-sm">
           <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
             <tr>
@@ -1429,7 +1430,7 @@ function KwCategorySection({
   const overallShare = totalMonthly > 0 ? (totalPage1 / totalMonthly) * 100 : 0;
 
   return (
-    <div style={{ borderBottom: '1px solid #111120', background: '#07070F', flexShrink: 0 }}>
+    <div style={{ borderBottom: '1px solid #111120', background: '#07070F' }}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px 6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
