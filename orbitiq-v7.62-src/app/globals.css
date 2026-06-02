@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:          #0A0A0F;
+  --surface:     #111118;
+  --card:        #16161F;
+  --border:      #1E1E2E;
+  --muted:       #2A2A3D;
+  --accent:      #6C63FF;
+  --accent-light: #8B85FF;
+  --accent-dim:  #3D3880;
+  --green:       #22C55E;
+  --amber:       #F59E0B;
+  --red:         #EF4444;
+  --cyan:        #06B6D4;
+  --text-primary:   #F0F0FF;
+  --text-secondary: #8888AA;
+  --text-tertiary:  #555570;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html, body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+
+/* Selection */
+::selection { background: rgba(108, 99, 255, 0.3); }
+
+/* Animations */
+@keyframes pulse-ring {
+  0%   { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2);   opacity: 0; }
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent-light), var(--cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Card base */
+.orbit-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.orbit-card:hover {
+  border-color: rgba(108, 99, 255, 0.3);
+  transition: border-color 0.2s;
+}
+
+/* Glow effect */
+.orbit-glow {
+  box-shadow: 0 0 0 1px rgba(108,99,255,0.2), 0 8px 32px rgba(108,99,255,0.12);
+}
