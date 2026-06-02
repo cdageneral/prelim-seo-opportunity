@@ -478,6 +478,7 @@ export default function KeywordsPanel({
   const clientName        = clientDomain || 'keywords';
 
   const [dbKeywords,  setDbKeywords]  = useState<DbKeyword[]>([]);
+  const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [showAdd,     setShowAdd]     = useState(false);
   const [newKw,       setNewKw]       = useState('');
@@ -507,7 +508,9 @@ export default function KeywordsPanel({
       const res  = await fetch(`/api/projects/${projectId}/keywords`);
       const data = await res.json();
       setDbKeywords(data.keywords ?? []);
-    } catch { /* silent */ }
+    } catch { /* silent */ } finally {
+      setDbLoaded(true);
+    }
   }, [projectId]);
 
   useEffect(() => { fetchDb(); }, [fetchDb]);
@@ -839,7 +842,10 @@ export default function KeywordsPanel({
           <div>
             <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
             <p className="text-orbit-tertiary text-[11px] mt-0.5">
-              {ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing
+              {dbLoaded
+                ? <>{ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing</>
+                : <span style={{ color: '#333350' }}>Loading keywords…</span>
+              }
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -1055,14 +1061,14 @@ export default function KeywordsPanel({
                   {/* Count */}
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
                     <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#E8E8FF' }}>
-                      {card.count.toLocaleString()}
+                      {dbLoaded ? card.count.toLocaleString() : '—'}
                     </span>
                     <span style={{ fontSize: 12, color: '#9090B8' }}>keywords</span>
                   </div>
 
                   {/* Annual volume */}
                   <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
-                    {fmtVol(card.vol)}
+                    {dbLoaded ? fmtVol(card.vol) : '—'}
                     <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
 

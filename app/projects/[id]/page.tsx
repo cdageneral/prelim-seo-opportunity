@@ -681,7 +681,12 @@ export default function ProjectBriefPage() {
 
           {/* ── Google SERP ── */}
           {hasResults && analysis && activeSection === 'serp' && (
-            <GoogleSerpSection analysis={analysis} />
+            <GoogleSerpSection
+              analysis={analysis}
+              projectId={projectId}
+              domain={domainDisplay}
+              competitors={competitorDomains}
+            />
           )}
 
           {/* ── SERP Features ── */}

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -21,9 +21,26 @@ interface SemKw {
   branded?:     boolean;
 }
 
+// DB keywords from project_keywords table (CSV uploads, custom, blocked)
+interface DbKeyword {
+  id:           number;
+  projectId:    string;
+  keyword:      string;
+  searchVolume: number;
+  position:     number | null;
+  type:         string;
+  branded:      boolean;
+  source:       string;
+}
+
 type BucketKey = 'all' | '1-3' | '4-10' | '11-20' | '21+';
 
-interface Props { analysis: any; }
+interface Props {
+  analysis:     any;
+  projectId:    string;
+  domain?:      string;
+  competitors?: string[];
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +84,18 @@ function bucketHex(pos: number): string {
   if (pos <= 10) return '#06B6D4';
   if (pos <= 20) return '#F59E0B';
   return '#EF4444';
+}
+
+function buildPositionDist(kws: SemKw[]): Record<string, number> {
+  const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+  for (const kw of kws) {
+    const pos = kw.position;
+    if (pos <= 3)       dist['1-3']++;
+    else if (pos <= 10) dist['4-10']++;
+    else if (pos <= 20) dist['11-20']++;
+    else                dist['21+']++;
+  }
+  return dist;
 }
 
 // ── Stat Card ──────────────────────────────────────────────────────────────────
@@ -121,18 +150,55 @@ function FeaturePill({ feature }: { feature: string }) {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis }: Props) {
-  const [filter,   setFilter]   = useState<BucketKey>('all');
-  const [sortCol,  setSortCol]  = useState<'position' | 'volume'>('position');
-  const [sortAsc,  setSortAsc]  = useState(true);
+export default function GoogleSerpSection({ analysis, projectId }: Props) {
+  const [filter,     setFilter]     = useState<BucketKey>('all');
+  const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
+  const [sortAsc,    setSortAsc]    = useState(true);
+  const [dbKeywords, setDbKeywords] = useState<DbKeyword[]>([]);
+  const [dbLoaded,   setDbLoaded]   = useState(false);
+
+  // Fetch DB keywords (CSV uploads + custom) on mount — same source as KeywordsPanel
+  useEffect(() => {
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then(r => r.json())
+      .then(d => setDbKeywords(d.keywords ?? []))
+      .catch(() => {})
+      .finally(() => setDbLoaded(true));
+  }, [projectId]);
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const topKws: SemKw[] = useMemo(
-    () => (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[],
-    [analysis]
+
+  // Merge semrush topKeywords + ranked DB keywords so this panel reflects
+  // the full keyword footprint shown in the Keyword Landscape panel.
+  const topKws: SemKw[] = useMemo(() => {
+    const semKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
+
+    // Build a dedup set from the Semrush list
+    const existingKeys = new Set(semKws.map((k: SemKw) => k.keyword.toLowerCase().trim()));
+
+    // Add DB keywords that have a position (ranked) and aren't blocked or already present
+    const dbRanked: SemKw[] = dbKeywords
+      .filter(k =>
+        k.source !== 'blocked' &&
+        k.position !== null &&
+        !existingKeys.has(k.keyword.toLowerCase().trim()),
+      )
+      .map(k => ({
+        keyword:      k.keyword,
+        position:     k.position as number,
+        searchVolume: k.searchVolume,
+        branded:      k.branded,
+      }));
+
+    return [...semKws, ...dbRanked];
+  }, [analysis, dbKeywords]);
+
+  // Recompute positionDist from the FULL merged keyword set.
+  // The stored semrushSnapshot.positionDist was built from only the 40 Semrush keywords.
+  const posDist: Record<string, number> = useMemo(
+    () => buildPositionDist(topKws),
+    [topKws],
   );
-  const posDist: Record<string, number> =
-    (analysis.semrushSnapshot?.positionDist ?? {}) as Record<string, number>;
 
   // Build a lookup map from serp scan keywords (keyed by lowercase keyword text)
   const serpKwMap = useMemo(() => {
@@ -212,8 +278,8 @@ export default function GoogleSerpSection({ analysis }: Props) {
       <div className="orbit-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Search · 03</p>
-            <h2 className="text-orbit-primary text-xl font-bold mt-1">Google SERP</h2>
+            <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Search · 06</p>
+            <h2 className="text-orbit-primary text-xl font-bold mt-1">Google Ranks</h2>
             <p className="text-orbit-secondary text-sm mt-1">Ranking distribution, keyword performance &amp; position analysis</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -239,25 +305,25 @@ export default function GoogleSerpSection({ analysis }: Props) {
       <div className="grid grid-cols-4 gap-3">
         <StatCard
           label="Total Keywords"
-          value={totalKws.toLocaleString()}
-          sub={`${top3Kws} in top 3`}
+          value={dbLoaded ? totalKws.toLocaleString() : '—'}
+          sub={dbLoaded ? `${top3Kws} in top 3` : 'Loading…'}
         />
         <StatCard
           label="Page 1 Coverage"
-          value={`${page1Pct}%`}
-          sub={`${page1Kws} of ${totalKws} keywords`}
+          value={dbLoaded ? `${page1Pct}%` : '—'}
+          sub={dbLoaded ? `${page1Kws} of ${totalKws} keywords` : 'Loading…'}
           color="#6C63FF"
         />
         <StatCard
           label="Wtd. Avg Position"
-          value={weightedPos > 0 ? weightedPos.toFixed(1) : '—'}
+          value={dbLoaded ? (weightedPos > 0 ? weightedPos.toFixed(1) : '—') : '—'}
           sub="weighted by search volume"
           color={weightedPos > 0 && weightedPos <= 5 ? '#22C55E' : weightedPos <= 10 ? '#F59E0B' : '#EF4444'}
         />
         <StatCard
           label="Top-3 Volume Share"
-          value={`${top3VolPct}%`}
-          sub={`${fmtAnnual(top3Vol)} / yr in positions 1–3`}
+          value={dbLoaded ? `${top3VolPct}%` : '—'}
+          sub={dbLoaded ? `${fmtAnnual(top3Vol)} / yr in positions 1–3` : 'Loading…'}
           color="#22C55E"
         />
       </div>
