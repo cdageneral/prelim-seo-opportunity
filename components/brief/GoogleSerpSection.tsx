@@ -163,12 +163,13 @@ function inferCategoryForKw(
 
 // ── Stat Card ──────────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, color }: { label: string; value: string; sub: string; color?: string }) {
+function StatCard({ label, value, sub, sub2, color }: { label: string; value: string; sub: string; sub2?: string; color?: string }) {
   return (
     <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
       <p style={{ fontSize: '11px', color: '#8888AA', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em' }}>{label}</p>
       <p style={{ fontSize: '24px', fontWeight: 700, color: color ?? '#F0F0FF', lineHeight: 1 }}>{value}</p>
       <p style={{ fontSize: '11px', color: '#555570' }}>{sub}</p>
+      {sub2 && <p style={{ fontSize: '10px', color: '#444460', marginTop: '1px' }}>{sub2}</p>}
     </div>
   );
 }
@@ -445,6 +446,197 @@ function FeaturePill({ feature }: { feature: string }) {
   );
 }
 
+// ── Share of Voice ─────────────────────────────────────────────────────────────
+
+const SOV_SERP_COLORS  = ['#06B6D4', '#0891B2', '#0E7490'];
+const SOV_BRAND_COLORS = ['#F59E0B', '#D97706', '#B45309'];
+
+interface SovRawEntry {
+  domain:  string;
+  traffic: number;
+  type:    'client' | 'serp' | 'brand';
+  color:   string;
+}
+
+interface SovArc extends SovRawEntry {
+  pct:        number;
+  dash:       number;
+  dashOffset: number;
+}
+
+function LegendRow({ arc }: { arc: SovArc }) {
+  const label    = arc.type === 'client' ? 'Client' : arc.domain.replace(/^www\./, '');
+  const isClient = arc.type === 'client';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+      <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: arc.color, flexShrink: 0 }} />
+      <span style={{
+        fontSize: isClient ? '12px' : '11px',
+        color: isClient ? '#C0C0E8' : '#888899',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
+        flex: 1, fontWeight: isClient ? 600 : 400,
+      }}>
+        {label}
+      </span>
+      <span style={{ fontSize: '10px', color: arc.color, fontWeight: isClient ? 700 : 400, flexShrink: 0, marginLeft: '4px', fontVariantNumeric: 'tabular-nums' }}>
+        {Math.round(arc.pct * 100)}%
+      </span>
+    </div>
+  );
+}
+
+function SovPanel({ analysis, competitors }: { analysis: any; competitors?: string[] }) {
+  const manualDomains = new Set((competitors ?? []).map(d => d.toLowerCase().trim()));
+  const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
+  const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
+
+  // Build entries: client first, then competitors sorted by traffic descending
+  const rawEntries: SovRawEntry[] = [
+    { domain: 'Client', traffic: clientTraffic, type: 'client', color: '#6C63FF' },
+  ];
+  let serpIdx = 0;
+  let brandIdx = 0;
+  for (const c of [...semComps].sort((a, b) => b.organicTraffic - a.organicTraffic)) {
+    const isBrand = manualDomains.has(c.domain.toLowerCase().trim());
+    rawEntries.push({
+      domain:  c.domain,
+      traffic: c.organicTraffic,
+      type:    isBrand ? 'brand' : 'serp',
+      color:   isBrand
+        ? SOV_BRAND_COLORS[brandIdx++ % SOV_BRAND_COLORS.length]
+        : SOV_SERP_COLORS[serpIdx++  % SOV_SERP_COLORS.length],
+    });
+  }
+
+  const total    = rawEntries.reduce((s, e) => s + e.traffic, 0);
+  const TOP_N    = 6;
+  const topRaw   = rawEntries.slice(0, TOP_N);
+  const otherT   = rawEntries.slice(TOP_N).reduce((s, e) => s + e.traffic, 0);
+
+  // Compute SVG donut arcs.
+  // Use a <g transform="rotate(-90, cx, cy)"> wrapper so the path starts at 12 o'clock.
+  // With that rotation, dashOffset = cumPct * C (skip forward along path to correct start).
+  const R   = 55;
+  const C   = 2 * Math.PI * R;  // ≈ 345.58
+  const GAP = 1.5;
+  let cumPct = 0;
+
+  const arcs: SovArc[] = topRaw.map(e => {
+    const pct        = total > 0 ? e.traffic / total : 0;
+    const dash       = Math.max(0, pct * C - GAP);
+    const dashOffset = cumPct * C;  // skip forward to correct start position
+    cumPct += pct;
+    return { ...e, pct, dash, dashOffset };
+  });
+
+  // Add "Other" slice for remaining competitors
+  const otherPct = total > 0 ? otherT / total : 0;
+  if (otherPct > 0.005) {
+    arcs.push({
+      domain: 'Other', traffic: otherT, type: 'serp', color: '#2A2A44',
+      pct: otherPct,
+      dash: Math.max(0, otherPct * C - GAP),
+      dashOffset: cumPct * C,
+    });
+  }
+
+  const clientArc   = arcs.find(a => a.type === 'client');
+  const serpArcs    = arcs.filter(a => a.type === 'serp'  && a.domain !== 'Other');
+  const brandArcs   = arcs.filter(a => a.type === 'brand');
+  const otherArc    = arcs.find(a => a.domain === 'Other');
+
+  if (total === 0) {
+    return (
+      <div className="orbit-card p-5 flex flex-col gap-3">
+        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p style={{ fontSize: '12px', color: '#555570' }}>
+          No competitor traffic data available. Run analysis to populate.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="orbit-card p-5 flex flex-col gap-3">
+      <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+
+        {/* Donut SVG — group is rotated -90° so arc path starts at 12 o'clock */}
+        <div style={{ flexShrink: 0 }}>
+          <svg width="144" height="144" viewBox="0 0 144 144" role="img"
+            aria-label={`Share of Voice donut. Client holds ${Math.round((clientArc?.pct ?? 0) * 100)}% of organic search visibility.`}>
+            <title>Share of Voice</title>
+            <g transform="rotate(-90, 72, 72)">
+              {arcs.map(arc => arc.dash > 0 ? (
+                <circle key={arc.domain}
+                  cx="72" cy="72" r={R}
+                  fill="none"
+                  stroke={arc.color}
+                  strokeWidth="20"
+                  strokeDasharray={`${arc.dash.toFixed(2)} ${(C - arc.dash).toFixed(2)}`}
+                  strokeDashoffset={arc.dashOffset.toFixed(2)}
+                />
+              ) : null)}
+            </g>
+            {/* Inner fill — must be OUTSIDE the rotated group so text renders upright */}
+            <circle cx="72" cy="72" r="45" fill="#0F0F1C" />
+            <text x="72" y="68" textAnchor="middle" fontSize="17" fontWeight="700" fill="#F0F0FF">
+              {Math.round((clientArc?.pct ?? 0) * 100)}%
+            </text>
+            <text x="72" y="82" textAnchor="middle" fontSize="8.5" fill="#555578" letterSpacing=".07em">
+              CLIENT SOV
+            </text>
+          </svg>
+        </div>
+
+        {/* Legend */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {clientArc && <LegendRow arc={clientArc} />}
+
+          {serpArcs.length > 0 && (
+            <>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: '#3A3A5C', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
+                SERP Discovered
+              </p>
+              {serpArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+            </>
+          )}
+
+          {brandArcs.length > 0 && (
+            <>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: '#3A3A5C', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
+                Brand Competitors
+              </p>
+              {brandArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+            </>
+          )}
+
+          {otherArc && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '5px', paddingTop: '5px', borderTop: '1px solid #1A1A2E' }}>
+              <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: '#2A2A44', flexShrink: 0 }} />
+              <span style={{ fontSize: '11px', color: '#555570', flex: 1 }}>Other</span>
+              <span style={{ fontSize: '10px', color: '#444460' }}>{Math.round(otherArc.pct * 100)}%</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Type legend pills */}
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'rgba(6,182,212,.08)', border: '1px solid rgba(6,182,212,.2)', color: '#06B6D4' }}>
+          <span style={{ width: '5px', height: '5px', background: '#06B6D4', borderRadius: '50%' }} />
+          SERP discovered
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.2)', color: '#F59E0B' }}>
+          <span style={{ width: '5px', height: '5px', background: '#F59E0B', borderRadius: '50%' }} />
+          Brand / manual
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function GoogleSerpSection({ analysis, projectId, defaultClientThreshold = 0 }: Props) {
@@ -477,17 +669,38 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
   const topKws: SemKw[] = useMemo(() => {
     const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
 
+    // Build blocked-keyword set from DB — mirrors KeywordsPanel.buildRows.
+    // Without this, blocked semrush keywords would still appear here, causing
+    // the "Total Keywords" count to be higher than the keyword-list panel.
+    const blockedKeys = new Set(
+      dbKeywords
+        .filter(k => k.source === 'blocked')
+        .map(k => k.keyword.toLowerCase().trim()),
+    );
+
     // Mirror KeywordsPanel.buildRows exactly:
+    //   - Filter blocked keywords first (fixes count discrepancy vs keyword-list panel)
     //   - Apply defaultClientThreshold to Semrush keywords (keeps counts in sync)
     //   - Convert positions safely: null stays null (avoids Number(null)=0 falling in no bucket)
     const semKws: SemKw[] = rawSemKws
+      .filter(k => !blockedKeys.has((k.keyword ?? '').toLowerCase().trim()))
       .filter(k => defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold)
       .map(k => ({
         ...k,
         position: k.position != null ? Number(k.position) : null,
       }));
 
-    const existingKeys = new Set(semKws.map(k => k.keyword.toLowerCase().trim()));
+    // Also include gap keywords in existingKeys so DB ranked keywords that duplicate
+    // a gap keyword are not double-counted (mirrors KeywordsPanel.buildRows dedup exactly).
+    const gapKeywordKeys = new Set(
+      (analysis.semrushSnapshot?.gapKeywords ?? []).map(
+        (k: any) => (k.keyword ?? '').toLowerCase().trim(),
+      ),
+    );
+    const existingKeys = new Set([
+      ...semKws.map(k => k.keyword.toLowerCase().trim()),
+      ...gapKeywordKeys,
+    ]);
 
     const dbRanked: SemKw[] = [];
     for (const k of dbKeywords) {
@@ -550,13 +763,7 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
   const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
 
   // ── Bar chart ─────────────────────────────────────────────────────────────
-  const maxCount = Math.max(...POSITION_BUCKETS.map(b => posDist[b.key] ?? 0), 1);
-  const totalDistKws = Object.values(posDist).reduce((a, b) => a + b, 0);
-  const ySteps = 4;
-  const yGridLines = Array.from({ length: ySteps + 1 }, (_, i) => ({
-    val: Math.round((maxCount / ySteps) * (ySteps - i)),
-    y:   (i / ySteps) * CHART_H,
-  }));
+  // (bar chart helpers removed — bar chart replaced with SovPanel)
 
   // ── Category Performance ──────────────────────────────────────────────────
   // Read category breakdown stored by the synthesis pipeline
@@ -665,6 +872,7 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
           sub={dbLoaded
             ? `${top3Kws} in top 3${posKws.length < totalKws ? ` · ${posKws.length} with position data` : ''}`
             : 'Loading…'}
+          sub2={dbLoaded && totalVol > 0 ? `${fmtAnnual(totalVol)} annual search volume` : undefined}
         />
         <StatCard
           label="Page 1 Coverage"
@@ -689,78 +897,8 @@ export default function GoogleSerpSection({ analysis, projectId, defaultClientTh
       {/* ── Two-col: Chart + Opportunity ── */}
       <div className="grid grid-cols-2 gap-3">
 
-        {/* Bar Chart */}
-        <div className="orbit-card p-5 flex flex-col gap-3">
-          <p className="text-orbit-secondary text-xs font-medium">Where Your Rankings Live</p>
-          <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
-            <svg
-              viewBox={`0 0 ${CHART_W} ${CHART_H + 46}`}
-              width="100%"
-              aria-label="Bar chart of keyword ranking distribution"
-              role="img"
-            >
-              {/* Y-axis grid */}
-              {yGridLines.map(({ val, y }) => (
-                <g key={y}>
-                  <line x1={Y_AXIS_W} y1={y} x2={CHART_W} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
-                  <text x={Y_AXIS_W - 4} y={y + 4} textAnchor="end" fontSize="9" fill="#444458">{val}</text>
-                </g>
-              ))}
-              {/* Bars — positioned within [Y_AXIS_W, CHART_W] so the last bar never clips */}
-              {POSITION_BUCKETS.map((b, i) => {
-                const count = (posDist[b.key] as number) ?? 0;
-                const pct   = totalDistKws > 0 ? Math.round((count / totalDistKws) * 100) : 0;
-                const barH  = count > 0 ? Math.max(4, (count / maxCount) * CHART_H) : 0;
-                const cx    = Y_AXIS_W + COL_STEP * i + COL_STEP / 2;
-                const barX  = cx - BAR_W / 2;
-                const barY  = CHART_H - barH;
-
-                return (
-                  <g key={b.key}>
-                    {count > 0 && (
-                      <rect x={barX} y={barY} width={BAR_W} height={barH} fill={b.hex} rx="3"
-                        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))' }} />
-                    )}
-                    <text
-                      x={cx} y={count > 0 ? barY - 5 : CHART_H - 5}
-                      textAnchor="middle" fontSize="11" fontWeight="700" fill="#F0F0FF"
-                    >{count}</text>
-                    <text x={cx} y={CHART_H + 14} textAnchor="middle" fontSize="9" fill="#8888AA">{b.label}</text>
-                    <text x={cx} y={CHART_H + 27} textAnchor="middle" fontSize="8" fill="#444458">{pct}%</text>
-                  </g>
-                );
-              })}
-              <line x1={Y_AXIS_W} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="#1E1E2E" strokeWidth="1" />
-            </svg>
-          </div>
-
-          {/* Bucket breakdown pills — click to filter the keyword table */}
-          <div className="flex flex-wrap gap-1.5">
-            {POSITION_BUCKETS.map(b => {
-              const count   = (posDist[b.key] as number) ?? 0;
-              const active  = filter === b.key;
-              return (
-                <button
-                  key={b.key}
-                  onClick={() => setFilter(active ? 'all' : b.key as BucketKey)}
-                  title={active ? 'Click to clear filter' : `Filter table to ${b.label}`}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '5px',
-                    padding: '3px 10px', borderRadius: '20px', fontSize: '10px', cursor: 'pointer',
-                    background: active ? `${b.hex}28` : `${b.hex}18`,
-                    border: `1px solid ${active ? b.hex : `${b.hex}33`}`,
-                    color: b.hex,
-                    outline: 'none',
-                  }}
-                >
-                  <span style={{ fontWeight: 700 }}>{count}</span>
-                  <span style={{ color: `${b.hex}99` }}>{b.label}</span>
-                  {active && <span style={{ color: b.hex, fontWeight: 700, marginLeft: 2 }}>✕</span>}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        {/* Share of Voice */}
+        <SovPanel analysis={analysis} competitors={competitors} />
 
         {/* Volume Opportunity */}
         <div className="orbit-card p-5 flex flex-col gap-4">
