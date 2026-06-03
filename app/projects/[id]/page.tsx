@@ -3,11 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import MarketGapSection     from '@/components/brief/MarketGapSection';
-import CompetitorGapSection from '@/components/brief/CompetitorGapSection';
 import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
-import FootprintSection     from '@/components/brief/FootprintSection';
-import OpportunitiesSection from '@/components/brief/OpportunitiesSection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
@@ -20,6 +16,7 @@ import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
 import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 import ContentMapSection    from '@/components/brief/ContentMapSection';
+import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -649,25 +646,23 @@ export default function ProjectBriefPage() {
             />
           )}
 
-          {/* ── Executive Overview — 2×2 grid ── */}
+          {/* ── Executive Summary — Layout B ── */}
           {hasResults && analysis && activeSection === 'overview' && (
-            <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
-              <div className="grid grid-cols-2 gap-3">
-                <MarketGapSection analysis={analysis} />
-                <CompetitorGapSection
-                  analysis={analysis}
-                  manualDomains={competitorDomains}
-                />
-                <FootprintSection     analysis={analysis} />
-                <LLMVisibilitySection analysis={analysis} />
-              </div>
-              <OpportunitiesSection analysis={analysis} />
-              <ReportsPanel
-                analysisId={analysis.id}
-                projectId={project.id}
-                clientName={project.clientName}
+            <>
+              <ExecutiveSummarySection
+                analysis={analysis}
+                projectName={project.clientName}
+                clientDomain={domainDisplay}
+                manualDomains={competitorDomains}
               />
-            </div>
+              <div className="px-3 pb-3">
+                <ReportsPanel
+                  analysisId={analysis.id}
+                  projectId={project.id}
+                  clientName={project.clientName}
+                />
+              </div>
+            </>
           )}
 
           {/* ── Content Map ── */}
