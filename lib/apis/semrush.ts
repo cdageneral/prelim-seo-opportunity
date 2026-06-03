@@ -110,16 +110,14 @@ export async function getDomainOverview(domain: string): Promise<SemrushDomainOv
   };
 }
 
-// ─── Organic Keywords (MVP: 40) ───────────────────────────────────────────────
-// Capped at 40 for MVP to reduce token usage and Semrush API units.
-// Remove cap when moving to full production footprint.
+// ─── Organic Keywords ────────────────────────────────────────────────────────
 
 export async function getOrganicKeywords(domain: string): Promise<SemrushKeyword[]> {
   const raw = await semrushGet({
     type:    'domain_organic',
     domain,
     database: 'us',
-    display_limit: '40',
+    display_limit: '150',
     display_sort: 'tr_desc',
     export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
   });

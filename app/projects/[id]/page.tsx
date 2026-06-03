@@ -651,6 +651,7 @@ export default function ProjectBriefPage() {
             <>
               <ExecutiveSummarySection
                 analysis={analysis}
+                projectId={projectId}
                 projectName={project.clientName}
                 clientDomain={domainDisplay}
                 manualDomains={competitorDomains}

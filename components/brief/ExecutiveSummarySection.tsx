@@ -1,6 +1,26 @@
 'use client';
 
+import { useState, useMemo, useEffect } from 'react';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface SemKw {
+  keyword:      string;
+  position:     number | null;
+  searchVolume: number;
+  branded?:     boolean;
+}
+
+interface DbKeyword {
+  id:           number;
+  projectId:    string;
+  keyword:      string;
+  searchVolume: number;
+  position:     number | null;
+  type:         string;
+  branded:      boolean;
+  source:       string;
+}
 
 interface Opportunity {
   id?:      string;
@@ -11,13 +31,28 @@ interface Opportunity {
 }
 
 interface Props {
-  analysis:       any;
-  projectName?:   string;
-  clientDomain?:  string;
-  manualDomains?: string[];
+  analysis:                any;
+  projectId:               string;
+  projectName?:            string;
+  clientDomain?:           string;
+  manualDomains?:          string[];
+  defaultClientThreshold?: number;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers (mirrors GoogleSerpSection exactly) ──────────────────────────────
+
+function buildPositionDist(kws: SemKw[]): Record<string, number> {
+  const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+  for (const kw of kws) {
+    const pos = kw.position;
+    if (pos === null) continue;
+    if (pos <= 3)       dist['1-3']++;
+    else if (pos <= 10) dist['4-10']++;
+    else if (pos <= 20) dist['11-20']++;
+    else                dist['21+']++;
+  }
+  return dist;
+}
 
 function fmtAnnual(monthly: number): string {
   const a = monthly * 12;
@@ -37,22 +72,21 @@ function firstSentences(text: string, n: number): string {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function BarRow({
-  label, pct, color, isClient = false,
-}: { label: string; pct: number; color: string; isClient?: boolean }) {
+function BarRow({ label, pct, color, isClient = false }: {
+  label: string; pct: number; color: string; isClient?: boolean;
+}) {
   const w = Math.min(Math.max(pct * 100, 0.5), 100);
   return (
     <div className="flex items-center gap-2 mb-[5px]">
-      <span
-        className="text-[10px] w-20 shrink-0 overflow-hidden text-ellipsis whitespace-nowrap"
-        style={{ color: isClient ? '#8B85FF' : '#8888AA', fontWeight: isClient ? 600 : 400 }}
-      >
+      <span className="text-[10px] w-20 shrink-0 overflow-hidden text-ellipsis whitespace-nowrap"
+        style={{ color: isClient ? '#8B85FF' : '#8888AA', fontWeight: isClient ? 600 : 400 }}>
         {label}
       </span>
       <div className="flex-1 h-[6px] rounded-full" style={{ background: '#1E1E2E' }}>
         <div className="h-[6px] rounded-full" style={{ width: `${w}%`, background: color }} />
       </div>
-      <span className="text-[10px] w-8 text-right shrink-0" style={{ color: isClient ? '#8B85FF' : '#8888AA' }}>
+      <span className="text-[10px] w-8 text-right shrink-0"
+        style={{ color: isClient ? '#8B85FF' : '#8888AA' }}>
         {pct >= 0.001 ? `${(pct * 100).toFixed(0)}%` : '<1%'}
       </span>
     </div>
@@ -72,17 +106,12 @@ function SignalCard({ source, value, desc, accentColor }: {
   source: string; value: string; desc: string; accentColor: string;
 }) {
   return (
-    <div
-      className="px-3 py-2.5 mb-1.5"
+    <div className="px-3 py-2.5 mb-1.5"
       style={{
-        background:   '#111118',
-        borderLeft:   `3px solid ${accentColor}`,
-        borderTop:    '1px solid #1E1E2E',
-        borderRight:  '1px solid #1E1E2E',
-        borderBottom: '1px solid #1E1E2E',
-        borderRadius: '0 6px 6px 0',
-      }}
-    >
+        background: '#111118', borderLeft: `3px solid ${accentColor}`,
+        borderTop: '1px solid #1E1E2E', borderRight: '1px solid #1E1E2E',
+        borderBottom: '1px solid #1E1E2E', borderRadius: '0 6px 6px 0',
+      }}>
       <p className="text-[8px] font-bold uppercase tracking-wider mb-0.5" style={{ color: accentColor }}>
         {source}
       </p>
@@ -94,48 +123,114 @@ function SignalCard({ source, value, desc, accentColor }: {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function ExecutiveSummarySection({ analysis, clientDomain: propClientDomain, manualDomains = [] }: Props) {
+export default function ExecutiveSummarySection({
+  analysis,
+  projectId,
+  clientDomain: propClientDomain,
+  manualDomains = [],
+  defaultClientThreshold = 0,
+}: Props) {
 
+  // ── DB keyword fetch (mirrors GoogleSerpSection exactly) ──────────────────
+  const [dbKeywords, setDbKeywords] = useState<DbKeyword[]>([]);
+  const [dbLoaded,   setDbLoaded]   = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then(r => r.json())
+      .then(d => setDbKeywords(d.keywords ?? []))
+      .catch(() => {})
+      .finally(() => setDbLoaded(true));
+  }, [projectId]);
+
+  // ── Merge full keyword set (exact mirror of GoogleSerpSection) ─────────────
+  const topKws: SemKw[] = useMemo(() => {
+    const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
+
+    const blockedKeys = new Set(
+      dbKeywords
+        .filter(k => k.source === 'blocked')
+        .map(k => k.keyword.toLowerCase().trim()),
+    );
+
+    const semKws: SemKw[] = rawSemKws
+      .filter(k => !blockedKeys.has((k.keyword ?? '').toLowerCase().trim()))
+      .filter(k => defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold)
+      .map(k => ({ ...k, position: k.position != null ? Number(k.position) : null }));
+
+    const gapKeywordKeys = new Set(
+      (analysis.semrushSnapshot?.gapKeywords ?? []).map(
+        (k: any) => (k.keyword ?? '').toLowerCase().trim(),
+      ),
+    );
+    const existingKeys = new Set([
+      ...semKws.map(k => k.keyword.toLowerCase().trim()),
+      ...Array.from(gapKeywordKeys),
+    ]);
+
+    const dbRanked: SemKw[] = [];
+    for (const k of dbKeywords) {
+      if (k.source === 'blocked') continue;
+      if (k.type !== 'ranked') continue;
+      const kwKey = k.keyword.toLowerCase().trim();
+      if (existingKeys.has(kwKey)) continue;
+      existingKeys.add(kwKey);
+      const pos = k.position;
+      dbRanked.push({
+        keyword:      k.keyword,
+        position:     pos != null && Number(pos) > 0 && isFinite(Number(pos)) ? Number(pos) : null,
+        searchVolume: k.searchVolume,
+        branded:      k.branded,
+      });
+    }
+
+    return [...semKws, ...dbRanked];
+  }, [analysis, dbKeywords, defaultClientThreshold]);
+
+  // ── Computed stats (exact mirror of GoogleSerpSection) ────────────────────
+  const posKws     = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
+  const totalKws   = topKws.length;
+  const page1Kws   = posKws.filter(k => k.position <= 10).length;
+  const top3Kws    = posKws.filter(k => k.position <= 3).length;
+  const totalVol   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  const top3Vol    = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
+  const page1Vol   = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const posVol     = posKws.reduce((s, k) => s + k.searchVolume, 0);
+  const weightedPos = posVol > 0
+    ? posKws.reduce((s, k) => s + k.position * k.searchVolume, 0) / posVol
+    : 0;
+  const posDist        = useMemo(() => buildPositionDist(topKws), [topKws]);
+  const volOutsideTop3 = totalVol - top3Vol;
+  const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
+  const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
+  const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
+
+  // ── Market capture ────────────────────────────────────────────────────────
   const semSnap: any   = analysis.semrushSnapshot  ?? {};
   const serpSnap: any  = analysis.serpApiSnapshot   ?? {};
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // Market capture
   const captureRate       = cb.page1CaptureRate   ?? analysis.marketCaptureRate   ?? 0;
   const totalMonthly      = cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0;
   const page1Monthly      = cb.totalPage1Demand   ?? analysis.clientOwnedVolume   ?? 0;
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
-  // Ranking distribution
-  const posDist: Record<string, number> = semSnap.positionDist ?? {};
-  const pos1to3   = (posDist['1-3']   as number) ?? 0;
-  const pos4to10  = (posDist['4-10']  as number) ?? 0;
-  const pos11to20 = (posDist['11-20'] as number) ?? 0;
-  const pos21plus = (posDist['21+']   as number) ?? 0;
-  const totalKws  = pos1to3 + pos4to10 + pos11to20 + pos21plus;
-  const page1KwPct = totalKws > 0 ? (pos1to3 + pos4to10) / totalKws : 0;
-  const avgPos     = totalKws > 0
-    ? ((pos1to3 * 2) + (pos4to10 * 7) + (pos11to20 * 15) + (pos21plus * 25)) / totalKws
-    : 0;
-
-  // SERP features
+  // ── SERP features ─────────────────────────────────────────────────────────
   const aioAvail = analysis.aioAvailable ?? 0;
   const aioAcq   = analysis.aioAcquired  ?? 0;
   const aioRate  = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
   const featSum  = serpSnap.serpFeatureSummary ?? {};
   const paaAvail = featSum.withPAA         ?? 0;
   const paaAcq   = featSum.paaClientCited  ?? 0;
-  const paaRate  = paaAvail > 0 ? Math.round((paaAcq / paaAvail) * 100) : 0;
   const vidAvail = featSum.withVideo       ?? 0;
   const vidAcq   = featSum.videoClientCited ?? 0;
-  const vidRate  = vidAvail > 0 ? Math.round((vidAcq / vidAvail) * 100) : 0;
   const totalAvail = aioAvail + paaAvail + vidAvail;
   const totalAcq   = aioAcq  + paaAcq   + vidAcq;
   const combinedSerpRate = totalAvail > 0 ? Math.round((totalAcq / totalAvail) * 100) : 0;
 
-  // Competitor market share
+  // ── Competitor market share ───────────────────────────────────────────────
   const clientTraffic = semSnap.overview?.organicTraffic ?? 0;
   const clientDomain  = normDomain(propClientDomain ?? analysis.domain ?? '');
   const rawComps: any[] = semSnap.competitors ?? [];
@@ -147,60 +242,61 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
       .slice(0, 4)
       .map((c: any) => ({ domain: normDomain(c.domain ?? ''), traffic: c.organicTraffic ?? 0, isClient: false })),
   ];
-  const totalPool   = allPlayers.reduce((s, p) => s + p.traffic, 0);
-  const topComp     = allPlayers.find(p => !p.isClient);
+  const totalPool    = allPlayers.reduce((s, p) => s + p.traffic, 0);
+  const topComp      = allPlayers.find(p => !p.isClient);
   const topCompShare = totalPool > 0 && topComp ? topComp.traffic / totalPool : 0;
   const clientShare  = totalPool > 0 ? clientTraffic / totalPool : captureRate;
   const gapVsTop     = topCompShare - clientShare;
 
-  // LLM visibility
-  const llmSnap: any       = analysis.profoundSnapshot ?? {};
-  const isLlmProbe         = llmSnap.source === 'llm_probe';
+  // ── LLM visibility ────────────────────────────────────────────────────────
+  const llmSnap: any        = analysis.profoundSnapshot ?? {};
+  const isLlmProbe          = llmSnap.source === 'llm_probe';
   const llmPlatforms: any[] = isLlmProbe ? (llmSnap.platforms ?? []) : [];
-  const overallMentions    = isLlmProbe ? (llmSnap.overallMentions ?? 0) : 0;
-  const overallTotal       = isLlmProbe ? (llmSnap.overallTotal    ?? 0) : 0;
-  const overallLlmRate     = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
-  const bestExcerpt        = llmPlatforms
+  const overallMentions     = isLlmProbe ? (llmSnap.overallMentions ?? 0) : 0;
+  const overallTotal        = isLlmProbe ? (llmSnap.overallTotal    ?? 0) : 0;
+  const overallLlmRate      = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
+  const bestExcerpt         = llmPlatforms
     .flatMap((p: any) => p.results ?? [])
     .find((r: any) => r.mentioned && r.excerpt)?.excerpt ?? '';
 
-  // Content inventory
+  // ── Content inventory ─────────────────────────────────────────────────────
   const gapKeywords: any[]  = semSnap.gapKeywords ?? [];
   const gapKwCount          = gapKeywords.length;
   const categories: any[]   = cb.categories ?? [];
   const clusterCount        = categories.filter((c: any) => c.type === 'procedure').length;
-  const contentGapsFromDb: string[] = analysis.contentGaps ?? [];
+  const contentGapsFromDb   = (analysis.contentGaps ?? []) as string[];
   const gapVolume           = gapKeywords.reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
 
-  // Opportunities / priority actions
+  // ── Opportunities ─────────────────────────────────────────────────────────
   const opps: Opportunity[] = (analysis.opportunities ?? [])
     .sort((a: Opportunity, b: Opportunity) => a.rank - b.rank)
     .slice(0, 3);
 
   const fallbackActions: Opportunity[] = [
-    { rank: 1, category: 'Content',     title: 'Close the content gap',
-      summary: `${gapKwCount} non-branded gap keywords identified where competitors rank but client does not. Focus on highest-volume procedure clusters.` },
-    { rank: 2, category: 'SEO',         title: 'Target competitor-gap keywords',
-      summary: `${gapKwCount} keywords where top competitors rank page 1 and client does not — high displacement potential worth ${fmtAnnual(gapVolume)} annual searches.` },
-    { rank: 3, category: 'GEO',         title: 'Build AI search presence',
-      summary: `Currently cited in ${overallMentions} of ${overallTotal || 6} AI probes across Claude and ChatGPT. Structured, authoritative content aligned to LLM prompt patterns will lift citation rates.` },
+    { rank: 1, category: 'Content', title: 'Close the content gap',
+      summary: `${gapKwCount} non-branded gap keywords where competitors rank but client does not. Focus on highest-volume procedure clusters.` },
+    { rank: 2, category: 'SEO',     title: 'Target competitor-gap keywords',
+      summary: `${gapKwCount} keywords where top competitors rank page 1 and client does not — worth ${fmtAnnual(gapVolume)} annual searches.` },
+    { rank: 3, category: 'GEO',     title: 'Build AI search presence',
+      summary: `Cited in ${overallMentions} of ${overallTotal || 6} AI probes. Structured content aligned to LLM prompt patterns will lift citation rates on Claude and ChatGPT.` },
   ];
-  const actions = opps.length > 0 ? opps : fallbackActions;
+  const actions          = opps.length > 0 ? opps : fallbackActions;
   const hasFallbackActions = opps.length === 0;
 
-  // Narrative
+  // ── Narrative ─────────────────────────────────────────────────────────────
   const rawNarrative =
     narrative.marketPositionNarrative ??
     narrative.strategicCall           ??
     narrative.competitorGapNarrative  ?? '';
   const narrativeText = rawNarrative ? firstSentences(rawNarrative, 4) : '';
 
-  // Color helpers
+  // ── Color helpers ─────────────────────────────────────────────────────────
   const captureColor = captureRate < 0.15 ? '#EF4444' : captureRate < 0.35 ? '#F59E0B' : '#22C55E';
   const llmColor     = overallLlmRate < 34 ? '#EF4444' : overallLlmRate < 67 ? '#F59E0B' : '#22C55E';
-  const pg1Color     = page1KwPct < 0.3 ? '#F59E0B' : '#22C55E';
+  const pg1Color     = page1Pct < 30 ? '#F59E0B' : '#22C55E';
   const aioColor     = aioRate < 20 ? '#EF4444' : aioRate < 50 ? '#F59E0B' : '#06B6D4';
-  const avgPosColor  = avgPos > 0 && avgPos <= 5 ? '#22C55E' : '#F59E0B';
+  const avgPosColor  = weightedPos > 0 && weightedPos <= 5 ? '#22C55E'
+    : weightedPos <= 20 ? '#F59E0B' : '#EF4444';
 
   const CATEGORY_COLOR: Record<string, string> = {
     SEO: 'rgba(108,99,255,.15)', GEO: 'rgba(6,182,212,.12)', Content: 'rgba(139,133,255,.12)',
@@ -214,11 +310,9 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
       {/* ═══ HERO ═══ */}
-      <div
-        className="orbit-card p-4 flex items-center gap-4"
-        style={{ borderColor: 'rgba(108,99,255,0.4)' }}
-      >
-        {/* Big capture rate */}
+      <div className="orbit-card p-4 flex items-center gap-4"
+        style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+
         <div className="shrink-0">
           <p className="text-[9px] text-orbit-tertiary uppercase tracking-widest mb-1">Market capture rate</p>
           <p className="font-black leading-none" style={{ fontSize: 48, color: '#6C63FF' }}>
@@ -231,7 +325,6 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
 
         <div className="self-stretch w-px shrink-0 bg-orbit-border" />
 
-        {/* Context blurb */}
         <div className="flex-1 min-w-0">
           <p className="text-orbit-primary text-sm font-semibold mb-1">
             {captureRate < 0.15
@@ -242,7 +335,7 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
           </p>
           <p className="text-orbit-secondary text-[10px] leading-relaxed">
             {topComp
-              ? `${topComp.domain} holds ${(topCompShare * 100).toFixed(0)}% of total demand. ${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords where competitors rank but this client does not.`
+              ? `${topComp.domain} holds ${(topCompShare * 100).toFixed(0)}% of total demand. ${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`
               : `${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`}
             {combinedSerpRate < 30 ? ' AI search visibility is an emerging gap.' : ''}
           </p>
@@ -250,21 +343,21 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
 
         <div className="self-stretch w-px shrink-0 bg-orbit-border" />
 
-        {/* 4 mini stat tiles */}
+        {/* 4 mini stat tiles — uses live DB-computed values */}
         <div className="grid grid-cols-2 gap-2 shrink-0" style={{ width: 210 }}>
           {[
+            { label: 'Total keywords',
+              value: dbLoaded ? totalKws.toLocaleString() : '—',
+              color: '#F0F0FF' },
             { label: 'Pg 1 coverage',
-              value: `${Math.round(page1KwPct * 100)}%`,
+              value: dbLoaded ? `${page1Pct}%` : '—',
               color: pg1Color },
-            { label: 'LLM mentions',
-              value: overallTotal > 0 ? `${overallLlmRate}%` : '—',
-              color: llmColor },
-            { label: 'Uncaptured',
-              value: fmtAnnual(uncapturedMonthly),
-              color: '#EF4444' },
-            { label: 'Avg rank',
-              value: avgPos > 0 ? avgPos.toFixed(1) : '—',
+            { label: 'Wtd. avg position',
+              value: dbLoaded && weightedPos > 0 ? weightedPos.toFixed(1) : '—',
               color: avgPosColor },
+            { label: 'Top-3 vol share',
+              value: dbLoaded && totalVol > 0 ? `${top3VolPct}%` : '—',
+              color: top3VolPct < 10 ? '#EF4444' : top3VolPct < 25 ? '#F59E0B' : '#22C55E' },
           ].map(s => (
             <div key={s.label} className="rounded-md px-2.5 py-2 text-center bg-orbit-surface">
               <p className="text-[9px] uppercase tracking-wider mb-1 text-orbit-tertiary">{s.label}</p>
@@ -279,7 +372,7 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
 
         <div className="flex flex-col gap-3">
 
-          {/* Row 1 */}
+          {/* Row 1: Competitors + Google Volume Opportunity */}
           <div className="grid grid-cols-2 gap-3">
 
             {/* Competitor market share */}
@@ -301,13 +394,8 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
                 <div className="flex items-center gap-2 mb-[5px]">
                   <span className="text-[10px] w-20 shrink-0" style={{ color: '#EF4444' }}>Uncaptured</span>
                   <div className="flex-1 h-[6px] rounded-full bg-orbit-muted">
-                    <div
-                      className="h-[6px] rounded-full"
-                      style={{
-                        width: `${Math.min((uncapturedMonthly / totalMonthly) * 100, 100)}%`,
-                        background: 'rgba(239,68,68,0.4)',
-                      }}
-                    />
+                    <div className="h-[6px] rounded-full"
+                      style={{ width: `${Math.min((uncapturedMonthly / totalMonthly) * 100, 100)}%`, background: 'rgba(239,68,68,0.4)' }} />
                   </div>
                   <span className="text-[10px] w-8 text-right shrink-0" style={{ color: '#EF4444' }}>
                     {((uncapturedMonthly / totalMonthly) * 100).toFixed(0)}%
@@ -327,35 +415,88 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
               </div>
             </div>
 
-            {/* Google ranks + SERP features */}
-            <div className="orbit-card p-4">
-              <p className="text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest mb-0.5">Google platform</p>
-              <h4 className="text-orbit-primary text-xs font-semibold mb-3">Rank distribution</h4>
+            {/* Volume Opportunity Analysis — exact replica of GoogleSerpSection */}
+            <div className="orbit-card p-4 flex flex-col gap-3">
+              <p className="text-orbit-secondary text-xs font-medium">Volume Opportunity Analysis</p>
 
-              {totalKws > 0 ? (
+              {dbLoaded && totalVol > 0 ? (
                 <>
-                  <BarRow label="Pos 1–3"  pct={pos1to3  / totalKws} color="#22C55E" />
-                  <BarRow label="Pos 4–10" pct={pos4to10  / totalKws} color="#06B6D4" />
-                  <BarRow label="Page 2"   pct={pos11to20 / totalKws} color="#2A2A3D" />
-                  <BarRow label="Page 3+"  pct={pos21plus / totalKws} color="#2A2A3D" />
-                </>
-              ) : (
-                <p className="text-orbit-tertiary text-[10px] mb-3">No position data available</p>
-              )}
+                  {/* Big metric */}
+                  <div className="flex items-center gap-3 py-1">
+                    <div>
+                      <p style={{ color: '#EF4444', fontSize: '36px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
+                        {pctOutsideTop3}%
+                      </p>
+                      <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '4px' }}>
+                        of volume outside top 3
+                      </p>
+                    </div>
+                    <div style={{ width: '1px', height: '50px', background: '#1E1E2E', flexShrink: 0 }} />
+                    <div>
+                      <p style={{ color: '#F0F0FF', fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                        {fmtAnnual(volOutsideTop3)}
+                        <span style={{ color: '#444458', fontWeight: 400, fontSize: '11px' }}> / yr</span>
+                      </p>
+                      <p style={{ color: '#8888AA', fontSize: '10px', margin: '3px 0 0' }}>annual searches pos 4+</p>
+                      <p style={{ color: '#555570', fontSize: '9px', margin: '2px 0 0' }}>
+                        out of {fmtAnnual(totalVol)} total
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="mt-3 pt-2 border-t border-orbit-border">
-                <p className="text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest mb-2">SERP features acquired</p>
-                {aioAvail > 0 && <BarRow label="AIO"   pct={aioRate / 100} color="#06B6D4" />}
-                {paaAvail > 0 && <BarRow label="PAA"   pct={paaRate / 100} color="#2A2A3D" />}
-                {vidAvail > 0 && <BarRow label="Video" pct={vidRate / 100} color="#2A2A3D" />}
-                {aioAvail === 0 && paaAvail === 0 && vidAvail === 0 && (
-                  <p className="text-orbit-tertiary text-[10px]">No SERP feature data</p>
-                )}
-              </div>
+                  {/* Volume breakdown bars — exact match to GoogleSerpSection */}
+                  <div className="flex flex-col gap-2">
+                    {[
+                      { label: 'Positions 1–3',  vol: top3Vol,             color: '#6C63FF' },
+                      { label: 'Positions 4–10', vol: page1Vol - top3Vol,  color: '#06B6D4' },
+                      { label: 'Page 2+ (11+)',  vol: totalVol - page1Vol, color: '#EF4444' },
+                    ].map(row => {
+                      const pct = totalVol > 0 ? (row.vol / totalVol) * 100 : 0;
+                      return (
+                        <div key={row.label}>
+                          <div className="flex justify-between mb-1">
+                            <span style={{ fontSize: '10px', color: '#8888AA' }}>{row.label}</span>
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: row.color }}>
+                              {fmtAnnual(row.vol)}
+                              <span style={{ color: '#444458', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span>
+                            </span>
+                          </div>
+                          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '5px' }}>
+                            <div style={{
+                              background: row.color, borderRadius: '3px', height: '5px',
+                              width: `${Math.min(100, pct)}%`,
+                            }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Opportunity insight callout */}
+                  <div style={{
+                    background: '#0F0F1E', border: '1px solid #1E1E35',
+                    borderLeft: '3px solid #6C63FF', borderRadius: '0 8px 8px 0', padding: '8px 10px',
+                  }}>
+                    <p style={{ fontSize: '10px', color: '#8888AA', lineHeight: 1.5, margin: 0 }}>
+                      <span style={{ color: '#C0C0E8', fontWeight: 500 }}>Opportunity: </span>
+                      Moving {Math.min(5, posDist['4-10'] ?? 0)} of your Pos 4–10 keywords
+                      into top 3 could unlock{' '}
+                      <span style={{ color: '#6C63FF', fontWeight: 600 }}>
+                        ~{fmtAnnual(Math.round((page1Vol - top3Vol) * 0.3))}
+                      </span>{' '}
+                      additional annual searches.
+                    </p>
+                  </div>
+                </>
+              ) : !dbLoaded ? (
+                <p className="text-orbit-tertiary text-[10px]">Loading keyword data…</p>
+              ) : (
+                <p className="text-orbit-tertiary text-[10px]">No keyword volume data available. Run analysis to see results.</p>
+              )}
             </div>
           </div>
 
-          {/* Row 2 */}
+          {/* Row 2: LLM + Content inventory */}
           <div className="grid grid-cols-2 gap-3">
 
             {/* LLM visibility */}
@@ -371,7 +512,8 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
                     const bgBadge  = p.platform === 'claude' ? 'rgba(108,99,255,.15)' : 'rgba(34,197,94,.1)';
                     const txtBadge = p.platform === 'claude' ? '#8B85FF' : '#22C55E';
                     return (
-                      <div key={p.platform} className="flex items-center gap-2 mb-2 rounded-md px-2.5 py-1.5 bg-orbit-surface">
+                      <div key={p.platform}
+                        className="flex items-center gap-2 mb-2 rounded-md px-2.5 py-1.5 bg-orbit-surface">
                         <span className="text-[9px] font-bold rounded px-1.5 py-1 shrink-0"
                           style={{ background: bgBadge, color: txtBadge }}>
                           {p.platform === 'claude' ? 'CL' : 'GP'}
@@ -411,10 +553,9 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
                     value: contentGapsFromDb.length > 0 ? String(contentGapsFromDb.length) : gapKwCount > 0 ? `${gapKwCount}+` : '—' },
                   { label: 'Procedure clusters',
                     value: String(clusterCount > 0 ? clusterCount : categories.length) },
-                  { label: 'Annual gap volume',
-                    value: gapVolume > 0 ? fmtAnnual(gapVolume) : '—' },
+                  { label: 'Annual gap volume',  value: gapVolume > 0 ? fmtAnnual(gapVolume) : '—' },
                   { label: 'Total ranked kws',
-                    value: totalKws > 0 ? String(totalKws) : String(semSnap.overview?.organicKeywords ?? '—') },
+                    value: dbLoaded ? totalKws.toLocaleString() : '—' },
                 ].map(s => (
                   <div key={s.label} className="rounded-md px-2.5 py-1.5 bg-orbit-surface">
                     <p className="text-[9px] mb-0.5 text-orbit-tertiary">{s.label}</p>
@@ -439,17 +580,12 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
 
           {/* Narrative */}
           {narrativeText ? (
-            <div
-              className="px-4 py-3 text-[10px] leading-relaxed text-orbit-secondary"
+            <div className="px-4 py-3 text-[10px] leading-relaxed text-orbit-secondary"
               style={{
-                background:   '#111118',
-                borderLeft:   '3px solid #6C63FF',
-                borderTop:    '1px solid #1E1E2E',
-                borderRight:  '1px solid #1E1E2E',
-                borderBottom: '1px solid #1E1E2E',
-                borderRadius: '0 8px 8px 0',
-              }}
-            >
+                background: '#111118', borderLeft: '3px solid #6C63FF',
+                borderTop: '1px solid #1E1E2E', borderRight: '1px solid #1E1E2E',
+                borderBottom: '1px solid #1E1E2E', borderRadius: '0 8px 8px 0',
+              }}>
               {narrativeText}
             </div>
           ) : null}
@@ -457,10 +593,8 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
 
         {/* ── SIGNALS COLUMN ── */}
         <div className="flex flex-col">
-          <p
-            className="text-[9px] font-bold uppercase tracking-widest pb-2 mb-2 text-orbit-tertiary"
-            style={{ borderBottom: '1px solid #1E1E2E' }}
-          >
+          <p className="text-[9px] font-bold uppercase tracking-widest pb-2 mb-2 text-orbit-tertiary"
+            style={{ borderBottom: '1px solid #1E1E2E' }}>
             Panel signals
           </p>
 
@@ -478,8 +612,10 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
           />
           <SignalCard
             source="Google ranks"
-            value={`${Math.round(page1KwPct * 100)}%`}
-            desc={`Page 1 coverage — avg position ${avgPos > 0 ? avgPos.toFixed(1) : '—'}`}
+            value={dbLoaded ? `${page1Pct}%` : '—'}
+            desc={dbLoaded
+              ? `Page 1 coverage — wtd. avg pos ${weightedPos > 0 ? weightedPos.toFixed(1) : '—'}`
+              : 'Loading…'}
             accentColor={pg1Color}
           />
           <SignalCard
@@ -508,19 +644,17 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
           />
           <SignalCard
             source="Journeys"
-            value={page1KwPct > 0.3 ? '2 of 4' : '1 of 4'}
+            value={page1Pct > 30 ? '2 of 4' : '1 of 4'}
             desc="Journey stages with meaningful coverage"
-            accentColor={page1KwPct > 0.3 ? '#F59E0B' : '#EF4444'}
+            accentColor={page1Pct > 30 ? '#F59E0B' : '#EF4444'}
           />
         </div>
       </div>
 
       {/* ═══ PRIORITY ACTIONS ═══ */}
       <div>
-        <p
-          className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
-          style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10 }}
-        >
+        <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
+          style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10 }}>
           {hasFallbackActions ? 'Recommended priorities' : 'AI-generated priorities'}
         </p>
 
@@ -531,16 +665,12 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
             return (
               <div key={a.id ?? a.rank ?? i} className="orbit-card p-4 flex flex-col gap-2">
                 <div className="flex items-center gap-2">
-                  <div
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                    style={{ background: '#6C63FF' }}
-                  >
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
+                    style={{ background: '#6C63FF' }}>
                     {i + 1}
                   </div>
-                  <span
-                    className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-                    style={{ background: catBg, color: catColor }}
-                  >
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                    style={{ background: catBg, color: catColor }}>
                     {a.category}
                   </span>
                 </div>
@@ -551,6 +681,7 @@ export default function ExecutiveSummarySection({ analysis, clientDomain: propCl
           })}
         </div>
       </div>
+
     </div>
   );
 }

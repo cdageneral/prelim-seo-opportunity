@@ -85,8 +85,8 @@ export function personaPrompt(
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot
 ): string {
-  const topKws = semrush.topKeywords.slice(0, 25).map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
-  const gapKws = semrush.gapKeywords.slice(0, 15).map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
+  const topKws = semrush.topKeywords.map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
+  const gapKws = semrush.gapKeywords.map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`).join('\n- ');
   const paa    = serp.keywords.flatMap(k => k.paaQuestions).slice(0, 25).join('\n- ');
 
   return `You are a senior audience strategist building deep-dive segment profiles from real organic search data.
@@ -161,7 +161,7 @@ export function opportunityPrompt(
   const positionDist = JSON.stringify(semrush.positionDist);
   // Sort by organicTraffic so manually-added competitors (traffic=0) don't steal top spot
   const topComp      = [...semrush.competitors].sort((a, b) => b.organicTraffic - a.organicTraffic)[0]?.domain ?? 'unknown competitor';
-  const gapKeywords  = semrush.gapKeywords.slice(0, 15)
+  const gapKeywords  = semrush.gapKeywords
     .map(k => `${k.keyword} (${k.searchVolume.toLocaleString()}/mo)`)
     .join(', ');
 

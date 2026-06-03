@@ -51,8 +51,7 @@ export async function POST(
     return NextResponse.json({ assignments: {} });
   }
 
-  // Cap at 60 keywords per call — above this, signal matching should handle the rest
-  const capped = keywords.slice(0, 60);
+  const capped = keywords.slice(0, 200);
 
   const kwList = capped.map((kw, i) => `${i}. ${kw}`).join('\n');
 
