@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { getVolumeMetrics } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -214,27 +213,44 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // ── Market capture metrics — via shared utility (matches Keyword Landscape exactly) ──
-  const _clientDomain = propClientDomain ?? semSnap.domain ?? '';
-  const _volMetrics   = getVolumeMetrics({
-    semrushSnapshot:    semSnap,
-    uploadedKeywords:   dbKeywords,   // includes CSV uploads not in semSnap
-    clientDomain:       _clientDomain,
-    competitorDomains:  manualDomains,
-    clientVolMin:       defaultClientThreshold,
-    competitorVolMin:   defaultCompetitorThreshold,
-  });
+  // ── Compute market metrics from full keyword footprint (not the 200-kw AI cap) ──
+  // Applies the same threshold + brand filters as Keyword Landscape for a consistent number.
+  const _clientBrand = (propClientDomain ?? semSnap.domain ?? '')
+    .replace(/^https?:\/\/(www\.)?/, '').split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  const _compBrands  = manualDomains.map(d =>
+    d.replace(/^https?:\/\/(www\.)?/, '').split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '')
+  ).filter(b => b.length >= 3);
+  const _isBranded   = (kw: string) => {
+    const k = kw.toLowerCase().replace(/[^a-z0-9 ]/g, '');
+    if (_clientBrand.length >= 3 && k.includes(_clientBrand)) return true;
+    return _compBrands.some(b => k.includes(b));
+  };
 
-  // Fall back to stored values only when snapshot is empty (rare edge case)
-  const totalMonthly      = _volMetrics.totalMonthly > 0
-    ? _volMetrics.totalMonthly
-    : (cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0);
-  const page1Monthly      = _volMetrics.page1Monthly > 0
-    ? _volMetrics.page1Monthly
-    : (cb.totalPage1Demand ?? analysis.clientOwnedVolume ?? 0);
-  const captureRate       = totalMonthly > 0
-    ? page1Monthly / totalMonthly
-    : (cb.page1CaptureRate ?? analysis.marketCaptureRate ?? 0);
+  // Client ranked keywords — apply client volume threshold
+  const _topKws = (semSnap.topKeywords ?? []).filter((k: any) =>
+    defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold
+  ) as any[];
+  const _topSet = new Set(_topKws.map((k: any) => (k.keyword ?? '').toLowerCase()));
+
+  // Gap keywords — apply competitor threshold + skip branded (same as Keyword Landscape)
+  const _gapKws = (semSnap.gapKeywords ?? []).filter((k: any) => {
+    const kwLow = (k.keyword ?? '').toLowerCase();
+    if (_topSet.has(kwLow)) return false;
+    if (_isBranded(kwLow))  return false;
+    if (defaultCompetitorThreshold > 0 && (k.searchVolume ?? 0) < defaultCompetitorThreshold) return false;
+    return true;
+  }) as any[];
+
+  const _allKws      = [..._topKws, ..._gapKws];
+  const _fullMonthly = _allKws.reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
+  const _fullPage1   = _topKws
+    .filter((k: any) => k.position != null && k.position <= 10)
+    .reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
+
+  // Fall back to stored values if snapshot is empty (e.g. upload-only analysis)
+  const totalMonthly      = _fullMonthly > 0 ? _fullMonthly  : (cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0);
+  const page1Monthly      = _fullPage1   > 0 ? _fullPage1    : (cb.totalPage1Demand   ?? analysis.clientOwnedVolume   ?? 0);
+  const captureRate       = totalMonthly > 0 ? page1Monthly / totalMonthly : (cb.page1CaptureRate ?? analysis.marketCaptureRate ?? 0);
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
