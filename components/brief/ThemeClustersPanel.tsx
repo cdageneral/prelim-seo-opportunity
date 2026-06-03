@@ -847,11 +847,15 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
 
   const [loadingClaude, setLoadingClaude] = useState(false);
   const [claudeAssigns,    setClaudeAssigns]    = useState<Record<string, IntentType>>({});
-  const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
+  // null = not yet fetched from DB (prevents stale count flash before blocked keywords are applied)
+  const [uploadedKeywords,  setUploadedKeywords]  = useState<any[] | null>(null);
   const [refreshingKws,     setRefreshingKws]     = useState(false);
 
+  // True once the first keywords fetch has resolved (even if empty)
+  const kwLoaded = uploadedKeywords !== null;
+
   const baseClusters = useMemo(
-    () => buildThemeClusters(analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords),
+    () => buildThemeClusters(analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? []),
     [analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords],
   );
 
@@ -899,7 +903,10 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
       const res = await fetch(`/api/projects/${projectId}/keywords`);
       const d   = res.ok ? await res.json() : { keywords: [] };
       setUploadedKeywords(d.keywords ?? []);
-    } catch { /* silent */ } finally {
+    } catch {
+      // On error: unblock UI with empty list (avoids infinite "Loading clusters…" state)
+      setUploadedKeywords(prev => prev ?? []);
+    } finally {
       if (showSpinner) setRefreshingKws(false);
     }
   }, [projectId]);
@@ -917,7 +924,9 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
         <div>
           <h2 style={{ fontSize: 13, fontWeight: 600, color: '#D8D8F8', margin: 0 }}>Theme Clusters</h2>
           <p style={{ fontSize: 11, color: '#404060', margin: '2px 0 0' }}>
-            {totalKws} keywords grouped by category · {clusterCnt} clusters · click any card to see keywords
+            {kwLoaded
+              ? `${totalKws} keywords grouped by category · ${clusterCnt} clusters · click any card to see keywords`
+              : 'Loading clusters…'}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -952,10 +961,26 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
         </div>
       </div>
 
-      {refreshingKws && (
+      {(refreshingKws || !kwLoaded) && (
         <div className="animate-pulse" style={{ height: 3, background: 'rgba(108,99,255,0.35)', flexShrink: 0 }} />
       )}
-      <ClustersTab clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />
+
+      {!kwLoaded ? (
+        /* ── Skeleton: shown until DB keyword fetch resolves ── */
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ textAlign: 'center', color: '#404060', fontSize: 13 }}>
+            <svg style={{ width: 18, height: 18, animation: 'spin 1s linear infinite', margin: '0 auto 10px', display: 'block' }}
+              fill="none" viewBox="0 0 24 24" stroke="rgba(108,99,255,0.6)">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Building clusters…
+          </div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      ) : (
+        <ClustersTab clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />
+      )}
     </div>
   );
 }
