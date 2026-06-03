@@ -257,6 +257,8 @@ function buildThemeClusters(
     if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     // Apply same competitor volume threshold as Keyword Landscape
     if (competitorVolMin > 0 && (kw.searchVolume ?? 0) < competitorVolMin) continue;
+    // Skip client-branded gap keywords — mirrors KeywordsPanel behaviour
+    if (isBranded(kw.keyword, clientDomain, competitorDomains)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      kw.keyword,
