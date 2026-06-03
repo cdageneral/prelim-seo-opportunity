@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
         // ── Net-new competitor gap keywords ───────────────────────────────────
         // Rebuild existingRanked set to include newly ranked client keywords
         const allRankedNow = new Set([
-          ...existingRanked,
+          ...Array.from(existingRanked),
           ...newClientKeywords.map(k => k.keyword.toLowerCase().trim()),
         ]);
 
