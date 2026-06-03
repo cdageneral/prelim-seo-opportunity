@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback } from 'react';
+import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -50,34 +51,9 @@ const COMP_COLORS = ['#6C63FF', '#F59E0B', '#22C55E', '#38BDF8', '#F472B6', '#A7
 
 // ─── Branded / domain helpers ─────────────────────────────────────────────────
 
-function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  const m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
-  let curr = new Array<number>(n + 1);
-  for (let i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= n; j++) {
-      curr[j] = a[i-1] === b[j-1]
-        ? prev[j-1]
-        : 1 + Math.min(prev[j], curr[j-1], prev[j-1]);
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[n];
-}
-
-function extractBrand(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '')
-    .replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
+// ─── Brand helpers — delegated to shared utility ─────────────────────────────
+// DO NOT add local isBranded / extractBrand here — edit lib/utils/kwVolume.ts instead.
+const isBranded = isBrandedKeyword;
 
 /** Capitalises first letter and truncates for display in small UI contexts. */
 function displayName(domain: string, maxLen = 14): string {
@@ -85,43 +61,6 @@ function displayName(domain: string, maxLen = 14): string {
   if (!brand) return domain.slice(0, maxLen);
   const cap = brand.charAt(0).toUpperCase() + brand.slice(1);
   return cap.length > maxLen ? cap.slice(0, maxLen - 1) + '…' : cap;
-}
-
-function isBranded(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
-  if (!keyword) return false;
-  const kw     = keyword.toLowerCase().trim();
-  const kwNorm = kw.replace(/[^a-z0-9]/g, '');
-  if (!kwNorm) return false;
-
-  const baseBrands = [clientDomain, ...competitorDomains]
-    .map(extractBrand)
-    .filter(b => b.length >= 4);
-  if (baseBrands.length === 0) return false;
-
-  const tokenSet = new Set<string>(baseBrands);
-  for (const brand of baseBrands) {
-    const half = Math.floor(brand.length / 2);
-    if (half >= 4)                tokenSet.add(brand.slice(0, half));
-    if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
-  }
-  const allTokens = Array.from(tokenSet);
-
-  for (const token of allTokens) {
-    if (kwNorm.includes(token))                               return true;
-    if (token.includes(kwNorm) && kwNorm.length >= 4)        return true;
-    if (token.length >= 5 && kwNorm.length >= 4 && token.startsWith(kwNorm)) return true;
-  }
-
-  const kwWords = kw.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(w => w.length >= 4);
-  for (const word of kwWords) {
-    for (const token of allTokens) {
-      const minLen    = Math.min(word.length, token.length);
-      const threshold = Math.max(1, Math.floor(minLen / 4));
-      if (Math.abs(word.length - token.length) > threshold + 1) continue;
-      if (editDistance(word, token) <= threshold) return true;
-    }
-  }
-  return false;
 }
 
 // ─── Intent signal detection (Layer 1) ───────────────────────────────────────
@@ -225,62 +164,25 @@ function buildThemeClusters(
   if (categories.length === 0) return [];
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
-  const rankedMap = new Map<string, number>();
-  for (const kw of (semSnap.topKeywords ?? [])) {
-    rankedMap.set((kw.keyword ?? '').toLowerCase(), kw.position ?? 0);
-  }
 
-  // Respect blocked list — blocked keywords hidden in KeywordsPanel hide from clusters too
-  const blockedSet = new Set(
-    uploadedKeywords
-      .filter((k: any) => k.source === 'blocked')
-      .map((k: any) => (k.keyword ?? '').toLowerCase())
-  );
+  // ── Build keyword pool via shared utility — identical filtering to Keyword Landscape ──
+  const rawPool = buildKwPool({
+    semrushSnapshot:  semSnap,
+    uploadedKeywords,
+    clientDomain,
+    competitorDomains,
+    clientVolMin,
+    competitorVolMin,
+  });
 
-  const pool: KwItem[] = [];
-  for (const kw of (semSnap.topKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow)) continue;
-    // Apply same client volume threshold as Keyword Landscape
-    if (clientVolMin > 0 && (kw.searchVolume ?? 0) < clientVolMin) continue;
-    pool.push({
-      keyword:      kw.keyword,
-      searchVolume: kw.searchVolume ?? 0,
-      position:     kw.position ?? null,
-      isGap:        false,
-      competitor:   null,
-    });
-  }
-  const seen = new Set(pool.map(k => k.keyword.toLowerCase()));
-  for (const kw of (semSnap.gapKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
-    // Apply same competitor volume threshold as Keyword Landscape
-    if (competitorVolMin > 0 && (kw.searchVolume ?? 0) < competitorVolMin) continue;
-    // Skip client-branded gap keywords — mirrors KeywordsPanel behaviour
-    if (isBranded(kw.keyword, clientDomain, competitorDomains)) continue;
-    seen.add(kwLow);
-    pool.push({
-      keyword:      kw.keyword,
-      searchVolume: kw.searchVolume ?? 0,
-      position:     null,
-      isGap:        true,
-      competitor:   (kw as any).competitor ?? null,
-    });
-  }
-  // Uploaded / CSV keywords — no cap, full set
-  for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (!kwLow || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    pool.push({
-      keyword:      kw.keyword,
-      searchVolume: kw.search_volume ?? kw.searchVolume ?? 0,
-      position:     kw.position ?? null,
-      isGap:        kw.type === 'gap',
-      competitor:   null,
-    });
-  }
+  // Map to KwItem (ThemeClusters internal type)
+  const pool: KwItem[] = rawPool.map(item => ({
+    keyword:      item.keyword,
+    searchVolume: item.searchVolume,
+    position:     item.position,
+    isGap:        item.isGap,
+    competitor:   item.competitor,
+  }));
 
   const catMap = new Map<string, KwItem[]>();
   categories.forEach(c => catMap.set(c.name, []));

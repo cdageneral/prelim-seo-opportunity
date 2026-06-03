@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
+import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -69,106 +70,14 @@ interface KwCatStats {
   posSum:  number;  // sum of positions (for avg calculation)
 }
 
-// ─── Branded detection ────────────────────────────────────────────────────────
-// Strips protocol, www, and TLD — returns lowercase alphanum brand root.
-//   "sonobello.com" → "sonobello"
-//
-// isBranded uses three layers to catch the client's brand (and competitors) in any keyword:
-//   1. Exact substring — normalized keyword contains brand token (or vice-versa)
-//   2. Sub-token split — compound brand (e.g. "sonobello") → halves ("sono", "bello");
-//      keyword containing either half is branded
-//   3. Fuzzy per-word — each word in the keyword vs each token, Levenshtein distance ≤
-//      max(1, floor(minLen/4)); catches misspellings & phonetic variants:
-//        "solobello" (ed=1 vs "sonobello") → branded
-//        "sonobella" (ed=1 vs "sonobello") → branded
-//        "sona"      (ed=1 vs "sono")      → branded
-//        "bella"     (ed=1 vs "bello")     → branded
-//        "sonabella" (ed=2 vs "sonobello") → branded
-
-// Compact 2-row Levenshtein (O(m×n) time, O(n) space)
-function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  const m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
-  let curr = new Array<number>(n + 1);
-  for (let i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= n; j++) {
-      curr[j] = a[i - 1] === b[j - 1]
-        ? prev[j - 1]
-        : 1 + Math.min(prev[j], curr[j - 1], prev[j - 1]);
-    }
-    [prev, curr] = [curr, prev];
-  }
-  return prev[n];
-}
-
-function extractBrand(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '')
-    .replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function isBranded(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
-  if (!keyword) return false;
-  const kw     = keyword.toLowerCase().trim();
-  const kwNorm = kw.replace(/[^a-z0-9]/g, '');
-  if (!kwNorm) return false;
-
-  // Base brand tokens from client + competitor domains (min 4 chars)
-  const baseBrands = [clientDomain, ...competitorDomains]
-    .map(extractBrand)
-    .filter(b => b.length >= 4);
-  if (baseBrands.length === 0) return false;
-
-  // Expand: for compound brand names, add first-half and last-half as independent tokens
-  // e.g. "sonobello" (9) → "sono" (4) + "bello" (5)
-  // This lets us catch keywords that contain just one component of the brand name.
-  const tokenSet = new Set<string>(baseBrands);
-  for (const brand of baseBrands) {
-    const half = Math.floor(brand.length / 2);
-    if (half >= 4)                  tokenSet.add(brand.slice(0, half));
-    if (brand.length - half >= 4)   tokenSet.add(brand.slice(half));
-  }
-  // Convert to array — Set iteration requires ES2015+ target which this project doesn't use
-  const allTokens: string[] = Array.from(tokenSet);
-
-  // ── Pass 1: exact substring checks ──────────────────────────────────────────
-  for (const token of allTokens) {
-    if (kwNorm.includes(token))                               return true;  // "sonobelloatlanta" ⊇ "sonobello"
-    if (token.includes(kwNorm) && kwNorm.length >= 4)        return true;  // keyword IS the brand
-    if (token.length >= 5 && kwNorm.length >= 4 &&
-        token.startsWith(kwNorm))                            return true;  // "sonobell" → "sonobello" truncated
-  }
-
-  // ── Pass 2: fuzzy per-word matching ─────────────────────────────────────────
-  // Split keyword into individual words; fuzzy-match each against every brand token.
-  // Threshold = max(1, floor(minLen / 4)) — allows 1 edit for short words, 2 for 8–11 chars.
-  const kwWords = kw
-    .split(/\s+/)
-    .map(w => w.replace(/[^a-z0-9]/g, ''))
-    .filter(w => w.length >= 4);
-
-  for (const word of kwWords) {
-    for (const token of allTokens) {
-      const minLen    = Math.min(word.length, token.length);
-      const threshold = Math.max(1, Math.floor(minLen / 4));
-      // Quick length guard: if lengths differ by more than threshold+1, skip
-      if (Math.abs(word.length - token.length) > threshold + 1) continue;
-      if (editDistance(word, token) <= threshold) return true;
-    }
-  }
-
-  return false;
-}
+// ─── Branded detection — delegated to shared utility ─────────────────────────
+// isBrandedKeyword and extractBrand are imported from lib/utils/kwVolume.
+// DO NOT add a local isBranded implementation here — edit the utility instead.
+const isBranded = isBrandedKeyword;
 
 // ─── Merge semrush + DB rows ──────────────────────────────────────────────────
+// Uses buildKwPool from lib/utils/kwVolume for all filtering (thresholds, dedup,
+// branded exclusion). Enriches each item with SERP feature flags on top.
 
 function buildRows(
   analysis: any,
@@ -178,109 +87,56 @@ function buildRows(
   clientVolMin: number = 0,
   competitorVolMin: number = 0,
 ): KeywordRow[] {
-  const semSnap  = analysis?.semrushSnapshot ?? {};
   const serpSnap = analysis?.serpApiSnapshot ?? {};
 
-  // Build SERP lookup keyed by lowercase keyword text
+  // SERP lookup keyed by lowercase keyword text
   const serpMap: Record<string, any> = {};
   for (const k of (serpSnap.keywords ?? [])) {
     serpMap[k.keyword?.toLowerCase()] = k;
   }
 
-  const blocked = new Set(
-    dbKeywords.filter(r => r.source === 'blocked').map(r => r.keyword.toLowerCase()),
-  );
+  // Core filtering via shared utility — single source of truth
+  const pool = buildKwPool({
+    semrushSnapshot:  analysis?.semrushSnapshot,
+    uploadedKeywords: dbKeywords,
+    clientDomain,
+    competitorDomains,
+    clientVolMin,
+    competitorVolMin,
+  });
 
-  const rows: KeywordRow[] = [];
+  // Map pool items to KeywordRow, adding SERP enrichment
+  const rows: KeywordRow[] = pool.map(item => {
+    const kwLow = item.keyword.toLowerCase();
+    const serp  = serpMap[kwLow];
+    const dbRow = dbKeywords.find(d => d.keyword.toLowerCase() === kwLow && d.source !== 'blocked');
 
-  // ── Semrush ranked keywords (excluding blocked, deduped, below client vol threshold) ──
-  const rankedSeen = new Set<string>();
-  for (const k of (semSnap.topKeywords ?? [])) {
-    const kwLower = (k.keyword ?? '').toLowerCase();
-    if (blocked.has(kwLower) || rankedSeen.has(kwLower)) continue;
-    if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
-    rankedSeen.add(kwLower);
-    const serp = serpMap[kwLower];
-    rows.push({
-      key:          `sem-ranked-${kwLower}`,
-      keyword:      k.keyword,
-      searchVolume: k.searchVolume ?? 0,
-      position:     k.position ?? null,
-      type:         'ranked',
-      branded:      isBranded(k.keyword, clientDomain, competitorDomains),
-      source:       'semrush',
-      competitor:   null,
+    return {
+      key:          dbRow ? `${dbRow.source}-${dbRow.id}` : (item.isGap ? `sem-gap-${kwLow}` : `sem-ranked-${kwLow}`),
+      keyword:      item.keyword,
+      searchVolume: item.searchVolume,
+      position:     item.position,
+      type:         item.isGap ? 'gap' : 'ranked',
+      branded:      item.isBranded,
+      source:       (dbRow?.source ?? 'semrush') as KwSource,
+      competitor:   item.competitor,
       hasAIO:       serp?.hasAIO ?? false,
       clientInAIO:  serp
         ? (serp.aioSources ?? []).some(
             (s: any) => clientDomain && s.domain?.includes(extractBrand(clientDomain)),
           )
         : false,
-      hasPAA:       (serp?.paaQuestions ?? []).length > 0,
-      clientInPAA:  serp?.paaClientCited ?? false,
-      hasVideo:     (serp?.serpFeatures ?? []).includes('videos'),
+      hasPAA:        (serp?.paaQuestions ?? []).length > 0,
+      clientInPAA:   serp?.paaClientCited ?? false,
+      hasVideo:      (serp?.serpFeatures ?? []).includes('videos'),
       clientInVideo: serp?.videoClientCited ?? false,
-    });
-  }
-
-  // ── Semrush gap keywords (excluding blocked, deduped, client-branded excluded, below competitor vol threshold) ──
-  // Use trimmed lowercase for all comparisons to catch whitespace mismatches from the API.
-  const existing = new Set(rows.map(r => r.keyword.toLowerCase().trim()));
-  for (const k of (semSnap.gapKeywords ?? [])) {
-    const kwLower = (k.keyword ?? '').toLowerCase().trim();
-    if (blocked.has(kwLower) || existing.has(kwLower)) continue;
-    // Skip client-branded gap keywords — these are terms the client already owns.
-    if (isBranded(k.keyword, clientDomain, competitorDomains)) continue;
-    // Skip below competitor volume threshold (project-level setting)
-    if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
-    existing.add(kwLower);  // keep existing growing so same kw from 2 competitors isn't added twice
-    const serp = serpMap[kwLower];
-    rows.push({
-      key:          `sem-gap-${kwLower}`,
-      keyword:      k.keyword,
-      searchVolume: k.searchVolume ?? 0,
-      position:     null,
-      type:         'gap',
-      branded:      false,  // already guaranteed non-branded by the isBranded() check above
-      source:       'semrush',
-      competitor:   (k as any).competitor ?? null,
-      hasAIO:       serp?.hasAIO ?? false,
-      clientInAIO:  false,
-      hasPAA:       (serp?.paaQuestions ?? []).length > 0,
-      clientInPAA:  false,
-      hasVideo:     (serp?.serpFeatures ?? []).includes('videos'),
-      clientInVideo: false,
-    });
-  }
-
-  // ── Custom / CSV keywords ──
-  for (const dbKw of dbKeywords) {
-    if (dbKw.source === 'blocked') continue;
-    const kwLower = dbKw.keyword.toLowerCase();
-    if (existing.has(kwLower)) continue; // shouldn't happen if duplicate-check is working
-    existing.add(kwLower);
-    rows.push({
-      key:           `${dbKw.source}-${dbKw.id}`,
-      keyword:       dbKw.keyword,
-      searchVolume:  dbKw.searchVolume,
-      position:      dbKw.position,
-      type:          dbKw.type === 'ranked' ? 'ranked' : 'gap',
-      branded:       isBranded(dbKw.keyword, clientDomain, competitorDomains),
-      source:        dbKw.source as KwSource,
-      competitor:    (dbKw as any).domain || null,
-      hasAIO:        false,
-      clientInAIO:   false,
-      hasPAA:        false,
-      clientInPAA:   false,
-      hasVideo:      false,
-      clientInVideo: false,
-    });
-  }
+    };
+  });
 
   // Sort: ranked first (by position asc), then gap (by volume desc)
   return rows.sort((a, b) => {
     if (a.type === 'ranked' && b.type === 'gap') return -1;
-    if (a.type === 'gap' && b.type === 'ranked') return 1;
+    if (a.type === 'gap'    && b.type === 'ranked') return 1;
     if (a.position !== null && b.position !== null) return a.position - b.position;
     return b.searchVolume - a.searchVolume;
   });
