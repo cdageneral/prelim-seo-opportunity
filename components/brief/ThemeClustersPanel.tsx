@@ -36,9 +36,11 @@ interface ThemeCluster {
 }
 
 interface Props {
-  projectId:   string;
-  analysis:    any;
-  competitors: string[];
+  projectId:                string;
+  analysis:                 any;
+  competitors:              string[];
+  defaultClientThreshold?:     number;
+  defaultCompetitorThreshold?: number;
 }
 
 // ─── Competitor colour palette ────────────────────────────────────────────────
@@ -204,11 +206,13 @@ function matchKeywordToCategory(
 // ─── Build theme clusters ─────────────────────────────────────────────────────
 
 function buildThemeClusters(
-  analysis:          any,
-  claudeAssignments: Record<string, IntentType>,
-  clientDomain:      string,
-  competitorDomains: string[],
-  uploadedKeywords:  any[] = [],
+  analysis:            any,
+  claudeAssignments:   Record<string, IntentType>,
+  clientDomain:        string,
+  competitorDomains:   string[],
+  uploadedKeywords:    any[] = [],
+  clientVolMin:        number = 0,
+  competitorVolMin:    number = 0,
 ): ThemeCluster[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const cb       = semSnap._categoryBreakdown ?? null;
@@ -237,6 +241,8 @@ function buildThemeClusters(
   for (const kw of (semSnap.topKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow)) continue;
+    // Apply same client volume threshold as Keyword Landscape
+    if (clientVolMin > 0 && (kw.searchVolume ?? 0) < clientVolMin) continue;
     pool.push({
       keyword:      kw.keyword,
       searchVolume: kw.searchVolume ?? 0,
@@ -249,6 +255,8 @@ function buildThemeClusters(
   for (const kw of (semSnap.gapKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
+    // Apply same competitor volume threshold as Keyword Landscape
+    if (competitorVolMin > 0 && (kw.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      kw.keyword,
@@ -837,7 +845,10 @@ function ClustersTab({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ThemeClustersPanel({ projectId, analysis, competitors }: Props) {
+export default function ThemeClustersPanel({
+  projectId, analysis, competitors,
+  defaultClientThreshold = 0, defaultCompetitorThreshold = 0,
+}: Props) {
   const semSnap       = useMemo(() => analysis?.semrushSnapshot ?? {}, [analysis]);
   const clientDomain  = useMemo(() => (semSnap.domain as string) ?? '', [semSnap]);
   const industry      = (analysis as any)?._industry ?? 'General';
@@ -853,8 +864,11 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
   const kwLoaded = uploadedKeywords !== null;
 
   const baseClusters = useMemo(
-    () => buildThemeClusters(analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? []),
-    [analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords],
+    () => buildThemeClusters(
+      analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? [],
+      defaultClientThreshold, defaultCompetitorThreshold,
+    ),
+    [analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
   );
 
   const runClaudePass = useCallback(async () => {

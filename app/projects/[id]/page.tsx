@@ -7,7 +7,6 @@ import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
-import ReportsPanel         from '@/components/brief/ReportsPanel';
 import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
@@ -177,6 +176,12 @@ export default function ProjectBriefPage() {
   // Edit project modal
   const [showEditProject,   setShowEditProject]   = useState(false);
 
+  // Export state
+  const [pdfLoading,  setPdfLoading]  = useState(false);
+  const [pptLoading,  setPptLoading]  = useState(false);
+  const [pptPrompt,   setPptPrompt]   = useState<string | null>(null);
+  const [pptCopied,   setPptCopied]   = useState(false);
+
   const analysis   = project?.analyses?.[0] ?? null;
   const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
@@ -289,6 +294,47 @@ export default function ProjectBriefPage() {
     if (!confirm(`Delete "${project?.clientName}"? This cannot be undone.`)) return;
     await fetch(`/api/projects/${projectId}`, { method: 'DELETE' });
     router.push('/dashboard');
+  }
+
+  // ── Export functions ──────────────────────────────────────────────────────
+
+  async function generatePDF() {
+    if (!analysis) return;
+    setPdfLoading(true);
+    try {
+      const res  = await fetch('/api/reports/pdf', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ analysisId: analysis.id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.fileUrl) window.open(data.fileUrl, '_blank');
+    } finally {
+      setPdfLoading(false);
+    }
+  }
+
+  async function generatePPTPrompt() {
+    if (!analysis) return;
+    setPptLoading(true);
+    try {
+      const res  = await fetch('/api/reports/ppt-prompt', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ analysisId: analysis.id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.promptText) setPptPrompt(data.promptText);
+    } finally {
+      setPptLoading(false);
+    }
+  }
+
+  function copyPptPrompt() {
+    if (!pptPrompt) return;
+    navigator.clipboard.writeText(pptPrompt);
+    setPptCopied(true);
+    setTimeout(() => setPptCopied(false), 2500);
   }
 
   if (loading) return (
@@ -418,6 +464,57 @@ export default function ProjectBriefPage() {
         />
       )}
 
+      {/* ── PPT Prompt modal ── */}
+      {pptPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setPptPrompt(null)} />
+          <div className="relative orbit-card orbit-glow w-full max-w-2xl p-6 animate-fade-in flex flex-col gap-4 max-h-[80vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between flex-shrink-0">
+              <div>
+                <p className="text-orbit-accent text-sm font-semibold">Claude PPTX Skill Prompt — Ready to Paste</p>
+                <p className="text-orbit-tertiary text-xs mt-0.5">
+                  Type <code className="bg-orbit-muted px-1 py-0.5 rounded text-orbit-accent">/pptx</code> in Claude, then paste this prompt to generate the deck.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={copyPptPrompt}
+                  className="flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition-colors"
+                  style={pptCopied ? { color: '#4ADE80', borderColor: 'rgba(74,222,128,0.4)' } : { color: '#8080B0', borderColor: '#2A2A4A' }}
+                >
+                  {pptCopied ? (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy Prompt
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setPptPrompt(null)}
+                  className="text-orbit-secondary hover:text-orbit-primary border border-orbit-border px-3 py-1.5 rounded-lg text-xs transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            {/* Prompt text */}
+            <pre className="flex-1 overflow-y-auto text-orbit-secondary text-xs leading-relaxed whitespace-pre-wrap font-mono bg-orbit-bg rounded-lg p-4 border border-orbit-border min-h-0">
+              {pptPrompt}
+            </pre>
+          </div>
+        </div>
+      )}
+
       {/* ════ GLOBAL HEADER ════ */}
       <header className="flex-shrink-0 h-14 border-b border-orbit-border bg-orbit-surface/80 backdrop-blur-sm flex items-center justify-between px-5 z-40">
         <div className="flex items-center gap-2">
@@ -443,6 +540,36 @@ export default function ProjectBriefPage() {
             </svg>
             Edit Project
           </button>
+          {/* ── Export buttons — visible once analysis is complete ── */}
+          {hasResults && analysis && (
+            <>
+              <div className="w-px h-5 bg-orbit-border mx-1" />
+              <button
+                onClick={generatePDF}
+                disabled={pdfLoading}
+                title="Export PDF Brief"
+                className="text-xs text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                {pdfLoading ? 'Generating…' : 'PDF'}
+              </button>
+              <button
+                onClick={generatePPTPrompt}
+                disabled={pptLoading}
+                title="Generate PowerPoint Prompt"
+                className="text-xs text-orbit-accent hover:text-orbit-accent-light border border-orbit-accent/30 hover:border-orbit-accent/50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                {pptLoading ? 'Generating…' : 'PPT Prompt'}
+              </button>
+              <div className="w-px h-5 bg-orbit-border mx-1" />
+            </>
+          )}
+
           <button
             onClick={() => {
               if (hasResults) {
@@ -643,28 +770,21 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}
+              defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
             />
           )}
 
           {/* ── Executive Summary — Layout B ── */}
           {hasResults && analysis && activeSection === 'overview' && (
-            <>
-              <ExecutiveSummarySection
-                analysis={analysis}
-                projectId={projectId}
-                projectName={project.clientName}
-                clientDomain={domainDisplay}
-                manualDomains={competitorDomains}
-                defaultClientThreshold={project.kwVolThresholdClient ?? 0}
-              />
-              <div className="px-3 pb-3">
-                <ReportsPanel
-                  analysisId={analysis.id}
-                  projectId={project.id}
-                  clientName={project.clientName}
-                />
-              </div>
-            </>
+            <ExecutiveSummarySection
+              analysis={analysis}
+              projectId={projectId}
+              projectName={project.clientName}
+              clientDomain={domainDisplay}
+              manualDomains={competitorDomains}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}
+            />
           )}
 
           {/* ── Content Map ── */}

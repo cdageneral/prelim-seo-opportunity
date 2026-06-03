@@ -6,7 +6,7 @@
  * Shown when the user clicks "Refresh Analysis" on a project that already
  * has results. Presents two modes:
  *   • Full re-analysis  — recrawls everything (~2,400 Semrush units)
- *   • Find gaps only    — fetches only net-new competitor keywords (~300 units)
+ *   • Find gaps only    — refreshes client rankings + fetches net-new competitor keywords (~450 units)
  */
 
 import { useState } from 'react';
@@ -94,13 +94,13 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
               <i className="ti ti-zoom-scan" style={{ fontSize: '18px', color: mode === 'gaps' ? '#00C9B1' : '#454565' }} aria-hidden="true" />
-              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '20px', fontWeight: 500, background: '#0D2B1D', color: '#4ADE80' }}>~300 units</span>
+              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '20px', fontWeight: 500, background: '#0D2B1D', color: '#4ADE80' }}>~450 units</span>
             </div>
-            <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Find gaps only</p>
+            <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Gap &amp; rank refresh</p>
             <p style={{ fontSize: '11px', color: '#7070A0', margin: '0 0 8px', lineHeight: 1.5 }}>
-              Checks competitors for keywords missing from your footprint. Reuses existing SERP &amp; LLM probe data.
+              Updates your current rankings, finds new competitor gaps, and re-runs Claude analysis. Reuses SERP &amp; LLM probe data.
             </p>
-            <p style={{ fontSize: '10px', color: '#454565', margin: 0 }}>Best for monthly gap checks</p>
+            <p style={{ fontSize: '10px', color: '#454565', margin: 0 }}>Best for monthly refreshes</p>
           </button>
 
         </div>
@@ -110,10 +110,10 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
           <div style={{ background: '#131325', border: '0.5px solid #2A2A4A', borderRadius: '8px', padding: '12px', marginBottom: '18px' }}>
             <p style={{ fontSize: '11px', color: '#8080C0', fontWeight: 500, margin: '0 0 10px' }}>How gap scan works</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-              <Row icon="ti-check" iconBg="#0D2B1D" iconColor="#4ADE80" text={<><strong style={{ color: '#C0C0E0' }}>{keywordsCount} keywords already tracked</strong><span style={{ color: '#4ADE80' }}> → skipped, no API call</span></>} />
+              <Row icon="ti-refresh" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Client&apos;s current rankings</strong><span style={{ color: '#8080C0' }}> → refreshed, positions updated, new keywords added</span></>} />
+              <Row icon="ti-search" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Competitor keywords not in footprint</strong><span style={{ color: '#8080C0' }}> → fetched &amp; merged</span></>} />
               <Row icon="ti-check" iconBg="#0D2B1D" iconColor="#4ADE80" text={<><strong style={{ color: '#C0C0E0' }}>Existing SERP &amp; LLM probe data</strong><span style={{ color: '#4ADE80' }}> → reused</span></>} />
-              <Row icon="ti-search" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Competitor keywords not in footprint</strong><span style={{ color: '#8080C0' }}> → fetched</span></>} />
-              <Row icon="ti-brain" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Claude analysis</strong><span style={{ color: '#8080C0' }}> → re-runs on full footprint + new gaps</span></>} />
+              <Row icon="ti-brain" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Claude analysis</strong><span style={{ color: '#8080C0' }}> → re-runs on full updated footprint</span></>} />
             </div>
           </div>
         )}
@@ -143,7 +143,7 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
             style={{ background: '#6C63FF', border: 'none', borderRadius: '8px', padding: '9px 18px', color: 'white', fontSize: '13px', fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
             <i className={mode === 'gaps' ? 'ti ti-zoom-scan' : 'ti ti-refresh'} style={{ fontSize: '14px' }} aria-hidden="true" />
-            {mode === 'gaps' ? 'Run gap scan' : 'Run full re-analysis'}
+            {mode === 'gaps' ? 'Run gap & rank refresh' : 'Run full re-analysis'}
           </button>
         </div>
 

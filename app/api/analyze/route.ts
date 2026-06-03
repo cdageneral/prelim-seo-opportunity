@@ -20,7 +20,7 @@ import { z }       from 'zod';
 import { db }      from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
-import { getSemrushSnapshot, getKeywordGap } from '@/lib/apis/semrush';
+import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot }  from '@/lib/apis/serp';
 import { getLLMProbeSnapshot } from '@/lib/apis/llmProbe';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
@@ -120,18 +120,43 @@ export async function POST(req: NextRequest) {
           ...manualCompetitorDomains,
         ].filter((d, i, arr) => d && arr.indexOf(d) === i);
 
-        const gapResults = await Promise.all(
-          allCompetitorDomains.slice(0, 5).map(comp =>
+        // ── Fetch in parallel: client's current rankings + competitor gaps ──
+        const [freshClientKws, ...gapResults] = await Promise.all([
+          getOrganicKeywords(domain).catch(() => []),
+          ...allCompetitorDomains.slice(0, 5).map(comp =>
             getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
-          )
-        );
+          ),
+        ]);
+
+        // ── Net-new client ranked keywords ────────────────────────────────────
+        const newClientKeywords = freshClientKws.filter(kw => {
+          const key = kw.keyword.toLowerCase().trim();
+          return !existingRanked.has(key) && !existingGaps.has(key);
+        });
+
+        // Also update positions for keywords that already exist (rankings shift)
+        const existingTopUpdated = (existingSnapshot.topKeywords ?? []).map((kw: any) => {
+          const fresh = freshClientKws.find(
+            f => f.keyword.toLowerCase().trim() === kw.keyword.toLowerCase().trim()
+          );
+          return fresh ? { ...kw, position: fresh.position, searchVolume: fresh.searchVolume } : kw;
+        });
+
+        console.log(`[OrbitIQ] Gap scan: ${newClientKeywords.length} net-new client keywords, ${existingTopUpdated.length} existing positions refreshed`);
+
+        // ── Net-new competitor gap keywords ───────────────────────────────────
+        // Rebuild existingRanked set to include newly ranked client keywords
+        const allRankedNow = new Set([
+          ...existingRanked,
+          ...newClientKeywords.map(k => k.keyword.toLowerCase().trim()),
+        ]);
 
         const seen = new Set<string>();
         const newGapKeywords: SemrushKeywordGap[] = [];
         for (const batch of gapResults) {
           for (const kw of batch) {
             const key = kw.keyword.toLowerCase().trim();
-            if (seen.has(key) || existingRanked.has(key) || existingGaps.has(key)) continue;
+            if (seen.has(key) || allRankedNow.has(key) || existingGaps.has(key)) continue;
             if (kw.searchVolume < 2400) continue;
             seen.add(key);
             newGapKeywords.push(kw);
@@ -140,18 +165,39 @@ export async function POST(req: NextRequest) {
 
         console.log(`[OrbitIQ] Gap scan: ${newGapKeywords.length} net-new gap keywords found`);
 
+        // ── Rebuild positionDist from merged topKeywords ──────────────────────
+        const mergedTopKeywords = [
+          ...existingTopUpdated,
+          ...newClientKeywords,
+        ].sort((a: any, b: any) => b.searchVolume - a.searchVolume);
+
+        const newPositionDist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+        for (const kw of mergedTopKeywords) {
+          const pos = (kw as any).position ?? 999;
+          if (pos <= 3)       newPositionDist['1-3']++;
+          else if (pos <= 10) newPositionDist['4-10']++;
+          else if (pos <= 20) newPositionDist['11-20']++;
+          else                newPositionDist['21+']++;
+        }
+
         const mergedSnapshot: SemrushSnapshot = {
           ...existingSnapshot,
+          topKeywords: mergedTopKeywords,
           gapKeywords: [
             ...(existingSnapshot.gapKeywords ?? []),
             ...newGapKeywords,
           ].sort((a, b) => b.searchVolume - a.searchVolume),
+          positionDist: newPositionDist,
           fetchedAt: new Date().toISOString(),
         };
 
-        const gapKeywordTexts = newGapKeywords.slice(0, 5).map(k => k.keyword);
-        const serp = gapKeywordTexts.length > 0
-          ? await getSerpApiSnapshot(domain, gapKeywordTexts).catch(err => {
+        // SerpAPI: scan new client keywords + new gap keywords (up to 5 each)
+        const serpSample = [
+          ...newClientKeywords.slice(0, 3).map(k => k.keyword),
+          ...newGapKeywords.slice(0, 3).map(k => k.keyword),
+        ].slice(0, 5);
+        const serp = serpSample.length > 0
+          ? await getSerpApiSnapshot(domain, serpSample).catch(err => {
               console.error(`[OrbitIQ] SerpAPI (gap) failed:`, err);
               return lastAnalysis.serpApiSnapshot as any;
             })
@@ -169,11 +215,12 @@ export async function POST(req: NextRequest) {
 
         console.log(`[OrbitIQ] Gap scan Phase 1 complete for ${analysis.id}`);
         return NextResponse.json({
-          analysisId:  analysis.id,
-          triggeredAt: analysis.triggeredAt,
-          status:      'data_ready',
-          gapMode:     true,
-          newGapsFound: newGapKeywords.length,
+          analysisId:         analysis.id,
+          triggeredAt:        analysis.triggeredAt,
+          status:             'data_ready',
+          gapMode:            true,
+          newClientKwsFound:  newClientKeywords.length,
+          newGapsFound:       newGapKeywords.length,
         });
       }
     }

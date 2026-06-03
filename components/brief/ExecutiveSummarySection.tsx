@@ -211,9 +211,25 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  const captureRate       = cb.page1CaptureRate   ?? analysis.marketCaptureRate   ?? 0;
-  const totalMonthly      = cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0;
-  const page1Monthly      = cb.totalPage1Demand   ?? analysis.clientOwnedVolume   ?? 0;
+  // ── Compute market metrics from full keyword footprint (not the 200-kw AI cap) ──
+  // This ensures the "total demand" here matches Keyword Landscape exactly.
+  const _topKws  = (semSnap.topKeywords ?? []) as any[];
+  const _topSet  = new Set(_topKws.map((k: any) => (k.keyword ?? '').toLowerCase()));
+  const _allKws  = [
+    ..._topKws,
+    ...(semSnap.gapKeywords ?? []).filter(
+      (k: any) => !_topSet.has((k.keyword ?? '').toLowerCase()),
+    ),
+  ];
+  const _fullMonthly = _allKws.reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
+  const _fullPage1   = _topKws
+    .filter((k: any) => k.position != null && k.position <= 10)
+    .reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
+
+  // Fall back to stored values if snapshot is empty (e.g. upload-only analysis)
+  const totalMonthly      = _fullMonthly > 0 ? _fullMonthly  : (cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0);
+  const page1Monthly      = _fullPage1   > 0 ? _fullPage1    : (cb.totalPage1Demand   ?? analysis.clientOwnedVolume   ?? 0);
+  const captureRate       = totalMonthly > 0 ? page1Monthly / totalMonthly : (cb.page1CaptureRate ?? analysis.marketCaptureRate ?? 0);
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 

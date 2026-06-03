@@ -377,18 +377,30 @@ export async function runFullSynthesis(
   ]);
   console.log(`[OrbitIQ] Narrative + PPT prompt generated in parallel`);
 
-  // Compute hero metrics — prefer new demand-based metrics where available
-  const totalCategoryVolume = categoryBreakdown.totalMonthlyDemand > 0
-    ? categoryBreakdown.totalMonthlyDemand
+  // ── Hero metrics from FULL keyword footprint (not capped-200 category analysis) ──
+  // This ensures totalCategoryVolume stored in DB matches what Keyword Landscape displays.
+  const _topKws   = semrush.topKeywords ?? [];
+  const _topSet   = new Set(_topKws.map(k => k.keyword.toLowerCase()));
+  const _allKwsFull = [
+    ..._topKws,
+    ...(semrush.gapKeywords ?? []).filter(k => !_topSet.has(k.keyword.toLowerCase())),
+  ];
+  const _fullMonthlyVol = _allKwsFull.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  const _fullPage1Vol   = _topKws
+    .filter(k => k.position != null && k.position <= 10)
+    .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+
+  const totalCategoryVolume = _fullMonthlyVol > 0
+    ? _fullMonthlyVol
     : semrush.competitors.reduce((sum, c) => sum + c.organicTraffic, semrush.overview.organicTraffic);
 
-  const clientOwnedVolume = categoryBreakdown.totalPage1Demand > 0
-    ? categoryBreakdown.totalPage1Demand
+  const clientOwnedVolume = _fullPage1Vol > 0
+    ? _fullPage1Vol
     : semrush.overview.organicTraffic;
 
-  const marketCaptureRate = categoryBreakdown.page1CaptureRate > 0
-    ? categoryBreakdown.page1CaptureRate
-    : (totalCategoryVolume > 0 ? semrush.overview.organicTraffic / totalCategoryVolume : 0);
+  const marketCaptureRate = totalCategoryVolume > 0
+    ? clientOwnedVolume / totalCategoryVolume
+    : 0;
 
   return {
     personas,
