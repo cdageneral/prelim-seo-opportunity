@@ -640,7 +640,7 @@ function SovPanel({ analysis, competitors }: { analysis: any; competitors?: stri
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis, projectId, competitors, defaultClientThreshold = 0 }: Props) {
+export default function GoogleSerpSection({ analysis, projectId, domain, competitors, defaultClientThreshold = 0 }: Props) {
   const [filter,     setFilter]     = useState<BucketKey>('all');
   const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
   const [sortAsc,    setSortAsc]    = useState(true);
