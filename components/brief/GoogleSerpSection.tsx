@@ -1,5 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
+import { buildKwPool } from '@/lib/utils/kwVolume';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -664,64 +665,29 @@ export default function GoogleSerpSection({ analysis, projectId, competitors, de
   //   - DB keywords: include ALL type='ranked' regardless of position or volume
   //     (KeywordsPanel shows type='ranked' DB keywords even without positions;
   //      volume threshold is only applied to Semrush keywords in KeywordsPanel, not DB keywords)
-  //   - Dedup within dbKeywords using existingKeys set
-  //   - position: number | null — null = ranked but no position data in CSV
+  // Build ranked keyword list via shared utility — guarantees identical count to KeywordsPanel.
+  // Filter to !isGap: this section is about client rankings only (gap kws have no client position).
   const topKws: SemKw[] = useMemo(() => {
-    const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
-
-    // Build blocked-keyword set from DB — mirrors KeywordsPanel.buildRows.
-    // Without this, blocked semrush keywords would still appear here, causing
-    // the "Total Keywords" count to be higher than the keyword-list panel.
-    const blockedKeys = new Set(
-      dbKeywords
-        .filter(k => k.source === 'blocked')
-        .map(k => k.keyword.toLowerCase().trim()),
-    );
-
-    // Mirror KeywordsPanel.buildRows exactly:
-    //   - Filter blocked keywords first (fixes count discrepancy vs keyword-list panel)
-    //   - Apply defaultClientThreshold to Semrush keywords (keeps counts in sync)
-    //   - Convert positions safely: null stays null (avoids Number(null)=0 falling in no bucket)
-    const semKws: SemKw[] = rawSemKws
-      .filter(k => !blockedKeys.has((k.keyword ?? '').toLowerCase().trim()))
-      .filter(k => defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold)
-      .map(k => ({
-        ...k,
-        position: k.position != null ? Number(k.position) : null,
+    const clientDomain = analysis?.semrushSnapshot?.domain ?? domain ?? '';
+    const pool = buildKwPool({
+      semrushSnapshot:  analysis?.semrushSnapshot,
+      uploadedKeywords: dbKeywords,
+      clientDomain,
+      competitorDomains: competitors ?? [],
+      clientVolMin:     defaultClientThreshold,
+      competitorVolMin: 0,
+    });
+    return pool
+      .filter(item => !item.isGap)
+      .map(item => ({
+        keyword:      item.keyword,
+        position:     item.position != null && item.position > 0 && isFinite(item.position)
+                        ? item.position
+                        : null,
+        searchVolume: item.searchVolume,
+        branded:      item.isBranded,
       }));
-
-    // Also include gap keywords in existingKeys so DB ranked keywords that duplicate
-    // a gap keyword are not double-counted (mirrors KeywordsPanel.buildRows dedup exactly).
-    const gapKeywordKeys = new Set(
-      (analysis.semrushSnapshot?.gapKeywords ?? []).map(
-        (k: any) => (k.keyword ?? '').toLowerCase().trim(),
-      ),
-    );
-    const existingKeys = new Set([
-      ...semKws.map(k => k.keyword.toLowerCase().trim()),
-      ...Array.from(gapKeywordKeys),
-    ]);
-
-    const dbRanked: SemKw[] = [];
-    for (const k of dbKeywords) {
-      if (k.source === 'blocked') continue;
-      if (k.type !== 'ranked') continue;  // only ranked keywords (matches KeywordsPanel count)
-      const kwKey = k.keyword.toLowerCase().trim();
-      if (existingKeys.has(kwKey)) continue;
-      existingKeys.add(kwKey);
-      // Allow null positions — keyword is ranked but position wasn't in the CSV
-      const rawPos = k.position;
-      const pos = rawPos != null ? Number(rawPos) : null;
-      dbRanked.push({
-        keyword:      k.keyword,
-        position:     pos != null && pos > 0 && isFinite(pos) ? pos : null,
-        searchVolume: k.searchVolume,
-        branded:      k.branded,
-      });
-    }
-
-    return [...semKws, ...dbRanked];
-  }, [analysis, dbKeywords]);
+  }, [analysis, dbKeywords, domain, competitors, defaultClientThreshold]);
 
   // Recompute positionDist from the FULL merged keyword set.
   // The stored semrushSnapshot.positionDist was built from only the 40 Semrush keywords.
@@ -759,8 +725,10 @@ export default function GoogleSerpSection({ analysis, projectId, competitors, de
   const volOutsideTop3 = totalVol - top3Vol;
   const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
   const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
-  // Coverage % is over keywords with position data (not total, which may include no-position kws)
-  const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
+  // Volume-based page 1 share: what % of total search demand is captured at positions 1–10.
+  // Matches the metric users expect when they say "page 1 coverage."
+  // Count-based (page1Kws / posKws.length) is surfaced as sub-text only.
+  const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
 
   // ── Bar chart ─────────────────────────────────────────────────────────────
   // (bar chart helpers removed — bar chart replaced with SovPanel)
@@ -875,9 +843,10 @@ export default function GoogleSerpSection({ analysis, projectId, competitors, de
           sub2={dbLoaded && totalVol > 0 ? `${fmtAnnual(totalVol)} annual search volume` : undefined}
         />
         <StatCard
-          label="Page 1 Coverage"
+          label="PG 1 Vol. Share"
           value={dbLoaded ? `${page1Pct}%` : '—'}
-          sub={dbLoaded ? `${page1Kws} of ${posKws.length} ranked keywords` : 'Loading…'}
+          sub={dbLoaded ? `${page1Kws} of ${posKws.length} kws rank pg 1` : 'Loading…'}
+          sub2={dbLoaded && page1Vol > 0 ? `${fmtAnnual(page1Vol)} annual vol at pg 1` : undefined}
           color="#6C63FF"
         />
         <StatCard
