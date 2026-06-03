@@ -213,11 +213,19 @@ export async function generateCategoryBreakdown(
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} };
   }
 
-  const prompt = categoryBreakdownPrompt(domain, industry, merged);
+  // Cap at 200 keywords (top by volume) so Claude's response fits within token budget.
+  // Keywords are already sorted by traffic desc from Semrush, so the highest-value ones
+  // are first. Remaining keywords will be classified by ThemeClusters Layer 2 signal matching.
+  const BREAKDOWN_LIMIT = 200;
+  const capped = merged.length > BREAKDOWN_LIMIT
+    ? merged.slice(0, BREAKDOWN_LIMIT)
+    : merged;
+
+  const prompt = categoryBreakdownPrompt(domain, industry, capped);
 
   const response = await getClient().messages.create({
     model:      MODELS.fast,
-    max_tokens: 1500,
+    max_tokens: 3000,
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 100_000 });
 

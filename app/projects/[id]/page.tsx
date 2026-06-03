@@ -655,6 +655,7 @@ export default function ProjectBriefPage() {
                 projectName={project.clientName}
                 clientDomain={domainDisplay}
                 manualDomains={competitorDomains}
+                defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               />
               <div className="px-3 pb-3">
                 <ReportsPanel

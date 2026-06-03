@@ -214,8 +214,6 @@ function buildClusters(
   if (!categories.length) return [];
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
-  const MVP_LIMIT = 20;
-  // Respect the blocked list — same keywords hidden in KeywordsPanel hide from clusters too
   const blockedSet = new Set(
     uploadedKeywords
       .filter((k: any) => k.source === 'blocked')
@@ -223,13 +221,13 @@ function buildClusters(
   );
 
   const pool: KwItem[] = [];
-  for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+  for (const kw of (semSnap.topKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow)) continue;
     pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null });
   }
   const seen = new Set(pool.map((k: KwItem) => k.keyword.toLowerCase()));
-  for (const kw of (semSnap.gapKeywords ?? []).slice(0, MVP_LIMIT)) {
+  for (const kw of (semSnap.gapKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     seen.add(kwLow);

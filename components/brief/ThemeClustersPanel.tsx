@@ -221,10 +221,8 @@ function buildThemeClusters(
   if (categories.length === 0) return [];
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
-  const MVP_LIMIT = 20;
-
   const rankedMap = new Map<string, number>();
-  for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+  for (const kw of (semSnap.topKeywords ?? [])) {
     rankedMap.set((kw.keyword ?? '').toLowerCase(), kw.position ?? 0);
   }
 
@@ -236,7 +234,7 @@ function buildThemeClusters(
   );
 
   const pool: KwItem[] = [];
-  for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+  for (const kw of (semSnap.topKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow)) continue;
     pool.push({
@@ -248,7 +246,7 @@ function buildThemeClusters(
     });
   }
   const seen = new Set(pool.map(k => k.keyword.toLowerCase()));
-  for (const kw of (semSnap.gapKeywords ?? []).slice(0, MVP_LIMIT)) {
+  for (const kw of (semSnap.gapKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     seen.add(kwLow);
@@ -866,14 +864,13 @@ export default function ThemeClustersPanel({ projectId, analysis, competitors }:
       if (cached) { setClaudeAssigns(JSON.parse(cached)); return; }
     } catch { /* unavailable */ }
 
-    const MVP_LIMIT = 20;
     const pool: string[] = [];
     const seen = new Set<string>();
-    for (const kw of (semSnap.topKeywords ?? []).slice(0, MVP_LIMIT)) {
+    for (const kw of (semSnap.topKeywords ?? [])) {
       const k = kw.keyword?.toLowerCase();
       if (k && !seen.has(k) && !detectIntentSignal(kw.keyword)) { pool.push(kw.keyword); seen.add(k); }
     }
-    for (const kw of (semSnap.gapKeywords ?? []).slice(0, MVP_LIMIT)) {
+    for (const kw of (semSnap.gapKeywords ?? [])) {
       const k = kw.keyword?.toLowerCase();
       if (k && !seen.has(k) && !detectIntentSignal(kw.keyword)) { pool.push(kw.keyword); seen.add(k); }
     }
