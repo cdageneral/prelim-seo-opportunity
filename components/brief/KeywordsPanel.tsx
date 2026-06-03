@@ -742,7 +742,7 @@ export default function KeywordsPanel({
             <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
             <p className="text-orbit-tertiary text-[11px] mt-0.5">
               {dbLoaded
-                ? <>{ranked} ranked &nbsp;·&nbsp; {gap} gap &nbsp;·&nbsp; {visibleRows.length} showing</>
+                ? <>{visibleRows.length.toLocaleString()} total &nbsp;·&nbsp; {ranked.toLocaleString()} ranked &nbsp;·&nbsp; {gap} gap</>
                 : <span style={{ color: '#333350' }}>Loading keywords…</span>
               }
             </p>
