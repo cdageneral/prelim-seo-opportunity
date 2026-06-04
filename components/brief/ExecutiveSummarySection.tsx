@@ -222,15 +222,49 @@ export default function ExecutiveSummarySection({
   const gapVsTop     = topCompShare - clientShare;
 
   // ── LLM visibility ────────────────────────────────────────────────────────
-  const llmSnap: any        = analysis.profoundSnapshot ?? {};
-  const isLlmProbe          = llmSnap.source === 'llm_probe';
-  const llmPlatforms: any[] = isLlmProbe ? (llmSnap.platforms ?? []) : [];
-  const overallMentions     = isLlmProbe ? (llmSnap.overallMentions ?? 0) : 0;
-  const overallTotal        = isLlmProbe ? (llmSnap.overallTotal    ?? 0) : 0;
-  const overallLlmRate      = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
-  const bestExcerpt         = llmPlatforms
-    .flatMap((p: any) => p.results ?? [])
-    .find((r: any) => r.mentioned && r.excerpt)?.excerpt ?? '';
+  // v7.80: supports both probe shapes. v2 (llm_probe_v2) reports the UNBRANDED
+  // mention rate — prompts that never named the brand — per platform; v1 keeps
+  // its original all-prompt mention rate.
+  const llmSnap: any   = analysis.profoundSnapshot ?? {};
+  const isLlmProbeV2   = llmSnap.source === 'llm_probe_v2';
+  const isLlmProbeV1   = llmSnap.source === 'llm_probe';
+  const isLlmProbe     = isLlmProbeV1 || isLlmProbeV2;
+
+  let llmPlatforms: any[] = [];
+  let overallMentions = 0;
+  let overallTotal    = 0;
+  let bestExcerpt     = '';
+
+  if (isLlmProbeV2) {
+    const v2Results: any[] = llmSnap.results ?? [];
+    llmPlatforms = (['claude', 'chatgpt'] as const)
+      .map(plat => {
+        const rows = v2Results.filter((r: any) => r.platform === plat && !r.branded);
+        const mentionCount = rows.filter((r: any) => r.mentioned).length;
+        return {
+          platform: plat,
+          label:    plat === 'claude' ? 'Claude (Anthropic)' : 'ChatGPT (OpenAI)',
+          results:  rows,
+          mentionCount,
+          mentionRate: rows.length > 0 ? mentionCount / rows.length : 0,
+        };
+      })
+      .filter(p => p.results.length > 0);
+    overallMentions = llmSnap.unbranded?.mentions ?? 0;
+    overallTotal    = llmSnap.unbranded?.total    ?? 0;
+    bestExcerpt     = (llmSnap.sentiment?.examples ?? [])
+      .find((e: any) => e.tone === 'positive')?.quote
+      ?? v2Results.find((r: any) => r.mentioned && r.excerpt)?.excerpt ?? '';
+  } else if (isLlmProbeV1) {
+    llmPlatforms    = llmSnap.platforms ?? [];
+    overallMentions = llmSnap.overallMentions ?? 0;
+    overallTotal    = llmSnap.overallTotal    ?? 0;
+    bestExcerpt     = llmPlatforms
+      .flatMap((p: any) => p.results ?? [])
+      .find((r: any) => r.mentioned && r.excerpt)?.excerpt ?? '';
+  }
+
+  const overallLlmRate = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
 
   // ── Content inventory ─────────────────────────────────────────────────────
   const gapKeywords: any[]  = semSnap.gapKeywords ?? [];

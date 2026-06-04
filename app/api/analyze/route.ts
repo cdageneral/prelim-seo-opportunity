@@ -22,7 +22,6 @@ import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot }  from '@/lib/apis/serp';
-import { getLLMProbeSnapshot } from '@/lib/apis/llmProbe';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 
@@ -271,17 +270,24 @@ export async function POST(req: NextRequest) {
       ` video=${serp.serpFeatureSummary?.withVideo ?? 0}`
     );
 
-    // LLM Probe
-    const llmProbe = await getLLMProbeSnapshot(project.clientName, domain, industry).catch(err => {
-      console.error(`[OrbitIQ] LLM probe failed:`, err);
-      return { source: 'llm_probe', probedAt: new Date().toISOString(), prompts: [], platforms: [], overallScore: 0, overallMentions: 0, overallTotal: 0 } as any;
-    });
+    // LLM Probe (v7.80): moved to Phase 2 (synthesize) — it needs the product
+    // categories from _categoryBreakdown to generate category-driven prompts.
+    // Carry forward the previous analysis's probe so the panel has data until
+    // Phase 2 overwrites it with fresh results.
+    const recentAnalyses = await db.query.analyses.findMany({
+      where:   eq(analyses.projectId, projectId),
+      orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+      limit:   3,
+    }).catch(() => [] as any[]);
+    const previousProbe = recentAnalyses
+      .find((a: any) => a.id !== analysis.id && a.profoundSnapshot != null)
+      ?.profoundSnapshot ?? null;
 
     await db.update(analyses)
       .set({
         semrushSnapshot:  semrush  as any,
         serpApiSnapshot:  serp     as any,
-        profoundSnapshot: llmProbe as any,
+        profoundSnapshot: previousProbe as any,
       })
       .where(eq(analyses.id, analysis.id));
 

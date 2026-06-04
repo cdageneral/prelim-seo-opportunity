@@ -131,6 +131,8 @@ export async function POST(req: NextRequest) {
           _categoryBreakdown:  synthesis.categoryBreakdown,
           _audienceSegments:   synthesis.personas,
         } as any,
+        // v7.80: LLM probe now runs in Phase 2 (needs categories) — persist it here
+        profoundSnapshot: (synthesis.llmProbe ?? profound) as any,
       })
       .where(eq(analyses.id, analysisId));
 

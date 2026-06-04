@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
 function firstSentences(text: string, n: number): string {
@@ -8,37 +10,78 @@ function firstSentences(text: string, n: number): string {
   return matches.slice(0, n).join(' ').trim();
 }
 
-// ─── Types (mirror llmProbe.ts) ───────────────────────────────────────────────
-
-interface ProbePromptResult {
-  prompt:    string;
-  mentioned: boolean;
-  excerpt:   string | null;
+function fmtVol(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`;
+  return n.toLocaleString();
 }
 
-interface PlatformProbeData {
+// ─── Types (mirror llmProbe.ts v2) ────────────────────────────────────────────
+
+interface ProbeResultV2 {
+  id:           string;
   platform:     'claude' | 'chatgpt';
-  label:        string;
-  results:      ProbePromptResult[];
-  mentionCount: number;
-  mentionRate:  number;
+  category:     string | null;
+  intent:       string;
+  branded:      boolean;
+  prompt:       string;
+  mentioned:    boolean;
+  excerpt:      string | null;
+  responseText: string;
+  sentiment:    'positive' | 'neutral' | 'negative' | null;
+  recognized:   boolean | null;
 }
 
-interface LLMProbeSnapshot {
-  source:          'llm_probe';
-  probedAt:        string;
-  prompts:         string[];
-  platforms:       PlatformProbeData[];
-  overallScore:    number;
-  overallMentions: number;
-  overallTotal:    number;
+interface CategoryVisibilityV2 {
+  category:        string;
+  monthlyDemand:   number;
+  claudeMentions:  number;
+  claudeTotal:     number;
+  chatgptMentions: number;
+  chatgptTotal:    number;
+  mentionRate:     number;
 }
 
-// ─── Platform Icons ───────────────────────────────────────────────────────────
+interface SentimentExampleV2 {
+  tone:     'positive' | 'negative';
+  platform: 'claude' | 'chatgpt';
+  prompt:   string;
+  category: string | null;
+  quote:    string;
+}
 
-const PLATFORM_ICON: Record<string, string> = {
-  claude:  '🧠',
-  chatgpt: '🤖',
+interface LLMProbeSnapshotV2 {
+  source:        'llm_probe_v2';
+  probedAt:      string;
+  platformsUsed: string[];
+  promptsPerPlatform: number;
+  results:       ProbeResultV2[];
+  categories:    CategoryVisibilityV2[];
+  unbranded: { mentions: number; total: number; score: number };
+  branded:   { recognized: number; total: number; score: number; assessed: boolean };
+  sentiment: {
+    positive: number; neutral: number; negative: number; totalMentions: number;
+    assessed: boolean;
+    examples: SentimentExampleV2[];
+  };
+  overallScore: number;
+}
+
+// v1 types (legacy snapshots from analyses run before v7.80)
+interface ProbePromptResultV1 { prompt: string; mentioned: boolean; excerpt: string | null }
+interface PlatformProbeDataV1 {
+  platform: 'claude' | 'chatgpt'; label: string;
+  results: ProbePromptResultV1[]; mentionCount: number; mentionRate: number;
+}
+interface LLMProbeSnapshotV1 {
+  source: 'llm_probe'; probedAt: string; prompts: string[];
+  platforms: PlatformProbeDataV1[]; overallScore: number;
+  overallMentions: number; overallTotal: number;
+}
+
+const PLATFORM_LABEL: Record<string, string> = {
+  claude:  'Claude',
+  chatgpt: 'ChatGPT',
 };
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -46,11 +89,13 @@ const PLATFORM_ICON: Record<string, string> = {
 interface Props { analysis: any; }
 
 export default function LLMVisibilitySection({ analysis }: Props) {
-  const snapshot = analysis.profoundSnapshot as LLMProbeSnapshot | null;
+  const snapshot = analysis.profoundSnapshot as any;
 
-  // ── Probe data path ──────────────────────────────────────────────────────────
+  if (snapshot?.source === 'llm_probe_v2') {
+    return <ProbeViewV2 snapshot={snapshot as LLMProbeSnapshotV2} />;
+  }
   if (snapshot?.source === 'llm_probe') {
-    return <ProbeView snapshot={snapshot} />;
+    return <ProbeViewV1 snapshot={snapshot as LLMProbeSnapshotV1} />;
   }
 
   // ── Legacy / empty state ─────────────────────────────────────────────────────
@@ -70,6 +115,9 @@ export default function LLMVisibilitySection({ analysis }: Props) {
           <p className="text-orbit-tertiary text-xs mt-0.5">LLM visibility score</p>
         </div>
       </div>
+      <p className="text-orbit-tertiary text-sm">
+        No LLM probe data yet — run a full analysis to query Claude + ChatGPT live.
+      </p>
       {aiText && (
         <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
           <p className="text-orbit-accent text-xs font-medium mb-2 uppercase tracking-widest">The AI Search Moment</p>
@@ -80,9 +128,234 @@ export default function LLMVisibilitySection({ analysis }: Props) {
   );
 }
 
-// ─── Probe View ───────────────────────────────────────────────────────────────
+// ─── Probe View v2 ────────────────────────────────────────────────────────────
 
-function ProbeView({ snapshot }: { snapshot: LLMProbeSnapshot }) {
+function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
+  const { categories, unbranded, branded, sentiment, results, probedAt, promptsPerPlatform, platformsUsed } = snapshot;
+  const [showDetail, setShowDetail] = useState(false);
+
+  const probeDate = new Date(probedAt).toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
+
+  const unbrandedColor = unbranded.score >= 60 ? 'text-green-400'
+    : unbranded.score >= 30 ? 'text-amber-400' : 'text-red-400';
+  const brandedColor = branded.score >= 80 ? 'text-green-400'
+    : branded.score >= 50 ? 'text-amber-400' : 'text-red-400';
+
+  const totalPrompts = promptsPerPlatform * Math.max(platformsUsed.length, 1);
+  const sortedCats   = [...(categories ?? [])].sort((a, b) => b.monthlyDemand - a.monthlyDemand);
+
+  const sentTotal = sentiment.positive + sentiment.neutral + sentiment.negative;
+  const pctPos = sentTotal > 0 ? Math.round((sentiment.positive / sentTotal) * 100) : 0;
+  const pctNeg = sentTotal > 0 ? Math.round((sentiment.negative / sentTotal) * 100) : 0;
+  const pctNeu = sentTotal > 0 ? Math.max(0, 100 - pctPos - pctNeg) : 0;
+
+  const posExamples = sentiment.examples.filter(e => e.tone === 'positive');
+  const negExamples = sentiment.examples.filter(e => e.tone === 'negative');
+
+  return (
+    <div className="orbit-card p-6 flex flex-col gap-6">
+
+      {/* Header */}
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">GEO / LLM Gap</p>
+          <h3 className="text-orbit-primary text-lg font-semibold mt-1">AI Search Visibility</h3>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className="text-[10px] bg-orbit-accent/10 border border-orbit-accent/30 text-orbit-accent px-2 py-0.5 rounded-full font-medium">
+              Live AI Probe
+            </span>
+            <span className="text-orbit-tertiary text-[10px]">
+              {totalPrompts} prompts · Claude + ChatGPT (gpt-4o-mini) · queried {probeDate}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Score cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
+          <p className="text-orbit-tertiary text-xs">Unbranded visibility</p>
+          <p className={`text-3xl font-black mt-1 ${unbrandedColor}`}>{unbranded.score}<span className="text-sm font-medium text-orbit-tertiary">/100</span></p>
+          <p className="text-orbit-tertiary text-[10px] mt-1">
+            Mentioned in {unbranded.mentions} of {unbranded.total} prompts that never named the brand
+          </p>
+        </div>
+        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
+          <p className="text-orbit-tertiary text-xs">Brand recognition</p>
+          <p className={`text-3xl font-black mt-1 ${brandedColor}`}>{branded.score}<span className="text-sm font-medium text-orbit-tertiary">/100</span></p>
+          <p className="text-orbit-tertiary text-[10px] mt-1">
+            {branded.recognized} of {branded.total} branded prompts returned an accurate description
+            {!branded.assessed && ' (mention-based fallback)'}
+          </p>
+        </div>
+        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
+          <p className="text-orbit-tertiary text-xs">Sentiment of mentions</p>
+          {sentiment.assessed && sentTotal > 0 ? (
+            <>
+              <div className="flex h-2 rounded-full overflow-hidden mt-3 mb-2 bg-orbit-muted">
+                {pctPos > 0 && <div className="bg-green-500"     style={{ width: `${pctPos}%` }} />}
+                {pctNeu > 0 && <div className="bg-orbit-border"  style={{ width: `${pctNeu}%` }} />}
+                {pctNeg > 0 && <div className="bg-red-500/70"    style={{ width: `${pctNeg}%` }} />}
+              </div>
+              <p className="text-orbit-tertiary text-[10px]">
+                {sentiment.positive} positive · {sentiment.neutral} neutral · {sentiment.negative} negative ({sentiment.totalMentions} mentions)
+              </p>
+            </>
+          ) : (
+            <p className="text-orbit-tertiary text-xs mt-2 italic">
+              {sentiment.totalMentions === 0
+                ? 'No brand mentions to assess.'
+                : 'Sentiment classification unavailable for this run.'}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Category visibility table */}
+      {sortedCats.length > 0 && (
+        <div>
+          <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-2">
+            Visibility by product category <span className="normal-case">(unbranded prompts — same categories as Keyword Landscape)</span>
+          </p>
+          <div className="bg-orbit-surface border border-orbit-border rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-orbit-tertiary text-[10px] border-b border-orbit-border">
+                  <th className="text-left  font-medium px-4 py-2">Category</th>
+                  <th className="text-right font-medium px-3 py-2">Monthly demand</th>
+                  <th className="text-right font-medium px-3 py-2">Claude</th>
+                  <th className="text-right font-medium px-3 py-2">ChatGPT</th>
+                  <th className="text-left  font-medium px-4 py-2 w-[30%]">Mention rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedCats.map(cat => {
+                  const pct = Math.round(cat.mentionRate * 100);
+                  const barColor = pct >= 67 ? 'bg-green-500' : pct >= 34 ? 'bg-amber-500' : 'bg-red-500/60';
+                  return (
+                    <tr key={cat.category} className="border-b border-orbit-border/50 last:border-0">
+                      <td className="px-4 py-2.5 text-orbit-primary">{cat.category}</td>
+                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{fmtVol(cat.monthlyDemand)}</td>
+                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.claudeMentions}/{cat.claudeTotal}</td>
+                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.chatgptMentions}/{cat.chatgptTotal}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.max(pct, 2)}%` }} />
+                          </div>
+                          <span className="text-orbit-secondary text-[10px] w-8 text-right">{pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Sentiment examples — verbatim */}
+      {(posExamples.length > 0 || negExamples.length > 0) && (
+        <div>
+          <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-2">
+            What the AIs are saying <span className="normal-case">(verbatim excerpts)</span>
+          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {posExamples.map((ex, i) => <SentimentQuote key={`p${i}`} ex={ex} />)}
+            {negExamples.map((ex, i) => <SentimentQuote key={`n${i}`} ex={ex} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Methodology + detail toggle */}
+      <div className="border-t border-orbit-border pt-3 flex items-center justify-between flex-wrap gap-2">
+        <p className="text-orbit-tertiary text-[10px]">
+          3 prompts per category (2 unbranded + 1 branded) + 4 brand-level, per platform.
+          Responses are live at analysis time, not an index. Sentiment is Claude-assessed; excerpts are verbatim.
+        </p>
+        <button
+          onClick={() => setShowDetail(v => !v)}
+          className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors shrink-0"
+        >
+          {showDetail ? 'Hide prompts & responses ▲' : 'View all prompts & responses ▼'}
+        </button>
+      </div>
+
+      {showDetail && <ProbeDetail results={results} />}
+
+    </div>
+  );
+}
+
+// ─── Sentiment Quote Card ─────────────────────────────────────────────────────
+
+function SentimentQuote({ ex }: { ex: SentimentExampleV2 }) {
+  const positive = ex.tone === 'positive';
+  return (
+    <div className={`bg-orbit-surface rounded-lg p-4 border-l-2 ${positive ? 'border-green-500' : 'border-red-500'}`}>
+      <p className={`text-[10px] font-medium mb-1.5 ${positive ? 'text-green-400' : 'text-red-400'}`}>
+        {positive ? 'Positive' : 'Negative'} · {PLATFORM_LABEL[ex.platform] ?? ex.platform}
+        {ex.category ? ` · ${ex.category}` : ' · brand-level'}
+      </p>
+      <p className="text-orbit-secondary text-xs leading-relaxed italic">&ldquo;{ex.quote}&rdquo;</p>
+      <p className="text-orbit-tertiary text-[10px] mt-1.5">Prompt: &ldquo;{ex.prompt}&rdquo;</p>
+    </div>
+  );
+}
+
+// ─── Full Prompt/Response Detail ──────────────────────────────────────────────
+
+function ProbeDetail({ results }: { results: ProbeResultV2[] }) {
+  // Group by prompt (each prompt was sent to both platforms)
+  const byPrompt = new Map<string, ProbeResultV2[]>();
+  for (const r of results) {
+    if (!byPrompt.has(r.prompt)) byPrompt.set(r.prompt, []);
+    byPrompt.get(r.prompt)!.push(r);
+  }
+
+  return (
+    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3 max-h-96 overflow-y-auto">
+      {Array.from(byPrompt.entries()).map(([prompt, rows], i) => (
+        <div key={i} className="border-b border-orbit-border/50 last:border-0 pb-3 last:pb-0">
+          <p className="text-orbit-primary text-xs font-medium">
+            {i + 1}. &ldquo;{prompt}&rdquo;
+            {rows[0]?.category && <span className="text-orbit-tertiary font-normal"> · {rows[0].category}</span>}
+            {rows[0]?.branded
+              ? <span className="text-[9px] ml-2 bg-orbit-muted text-orbit-tertiary px-1.5 py-0.5 rounded-full">branded</span>
+              : <span className="text-[9px] ml-2 bg-orbit-accent/10 text-orbit-accent px-1.5 py-0.5 rounded-full">unbranded</span>}
+          </p>
+          <div className="mt-1.5 flex flex-col gap-1">
+            {rows.map(r => (
+              <div key={r.id} className="flex items-start gap-2">
+                <span className={`text-[10px] font-bold shrink-0 mt-0.5 ${r.mentioned ? 'text-green-400' : 'text-orbit-tertiary'}`}>
+                  {r.mentioned ? '✓' : '–'}
+                </span>
+                <span className="text-orbit-tertiary text-[10px] shrink-0 w-14">{PLATFORM_LABEL[r.platform] ?? r.platform}</span>
+                {r.mentioned && r.sentiment && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+                    r.sentiment === 'positive' ? 'bg-green-500/10 text-green-400'
+                    : r.sentiment === 'negative' ? 'bg-red-500/10 text-red-400'
+                    : 'bg-orbit-muted text-orbit-tertiary'
+                  }`}>{r.sentiment}</span>
+                )}
+                <span className="text-orbit-secondary text-[10px] italic leading-relaxed">
+                  {r.mentioned && r.excerpt ? `“${r.excerpt}”` : r.responseText ? 'Brand not mentioned.' : 'No response (call failed).'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Probe View v1 (legacy snapshots, pre-v7.80) ──────────────────────────────
+
+function ProbeViewV1({ snapshot }: { snapshot: LLMProbeSnapshotV1 }) {
   const { platforms, overallScore, overallMentions, overallTotal, prompts, probedAt } = snapshot;
 
   const scoreColor = overallScore >= 60 ? 'text-green-400'
@@ -94,18 +367,16 @@ function ProbeView({ snapshot }: { snapshot: LLMProbeSnapshot }) {
 
   return (
     <div className="orbit-card p-6 flex flex-col gap-6">
-
-      {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">GEO / LLM Gap</p>
           <h3 className="text-orbit-primary text-lg font-semibold mt-1">AI Search Visibility</h3>
           <div className="flex items-center gap-2 mt-2">
             <span className="text-[10px] bg-orbit-accent/10 border border-orbit-accent/30 text-orbit-accent px-2 py-0.5 rounded-full font-medium">
-              Live AI Probe
+              Live AI Probe (v1)
             </span>
             <span className="text-orbit-tertiary text-[10px]">
-              Claude + ChatGPT · Queried {probeDate}
+              Claude + ChatGPT · Queried {probeDate} · re-run analysis for category-level probe
             </span>
           </div>
         </div>
@@ -114,14 +385,25 @@ function ProbeView({ snapshot }: { snapshot: LLMProbeSnapshot }) {
           <p className="text-orbit-tertiary text-xs mt-0.5">
             {overallMentions}/{overallTotal} prompts mentioned brand
           </p>
-          <p className="text-orbit-tertiary text-[10px]">Claude · ChatGPT (gpt-4o-mini)</p>
         </div>
       </div>
 
-      {/* Platform results */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {platforms.map(platform => (
-          <PlatformCard key={platform.platform} platform={platform} />
+          <div key={platform.platform} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="text-orbit-primary text-sm font-medium">{platform.label}</span>
+              <span className="text-sm font-bold text-orbit-secondary">
+                {platform.mentionCount}/{platform.results.length} mentioned
+              </span>
+            </div>
+            {(() => {
+              const best = platform.results.find(r => r.mentioned && r.excerpt)?.excerpt ?? null;
+              return best
+                ? <p className="text-orbit-secondary text-xs leading-relaxed italic">&ldquo;{best}&rdquo;</p>
+                : <p className="text-orbit-tertiary text-xs italic">Brand not mentioned in any response.</p>;
+            })()}
+          </div>
         ))}
         {platforms.length === 0 && (
           <p className="text-orbit-tertiary text-sm col-span-2">
@@ -130,7 +412,6 @@ function ProbeView({ snapshot }: { snapshot: LLMProbeSnapshot }) {
         )}
       </div>
 
-      {/* Prompts used — transparency */}
       <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
         <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-3">
           Prompts sent to each platform
@@ -138,87 +419,12 @@ function ProbeView({ snapshot }: { snapshot: LLMProbeSnapshot }) {
         <ol className="flex flex-col gap-2">
           {prompts.map((p, i) => (
             <li key={i} className="flex items-start gap-2">
-              <span className="text-orbit-tertiary text-[10px] font-mono mt-0.5 shrink-0">
-                {i + 1}.
-              </span>
+              <span className="text-orbit-tertiary text-[10px] font-mono mt-0.5 shrink-0">{i + 1}.</span>
               <span className="text-orbit-secondary text-xs italic">&ldquo;{p}&rdquo;</span>
             </li>
           ))}
         </ol>
-        <p className="text-orbit-tertiary text-[10px] mt-3 border-t border-orbit-border pt-3">
-          Results reflect what these LLMs said at analysis time. Responses vary between runs and are not a persistent index.
-        </p>
       </div>
-
-    </div>
-  );
-}
-
-// ─── Platform Card ────────────────────────────────────────────────────────────
-
-function PlatformCard({ platform }: { platform: PlatformProbeData }) {
-  const icon        = PLATFORM_ICON[platform.platform] ?? '💡';
-  const pct         = Math.round(platform.mentionRate * 100);
-  const scoreColor  = pct >= 67 ? 'text-green-400' : pct >= 34 ? 'text-amber-400' : 'text-red-400';
-  const bestExcerpt = platform.results.find(r => r.mentioned && r.excerpt)?.excerpt ?? null;
-
-  return (
-    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3">
-
-      {/* Platform header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-base">{icon}</span>
-          <span className="text-orbit-primary text-sm font-medium">{platform.label}</span>
-        </div>
-        <span className={`text-sm font-bold ${scoreColor}`}>
-          {platform.mentionCount}/{platform.results.length} mentioned
-        </span>
-      </div>
-
-      {/* Mention bar */}
-      <div className="h-1.5 bg-orbit-muted rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-700 ${
-            pct >= 67 ? 'bg-green-500' : pct >= 34 ? 'bg-amber-500' : 'bg-red-500/60'
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-
-      {/* Per-prompt results */}
-      <div className="flex flex-col gap-1.5">
-        {platform.results.map((r, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <span className={`text-[10px] shrink-0 font-bold ${r.mentioned ? 'text-green-400' : 'text-orbit-tertiary'}`}>
-              {r.mentioned ? '✓' : '–'}
-            </span>
-            <span className="text-orbit-tertiary text-[10px]">Prompt {i + 1}</span>
-            {r.mentioned && (
-              <span className="text-[10px] bg-green-500/10 border border-green-500/20 text-green-400 px-1.5 py-0.5 rounded-full">
-                brand cited
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Best excerpt */}
-      {bestExcerpt ? (
-        <div className="bg-orbit-muted/50 rounded p-3 mt-1">
-          <p className="text-orbit-tertiary text-[10px] font-medium mb-1 uppercase tracking-widest">
-            What it said
-          </p>
-          <p className="text-orbit-secondary text-xs leading-relaxed italic">
-            &ldquo;{bestExcerpt}&rdquo;
-          </p>
-        </div>
-      ) : (
-        <div className="bg-orbit-muted/30 rounded p-3 mt-1">
-          <p className="text-orbit-tertiary text-xs italic">Brand not mentioned in any response.</p>
-        </div>
-      )}
-
     </div>
   );
 }

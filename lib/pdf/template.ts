@@ -204,10 +204,26 @@ export function buildBriefHTML(analysis: any): string {
       <div>
         <div class="stat-card" style="display:inline-block;margin-bottom:10px">
           <div class="stat-value" style="color:${profoundScore >= 60 ? '#22C55E' : profoundScore >= 35 ? '#F59E0B' : '#EF4444'}">${profoundScore}<span style="font-size:14px;color:#8888AA">/100</span></div>
-          <div class="stat-label">LLM Visibility Score</div>
-          <div class="stat-source">Source: Profound API</div>
+          <div class="stat-label">${profound.source === 'llm_probe_v2' ? 'Unbranded AI Visibility' : 'LLM Visibility Score'}</div>
+          <div class="stat-source">Source: Live AI probe (Claude + ChatGPT)</div>
         </div>
-        ${(profound.platformScores ?? []).map((p: any) => {
+        ${profound.source === 'llm_probe_v2' ? `
+          <div class="platform-row">
+            <div class="platform-name">Brand recognition</div>
+            <div class="platform-track"><div class="platform-fill" style="width:${profound.branded?.score ?? 0}%"></div></div>
+            <div class="platform-score">${profound.branded?.score ?? 0}</div>
+          </div>
+          <div style="font-size:8px;color:#8888AA;margin-top:6px">
+            Sentiment of brand mentions: ${profound.sentiment?.positive ?? 0} positive ·
+            ${profound.sentiment?.neutral ?? 0} neutral · ${profound.sentiment?.negative ?? 0} negative
+          </div>
+          ${(profound.categories ?? []).slice(0, 6).map((c: any) => `
+            <div class="platform-row">
+              <div class="platform-name">${escapeHtml(c.category)}</div>
+              <div class="platform-track"><div class="platform-fill" style="width:${Math.round((c.mentionRate ?? 0) * 100)}%"></div></div>
+              <div class="platform-score">${Math.round((c.mentionRate ?? 0) * 100)}%</div>
+            </div>`).join('')}
+        ` : (profound.platformScores ?? []).map((p: any) => {
           const label = { chatgpt: 'ChatGPT', perplexity: 'Perplexity', gemini: 'Gemini', claude: 'Claude', bing_copilot: 'Copilot' }[p.platform as string] ?? p.platform;
           return `<div class="platform-row">
             <div class="platform-name">${label}</div>

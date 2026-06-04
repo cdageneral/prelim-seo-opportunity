@@ -15,6 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
+import { getLLMProbeSnapshotV2, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
 
 import {
   personaPrompt,
@@ -440,6 +441,7 @@ export async function generatePPTPrompt(
 export interface SynthesisResult {
   personas:          any[];
   opportunities:     any[];
+  llmProbe:          LLMProbeSnapshotV2 | any;   // v7.80: probe now runs here (needs categories)
   narrative: {
     marketPositionNarrative: string;
     visibilityGap:           string;
@@ -470,23 +472,45 @@ export async function runFullSynthesis(
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}`);
 
-  // Passes 1, 2, 2.5 run in parallel
-  const [personas, opportunities, categoryBreakdown] = await Promise.all([
+  // Passes 1 & 2.5 run in parallel. Opportunities (pass 2) moved AFTER the
+  // LLM probe (v7.80) so it scores GEO opportunities against fresh probe data.
+  const [personas, categoryBreakdown] = await Promise.all([
     generatePersonas(domain, industry, semrush, serp),
-    generateOpportunities(domain, industry, semrush, serp, profound),
     generateCategoryBreakdown(domain, industry, semrush).catch(err => {
       console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
       return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;
     }),
   ]);
-  console.log(`[OrbitIQ] Personas: ${personas.length}, Opportunities: ${opportunities.length}, Categories: ${categoryBreakdown.categories.length}`);
+  console.log(`[OrbitIQ] Personas: ${personas.length}, Categories: ${categoryBreakdown.categories.length}`);
+
+  // Pass 2.6 (v7.80): LLM probe — needs procedure categories from pass 2.5.
+  // "Other" is excluded (catch-all, not a real product category). On failure,
+  // fall back to the previous analysis's probe data (passed in as `profound`)
+  // so the panel degrades gracefully instead of going blank.
+  const probeCategories = categoryBreakdown.categories
+    .filter(c => c.type === 'procedure' && c.name !== 'Other')
+    .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
+
+  const llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
+    .catch(err => {
+      console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err);
+      return profound ?? null;
+    });
+
+  // Pass 2: opportunities — uses the fresh probe
+  const opportunities = await generateOpportunities(domain, industry, semrush, serp, llmProbe)
+    .catch(err => {
+      console.error('[OrbitIQ] Opportunities failed (non-fatal):', err);
+      return [] as any[];
+    });
+  console.log(`[OrbitIQ] Opportunities: ${opportunities.length}`);
 
   // Passes 3 & 4 run in parallel — PPT prompt uses placeholder narrative snippets
   // until narrative is available; the deck is built from opportunities + raw data.
   const [narrative, pptPrompt] = await Promise.all([
     generateNarrative(
       domain, clientName, industry,
-      semrush, serp, profound,
+      semrush, serp, llmProbe,
       personas, opportunities,
       categoryBreakdown
     ),
@@ -494,7 +518,7 @@ export async function runFullSynthesis(
       clientName, domain, industry,
       null,          // narrative not yet available — prompts.ts handles null gracefully
       opportunities,
-      semrush, serp, profound
+      semrush, serp, llmProbe
     ),
   ]);
   console.log(`[OrbitIQ] Narrative + PPT prompt generated in parallel`);
@@ -527,6 +551,7 @@ export async function runFullSynthesis(
   return {
     personas,
     opportunities,
+    llmProbe,
     narrative,
     pptPrompt,
     categoryBreakdown,

@@ -12,6 +12,38 @@
 import type { SemrushSnapshot, SemrushKeyword }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
 
+// ─── LLM Probe context helper (v7.80) ────────────────────────────────────────
+//
+// Builds the "LLM visibility" data block for synthesis prompts from whatever
+// probe snapshot shape is present: v2 (llm_probe_v2), v1 (llm_probe), or none.
+// Every number in the block comes from actual probe results — no estimates.
+
+export function llmProbeContext(profound: any): string {
+  if (profound?.source === 'llm_probe_v2') {
+    const cats: any[] = profound.categories ?? [];
+    const invisible = cats.filter(c => c.mentionRate === 0).map(c => c.category);
+    const visible   = cats.filter(c => c.mentionRate > 0)
+      .map(c => `${c.category} (${Math.round(c.mentionRate * 100)}%)`);
+    const s = profound.sentiment ?? {};
+    const negExample = (s.examples ?? []).find((e: any) => e.tone === 'negative');
+
+    return `LLM VISIBILITY (live probe of Claude + ChatGPT, ${profound.promptsPerPlatform ?? '?'} prompts/platform):
+- Unbranded visibility: ${profound.unbranded?.score ?? 0}/100 — mentioned in ${profound.unbranded?.mentions ?? 0} of ${profound.unbranded?.total ?? 0} prompts that never named the brand
+- Brand recognition: ${profound.branded?.score ?? 0}/100 (${profound.branded?.recognized ?? 0}/${profound.branded?.total ?? 0} branded prompts answered accurately)
+- Categories where brand is NEVER recommended by AI: ${invisible.length > 0 ? invisible.join(', ') : 'none'}
+- Categories with some AI visibility: ${visible.length > 0 ? visible.join(', ') : 'none'}
+- Sentiment of brand mentions: ${s.positive ?? 0} positive / ${s.neutral ?? 0} neutral / ${s.negative ?? 0} negative${s.assessed === false ? ' (not assessed this run)' : ''}
+${negExample ? `- Example negative AI excerpt (verbatim): "${negExample.quote}"` : ''}`;
+  }
+
+  if (profound?.source === 'llm_probe') {
+    return `LLM VISIBILITY (live probe of Claude + ChatGPT):
+- Overall LLM visibility score: ${profound.overallScore ?? 0}/100 (${profound.overallMentions ?? 0}/${profound.overallTotal ?? 0} prompts mentioned brand)`;
+  }
+
+  return `LLM VISIBILITY: not yet assessed (no probe data for this analysis)`;
+}
+
 
 // ─── Pass 2.5: Category Breakdown ────────────────────────────────────────────
 //
@@ -206,12 +238,6 @@ export function opportunityPrompt(
     .join(', ');
 
   const aioStats = serp.aioSummary;
-  const profoundScore = profound?.overallScore ?? 0;
-  const brandMisalign = (profound?.brandContext?.misalignments ?? []).join('; ');
-  const topicGaps     = (profound?.topicAuthority ?? [])
-    .filter((t: any) => t.competitor && t.score < 50)
-    .map((t: any) => `${t.topic} (owned by ${t.competitor})`)
-    .join(', ');
 
   return `You are a senior SEO and GEO strategist building a CMO-level opportunity brief.
 
@@ -232,10 +258,7 @@ SERPAPI DATA (live SERP snapshots):
 - Client AIO acquisition rate: ${Math.round(aioStats.clientAIORate * 100)}% of AIOs cite client
 - Keywords queried: ${aioStats.total}
 
-PROFOUND DATA (LLM visibility):
-- Overall LLM visibility score: ${profoundScore}/100
-- Brand positioning misalignments: ${brandMisalign || 'none identified'}
-- Topic authority gaps (competitor-owned): ${topicGaps || 'none identified'}
+${llmProbeContext(profound)}
 
 ─────────────────────────────────────────────────────────────────────────────
 
@@ -292,8 +315,6 @@ export function narrativePrompt(
   const topComp         = [...semrush.competitors].sort((a, b) => b.organicTraffic - a.organicTraffic)[0]?.domain ?? 'the market leader';
   const aioRate         = Math.round(serp.aioSummary.aioRate * 100);
   const clientAIORate   = Math.round(serp.aioSummary.clientAIORate * 100);
-  const profoundScore    = profound?.overallScore ?? 0;
-  const brandDescription = profound?.brandContext?.summary ?? 'not yet assessed';
 
   return `You are a senior growth strategist writing an executive narrative for a CMO at ${clientName}.
 
@@ -326,8 +347,8 @@ Keyword footprint:
 AI search landscape:
 - ${aioRate}% of tracked keywords trigger AI Overviews (SerpAPI live data)
 - ${clientName} appears in ${clientAIORate}% of those AI Overviews
-- LLM visibility score: ${profoundScore}/100 (Profound)
-- How AI currently describes ${clientName}: "${brandDescription}"
+
+${llmProbeContext(profound)}
 
 Top opportunities: ${opportunities.map(o => o.title).join(', ')}
 
@@ -401,9 +422,7 @@ Visual: Bar comparison of client vs. top competitors in AI citations
 Source: SerpAPI live SERP data
 
 SLIDE 5 — LLM Brand Visibility
-Score: ${profound?.overallScore ?? 0}/100
-How AI describes us: "${profound?.brandContext?.summary ?? 'not yet assessed'}"
-Platform breakdown: ${(profound?.platformScores ?? []).map((p: any) => `${p.platform}: ${p.score}`).join(', ')}
+${llmProbeContext(profound)}
 Source: Live AI Probe (Claude + ChatGPT)
 
 SLIDE 6 — Opportunity #1
