@@ -1,7 +1,11 @@
 'use client';
 
 /**
- * CompetitorsModal — v7.105
+ * CompetitorsModal — v7.106
+ *
+ * v7.106: every competitor row now shows its uploaded keyword count even when
+ * zero ("0 kws uploaded — no CSV; auto-discover on next full analysis") so
+ * the count is always visible at a glance per competitor.
  *
  * v7.105: uploading a CSV onto a competitor that already has uploaded
  * keywords now asks Replace (clear that competitor's rows first, then load
@@ -577,7 +581,8 @@ export default function CompetitorsModal({
                                 {stats.withPos === 0 && <span style={{ color: '#F59E0B' }}> — re-upload with a Position column for page-1 SOV</span>}
                               </span>
                             ) : (
-                              <span>no CSV — auto-discover on next full analysis</span>
+                              /* v7.106: always show the count, even at zero */
+                              <span><span style={{ color: '#8888B0', fontWeight: 600 }}>0 kws uploaded</span> — no CSV; auto-discover on next full analysis</span>
                             )}
                             {kwError && <span style={{ color: '#F87171' }}> (keyword stats unavailable)</span>}
                           </p>
