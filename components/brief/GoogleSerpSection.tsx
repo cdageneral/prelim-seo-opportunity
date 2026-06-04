@@ -546,19 +546,15 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
         rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
       }
     } else if (compRows.length > 0) {
-      // v7.90: uploaded competitor CSVs carry NO rank positions (the uploader
-      // previously only ingested keyword+volume), so page-1 share cannot be
-      // computed. Honest fallback: each domain's TOTAL tracked keyword volume
-      // — same measure on both sides, explicitly labeled. Re-uploading
-      // competitor CSVs with a position column upgrades this to page-1 share.
-      basis = 'tracked';
-      clientKwsUsed = topKws.length;
-      clientVoice   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-      for (const r of compRows) {
-        const d = normSovDomain(r.domain);
-        byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
-        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
-      }
+      // v7.93: Wayne's definition is final — Share of Voice is PAGE-1 VOLUME
+      // ONLY. Competitor rows without rank positions cannot participate, and
+      // substituting total tracked volume (the v7.90–v7.92 stopgap) overstated
+      // whichever side had the bigger upload. When competitor positions are
+      // missing entirely, the panel renders an explicit fix-it notice instead
+      // of a donut — never a misleading share.
+      basis = 'tracked';   // signals the notice state below; no voice computed
+      clientKwsUsed = 0;
+      clientVoice   = 0;
     } else {
       basis = 'gapOnly';
       const clientP1 = topKws.filter(k => k?.position != null && k.position <= 10);
@@ -630,6 +626,25 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
   const brandArcs   = arcs.filter(a => a.type === 'brand');
   const otherArc    = arcs.find(a => a.domain === 'Other');
 
+  // v7.93: competitor rows exist but carry no rank positions — page-1 share
+  // of voice cannot be computed. Show the fix, never a misleading donut.
+  if (basis === 'tracked') {
+    return (
+      <div className="orbit-card p-5 flex flex-col gap-3">
+        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p style={{ fontSize: '12px', color: '#8888B0', lineHeight: 1.6 }}>
+          Share of Voice is computed from <span style={{ color: '#C0C0E8' }}>page-1 keyword volume per domain</span>, and the uploaded competitor keywords have no rank positions, so it cannot be calculated yet.
+        </p>
+        <p style={{ fontSize: '11px', color: '#7070A0', lineHeight: 1.6 }}>
+          Fix: re-upload each competitor&apos;s keyword CSV including a <span className="font-mono" style={{ color: '#9B96FF' }}>Position</span> column (Semrush exports include it). Existing rows are updated in place — the donut appears automatically once positions exist.
+        </p>
+        <p style={{ fontSize: '9px', color: '#383858', margin: 0 }}>
+          on file: {compRows.length.toLocaleString()} competitor keyword{compRows.length === 1 ? '' : 's'}, 0 with positions
+        </p>
+      </div>
+    );
+  }
+
   if (total === 0) {
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
@@ -648,7 +663,6 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
         <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
           {basis === 'traffic' && 'by organic traffic (Semrush)'}
           {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
-          {basis === 'tracked' && 'by total tracked keyword volume — uploaded competitor CSVs have no rank positions; re-upload with a position column for page-1 share'}
           {basis === 'gapOnly' && 'by page-1 gap-keyword volume only — competitor rankings on shared keywords not available'}
         </p>
       </div>
