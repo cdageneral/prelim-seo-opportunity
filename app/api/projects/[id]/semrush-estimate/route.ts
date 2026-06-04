@@ -41,7 +41,14 @@ export async function GET(
     .filter(Boolean);
 
   try {
-    const estimate = await estimateSemrushPull(domain, manualCompetitorDomains);
+    // v7.98: pass the project's volume floors so the response reports them and
+    // flags the estimate as a ceiling (per-domain counts are unfiltered totals).
+    const estimate = await estimateSemrushPull(
+      domain,
+      manualCompetitorDomains,
+      (project as any).kwVolThresholdClient ?? 0,
+      (project as any).kwVolThresholdCompetitor ?? 0,
+    );
     return NextResponse.json(estimate);
   } catch (err) {
     return NextResponse.json(

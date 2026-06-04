@@ -241,7 +241,7 @@ export default function EditProjectModal({
 
           <div style={{ background: '#0F0F1C', border: '0.5px solid #1E1E38', borderRadius: '10px', padding: '16px', marginBottom: '22px' }}>
             <p style={{ fontSize: '11px', color: '#7070A0', marginBottom: '16px', lineHeight: 1.5 }}>
-              Keywords below these monthly search volume thresholds are hidden from the Keyword Landscape and all analysis panels. Set to <strong style={{ color: '#9090C0' }}>All</strong> to show every keyword regardless of volume.
+              Keywords below these monthly search volume thresholds are hidden from all analysis panels, and on the next data pull they are excluded inside the Semrush query itself — never fetched, never billed (10 API units per row). Set to <strong style={{ color: '#9090C0' }}>All</strong> to fetch every keyword regardless of volume.
             </p>
 
             {/* Client ranked threshold */}

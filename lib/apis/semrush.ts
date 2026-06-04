@@ -123,7 +123,15 @@ export async function getDomainOverview(domain: string): Promise<SemrushDomainOv
 // partial-data warning to the UI.
 const SEMRUSH_PAGE = 10_000;
 
-export async function getOrganicKeywords(domain: string, limit = 0): Promise<SemrushKeyword[]> {
+// v7.98: server-side volume floor. Semrush display_filter syntax verified live
+// against api.semrush.com: '+|Nq|Gt|999' returned only rows with Search Volume
+// ≥ 1,000 (Gt = strictly greater, volumes are integers, so Gt|min-1 ≡ ≥ min).
+// Rows excluded by the filter are NEVER returned and NEVER billed (10 units/row).
+function volumeFilter(volMin: number): Record<string, string> {
+  return volMin > 0 ? { display_filter: `+|Nq|Gt|${volMin - 1}` } : {};
+}
+
+export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0): Promise<SemrushKeyword[]> {
   const all: SemrushKeyword[] = [];
   let offset = 0;
   for (;;) {
@@ -137,6 +145,7 @@ export async function getOrganicKeywords(domain: string, limit = 0): Promise<Sem
       display_offset: String(offset),
       display_sort: 'tr_desc',
       export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
+      ...volumeFilter(volMin),
     });
     const rows = parseSemrushCSV(raw).map(row => ({
       keyword:      row['Keyword']   ?? '',
@@ -181,7 +190,8 @@ export async function getCompetitors(domain: string): Promise<SemrushCompetitor[
 export async function getKeywordGap(
   clientDomain: string,
   competitorDomain: string,
-  limit = 0
+  limit = 0,
+  volMin = 0,          // v7.98: server-side volume floor — filtered rows are never billed
 ): Promise<SemrushKeywordGap[]> {
   const all: SemrushKeywordGap[] = [];
   let offset = 0;
@@ -196,6 +206,7 @@ export async function getKeywordGap(
       display_offset: String(offset),
       display_sort:   'tr_desc',
       export_columns: 'Ph,Po,Nq,Cp',
+      ...volumeFilter(volMin),
     });
     const rows = parseSemrushCSV(raw).map(row => ({
       keyword:            row['Keyword'] ?? '',
@@ -253,11 +264,14 @@ export async function getSemrushSnapshot(
   domain: string,
   manualCompetitors: string[] = [],   // domains from project.competitors
   gapVolMin = 0,                      // v7.86: project-level threshold (was hardcoded 2,400)
+  clientVolMin = 0,                   // v7.98: client volume floor, applied at the API level
 ): Promise<SemrushSnapshot> {
-  // Parallel fetch of independent endpoints — full footprint, no caps (v7.86)
+  // Parallel fetch of independent endpoints. v7.98: project volume thresholds
+  // are applied INSIDE the Semrush query (display_filter) so excluded rows are
+  // never fetched or billed — not just filtered after the fact.
   const [overview, topKeywords, autoCompetitors] = await Promise.all([
     getDomainOverview(domain),
-    getOrganicKeywords(domain),
+    getOrganicKeywords(domain, 0, clientVolMin),
     getCompetitors(domain),
   ]);
 
@@ -283,7 +297,7 @@ export async function getSemrushSnapshot(
   const gapResults = await Promise.all(
     gapDomains.map(async comp => {
       try {
-        const rows = await getKeywordGap(domain, comp);
+        const rows = await getKeywordGap(domain, comp, 0, gapVolMin);
         console.log(`[OrbitIQ] Gap pull ${comp}: ${rows.length} raw rows`);
         if (rows.length === 0) {
           warnings.push(
@@ -392,11 +406,20 @@ export interface SemrushPullEstimate {
   competitors: Array<{ domain: string; keywords: number }>;
   totalRows:   number;
   totalUnits:  number;   // totalRows × 10
+  // v7.98: active project volume floors. The per-domain keyword counts above are
+  // UNFILTERED footprint sizes (Semrush has no cheap filtered-count endpoint), so
+  // when a floor is set the estimate is a CEILING — the actual pull fetches and
+  // bills only rows at/above the floor, which can be far fewer.
+  clientVolMin:     number;
+  competitorVolMin: number;
+  isCeiling:        boolean;   // true when any floor > 0
 }
 
 export async function estimateSemrushPull(
   domain: string,
   manualCompetitors: string[] = [],
+  clientVolMin = 0,
+  competitorVolMin = 0,
 ): Promise<SemrushPullEstimate> {
   const [overview, autoCompetitors] = await Promise.all([
     getDomainOverview(domain),
@@ -428,5 +451,8 @@ export async function estimateSemrushPull(
     competitors,
     totalRows,
     totalUnits:  totalRows * 10,
+    clientVolMin,
+    competitorVolMin,
+    isCeiling:   clientVolMin > 0 || competitorVolMin > 0,
   };
 }

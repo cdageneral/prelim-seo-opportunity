@@ -537,6 +537,18 @@ export default function ProjectBriefPage() {
           }
           onClose={() => setShowRefreshModal(false)}
           onRun={mode => requestAnalysisWithEstimate(mode)}
+          clientThreshold={project.kwVolThresholdClient ?? 0}
+          competitorThreshold={project.kwVolThresholdCompetitor ?? 0}
+          onSaveThresholds={async (client, competitor) => {
+            // v7.98: single source of truth — same PATCH as Edit Project, so the
+            // estimate endpoint (which reads the project row) sees the new floors.
+            await fetch(`/api/projects/${projectId}`, {
+              method:  'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ kwVolThresholdClient: client, kwVolThresholdCompetitor: competitor }),
+            });
+            setProject(p => p ? { ...p, kwVolThresholdClient: client, kwVolThresholdCompetitor: competitor } : p);
+          }}
         />
       )}
 
@@ -831,11 +843,18 @@ export default function ProjectBriefPage() {
                         </div>
                       ))}
                       <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid #1E1E30' }}>
-                        <span className="font-medium" style={{ color: '#E8E8FF' }}>Estimated cost</span>
+                        <span className="font-medium" style={{ color: '#E8E8FF' }}>
+                          {costEstimate.isCeiling ? 'Maximum cost' : 'Estimated cost'}
+                        </span>
                         <span className="font-medium" style={{ color: '#F59E0B' }}>
-                          ~{costEstimate.totalUnits.toLocaleString()} API units ({costEstimate.totalRows.toLocaleString()} rows)
+                          {costEstimate.isCeiling ? 'up to ' : '~'}{costEstimate.totalUnits.toLocaleString()} API units ({costEstimate.totalRows.toLocaleString()} rows)
                         </span>
                       </div>
+                      {costEstimate.isCeiling && (
+                        <p className="text-[11px] pt-2" style={{ color: '#4ADE80', margin: 0 }}>
+                          Volume floor active{costEstimate.clientVolMin > 0 ? ` — client ≥ ${costEstimate.clientVolMin.toLocaleString()}/mo` : ''}{costEstimate.competitorVolMin > 0 ? ` — competitors ≥ ${costEstimate.competitorVolMin.toLocaleString()}/mo` : ''}. Keyword counts above are full footprints; rows below the floor are excluded inside the Semrush query and never billed, so actual cost will be lower.
+                        </p>
+                      )}
                     </div>
                     <p className="text-[11px] mb-4" style={{ color: '#55557A' }}>
                       If your unit balance runs out mid-pull, Semrush returns partial data and you&apos;ll see a warning banner. Check your balance under Subscription info → API units at semrush.com.

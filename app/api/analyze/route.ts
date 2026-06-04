@@ -125,10 +125,21 @@ export async function POST(req: NextRequest) {
         ].filter((d, i, arr) => d && arr.indexOf(d) === i);
 
         // ── Fetch in parallel: client's current rankings + competitor gaps ──
+        // v7.98: project volume floors applied at the API level (rows below the
+        // floor are never fetched or billed) + failures surfaced as warnings
+        // instead of being silently swallowed (same fix as full mode, v7.96).
+        const gapsClientFloor = (project as any).kwVolThresholdClient ?? 0;
+        const gapsCompFloor   = (project as any).kwVolThresholdCompetitor ?? 0;
         const [freshClientKws, ...gapResults] = await Promise.all([
-          getOrganicKeywords(domain).catch(() => []),
+          getOrganicKeywords(domain, 0, gapsClientFloor).catch(err => {
+            warnings.push(`Client ranking refresh failed — positions were NOT updated this run: ${String((err as any)?.message ?? err)}. Check your Semrush API unit balance and re-run.`);
+            return [] as Awaited<ReturnType<typeof getOrganicKeywords>>;
+          }),
           ...allCompetitorDomains.slice(0, 5).map(comp =>
-            getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
+            getKeywordGap(domain, comp, 0, gapsCompFloor).catch(err => {
+              warnings.push(`Competitor gap pull for ${comp} failed: ${String((err as any)?.message ?? err)}. Gap data is missing this domain — check your Semrush API unit balance and re-run.`);
+              return [] as SemrushKeywordGap[];
+            })
           ),
         ]);
 
@@ -262,6 +273,7 @@ export async function POST(req: NextRequest) {
         domain,
         manualCompetitorDomains,
         (project as any).kwVolThresholdCompetitor ?? 0,   // v7.86: project setting, not hardcoded 2,400
+        (project as any).kwVolThresholdClient ?? 0,       // v7.98: client floor applied at the API level
       ).catch(err => {
         console.error(`[OrbitIQ] Semrush failed:`, err);
         warnings.push(`Semrush fetch failed — keyword data is missing for this run: ${String((err as any)?.message ?? err)}`);
@@ -279,9 +291,12 @@ export async function POST(req: NextRequest) {
 
       // v7.86: Semrush returns PARTIAL rows when the API unit balance runs out
       // mid-pull — surface that instead of silently shipping incomplete data.
+      // v7.98: only meaningful when NO client volume floor is set — with a floor,
+      // fetched is legitimately smaller than the unfiltered overview count.
+      const clientFloor = (project as any).kwVolThresholdClient ?? 0;
       const expected = semrush.overview.organicKeywords;
       const fetched  = semrush.topKeywords.length;
-      if (expected > 0 && fetched < expected * 0.95) {
+      if (clientFloor === 0 && expected > 0 && fetched < expected * 0.95) {
         warnings.push(
           `Semrush returned ${fetched.toLocaleString()} of ~${expected.toLocaleString()} client keyword rows — ` +
           `your Semrush API unit balance may have run out mid-pull. Data below is partial; ` +
