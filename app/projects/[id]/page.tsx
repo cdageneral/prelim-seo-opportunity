@@ -978,7 +978,7 @@ function DataSourceCard({
         <div style={{ background: '#0F0F1E', border: '0.5px solid #1E1E35', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
             <i className="ti ti-info-circle" style={{ fontSize: '13px', color: '#6C63FF' }} aria-hidden="true" />
-            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch top 40 keywords for each domain</span>
+            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch the client&apos;s top 150 keywords + top 100 keywords per competitor domain</span>
           </div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             <DomainPill domain={clientDomain} label="client" />
