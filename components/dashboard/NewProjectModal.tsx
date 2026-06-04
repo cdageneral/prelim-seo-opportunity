@@ -200,7 +200,7 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
                 style={{ flex: 1, textAlign: 'left', cursor: 'pointer', background: dataSource === 'auto' ? '#1A1A3A' : '#111118', border: `1.5px solid ${dataSource === 'auto' ? '#6C63FF' : '#1E1E2E'}`, borderRadius: '8px', padding: '12px', transition: 'border-color .15s, background .15s' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '7px' }}>
                   <i className="ti ti-antenna" style={{ fontSize: '16px', color: dataSource === 'auto' ? '#7B68EE' : '#404060' }} aria-hidden="true" />
-                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: '#2B0D0D', color: '#F87171', fontWeight: 500 }}>~2,400 units</span>
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: '#2B0D0D', color: '#F87171', fontWeight: 500 }}>cost shown before run</span>
                 </div>
                 <p style={{ fontSize: '12px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 3px' }}>Auto-discover</p>
                 <p style={{ fontSize: '11px', color: '#707090', margin: 0, lineHeight: 1.4 }}>Semrush crawls client + competitors automatically.</p>

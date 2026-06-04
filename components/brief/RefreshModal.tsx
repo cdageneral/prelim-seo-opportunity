@@ -5,7 +5,7 @@
  *
  * Shown when the user clicks "Refresh Analysis" on a project that already
  * has results. Presents two modes:
- *   • Full re-analysis  — recrawls everything (~2,400 Semrush units)
+ *   • Full re-analysis  — recrawls everything (full footprint; unit cost estimated + confirmed before run, v7.86)
  *   • Find gaps only    — refreshes client rankings + fetches net-new competitor keywords (~450 units)
  */
 
@@ -72,7 +72,7 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
               <i className="ti ti-refresh" style={{ fontSize: '18px', color: mode === 'full' ? '#7B68EE' : '#454565' }} aria-hidden="true" />
-              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>~2,400 units</span>
+              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>cost shown before run</span>
             </div>
             <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Full re-analysis</p>
             <p style={{ fontSize: '11px', color: '#7070A0', margin: '0 0 8px', lineHeight: 1.5 }}>

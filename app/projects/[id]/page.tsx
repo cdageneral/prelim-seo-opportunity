@@ -1067,7 +1067,7 @@ function DataSourceCard({
         <button style={cardStyle(dataSource === 'auto')} onClick={() => onSelectSource('auto')}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
             <i className="ti ti-antenna" style={{ fontSize: '18px', color: dataSource === 'auto' ? '#7B68EE' : '#404060' }} aria-hidden="true" />
-            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>~2,400 units</span>
+            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>cost shown before run</span>
           </div>
           <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Auto-discover</p>
           <p style={{ fontSize: '11px', color: '#707090', margin: '0 0 6px', lineHeight: 1.5 }}>
@@ -1096,7 +1096,7 @@ function DataSourceCard({
         <div style={{ background: '#0F0F1E', border: '0.5px solid #1E1E35', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
             <i className="ti ti-info-circle" style={{ fontSize: '13px', color: '#6C63FF' }} aria-hidden="true" />
-            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch the client&apos;s top 150 keywords + top 100 keywords per competitor domain</span>
+            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch the FULL keyword footprint for the client + up to 5 competitor domains (10 API units per keyword row — exact cost estimate shown before the run starts)</span>
           </div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             <DomainPill domain={clientDomain} label="client" />
