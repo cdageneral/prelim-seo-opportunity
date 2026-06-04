@@ -1,7 +1,13 @@
 'use client';
 
 /**
- * CompetitorsModal — v7.101
+ * CompetitorsModal — v7.105
+ *
+ * v7.105: uploading a CSV onto a competitor that already has uploaded
+ * keywords now asks Replace (clear that competitor's rows first, then load
+ * only the new file) or Merge (the v7.92 upsert: update matches, add new).
+ * Prevents stale rows surviving a re-upload when the user expected the new
+ * file to fully replace the old one.
  *
  * Single home for ALL competitor management, opened from the "Competitors"
  * button in the project's top global nav. Replaces:
@@ -264,31 +270,70 @@ export default function CompetitorsModal({
     setTimeout(() => fileInputRef.current?.click(), 0);
   }
 
+  // v7.105: when the competitor already has uploaded keywords, the user must
+  // choose Replace (clear existing rows first) or Merge (v7.92 upsert) before
+  // the upload runs. Parsed rows wait here until they pick.
+  const [pendingUpload, setPendingUpload] = useState<{ competitor: Competitor; parsed: ParsedKw[] } | null>(null);
+
+  function setStatusFor(id: string, s: { type: 'success' | 'error'; msg: string } | null) {
+    setRowStatus(prev => {
+      const next = { ...prev };
+      if (s) next[id] = s; else delete next[id];
+      return next;
+    });
+  }
+
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file   = e.target.files?.[0];
     const target = uploadTarget;
     e.target.value = '';
     if (!file || !target) return;
 
-    const setStatus = (s: { type: 'success' | 'error'; msg: string } | null) =>
-      setRowStatus(prev => {
-        const next = { ...prev };
-        if (s) next[target.id] = s; else delete next[target.id];
-        return next;
-      });
-
     let text = '';
     try { text = await file.text(); } catch {
-      setStatus({ type: 'error', msg: 'Could not read file.' }); return;
+      setStatusFor(target.id, { type: 'error', msg: 'Could not read file.' }); return;
     }
     const parsed = parseCompetitorCsv(text);
     if (!parsed.length) {
-      setStatus({ type: 'error', msg: 'No valid rows. Expected columns: keyword, search_volume, position.' });
+      setStatusFor(target.id, { type: 'error', msg: 'No valid rows. Expected columns: keyword, search_volume, position.' });
       return;
     }
 
-    setUploadingId(target.id); setUploadPct(0); setStatus(null);
+    // v7.105: existing uploaded rows for this domain? Ask Replace vs Merge.
+    const existing = domainStats[normDomain(target.domain)]?.count ?? 0;
+    if (existing > 0) {
+      setStatusFor(target.id, null);
+      setConfirmClearId(null); setConfirmDeleteId(null);
+      setPendingUpload({ competitor: target, parsed });
+      return;
+    }
+    await runUpload(target, parsed, false);
+  }
+
+  /** Uploads parsed rows; when replace=true, clears the competitor's existing
+   *  uploaded rows (source csv/custom, this domain only) first. */
+  async function runUpload(target: Competitor, parsed: ParsedKw[], replace: boolean) {
+    setPendingUpload(null);
+    setUploadingId(target.id); setUploadPct(0); setStatusFor(target.id, null);
     const nd = normDomain(target.domain);
+
+    if (replace) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/keywords/clear`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ sources: ['csv', 'custom'], domain: nd }),
+        });
+        if (!res.ok) throw new Error('clear failed');
+      } catch {
+        // Abort — merging when the user asked for replace would be worse.
+        setUploadingId(null); setUploadTarget(null);
+        setStatusFor(target.id, { type: 'error', msg: 'Could not clear existing keywords — upload cancelled. Nothing was changed.' });
+        setTimeout(() => setStatusFor(target.id, null), 8000);
+        return;
+      }
+    }
+
     let added = 0; let skipped = 0;
     const CHUNK = 500;
     for (let i = 0; i < parsed.length; i += CHUNK) {
@@ -306,10 +351,10 @@ export default function CompetitorsModal({
     setUploadingId(null); setUploadTarget(null);
     await fetchKeywords();
     const skipNote = skipped > 0 ? ` · ${skipped} skipped` : '';
-    setStatus(added > 0
-      ? { type: 'success', msg: `${added.toLocaleString()} keywords uploaded/updated${skipNote}.` }
+    setStatusFor(target.id, added > 0
+      ? { type: 'success', msg: `${added.toLocaleString()} keywords ${replace ? 'uploaded (replaced existing)' : 'uploaded/updated'}${skipNote}.` }
       : { type: 'error',   msg: 'No keyword rows were saved.' });
-    setTimeout(() => setStatus(null), 6000);
+    setTimeout(() => setStatusFor(target.id, null), 6000);
   }
 
   // ── Volume thresholds — instant save on click ──
@@ -563,6 +608,26 @@ export default function CompetitorsModal({
                             <button type="button" onClick={() => setConfirmClearId(null)} style={{ fontSize: '10px', color: '#6060A0', background: 'none', border: 'none', cursor: 'pointer' }}>No</button>
                           </span>
                         )}
+                        {/* v7.105: Replace vs Merge choice for uploads onto existing data */}
+                        {pendingUpload?.competitor.id === c.id && !busy && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#F59E0B', whiteSpace: 'nowrap' }}>
+                            {stats?.count.toLocaleString() ?? 0} kws exist · new file has {pendingUpload.parsed.length.toLocaleString()} —
+                            <button type="button" title="Delete the existing keywords, then load only this file"
+                              onClick={() => runUpload(pendingUpload.competitor, pendingUpload.parsed, true)}
+                              style={{ fontSize: '10px', fontWeight: 700, color: '#F59E0B', background: 'rgba(245,158,11,0.15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
+                              Replace
+                            </button>
+                            <button type="button" title="Keep existing keywords; update matches and add new ones"
+                              onClick={() => runUpload(pendingUpload.competitor, pendingUpload.parsed, false)}
+                              style={{ fontSize: '10px', fontWeight: 700, color: '#4ADE80', background: 'rgba(74,222,128,0.12)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
+                              Merge
+                            </button>
+                            <button type="button" onClick={() => setPendingUpload(null)}
+                              style={{ fontSize: '10px', color: '#6060A0', background: 'none', border: 'none', cursor: 'pointer' }}>
+                              Cancel
+                            </button>
+                          </span>
+                        )}
                         {confirmDeleteId === c.id && !busy && (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#f87171', whiteSpace: 'nowrap' }}>
                             Delete competitor{stats && stats.count > 0 ? ` + ${stats.count.toLocaleString()} kws` : ''}?
@@ -579,7 +644,7 @@ export default function CompetitorsModal({
                         )}
 
                         {/* Actions */}
-                        {!busy && confirmClearId !== c.id && confirmDeleteId !== c.id && (
+                        {!busy && confirmClearId !== c.id && confirmDeleteId !== c.id && pendingUpload?.competitor.id !== c.id && (
                           <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
                             <button type="button" title="Upload this competitor's keyword CSV (columns: keyword, search_volume, position)"
                               onClick={() => pickFile(c)} style={iconBtnStyle('#F59E0B')}>
@@ -611,7 +676,7 @@ export default function CompetitorsModal({
           )}
 
           <p style={{ fontSize: '10px', color: '#505070', margin: '6px 0 22px', lineHeight: 1.5 }}>
-            Competitors are included in gap analysis and Share of Voice when you run or refresh an analysis. CSV format: <code style={{ background: '#1A1A30', padding: '0 4px', borderRadius: '3px', color: '#8080C0' }}>keyword, search_volume, position</code> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice. Re-uploading the same file updates existing rows.
+            Competitors are included in gap analysis and Share of Voice when you run or refresh an analysis. CSV format: <code style={{ background: '#1A1A30', padding: '0 4px', borderRadius: '3px', color: '#8080C0' }}>keyword, search_volume, position</code> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice. When a competitor already has keywords, uploading a CSV asks whether to <strong style={{ color: '#8080C0' }}>Replace</strong> them (clear first, load only the new file) or <strong style={{ color: '#8080C0' }}>Merge</strong> (update matches, add new ones).
           </p>
 
           {/* ── Section 2: Volume thresholds ── */}
