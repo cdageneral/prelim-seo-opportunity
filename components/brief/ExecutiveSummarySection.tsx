@@ -35,6 +35,7 @@ interface Opportunity {
 interface Props {
   analysis:                any;
   projectId:               string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   projectName?:            string;
   clientDomain?:           string;
   manualDomains?:          string[];
@@ -107,7 +108,7 @@ function SignalCard({ source, value, desc, accentColor }: {
 
 export default function ExecutiveSummarySection({
   analysis,
-  projectId,
+  projectId, kwVersion,
   projectName,
   clientDomain: propClientDomain,
   manualDomains = [],
@@ -125,7 +126,7 @@ export default function ExecutiveSummarySection({
       .then(d => setDbKeywords(d.keywords ?? []))
       .catch(() => {})
       .finally(() => setDbLoaded(true));
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   // ── Canonical keyword pool via shared utility ───────────────────────────────
   // buildKwPool is the single source of truth (see lib/utils/kwVolume.ts header).

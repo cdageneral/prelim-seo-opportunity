@@ -38,6 +38,7 @@ interface ThemeCluster {
 
 interface Props {
   projectId:                string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:                 any;
   competitors:              string[];
   defaultClientThreshold?:     number;
@@ -756,7 +757,7 @@ function ClustersTab({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ThemeClustersPanel({
-  projectId, analysis, competitors,
+  projectId, kwVersion, analysis, competitors,
   defaultClientThreshold = 0, defaultCompetitorThreshold = 0,
 }: Props) {
   const semSnap       = useMemo(() => analysis?.semrushSnapshot ?? {}, [analysis]);
@@ -830,7 +831,7 @@ export default function ThemeClustersPanel({
     } finally {
       if (showSpinner) setRefreshingKws(false);
     }
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   useEffect(() => { refreshUploadedKeywords(); }, [refreshUploadedKeywords]);
 

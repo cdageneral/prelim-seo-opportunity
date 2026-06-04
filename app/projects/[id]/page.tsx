@@ -178,6 +178,7 @@ export default function ProjectBriefPage() {
   // Edit project modal
   const [showEditProject,   setShowEditProject]   = useState(false);
   const [showCompetitors,   setShowCompetitors]   = useState(false);   // v7.101: global Competitors manager
+  const [kwVersion,         setKwVersion]         = useState(0);      // v7.107: bumped when Competitors modal closes -> all panels refetch /keywords
 
   // v7.86: Semrush cost-estimate confirm + API warning alerts
   const [estimating,       setEstimating]       = useState(false);
@@ -534,7 +535,7 @@ export default function ProjectBriefPage() {
           competitors={project.competitors ?? []}
           kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
           kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
-          onClose={() => setShowCompetitors(false)}
+          onClose={() => { setShowCompetitors(false); setKwVersion(v => v + 1); }}
           onChanged={fetchProject}
         />
       )}
@@ -969,6 +970,7 @@ export default function ProjectBriefPage() {
           {/* ── Keyword Landscape — list or clusters sub-view ── */}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'list' && (
             <KeywordsPanel
+              kwVersion={kwVersion}
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
@@ -979,6 +981,7 @@ export default function ProjectBriefPage() {
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
             <ThemeClustersPanel
+              kwVersion={kwVersion}
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
@@ -990,6 +993,7 @@ export default function ProjectBriefPage() {
           {/* ── Executive Summary — Layout B ── */}
           {hasResults && analysis && activeSection === 'overview' && (
             <ExecutiveSummarySection
+              kwVersion={kwVersion}
               analysis={analysis}
               projectId={projectId}
               projectName={project.clientName}
@@ -1003,6 +1007,7 @@ export default function ProjectBriefPage() {
           {/* ── Content Map ── */}
           {hasResults && analysis && activeSection === 'content' && (
             <ContentMapSection
+              kwVersion={kwVersion}
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}
@@ -1012,6 +1017,7 @@ export default function ProjectBriefPage() {
           {/* ── Google SERP ── */}
           {hasResults && analysis && activeSection === 'serp' && (
             <GoogleSerpSection
+              kwVersion={kwVersion}
               analysis={analysis}
               projectId={projectId}
               projectName={project.clientName}
@@ -1025,6 +1031,7 @@ export default function ProjectBriefPage() {
           {/* ── SERP Features ── */}
           {hasResults && analysis && activeSection === 'serpFeatures' && (
             <SerpFeaturesSection
+              kwVersion={kwVersion}
               analysis={analysis}
               competitors={project.competitors}
               clientName={project.clientName}
@@ -1051,6 +1058,7 @@ export default function ProjectBriefPage() {
           {hasResults && analysis && activeSection === 'journeys' && (
             <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
               <JourneySection
+              kwVersion={kwVersion}
                 projectId={projectId}
                 analysis={analysis}
                 competitors={competitorDomains}

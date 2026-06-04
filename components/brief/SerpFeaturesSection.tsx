@@ -39,6 +39,7 @@ interface Props {
   clientName?:  string;
   websiteUrl?:  string;
   projectId?:   string;   // v7.103: enables uploaded SERP-feature availability
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
 }
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
@@ -622,7 +623,7 @@ const ADD_FEATURES = [
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId }: Props) {
+export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
   const [aioViewTab,  setAioViewTab]  = useState<AIOViewTab>('keywords');
 
@@ -650,7 +651,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       .then(d => { if (alive) setUploadRows((d.keywords ?? []) as UploadKwRow[]); })
       .catch(() => { if (alive) setUploadRows([]); });
     return () => { alive = false; };
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   const scannedSet = useMemo(
     () => new Set(scannedKws.map(k => (k.keyword ?? '').trim().toLowerCase())),

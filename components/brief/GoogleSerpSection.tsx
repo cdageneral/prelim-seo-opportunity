@@ -64,6 +64,7 @@ interface CatRankStats {
 interface Props {
   analysis:               any;
   projectId:              string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   projectName?:           string;   // v7.94: client name shown in SOV legend
   domain?:                string;
   competitors?:           string[];
@@ -764,7 +765,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis, projectId, projectName, domain, competitors, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
+export default function GoogleSerpSection({ analysis, projectId, kwVersion, projectName, domain, competitors, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
   const [filter,     setFilter]     = useState<BucketKey>('all');
   const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
   const [sortAsc,    setSortAsc]    = useState(true);
@@ -778,7 +779,7 @@ export default function GoogleSerpSection({ analysis, projectId, projectName, do
       .then(d => setDbKeywords(d.keywords ?? []))
       .catch(() => {})
       .finally(() => setDbLoaded(true));
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   // ── Data ──────────────────────────────────────────────────────────────────
 

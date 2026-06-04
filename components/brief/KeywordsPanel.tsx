@@ -68,6 +68,7 @@ interface DbKeyword {
 
 interface Props {
   projectId:   string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
   domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
@@ -365,7 +366,7 @@ function SortHeader({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
-  projectId, analysis, competitors, domain,
+  projectId, kwVersion, analysis, competitors, domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
 }: Props) {
@@ -410,7 +411,7 @@ export default function KeywordsPanel({
     } catch { /* silent */ } finally {
       setDbLoaded(true);
     }
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   useEffect(() => { fetchDb(); }, [fetchDb]);
 

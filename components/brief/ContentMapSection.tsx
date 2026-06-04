@@ -67,6 +67,7 @@ interface ContentGap {
 
 interface Props {
   projectId:   string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:    any;
   competitors: string[];
 }
@@ -523,7 +524,7 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ContentMapSection({ projectId, analysis, competitors }: Props) {
+export default function ContentMapSection({ projectId, kwVersion, analysis, competitors }: Props) {
   const [claudeAssignments,  setClaudeAssignments]  = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,   setUploadedKeywords]   = useState<any[]>([]);
   const [filterStage,   setFilterStage]   = useState<JourneyStage | 'all'>('all');
@@ -556,7 +557,7 @@ export default function ContentMapSection({ projectId, analysis, competitors }: 
       .then((r: Response) => r.ok ? r.json() : { keywords: [] })
       .then((d: any) => setUploadedKeywords(d.keywords ?? []))
       .catch(() => {});
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   const clusters = useMemo(
     () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords),

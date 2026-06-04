@@ -47,6 +47,7 @@ interface AudienceSegment {
 
 interface Props {
   projectId:   string;
+  kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:    any;
   competitors: string[];
 }
@@ -538,7 +539,7 @@ function ProductJourneyLane({ prompts, clusters }: { prompts: string[]; clusters
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function JourneySection({ projectId, analysis, competitors }: Props) {
+export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
   const [claudeAssignments,  setClaudeAssignments]  = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,   setUploadedKeywords]   = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
@@ -568,7 +569,7 @@ export default function JourneySection({ projectId, analysis, competitors }: Pro
       .then((r: Response) => r.ok ? r.json() : { keywords: [] })
       .then((d: any) => setUploadedKeywords(d.keywords ?? []))
       .catch(() => {});
-  }, [projectId]);
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
   const clusters = useMemo(
     () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords),
