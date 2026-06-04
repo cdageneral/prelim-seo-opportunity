@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
-import { runFullSynthesis } from '@/lib/claude/synthesize';
+import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
 
 export const maxDuration = 300;
 
@@ -80,8 +80,32 @@ export async function POST(req: NextRequest) {
   const serp       = analysis.serpApiSnapshot  as any;
   const profound   = analysis.profoundSnapshot as any;
 
+  // ── v7.83: resumable synthesis ──────────────────────────────────────────────
+  // Checkpoints from a previously interrupted run (Vercel 300s kill, dropped
+  // connection) live in semrushSnapshot._synthCheckpoint. Completed passes are
+  // reused instead of re-run — no duplicate Claude/OpenAI spend on retry.
+  const cached: SynthesisCheckpoint = (semrush?._synthCheckpoint ?? {}) as SynthesisCheckpoint;
+  const checkpointState: SynthesisCheckpoint = { ...cached };
+
+  const persistCheckpoint = async (partial: SynthesisCheckpoint) => {
+    Object.assign(checkpointState, partial);
+    try {
+      await db.update(analyses)
+        .set({
+          semrushSnapshot: { ...(semrush as any), _synthCheckpoint: checkpointState } as any,
+          // Probe is persisted as it completes so the panel survives a crash mid-run
+          ...(partial.llmProbe ? { profoundSnapshot: partial.llmProbe as any } : {}),
+        })
+        .where(eq(analyses.id, analysisId));
+      console.log(`[OrbitIQ] Phase 2 checkpoint saved: ${Object.keys(checkpointState).join(', ')}`);
+    } catch (err) {
+      // Non-fatal — a failed checkpoint write only means a retry re-runs that pass
+      console.error('[OrbitIQ] Checkpoint write failed (non-fatal):', (err as any)?.message);
+    }
+  };
+
   try {
-    const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound)
+    const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound, cached, persistCheckpoint)
       .catch(err => {
         const msg = String((err as any)?.message ?? err);
         if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
@@ -95,7 +119,13 @@ export async function POST(req: NextRequest) {
     // The old `personas` relational table insert is intentionally skipped; the rigid
     // segment_name NOT NULL constraint is incompatible with the new AudienceSegment shape.
 
-    if (synthesis.opportunities.length > 0) {
+    // v7.83: skip insert if a previous (interrupted) attempt already wrote rows
+    const existingOpps = await db.select({ id: opportunities.id })
+      .from(opportunities)
+      .where(eq(opportunities.analysisId, analysisId))
+      .catch(() => []);
+
+    if (synthesis.opportunities.length > 0 && existingOpps.length === 0) {
       await db.insert(opportunities).values(
         synthesis.opportunities.map((o: any) => ({
           analysisId,
@@ -130,6 +160,7 @@ export async function POST(req: NextRequest) {
           _pptPrompt:          synthesis.pptPrompt,
           _categoryBreakdown:  synthesis.categoryBreakdown,
           _audienceSegments:   synthesis.personas,
+          _synthCheckpoint:    undefined,   // v7.83: clear resume checkpoint on completion
         } as any,
         // v7.80: LLM probe now runs in Phase 2 (needs categories) — persist it here
         profoundSnapshot: (synthesis.llmProbe ?? profound) as any,

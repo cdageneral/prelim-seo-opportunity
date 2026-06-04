@@ -208,29 +208,67 @@ export default function ProjectBriefPage() {
     setTriggeredAt(new Date().toISOString());
     setShowRefreshModal(false);
     try {
-      const res1  = await fetch('/api/analyze', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ projectId, mode }),
-      });
-      const data1 = await res1.json();
-      if (!res1.ok) {
-        setAnalysisError(data1?.error ?? 'Data gathering failed. Check your API keys in Vercel → Settings → Environment Variables.');
-        return;
+      // ── v7.83: RESUME an interrupted run instead of starting over ──────────
+      // If the latest analysis gathered its data (Phase 1) but synthesis never
+      // completed (timeout / dropped connection), skip Phase 1 entirely and
+      // re-run synthesis on the SAME analysis. Completed synthesis passes are
+      // checkpointed server-side, so this resumes where it stopped — no
+      // duplicate API spend.
+      let analysisId: string;
+      const incomplete = analysis
+        && analysis.status !== 'completed'
+        && analysis.semrushSnapshot;
+
+      if (incomplete) {
+        console.log('[OrbitIQ] Resuming interrupted synthesis for', analysis.id);
+        analysisId = analysis.id;
+      } else {
+        const res1  = await fetch('/api/analyze', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ projectId, mode }),
+        });
+        const data1 = await res1.json();
+        if (!res1.ok) {
+          setAnalysisError(data1?.error ?? 'Data gathering failed. Check your API keys in Vercel → Settings → Environment Variables.');
+          return;
+        }
+        analysisId = data1.analysisId;
       }
-      const res2  = await fetch('/api/synthesize', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ analysisId: data1.analysisId }),
-      });
-      const data2 = await res2.json();
-      if (!res2.ok) {
-        setAnalysisError(data2?.error ?? 'AI synthesis failed. Check your Anthropic API key and try again.');
+
+      // ── Phase 2 with automatic resume-retry ────────────────────────────────
+      // Synthesis is checkpointed server-side after each pass; if the request
+      // dies (Vercel 300s limit, network blip) a retry resumes from the last
+      // checkpoint instead of re-running completed passes.
+      const MAX_ATTEMPTS = 3;
+      let   lastErr      = '';
+      let   done         = false;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !done; attempt++) {
+        try {
+          const res2  = await fetch('/api/synthesize', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ analysisId }),
+          });
+          const data2 = await res2.json();
+          if (res2.ok) { done = true; break; }
+          lastErr = data2?.error ?? 'AI synthesis failed. Check your Anthropic API key and try again.';
+        } catch {
+          lastErr = 'Synthesis was interrupted (timeout or network drop).';
+        }
+        if (!done && attempt < MAX_ATTEMPTS) {
+          console.log(`[OrbitIQ] Synthesis attempt ${attempt} failed — resuming from checkpoint (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+          await new Promise(r => setTimeout(r, 5000));
+        }
+      }
+      if (!done) {
+        setAnalysisError(`${lastErr} Progress is saved — click Refresh Analysis to resume from where it stopped (completed steps are not re-run and no API credits are re-spent).`);
+        await fetchProject();   // pick up any checkpointed partial results
         return;
       }
       await fetchProject();
     } catch {
-      setAnalysisError('Analysis failed due to a network error. Please check your connection and try again.');
+      setAnalysisError('Analysis failed due to a network error. Progress is saved — click Refresh Analysis to resume from where it stopped.');
     } finally {
       setTriggering(false);
     }

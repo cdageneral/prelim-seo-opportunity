@@ -240,11 +240,13 @@ export async function generateCategoryBreakdown(
   const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
     try {
       const bPrompt   = categoryBreakdownPrompt(domain, industry, batch.kws);
+      // v7.83: 60s (was 100s) — haiku finishes these in <30s; a tighter timeout
+      // keeps the worst-case Phase 2 duration under Vercel's 300s hard kill.
       const bResponse = await getClient().messages.create({
         model:      MODELS.fast,
         max_tokens: 3000,
         messages:   [{ role: 'user', content: bPrompt }],
-      }, { timeout: 100_000 });
+      }, { timeout: 60_000 });
       const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
       const bParsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(bText);
 
@@ -301,7 +303,7 @@ export async function generateCategoryBreakdown(
         model:      MODELS.fast,
         max_tokens: 3000,
         messages:   [{ role: 'user', content: cPrompt }],
-      }, { timeout: 100_000 });
+      }, { timeout: 60_000 });
       const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
       const cParsed = extractJSON<{ categories: Array<{ name: string; type?: string; merges: string[] }> }>(cText);
 
@@ -462,48 +464,77 @@ export interface SynthesisResult {
   };
 }
 
+// v7.83: checkpoint shape persisted between passes so an interrupted synthesis
+// (Vercel 300s kill, dropped connection) can RESUME without re-running — and
+// re-paying for — passes that already finished.
+export interface SynthesisCheckpoint {
+  personas?:          any[];
+  categoryBreakdown?: CategoryBreakdownResult;
+  llmProbe?:          any;
+  opportunities?:     any[];
+}
+
 export async function runFullSynthesis(
   domain: string,
   clientName: string,
   industry: string,
   semrush: SemrushSnapshot,
   serp: SerpApiSnapshot,
-  profound: any
+  profound: any,
+  cached: SynthesisCheckpoint = {},
+  onCheckpoint?: (partial: SynthesisCheckpoint) => Promise<void>,
 ): Promise<SynthesisResult> {
-  console.log(`[OrbitIQ] Starting synthesis for ${domain}`);
+  console.log(`[OrbitIQ] Starting synthesis for ${domain}${Object.keys(cached).length > 0 ? ` (resuming — cached: ${Object.keys(cached).join(', ')})` : ''}`);
+
+  // Only trust cached results that actually contain data — an empty array /
+  // empty breakdown means the pass failed last time and should be retried.
+  const cachedPersonas = (cached.personas?.length ?? 0) > 0 ? cached.personas! : null;
+  const cachedCb       = (cached.categoryBreakdown?.categories?.length ?? 0) > 0 ? cached.categoryBreakdown! : null;
+  const cachedProbe    = cached.llmProbe ?? null;
+  const cachedOpps     = (cached.opportunities?.length ?? 0) > 0 ? cached.opportunities! : null;
 
   // Passes 1 & 2.5 run in parallel. Opportunities (pass 2) moved AFTER the
   // LLM probe (v7.80) so it scores GEO opportunities against fresh probe data.
   const [personas, categoryBreakdown] = await Promise.all([
-    generatePersonas(domain, industry, semrush, serp),
-    generateCategoryBreakdown(domain, industry, semrush).catch(err => {
-      console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
-      return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;
-    }),
+    cachedPersonas
+      ? Promise.resolve(cachedPersonas)
+      : generatePersonas(domain, industry, semrush, serp),
+    cachedCb
+      ? Promise.resolve(cachedCb)
+      : generateCategoryBreakdown(domain, industry, semrush).catch(err => {
+          console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
+          return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;
+        }),
   ]);
   console.log(`[OrbitIQ] Personas: ${personas.length}, Categories: ${categoryBreakdown.categories.length}`);
+  if (!cachedPersonas || !cachedCb) await onCheckpoint?.({ personas, categoryBreakdown });
 
   // Pass 2.6 (v7.80): LLM probe — needs procedure categories from pass 2.5.
   // "Other" is excluded (catch-all, not a real product category). On failure,
   // fall back to the previous analysis's probe data (passed in as `profound`)
   // so the panel degrades gracefully instead of going blank.
-  const probeCategories = categoryBreakdown.categories
-    .filter(c => c.type === 'procedure' && c.name !== 'Other')
-    .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
+  let llmProbe = cachedProbe;
+  if (!llmProbe) {
+    const probeCategories = categoryBreakdown.categories
+      .filter(c => c.type === 'procedure' && c.name !== 'Other')
+      .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
 
-  const llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
-    .catch(err => {
-      console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err);
-      return profound ?? null;
-    });
+    llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
+      .catch(err => {
+        console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err);
+        return profound ?? null;
+      });
+    if (llmProbe) await onCheckpoint?.({ llmProbe });
+  }
 
   // Pass 2: opportunities — uses the fresh probe
-  const opportunities = await generateOpportunities(domain, industry, semrush, serp, llmProbe)
+  const opportunities = cachedOpps ?? await generateOpportunities(domain, industry, semrush, serp, llmProbe)
     .catch(err => {
       console.error('[OrbitIQ] Opportunities failed (non-fatal):', err);
       return [] as any[];
     });
   console.log(`[OrbitIQ] Opportunities: ${opportunities.length}`);
+  if (!cachedOpps && opportunities.length > 0) await onCheckpoint?.({ opportunities });
 
   // Passes 3 & 4 run in parallel — PPT prompt uses placeholder narrative snippets
   // until narrative is available; the deck is built from opportunities + raw data.
