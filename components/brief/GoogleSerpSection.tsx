@@ -64,6 +64,7 @@ interface CatRankStats {
 interface Props {
   analysis:               any;
   projectId:              string;
+  projectName?:           string;   // v7.94: client name shown in SOV legend
   domain?:                string;
   competitors?:           string[];
   defaultClientThreshold?: number;  // min monthly vol for ranked keywords — must match KeywordsPanel
@@ -467,7 +468,8 @@ interface SovArc extends SovRawEntry {
 }
 
 function LegendRow({ arc }: { arc: SovArc }) {
-  const label    = arc.type === 'client' ? 'Client' : arc.domain.replace(/^www\./, '');
+  // v7.94: client rows carry the actual client name/domain in arc.domain
+  const label    = arc.domain.replace(/^www\./, '');
   const isClient = arc.type === 'client';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
@@ -492,7 +494,7 @@ function normSovDomain(d: string): string {
   return (d ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim();
 }
 
-export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any; competitors?: string[]; dbKeywords?: any[] }) {
+export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }) {
   const manualDomains = new Set((competitors ?? []).map(d => normSovDomain(d)));
   const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
   const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
@@ -571,9 +573,12 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
     compEntries = Array.from(byComp.entries()).map(([domain, voice]) => ({ domain, voice }));
   }
 
-  // Build entries: client first, then competitors sorted by voice descending
+  // Build entries: client first, then competitors sorted by voice descending.
+  // v7.94: label the client row with the actual client name (or domain) —
+  // never the generic word "Client".
+  const clientDisplay = (clientLabel ?? '').trim() || snap.domain || 'Client';
   const rawEntries: SovRawEntry[] = [
-    { domain: 'Client', traffic: clientVoice, type: 'client', color: '#6C63FF' },
+    { domain: clientDisplay, traffic: clientVoice, type: 'client', color: '#6C63FF' },
   ];
   let serpIdx = 0;
   let brandIdx = 0;
@@ -745,7 +750,7 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
           domain, so the basis behind every percentage is verifiable on screen */}
       {basis !== 'traffic' && (
         <p style={{ fontSize: '9px', color: '#383858', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
-          data: Client {clientKwsUsed.toLocaleString()} kws · {Math.round(clientVoice).toLocaleString()}/mo
+          data: {clientDisplay.replace(/^www\./, '')} {clientKwsUsed.toLocaleString()} kws · {Math.round(clientVoice).toLocaleString()}/mo
           {compEntries.map(c => (
             <span key={c.domain}>
               {' · '}{c.domain.replace(/^www\./, '')} {(rowsByComp.get(normSovDomain(c.domain)) ?? 0).toLocaleString()} kws · {Math.round(c.voice).toLocaleString()}/mo
@@ -759,7 +764,7 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis, projectId, domain, competitors, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
+export default function GoogleSerpSection({ analysis, projectId, projectName, domain, competitors, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
   const [filter,     setFilter]     = useState<BucketKey>('all');
   const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
   const [sortAsc,    setSortAsc]    = useState(true);
@@ -995,7 +1000,7 @@ export default function GoogleSerpSection({ analysis, projectId, domain, competi
       <div className="grid grid-cols-2 gap-3">
 
         {/* Share of Voice */}
-        <SovPanel analysis={analysis} competitors={competitors} dbKeywords={dbKeywords} />
+        <SovPanel analysis={analysis} competitors={competitors} dbKeywords={dbKeywords} clientLabel={projectName ?? domain} />
 
         {/* Volume Opportunity */}
         <div className="orbit-card p-5 flex flex-col gap-4">

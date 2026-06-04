@@ -958,6 +958,7 @@ export default function ProjectBriefPage() {
             <GoogleSerpSection
               analysis={analysis}
               projectId={projectId}
+              projectName={project.clientName}
               domain={domainDisplay}
               competitors={competitorDomains}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}

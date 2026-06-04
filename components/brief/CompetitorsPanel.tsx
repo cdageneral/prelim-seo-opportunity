@@ -1,7 +1,16 @@
 'use client';
 
 /**
- * CompetitorsPanel — v7.33
+ * CompetitorsPanel — v7.94
+ *
+ * v7.94 fix: this panel renders inside EditProjectModal's <form>. The
+ * "Add Competitor" toggle and row-delete buttons had no type="button",
+ * so the browser treated them as SUBMIT buttons for the modal's form —
+ * clicking them saved the project and auto-closed the modal 800ms later
+ * (the "screen disappears" bug). The add-competitor <form> was also
+ * nested inside the modal's <form> (invalid HTML; submit bubbles to the
+ * modal). Fixes: explicit type="button" everywhere, inner form → div,
+ * Add wired via onClick, Enter key handled manually.
  *
  * Data source choice (auto-discover vs upload CSV) now lives entirely
  * inside the add-competitor form. Decision is made once at add time.
@@ -108,8 +117,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
     }
   }
 
-  async function addCompetitor(e: React.FormEvent) {
-    e.preventDefault();
+  async function addCompetitor() {
     if (!domain.trim() || !srcChoice) return;
     if (srcChoice === 'upload' && !fileReady) return;
     setAdding(true); setFormError('');
@@ -188,6 +196,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
           <h3 className="text-orbit-primary text-base font-semibold mt-0.5">Tracked Competitors</h3>
         </div>
         <button
+          type="button"
           onClick={() => { setShowForm(f => !f); if (showForm) resetForm(); }}
           className="flex items-center gap-1.5 text-xs text-orbit-accent hover:text-orbit-accent-light border border-orbit-accent/30 hover:border-orbit-accent/60 px-3 py-1.5 rounded-lg transition-all"
         >
@@ -198,9 +207,12 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
         </button>
       </div>
 
-      {/* ── Add competitor form ── */}
+      {/* ── Add competitor form ──
+          NOTE: deliberately a <div>, not a <form> — this panel renders inside
+          EditProjectModal's <form>; a nested form is invalid HTML and its
+          submit events bubble to the modal's save handler (closing the modal). */}
       {showForm && (
-        <form onSubmit={addCompetitor}
+        <div
           className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-3 animate-fade-in">
 
           {/* Domain + Name */}
@@ -210,6 +222,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
               <input
                 type="text" value={domain} required
                 onChange={e => setDomain(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (canAdd && !adding) addCompetitor(); } }}
                 placeholder="competitor.com"
                 className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-orbit-primary text-xs placeholder:text-orbit-tertiary focus:outline-none focus:border-orbit-accent transition-colors"
               />
@@ -219,6 +232,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
               <input
                 type="text" value={name}
                 onChange={e => setName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (canAdd && !adding) addCompetitor(); } }}
                 placeholder="Competitor Co."
                 className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-orbit-primary text-xs placeholder:text-orbit-tertiary focus:outline-none focus:border-orbit-accent transition-colors"
               />
@@ -310,12 +324,13 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
               className="flex-1 text-xs text-orbit-secondary border border-orbit-border py-1.5 rounded-lg hover:text-orbit-primary transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={!canAdd || adding}
+            <button type="button" disabled={!canAdd || adding}
+              onClick={addCompetitor}
               className="flex-1 text-xs bg-orbit-accent hover:bg-orbit-accent-light text-white py-1.5 rounded-lg transition-colors disabled:opacity-35">
               {adding ? 'Adding...' : 'Add'}
             </button>
           </div>
-        </form>
+        </div>
       )}
 
       {/* ── Competitor rows — clean, no upload actions ── */}
@@ -359,6 +374,7 @@ export default function CompetitorsPanel({ projectId, competitors, onChange }: P
                 )}
                 {/* Delete */}
                 <button
+                  type="button"
                   onClick={() => removeCompetitor(comp.id)}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#404060', padding: '4px' }}
                   title="Remove competitor"
