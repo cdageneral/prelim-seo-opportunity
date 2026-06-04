@@ -112,24 +112,44 @@ export async function getDomainOverview(domain: string): Promise<SemrushDomainOv
 
 // ─── Organic Keywords ────────────────────────────────────────────────────────
 
-export async function getOrganicKeywords(domain: string): Promise<SemrushKeyword[]> {
-  const raw = await semrushGet({
-    type:    'domain_organic',
-    domain,
-    database: 'us',
-    display_limit: '150',
-    display_sort: 'tr_desc',
-    export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
-  });
+// v7.86: caps removed per Wayne — the FULL keyword footprint is pulled by
+// default (limit <= 0 = unlimited), paginated in chunks of 10,000 rows.
+// COST: Semrush bills 10 API units per returned row (verified at
+// developer.semrush.com/api/get-started/api-units-balance). Callers must show
+// the user a cost estimate before triggering — see /api/projects/[id]/semrush-estimate.
+// If the unit balance runs out mid-pull, Semrush returns partial rows; the
+// pagination loop stops at the short page and the analyze route surfaces a
+// partial-data warning to the UI.
+const SEMRUSH_PAGE = 10_000;
 
-  return parseSemrushCSV(raw).map(row => ({
-    keyword:      row['Keyword']   ?? '',
-    position:     parseInt(row['Position'] ?? '0'),
-    searchVolume: parseInt(row['Search Volume'] ?? '0'),
-    url:          row['URL']       ?? '',
-    cpc:          parseFloat(row['CPC'] ?? '0'),
-    competition:  parseFloat(row['Competition'] ?? '0'),
-  }));
+export async function getOrganicKeywords(domain: string, limit = 0): Promise<SemrushKeyword[]> {
+  const all: SemrushKeyword[] = [];
+  let offset = 0;
+  for (;;) {
+    const want = limit > 0 ? Math.min(SEMRUSH_PAGE, limit - all.length) : SEMRUSH_PAGE;
+    if (want <= 0) break;
+    const raw = await semrushGet({
+      type:    'domain_organic',
+      domain,
+      database: 'us',
+      display_limit:  String(want),
+      display_offset: String(offset),
+      display_sort: 'tr_desc',
+      export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
+    });
+    const rows = parseSemrushCSV(raw).map(row => ({
+      keyword:      row['Keyword']   ?? '',
+      position:     parseInt(row['Position'] ?? '0'),
+      searchVolume: parseInt(row['Search Volume'] ?? '0'),
+      url:          row['URL']       ?? '',
+      cpc:          parseFloat(row['CPC'] ?? '0'),
+      competition:  parseFloat(row['Competition'] ?? '0'),
+    }));
+    all.push(...rows);
+    offset += rows.length;
+    if (rows.length < want) break;   // footprint exhausted (or API units ran out)
+  }
+  return all;
 }
 
 // ─── Competitor Discovery ─────────────────────────────────────────────────────
@@ -154,29 +174,41 @@ export async function getCompetitors(domain: string): Promise<SemrushCompetitor[
 
 // ─── Keyword Gap ──────────────────────────────────────────────────────────────
 
+// v7.86: cap removed — pulls the competitor's FULL organic footprint
+// (limit <= 0 = unlimited, paginated). Volume filtering now happens in
+// getSemrushSnapshot using the PROJECT-level threshold, not a hardcoded 2,400.
 export async function getKeywordGap(
   clientDomain: string,
-  competitorDomain: string
+  competitorDomain: string,
+  limit = 0
 ): Promise<SemrushKeywordGap[]> {
-  // Fetch up to 100 of the competitor's top organic keywords.
-  // We fetch 100 so we have enough candidates after the vol ≥ 2400 filter.
-  const raw = await semrushGet({
-    type:           'domain_organic',
-    domain:         competitorDomain,
-    database:       'us',
-    display_limit:  '100',
-    display_sort:   'tr_desc',
-    export_columns: 'Ph,Po,Nq,Cp',
-  });
-
-  return parseSemrushCSV(raw).map(row => ({
-    keyword:            row['Keyword'] ?? '',
-    searchVolume:       parseInt(row['Search Volume'] ?? '0'),
-    clientPosition:     null,
-    competitor:         competitorDomain,
-    competitorPosition: parseInt(row['Position'] ?? '0'),
-    cpc:                parseFloat(row['CPC'] ?? '0'),
-  }));
+  const all: SemrushKeywordGap[] = [];
+  let offset = 0;
+  for (;;) {
+    const want = limit > 0 ? Math.min(SEMRUSH_PAGE, limit - all.length) : SEMRUSH_PAGE;
+    if (want <= 0) break;
+    const raw = await semrushGet({
+      type:           'domain_organic',
+      domain:         competitorDomain,
+      database:       'us',
+      display_limit:  String(want),
+      display_offset: String(offset),
+      display_sort:   'tr_desc',
+      export_columns: 'Ph,Po,Nq,Cp',
+    });
+    const rows = parseSemrushCSV(raw).map(row => ({
+      keyword:            row['Keyword'] ?? '',
+      searchVolume:       parseInt(row['Search Volume'] ?? '0'),
+      clientPosition:     null,
+      competitor:         competitorDomain,
+      competitorPosition: parseInt(row['Position'] ?? '0'),
+      cpc:                parseFloat(row['CPC'] ?? '0'),
+    }));
+    all.push(...rows);
+    offset += rows.length;
+    if (rows.length < want) break;
+  }
+  return all;
 }
 
 // ─── Brand token helper (mirrors KeywordsPanel logic) ─────────────────────────
@@ -219,8 +251,9 @@ function buildPositionDistribution(keywords: SemrushKeyword[]): Record<string, n
 export async function getSemrushSnapshot(
   domain: string,
   manualCompetitors: string[] = [],   // domains from project.competitors
+  gapVolMin = 0,                      // v7.86: project-level threshold (was hardcoded 2,400)
 ): Promise<SemrushSnapshot> {
-  // Parallel fetch of independent endpoints
+  // Parallel fetch of independent endpoints — full footprint, no caps (v7.86)
   const [overview, topKeywords, autoCompetitors] = await Promise.all([
     getDomainOverview(domain),
     getOrganicKeywords(domain),
@@ -234,14 +267,14 @@ export async function getSemrushSnapshot(
     ...manualCompetitors.filter(d => !autoSet.has(d)),
   ];
 
-  // Query gap keywords from EVERY competitor, then merge + deduplicate.
-  // Criteria (per product spec):
-  //   - vol ≥ 2,400/mo
+  // Query gap keywords from competitors (full footprint each), merge + dedupe.
+  // Criteria:
+  //   - vol ≥ project gap threshold (gapVolMin; 0 = no floor)
   //   - not competitor-branded (but client-branded terms are allowed)
   const competitorDomainsForBrandFilter = allCompetitorDomains;
 
   const gapResults = await Promise.all(
-    allCompetitorDomains.slice(0, 5).map(comp =>   // cap at 5 competitors to limit API calls
+    allCompetitorDomains.slice(0, 5).map(comp =>   // cap at 5 competitor DOMAINS (per-domain pulls are uncapped)
       getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
     )
   );
@@ -272,7 +305,7 @@ export async function getSemrushSnapshot(
     for (const kw of batch) {
       const key = kw.keyword.toLowerCase().trim();
       if (seen.has(key)) continue;                          // deduplicate across competitors
-      if (kw.searchVolume < 2400) continue;                 // volume threshold
+      if (gapVolMin > 0 && kw.searchVolume < gapVolMin) continue;   // v7.86: project-level threshold (no hardcoded floor)
       if (clientRankedTexts.has(key)) continue;             // client already ranks for this — not a gap
       if (isClientBranded(kw.keyword)) continue;            // client-branded term — not an opportunity gap
       if (isCompetitorBranded(kw.keyword, competitorDomainsForBrandFilter)) continue; // strip competitor brand terms
@@ -302,5 +335,56 @@ export async function getSemrushSnapshot(
     gapKeywords,
     positionDist,
     fetchedAt: new Date().toISOString(),
+  };
+}
+
+// ─── Pull cost estimate (v7.86) ──────────────────────────────────────────────
+// Estimates the Semrush API unit cost of a full uncapped analysis BEFORE it
+// runs, so the user can confirm. Mirrors getSemrushSnapshot's fetch plan:
+// client full footprint + full footprint of the first 5 competitor domains
+// (auto-discovered merged with manual). Semrush bills 10 units per row for
+// domain reports. The estimate itself costs a few rows (~16 lines ≈ 160 units).
+
+export interface SemrushPullEstimate {
+  client:      { domain: string; keywords: number };
+  competitors: Array<{ domain: string; keywords: number }>;
+  totalRows:   number;
+  totalUnits:  number;   // totalRows × 10
+}
+
+export async function estimateSemrushPull(
+  domain: string,
+  manualCompetitors: string[] = [],
+): Promise<SemrushPullEstimate> {
+  const [overview, autoCompetitors] = await Promise.all([
+    getDomainOverview(domain),
+    getCompetitors(domain).catch(() => [] as SemrushCompetitor[]),
+  ]);
+
+  const autoSet = new Set(autoCompetitors.map(c => c.domain));
+  const gapDomains = [
+    ...autoCompetitors.map(c => c.domain),
+    ...manualCompetitors.filter(d => !autoSet.has(d)),
+  ].slice(0, 5);
+
+  // Keyword counts: reuse auto-discovery's organicKeywords where known,
+  // otherwise fetch the domain overview (1 row each).
+  const competitors: Array<{ domain: string; keywords: number }> = [];
+  for (const d of gapDomains) {
+    const known = autoCompetitors.find(c => c.domain === d)?.organicKeywords;
+    if (known && known > 0) {
+      competitors.push({ domain: d, keywords: known });
+    } else {
+      const ov = await getDomainOverview(d).catch(() => null);
+      competitors.push({ domain: d, keywords: ov?.organicKeywords ?? 0 });
+    }
+  }
+
+  const totalRows = overview.organicKeywords + competitors.reduce((s, c) => s + c.keywords, 0);
+  return {
+    client:      { domain, keywords: overview.organicKeywords },
+    competitors,
+    totalRows,
+    totalUnits:  totalRows * 10,
   };
 }

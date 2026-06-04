@@ -111,6 +111,15 @@ export async function POST(
 
   const results = await batchKeywordScan(batchKeywords, domain, batchSize);
 
+  // v7.86: every keyword in the batch failed → almost certainly an account-level
+  // problem (out of SerpAPI search credits or rate-limited), not keyword-level.
+  if (results.length === 0) {
+    return NextResponse.json(
+      { error: 'SerpAPI returned no results for this batch — your SerpAPI account is likely out of search credits or rate-limited. Check your balance at serpapi.com, then retry; nothing was saved or double-charged.' },
+      { status: 502 }
+    );
+  }
+
   // Merge — no overlap by construction (only unscanned keywords were sent).
   // Summaries are recomputed over the COMBINED set so the SERP Features panel
   // reflects total coverage, not just the latest batch.

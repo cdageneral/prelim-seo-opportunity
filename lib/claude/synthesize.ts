@@ -177,10 +177,22 @@ export interface CategoryBreakdownResult {
   keywordCategories:       Record<string, string>;
 }
 
+// v7.86: with uncapped Semrush pulls a footprint can be 30k+ keywords →
+// 120+ discovery batches, which cannot finish inside one 300s Lambda. The
+// discovery loop therefore reports progress after every concurrency wave via
+// onProgress; an interrupted run resumes from the saved progress instead of
+// re-running (and re-paying for) completed batches.
+export interface CbDiscoveryProgress {
+  proposed:   Array<{ name: string; type: 'procedure' | 'brand' | 'location'; indices: number[] }>;
+  doneStarts: number[];   // batch start offsets already discovered
+}
+
 export async function generateCategoryBreakdown(
   domain: string,
   industry: string,
-  semrush: SemrushSnapshot
+  semrush: SemrushSnapshot,
+  progress?: CbDiscoveryProgress | null,
+  onProgress?: (p: CbDiscoveryProgress) => Promise<void>,
 ): Promise<CategoryBreakdownResult> {
   // ── Build merged keyword pool ──────────────────────────────────────────────
   // Step 1: ranked keywords the client appears for (have real position data)
@@ -235,7 +247,9 @@ export async function generateCategoryBreakdown(
     type:    'procedure' | 'brand' | 'location';
     indices: number[];   // GLOBAL indices into merged
   }
-  const proposed: ProposedCat[] = [];
+  // v7.86: seed from saved progress (resume) — completed batches are skipped
+  const proposed: ProposedCat[] = (progress?.proposed ?? []).map(p => ({ ...p }));
+  const doneStarts = new Set<number>(progress?.doneStarts ?? []);
 
   const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
     try {
@@ -258,14 +272,24 @@ export async function generateCategoryBreakdown(
           .map(i => batch.start + i);
         if (indices.length > 0) proposed.push({ name: cat.name, type: catType, indices });
       }
+      doneStarts.add(batch.start);
     } catch (err) {
       // Non-fatal — this batch's keywords fall into "Other" below.
+      // NOT marked done, so a resumed run retries it.
       console.error('[OrbitIQ] Category discovery batch failed (keywords → Other):', (err as any)?.message);
     }
   };
 
-  for (let i = 0; i < batches.length; i += CONCURRENCY) {
-    await Promise.all(batches.slice(i, i + CONCURRENCY).map(runDiscovery));
+  const pendingBatches = batches.filter(b => !doneStarts.has(b.start));
+  if (pendingBatches.length < batches.length) {
+    console.log(`[OrbitIQ] Category discovery resume: ${batches.length - pendingBatches.length} batch(es) already done, ${pendingBatches.length} remaining`);
+  }
+  for (let i = 0; i < pendingBatches.length; i += CONCURRENCY) {
+    await Promise.all(pendingBatches.slice(i, i + CONCURRENCY).map(runDiscovery));
+    // v7.86: checkpoint after every wave so an interrupted run resumes here
+    if (onProgress && i + CONCURRENCY < pendingBatches.length) {
+      await onProgress({ proposed, doneStarts: Array.from(doneStarts) });
+    }
   }
 
   // Degenerate case: every discovery batch failed → keep the old empty-result
@@ -470,6 +494,7 @@ export interface SynthesisResult {
 export interface SynthesisCheckpoint {
   personas?:          any[];
   categoryBreakdown?: CategoryBreakdownResult;
+  cbProgress?:        CbDiscoveryProgress;   // v7.86: partial discovery (wave-level resume)
   llmProbe?:          any;
   opportunities?:     any[];
 }
@@ -501,7 +526,13 @@ export async function runFullSynthesis(
       : generatePersonas(domain, industry, semrush, serp),
     cachedCb
       ? Promise.resolve(cachedCb)
-      : generateCategoryBreakdown(domain, industry, semrush).catch(err => {
+      : generateCategoryBreakdown(
+          domain, industry, semrush,
+          cached.cbProgress ?? null,
+          // v7.86: wave-level discovery progress is checkpointed so very large
+          // (uncapped) footprints can resume mid-discovery after a 300s kill
+          onCheckpoint ? async (p) => onCheckpoint({ cbProgress: p }) : undefined,
+        ).catch(err => {
           console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
           return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;
         }),
@@ -515,8 +546,15 @@ export async function runFullSynthesis(
   // so the panel degrades gracefully instead of going blank.
   let llmProbe = cachedProbe;
   if (!llmProbe) {
+    // v7.86: cap probe input at the top 12 procedure categories by demand —
+    // uncapped footprints can produce 30+ categories, and probing all of them
+    // (3 prompts × 2 platforms each) would not fit in the Lambda window.
+    // The probe is a sampled visibility measure either way; results shown are
+    // always actual probe responses for the categories listed.
     const probeCategories = categoryBreakdown.categories
       .filter(c => c.type === 'procedure' && c.name !== 'Other')
+      .sort((a, b) => b.monthlyDemand - a.monthlyDemand)
+      .slice(0, 12)
       .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
 
     llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)

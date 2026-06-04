@@ -83,6 +83,11 @@ export async function POST(req: NextRequest) {
     triggeredAt: new Date(),
   }).returning();
 
+  // v7.86: non-fatal API problems (failed fetches, partial data from exhausted
+  // API credits) are collected here and returned to the UI as visible alerts
+  // instead of being silently swallowed.
+  const warnings: string[] = [];
+
   console.log(`[OrbitIQ] Phase 1 starting — mode=${mode}, analysisId=${analysis.id}, domain=${domain}`);
   console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, OPENAI: ${!!process.env.OPENAI_API_KEY}`);
 
@@ -156,7 +161,9 @@ export async function POST(req: NextRequest) {
           for (const kw of batch) {
             const key = kw.keyword.toLowerCase().trim();
             if (seen.has(key) || allRankedNow.has(key) || existingGaps.has(key)) continue;
-            if (kw.searchVolume < 2400) continue;
+            // v7.86: project-level threshold (was hardcoded 2,400)
+            const gapMin = (project as any).kwVolThresholdCompetitor ?? 0;
+            if (gapMin > 0 && kw.searchVolume < gapMin) continue;
             seen.add(key);
             newGapKeywords.push(kw);
           }
@@ -208,6 +215,7 @@ export async function POST(req: NextRequest) {
             console.log(`[OrbitIQ] SerpAPI (gap): +${fresh.keywords.length} fresh, ${carried.length} carried forward`);
           } catch (err) {
             console.error(`[OrbitIQ] SerpAPI (gap) failed (keeping previous SERP data):`, err);
+            warnings.push(`SerpAPI scan failed for the new keywords (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
           }
         }
 
@@ -229,6 +237,7 @@ export async function POST(req: NextRequest) {
           gapMode:            true,
           newClientKwsFound:  newClientKeywords.length,
           newGapsFound:       newGapKeywords.length,
+          warnings,
         });
       }
     }
@@ -248,9 +257,14 @@ export async function POST(req: NextRequest) {
       console.log(`[OrbitIQ] Using uploaded footprint — ${uploadedSnapshot.topKeywords.length} client kws, ${uploadedSnapshot.gapKeywords.length} gap kws — Semrush skipped`);
       semrush = uploadedSnapshot;
     } else {
-      console.log(`[OrbitIQ] Auto-discovering keyword footprint via Semrush`);
-      semrush = await getSemrushSnapshot(domain, manualCompetitorDomains).catch(err => {
+      console.log(`[OrbitIQ] Auto-discovering FULL keyword footprint via Semrush (uncapped, v7.86)`);
+      semrush = await getSemrushSnapshot(
+        domain,
+        manualCompetitorDomains,
+        (project as any).kwVolThresholdCompetitor ?? 0,   // v7.86: project setting, not hardcoded 2,400
+      ).catch(err => {
         console.error(`[OrbitIQ] Semrush failed:`, err);
+        warnings.push(`Semrush fetch failed — keyword data is missing for this run: ${String((err as any)?.message ?? err)}`);
         return {
           domain,
           overview:    { domain, organicKeywords: 0, organicTraffic: 0, organicCost: 0, authorityScore: 0, backlinks: 0 },
@@ -258,6 +272,18 @@ export async function POST(req: NextRequest) {
           fetchedAt:   new Date().toISOString(),
         } as SemrushSnapshot;
       });
+
+      // v7.86: Semrush returns PARTIAL rows when the API unit balance runs out
+      // mid-pull — surface that instead of silently shipping incomplete data.
+      const expected = semrush.overview.organicKeywords;
+      const fetched  = semrush.topKeywords.length;
+      if (expected > 0 && fetched < expected * 0.95) {
+        warnings.push(
+          `Semrush returned ${fetched.toLocaleString()} of ~${expected.toLocaleString()} client keyword rows — ` +
+          `your Semrush API unit balance may have run out mid-pull. Data below is partial; ` +
+          `check Subscription info → API units at semrush.com and re-run.`
+        );
+      }
     }
 
     // SerpAPI — runs on a sample of top keywords regardless of source
@@ -265,6 +291,7 @@ export async function POST(req: NextRequest) {
     console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, scanning ${Math.min(topKeywords.length, 5)} of ${topKeywords.length} keywords`);
     let serp: any = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
       console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
+      warnings.push(`SerpAPI scan failed — SERP features (AIO/PAA/Video) are unavailable for this run: ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
       return {
         domain, keywords: [],
         aioSummary:         { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
@@ -316,12 +343,13 @@ export async function POST(req: NextRequest) {
       })
       .where(eq(analyses.id, analysis.id));
 
-    console.log(`[OrbitIQ] Phase 1 complete for ${analysis.id} (uploadMode=${!!uploadedSnapshot})`);
+    console.log(`[OrbitIQ] Phase 1 complete for ${analysis.id} (uploadMode=${!!uploadedSnapshot}, warnings=${warnings.length})`);
     return NextResponse.json({
       analysisId:  analysis.id,
       triggeredAt: analysis.triggeredAt,
       status:      'data_ready',
       usedUploads: !!uploadedSnapshot,
+      warnings,
     });
 
   } catch (err) {

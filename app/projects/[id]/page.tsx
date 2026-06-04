@@ -176,6 +176,11 @@ export default function ProjectBriefPage() {
   // Edit project modal
   const [showEditProject,   setShowEditProject]   = useState(false);
 
+  // v7.86: Semrush cost-estimate confirm + API warning alerts
+  const [estimating,       setEstimating]       = useState(false);
+  const [costEstimate,     setCostEstimate]     = useState<any | null>(null);
+  const [analysisWarnings, setAnalysisWarnings] = useState<string[]>([]);
+
   // Export state
   const [pdfLoading,  setPdfLoading]  = useState(false);
   const [pptLoading,  setPptLoading]  = useState(false);
@@ -202,9 +207,39 @@ export default function ProjectBriefPage() {
 
   useEffect(() => { fetchProject(); }, [fetchProject]);
 
+  // v7.86: Semrush pulls are now UNCAPPED (full footprint). Before any
+  // auto-discover run, fetch a cost estimate and require explicit confirmation
+  // so unit spend is never a surprise.
+  async function requestAnalysisWithEstimate(mode: 'full' | 'gaps' = 'full') {
+    setShowRefreshModal(false);
+    setAnalysisError(null);
+    // Upload-based projects never hit Semrush; incomplete runs resume without Phase 1.
+    const incomplete = analysis && analysis.status !== 'completed' && analysis.semrushSnapshot;
+    if (dataSource !== 'auto' || incomplete) {
+      triggerAnalysis(mode);
+      return;
+    }
+    setEstimating(true);
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/semrush-estimate`);
+      const data = await res.json();
+      if (!res.ok) {
+        setAnalysisError(data?.error ?? 'Could not estimate Semrush cost.');
+        return;
+      }
+      setCostEstimate({ ...data, mode });
+    } catch {
+      setAnalysisError('Could not reach the Semrush estimate endpoint. Check your connection and try again.');
+    } finally {
+      setEstimating(false);
+    }
+  }
+
   async function triggerAnalysis(mode: 'full' | 'gaps' = 'full') {
     setTriggering(true);
     setAnalysisError(null);
+    setAnalysisWarnings([]);
+    setCostEstimate(null);
     setTriggeredAt(new Date().toISOString());
     setShowRefreshModal(false);
     try {
@@ -234,6 +269,9 @@ export default function ProjectBriefPage() {
           return;
         }
         analysisId = data1.analysisId;
+        // v7.86: surface non-fatal API problems (failed fetches, partial data
+        // from exhausted credits) as a visible amber alert
+        if (data1.warnings?.length) setAnalysisWarnings(data1.warnings);
       }
 
       // ── Phase 2 with automatic resume-retry ────────────────────────────────
@@ -498,7 +536,7 @@ export default function ProjectBriefPage() {
             (analysis.semrushSnapshot?.gapKeywords?.length ?? 0)
           }
           onClose={() => setShowRefreshModal(false)}
-          onRun={mode => triggerAnalysis(mode)}
+          onRun={mode => requestAnalysisWithEstimate(mode)}
         />
       )}
 
@@ -613,7 +651,7 @@ export default function ProjectBriefPage() {
               if (hasResults) {
                 setShowRefreshModal(true);
               } else {
-                triggerAnalysis('full');
+                requestAnalysisWithEstimate('full');
               }
             }}
             disabled={isRunning}
@@ -743,6 +781,86 @@ export default function ProjectBriefPage() {
         {/* ── MAIN ── */}
         <main className="flex-1 overflow-hidden flex flex-col">
 
+          {/* ── API warning banner (v7.86) — non-fatal data problems ── */}
+          {analysisWarnings.length > 0 && (
+            <div className="flex-shrink-0 m-3 bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex items-start gap-3">
+              <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-amber-400 text-sm font-medium">Data warning{analysisWarnings.length > 1 ? 's' : ''} — analysis completed with issues</p>
+                {analysisWarnings.map((w, i) => (
+                  <p key={i} className="text-amber-300/80 text-xs mt-1">{w}</p>
+                ))}
+              </div>
+              <button onClick={() => setAnalysisWarnings([])} className="text-amber-400/60 hover:text-amber-400 transition-colors">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* ── Semrush cost-estimate confirm (v7.86) — uncapped pulls ── */}
+          {(costEstimate || estimating) && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.65)' }}>
+              <div className="rounded-xl p-6" style={{ background: '#0D0D18', border: '1px solid #2A2A45', width: 440, maxWidth: '90vw' }}>
+                {estimating ? (
+                  <div className="flex items-center gap-3">
+                    <svg className="animate-spin" style={{ width: 16, height: 16, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+                      <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    <span className="text-sm" style={{ color: '#A0A0C8' }}>Estimating Semrush API unit cost…</span>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>Confirm Semrush pull</p>
+                    <p className="text-xs mb-3" style={{ color: '#7070A0' }}>
+                      Full-footprint analysis fetches every keyword Semrush has for each domain. Semrush bills 10 API units per keyword row.
+                    </p>
+                    <div className="rounded-lg p-3 mb-3" style={{ background: '#0A0A14', border: '1px solid #1E1E30' }}>
+                      <div className="flex justify-between text-xs py-0.5">
+                        <span style={{ color: '#A0A0C8' }}>{costEstimate.client.domain} <span style={{ color: '#8B85FF' }}>client</span></span>
+                        <span style={{ color: '#D0D0F0' }}>{costEstimate.client.keywords.toLocaleString()} keywords</span>
+                      </div>
+                      {costEstimate.competitors.map((c: any) => (
+                        <div key={c.domain} className="flex justify-between text-xs py-0.5">
+                          <span style={{ color: '#7070A0' }}>{c.domain}</span>
+                          <span style={{ color: '#9090B8' }}>{c.keywords.toLocaleString()} keywords</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid #1E1E30' }}>
+                        <span className="font-medium" style={{ color: '#E8E8FF' }}>Estimated cost</span>
+                        <span className="font-medium" style={{ color: '#F59E0B' }}>
+                          ~{costEstimate.totalUnits.toLocaleString()} API units ({costEstimate.totalRows.toLocaleString()} rows)
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[11px] mb-4" style={{ color: '#55557A' }}>
+                      If your unit balance runs out mid-pull, Semrush returns partial data and you&apos;ll see a warning banner. Check your balance under Subscription info → API units at semrush.com.
+                    </p>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => setCostEstimate(null)}
+                        className="text-xs px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => triggerAnalysis(costEstimate.mode)}
+                        className="text-xs font-medium px-4 py-2 rounded-lg text-white transition-colors"
+                        style={{ background: '#6C63FF' }}
+                      >
+                        Run analysis (~{costEstimate.totalUnits.toLocaleString()} units)
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Error banner */}
           {analysisError && (
             <div className="flex-shrink-0 m-3 bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
@@ -787,7 +905,7 @@ export default function ProjectBriefPage() {
                 uploadError={uploadError}
                 fileInputRefs={fileInputRefs}
                 onFileSelect={handleFileUpload}
-                onRun={() => triggerAnalysis('full')}
+                onRun={() => requestAnalysisWithEstimate('full')}
               />
             </div>
           )}
