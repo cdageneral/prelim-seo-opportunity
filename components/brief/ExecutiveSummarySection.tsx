@@ -205,7 +205,8 @@ export default function ExecutiveSummarySection({
   const volOutsideTop3 = totalVol - top3Vol;
   const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
   const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
-  const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
+  // Volume-based — matches GoogleSerpSection and volume opportunity bars
+  const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
 
   // ── Market capture ────────────────────────────────────────────────────────
   const semSnap: any   = analysis.semrushSnapshot  ?? {};
@@ -368,7 +369,7 @@ export default function ExecutiveSummarySection({
             { label: 'Total keywords',
               value: dbLoaded ? totalKws.toLocaleString() : '—',
               color: '#F0F0FF' },
-            { label: 'Pg 1 coverage',
+            { label: 'Pg 1 vol. share',
               value: dbLoaded ? `${page1Pct}%` : '—',
               color: pg1Color },
             { label: 'Wtd. avg position',
