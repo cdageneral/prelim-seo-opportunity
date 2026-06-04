@@ -678,7 +678,7 @@ export default function KeywordsPanel({
         });
         if (res.ok) {
           const d = await res.json();
-          added   += d.inserted ?? 0;
+          added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
           skipped += d.skipped  ?? 0;
         } else {
           skipped += chunk.length;
@@ -714,22 +714,48 @@ export default function KeywordsPanel({
       setCompUploadStatus({ type: 'error', msg: 'Could not read file.' });
       setCsvProgress(null); return;
     }
-    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-    // v7.90: header-aware position parsing — previously only keyword+volume were
-    // ingested, so competitor rows had NO rank positions and page-1 share of
-    // voice could not be computed. Accepts 'position' / 'rank' header; falls
-    // back to column 2 if the header row is unrecognized.
+    const lines = text.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    // v7.92: FULLY header-aware parsing — identical to the client CSV parser.
+    // The old parser hardcoded col 0 = keyword, col 1 = volume. Semrush keyword
+    // exports are "Keyword, Position, Previous position, Search Volume, ..."
+    // so col 1 put RANK POSITIONS into search_volume (Wayne's competitor rows
+    // showed 17 kws · 133/mo — those were rank numbers, not volumes).
     const headerCols = (lines[0] ?? '').toLowerCase().split(',').map((c: string) => c.replace(/^"|"$/g, '').trim());
-    const posIdx = (() => {
-      const i = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position' || h === 'pos');
-      return i >= 0 ? i : 2;
+    const kwIdx = (() => {
+      const i = headerCols.findIndex((h: string) => h === 'keyword' || h === 'keywords' || h === 'ph' || h === 'query');
+      return i >= 0 ? i : 0;
     })();
+    const volIdx = (() => {
+      const i = headerCols.findIndex((h: string) =>
+        h === 'search volume' || h === 'search_volume' || h === 'searchvolume' || h === 'volume' || h === 'monthly volume' || h === 'nq');
+      return i >= 0 ? i : 1;
+    })();
+    const posIdx = (() => {
+      const i = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position' || h === 'pos' || h === 'po');
+      return i >= 0 ? i : -1;   // -1 = no position column present
+    })();
+    function splitCompCsvLine(line: string): string[] {
+      const result: string[] = [];
+      let cur = ''; let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; }
+        else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
+        else { cur += ch; }
+      }
+      result.push(cur.replace(/\r$/, '').trim());
+      return result;
+    }
     const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
     const parsed = dataLines.map((line: string) => {
-      const cols = line.split(',').map((c: string) => c.replace(/^"|"$/g, '').replace(/\r$/, '').trim());
-      const posRaw = cols[posIdx];
+      const cols   = splitCompCsvLine(line);
+      const posRaw = posIdx >= 0 ? cols[posIdx] : undefined;
       const pos    = posRaw != null && posRaw !== '' && !isNaN(Number(posRaw)) ? Number(posRaw) : null;
-      return { keyword: cols[0] ?? '', searchVolume: parseInt(cols[1] ?? '0') || 0, position: pos };
+      return {
+        keyword:      (cols[kwIdx] ?? '').replace(/^"|"$/g, '').trim(),
+        searchVolume: parseInt(cols[volIdx] ?? '0') || 0,
+        position:     pos,
+      };
     }).filter((r: { keyword: string }) => r.keyword.length > 0);
     if (!parsed.length) {
       setCompUploadStatus({ type: 'error', msg: 'No valid rows found.' });
@@ -744,7 +770,7 @@ export default function KeywordsPanel({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ domain: selectedCompDomain, source: 'csv', keywords: parsed.slice(i, i + CHUNK) }),
         });
-        if (res.ok) { const d = await res.json(); added += d.inserted ?? 0; skipped += d.skipped ?? 0; }
+        if (res.ok) { const d = await res.json(); added += (d.inserted ?? 0) + (d.updated ?? 0); skipped += d.skipped ?? 0; }
         else skipped += Math.min(CHUNK, parsed.length - i);
       } catch { skipped += Math.min(CHUNK, parsed.length - i); }
       setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
@@ -754,8 +780,8 @@ export default function KeywordsPanel({
     if (e.target) e.target.value = '';
     const skipNote = skipped > 0 ? ` · ${skipped} skipped` : '';
     setCompUploadStatus(added > 0
-      ? { type: 'success', msg: `${added} competitor keywords uploaded${skipNote}.` }
-      : { type: 'error', msg: `All keywords already exist for this competitor.` }
+      ? { type: 'success', msg: `${added} competitor keywords uploaded/updated${skipNote}.` }
+      : { type: 'error', msg: `No valid keyword rows found in this file.` }
     );
     setTimeout(() => { setCompUploadStatus(null); setShowCompUpload(false); }, 5000);
   }
