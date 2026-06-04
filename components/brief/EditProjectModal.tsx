@@ -171,6 +171,7 @@ export default function EditProjectModal({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#505070', padding: '4px' }}
           >
