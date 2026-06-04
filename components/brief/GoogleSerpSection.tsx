@@ -430,15 +430,30 @@ function CategoryPositionSummary({
     }
     outperform.sort((a, b) => (b.compP1 - b.clientP1) - (a.compP1 - a.clientP1));
 
+    // v7.111: per-domain position diagnostics — surfaced when no competitor
+    // outperforms so a domain whose rows never reach page 1 (Wayne's AirSculpt
+    // case) is visible instead of silently absent.
+    const diag = new Map<string, { rows: number; p1: number; minPos: number }>();
+    for (const r of compRowsWithPos) {
+      const d = normSovDomain(r.domain as string);
+      let e = diag.get(d);
+      if (!e) { e = { rows: 0, p1: 0, minPos: Infinity }; diag.set(d, e); }
+      e.rows++;
+      if ((r.position as number) <= 10) e.p1++;
+      if ((r.position as number) < e.minPos) e.minPos = r.position as number;
+    }
+    const compDiag = Array.from(diag.entries()).map(([d, e]) => ({ domain: d, ...e }));
+
     return {
       strongest, weakest, opportunity,
       outperform:  outperform.slice(0, 3),
       hasCompPos:  compRowsWithPos.length > 0,
       hasCompRows: compRows.length > 0,
+      compDiag,
     };
   }, [cb, categoryRankStats, dbKeywords, clientDomain]);
 
-  const { strongest, weakest, opportunity, outperform, hasCompPos, hasCompRows } = data;
+  const { strongest, weakest, opportunity, outperform, hasCompPos, hasCompRows, compDiag } = data;
   const posTxt = (p: number | null) => p != null ? ` · avg pos ${p.toFixed(1)}` : '';
 
   return (
@@ -484,7 +499,19 @@ function CategoryPositionSummary({
         <SummaryCardShell accent={SUMMARY_ACCENTS.comp} label="Competitor Outperforming">
           {!hasCompRows && <SummaryEmpty text="No competitor keywords uploaded — add competitor CSVs (Competitors button) to enable this comparison." />}
           {hasCompRows && !hasCompPos && <SummaryEmpty text="Competitor CSVs have no rank positions — re-upload with a Position column to enable this comparison." />}
-          {hasCompPos && outperform.length === 0 && <SummaryEmpty text="No major category where a competitor's page-1 volume beats yours." />}
+          {hasCompPos && outperform.length === 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <SummaryEmpty text="No major category where a competitor's page-1 volume beats yours." />
+              <div style={{ borderTop: '1px solid #1A1A2A', paddingTop: '7px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {compDiag.map(c => (
+                  <p key={c.domain} style={{ fontSize: '10px', lineHeight: 1.5, margin: 0, color: c.p1 === 0 ? '#D9A23F' : '#555570' }}>
+                    {c.domain}: {c.rows.toLocaleString()} kws · {c.p1.toLocaleString()} page-1
+                    {c.p1 === 0 && ` (best pos ${isFinite(c.minPos) ? c.minPos : '—'}) — verify CSV Position column if unexpected`}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
           {outperform.length > 0 && (
             <>
               <SummaryHero
@@ -781,6 +808,26 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
   );
   const compRowsWithPos = compRows.filter(r => r.position != null);
 
+  // v7.111: per-domain position diagnostics over ALL rows with positions.
+  // A competitor whose uploaded rows never hit position ≤ 10 previously
+  // vanished SILENTLY from the legend and readout (rowsByComp only counted
+  // page-1 rows) — Wayne's AirSculpt case. Now such domains are listed
+  // explicitly with their best position so the exclusion is visible and the
+  // underlying data (real page-2+ rankings vs a misparsed Position column)
+  // can be judged on screen.
+  const compDiag = new Map<string, { rows: number; p1: number; minPos: number }>();
+  for (const r of compRowsWithPos) {
+    const d = normSovDomain(r.domain);
+    let e = compDiag.get(d);
+    if (!e) { e = { rows: 0, p1: 0, minPos: Infinity }; compDiag.set(d, e); }
+    e.rows++;
+    if (r.position <= 10) e.p1++;
+    if (r.position < e.minPos) e.minPos = r.position;
+  }
+  const zeroP1Domains = Array.from(compDiag.entries())
+    .filter(([, e]) => e.p1 === 0)
+    .map(([d, e]) => ({ domain: d, rows: e.rows, minPos: e.minPos }));
+
   if (trafficTotal > 0) {
     basis       = 'traffic';
     clientVoice = clientTraffic;
@@ -1008,7 +1055,29 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
               {' · '}{c.domain.replace(/^www\./, '')} {(rowsByComp.get(normSovDomain(c.domain)) ?? 0).toLocaleString()} kws · {Math.round(c.voice).toLocaleString()}/mo
             </span>
           ))}
+          {zeroP1Domains.map(z => (
+            <span key={z.domain}>
+              {' · '}{z.domain} {z.rows.toLocaleString()} kws · 0 page-1
+            </span>
+          ))}
         </p>
+      )}
+
+      {/* v7.111: explicit warning when an uploaded competitor has NO page-1 rows —
+          previously such domains disappeared from the donut/legend silently */}
+      {basis === 'volume' && zeroP1Domains.length > 0 && (
+        <div style={{
+          background: 'rgba(245,158,11,.06)', border: '1px solid rgba(245,158,11,.25)',
+          borderRadius: '8px', padding: '8px 10px',
+        }}>
+          {zeroP1Domains.map(z => (
+            <p key={z.domain} style={{ fontSize: '10px', color: '#D9A23F', lineHeight: 1.5, margin: 0 }}>
+              <span style={{ fontWeight: 600 }}>{z.domain}</span>: {z.rows.toLocaleString()} uploaded kws, none rank page 1
+              (best position {isFinite(z.minPos) ? z.minPos : '—'}) — excluded from page-1 Share of Voice.
+              If unexpected, open the CSV and verify the Position column values.
+            </p>
+          ))}
+        </div>
       )}
     </div>
   );
