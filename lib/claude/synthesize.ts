@@ -22,7 +22,7 @@ import {
   narrativePrompt,
   pptPromptGenerator,
   categoryBreakdownPrompt,
-  categoryAssignmentPrompt,
+  categoryConsolidationPrompt,
   type MergedKeyword,
 } from './prompts';
 
@@ -214,109 +214,131 @@ export async function generateCategoryBreakdown(
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} };
   }
 
-  // ── Pass A: define categories from the top 200 keywords (by volume) ────────
-  // One Claude call can't reliably handle the full footprint, so the top 200
-  // highest-volume keywords (already sorted desc by Semrush/upload builder)
-  // are used to DEFINE the category list and seed assignments.
-  const BREAKDOWN_LIMIT = 200;
-  const capped = merged.length > BREAKDOWN_LIMIT
-    ? merged.slice(0, BREAKDOWN_LIMIT)
-    : merged;
+  // ── Phase 1 (v7.80): category DISCOVERY across the ENTIRE keyword set ──────
+  // Every keyword participates in defining what categories exist — no top-200
+  // sampling. The full set is chunked into batches of 250; each batch runs the
+  // discovery prompt independently (parallel, bounded concurrency), proposing
+  // categories and assigning its own keywords to them.
+  const OTHER_NAME      = 'Other';
+  const DISCOVERY_BATCH = 250;
+  const CONCURRENCY     = 5;
 
-  const prompt = categoryBreakdownPrompt(domain, industry, capped);
+  const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
+  for (let i = 0; i < merged.length; i += DISCOVERY_BATCH) {
+    batches.push({ start: i, kws: merged.slice(i, i + DISCOVERY_BATCH) });
+  }
+  console.log(`[OrbitIQ] Category discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
 
-  const response = await getClient().messages.create({
-    model:      MODELS.fast,
-    max_tokens: 3000,
-    messages:   [{ role: 'user', content: prompt }],
-  }, { timeout: 100_000 });
+  interface ProposedCat {
+    name:    string;
+    type:    'procedure' | 'brand' | 'location';
+    indices: number[];   // GLOBAL indices into merged
+  }
+  const proposed: ProposedCat[] = [];
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
+    try {
+      const bPrompt   = categoryBreakdownPrompt(domain, industry, batch.kws);
+      const bResponse = await getClient().messages.create({
+        model:      MODELS.fast,
+        max_tokens: 3000,
+        messages:   [{ role: 'user', content: bPrompt }],
+      }, { timeout: 100_000 });
+      const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
+      const bParsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(bText);
 
-  // Claude returns categories with name, type, and keywordIndices
-  const parsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(text);
+      for (const cat of bParsed.categories ?? []) {
+        if (!cat?.name) continue;
+        const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
+        const indices = (cat.keywordIndices ?? [])
+          .filter(i => Number.isInteger(i) && i >= 0 && i < batch.kws.length)
+          .map(i => batch.start + i);
+        if (indices.length > 0) proposed.push({ name: cat.name, type: catType, indices });
+      }
+    } catch (err) {
+      // Non-fatal — this batch's keywords fall into "Other" below.
+      console.error('[OrbitIQ] Category discovery batch failed (keywords → Other):', (err as any)?.message);
+    }
+  };
 
-  // Global assignment map: merged-array index → category name.
-  // Seeded from Pass A, extended by Pass B batches below.
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    await Promise.all(batches.slice(i, i + CONCURRENCY).map(runDiscovery));
+  }
+
+  // Degenerate case: every discovery batch failed → keep the old empty-result
+  // contract so callers treat it as "no category data" rather than all-Other.
+  if (proposed.length === 0) {
+    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: merged.length, page1CaptureRate: 0, keywordCategories: {} };
+  }
+
+  // ── Phase 2 (v7.80): CONSOLIDATION — merge duplicate category names ────────
+  // Independent batches name the same concept differently ("Liposuction" vs
+  // "Lipo Procedures"). One haiku call merges aliases into a canonical list.
+  // On failure, identity mapping is used (raw names kept — still full coverage).
+
+  // Unique proposed names (case-insensitive) with majority type vote
+  const nameVotes = new Map<string, { name: string; types: Record<string, number> }>();
+  for (const p of proposed) {
+    const low = p.name.toLowerCase().trim();
+    if (!nameVotes.has(low)) nameVotes.set(low, { name: p.name, types: {} });
+    const v = nameVotes.get(low)!;
+    v.types[p.type] = (v.types[p.type] ?? 0) + p.indices.length;
+  }
+  const uniqueCats: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> = [];
+  nameVotes.forEach(v => {
+    const top = (Object.entries(v.types).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'procedure') as 'procedure' | 'brand' | 'location';
+    uniqueCats.push({ name: v.name, type: top });
+  });
+
+  // canonical lookup: proposed name (lowercase) → { name, type }
+  const canonical = new Map<string, { name: string; type: 'procedure' | 'brand' | 'location' }>();
+
+  if (batches.length > 1 && uniqueCats.length > 1) {
+    try {
+      const cPrompt   = categoryConsolidationPrompt(domain, industry, uniqueCats);
+      const cResponse = await getClient().messages.create({
+        model:      MODELS.fast,
+        max_tokens: 3000,
+        messages:   [{ role: 'user', content: cPrompt }],
+      }, { timeout: 100_000 });
+      const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
+      const cParsed = extractJSON<{ categories: Array<{ name: string; type?: string; merges: string[] }> }>(cText);
+
+      for (const canon of cParsed.categories ?? []) {
+        if (!canon?.name) continue;
+        const canonType = (canon.type === 'brand' || canon.type === 'location') ? canon.type : 'procedure';
+        for (const alias of canon.merges ?? []) {
+          if (typeof alias === 'string') {
+            canonical.set(alias.toLowerCase().trim(), { name: canon.name, type: canonType });
+          }
+        }
+      }
+      console.log(`[OrbitIQ] Category consolidation: ${uniqueCats.length} proposed → ${(cParsed.categories ?? []).length} canonical`);
+    } catch (err) {
+      console.error('[OrbitIQ] Category consolidation failed (using raw names):', (err as any)?.message);
+    }
+  }
+  // Identity mapping for anything the consolidation call missed
+  for (const u of uniqueCats) {
+    const low = u.name.toLowerCase().trim();
+    if (!canonical.has(low)) canonical.set(low, { name: u.name, type: u.type });
+  }
+
+  // ── Phase 3: build the complete keyword → canonical-category assignment ────
   const assignmentByIndex = new Map<number, string>();
   const catTypeByName     = new Map<string, 'procedure' | 'brand' | 'location'>();
 
-  for (const cat of parsed.categories) {
-    const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
-    catTypeByName.set(cat.name, catType);
-    for (const idx of cat.keywordIndices) {
-      if (merged[idx]) assignmentByIndex.set(idx, cat.name);
+  for (const p of proposed) {
+    const canon = canonical.get(p.name.toLowerCase().trim()) ?? { name: p.name, type: p.type };
+    if (!catTypeByName.has(canon.name)) catTypeByName.set(canon.name, canon.type);
+    for (const g of p.indices) {
+      if (merged[g] && !assignmentByIndex.has(g)) assignmentByIndex.set(g, canon.name);
     }
   }
-
-  // ── Pass B (v7.74): assign ALL remaining keywords to the fixed category list ──
-  // Previously keywords beyond the top 200 were never categorized, so the
-  // Keyword Landscape category counts/demand only reflected an ~200-keyword
-  // sample. Now the remainder is batched through Claude haiku in parallel
-  // using the Pass A category list. Failed/unmatched keywords fall into "Other".
-  const OTHER_NAME   = 'Other';
-  const ASSIGN_BATCH = 250;
-  const remaining    = merged.length > BREAKDOWN_LIMIT ? merged.slice(BREAKDOWN_LIMIT) : [];
-
-  if (remaining.length > 0 && parsed.categories.length > 0) {
-    const fixedCats = parsed.categories.map(c => ({
-      name: c.name,
-      type: catTypeByName.get(c.name) ?? 'procedure',
-    }));
-    const validNames = new Set(fixedCats.map(c => c.name));
-
-    const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
-    for (let i = 0; i < remaining.length; i += ASSIGN_BATCH) {
-      batches.push({ start: BREAKDOWN_LIMIT + i, kws: remaining.slice(i, i + ASSIGN_BATCH) });
-    }
-    console.log(`[OrbitIQ] Category assignment: ${remaining.length} remaining keywords in ${batches.length} batch(es)`);
-
-    // Run batches with bounded concurrency (5 at a time) to stay within
-    // Anthropic rate limits on very large footprints.
-    const CONCURRENCY = 5;
-    const runBatch = async (batch: { start: number; kws: MergedKeyword[] }) => {
-      try {
-        const bPrompt   = categoryAssignmentPrompt(domain, industry, fixedCats, batch.kws);
-        const bResponse = await getClient().messages.create({
-          model:      MODELS.fast,
-          max_tokens: 4000,
-          messages:   [{ role: 'user', content: bPrompt }],
-        }, { timeout: 100_000 });
-        const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
-        const bParsed = extractJSON<{ assignments: Record<string, number[]> }>(bText);
-
-        for (const [catName, indices] of Object.entries(bParsed.assignments ?? {})) {
-          const resolved = validNames.has(catName) ? catName : OTHER_NAME;
-          for (const localIdx of indices ?? []) {
-            const globalIdx = batch.start + localIdx;
-            if (merged[globalIdx] && !assignmentByIndex.has(globalIdx)) {
-              assignmentByIndex.set(globalIdx, resolved);
-            }
-          }
-        }
-      } catch (err) {
-        console.error('[OrbitIQ] Category assignment batch failed (keywords → Other):', (err as any)?.message);
-      }
-      // Any keyword in this batch still unassigned (failed batch or omitted
-      // by Claude) falls into "Other" so totals always cover the full footprint.
-      for (let i = 0; i < batch.kws.length; i++) {
-        const globalIdx = batch.start + i;
-        if (!assignmentByIndex.has(globalIdx)) assignmentByIndex.set(globalIdx, OTHER_NAME);
-      }
-    };
-
-    for (let i = 0; i < batches.length; i += CONCURRENCY) {
-      await Promise.all(batches.slice(i, i + CONCURRENCY).map(runBatch));
-    }
-  }
-
-  // Pass A leftovers (omitted indices within top 200) also fall into "Other"
-  // so every merged keyword is categorized. Skipped if Pass A produced no
-  // categories at all (degenerate case — keep result empty as before).
-  if (parsed.categories.length > 0) {
-    for (let i = 0; i < Math.min(merged.length, BREAKDOWN_LIMIT); i++) {
-      if (!assignmentByIndex.has(i)) assignmentByIndex.set(i, OTHER_NAME);
-    }
+  // Every keyword not assigned by discovery (failed batch / omitted index)
+  // falls into "Other" so totals always cover the full footprint.
+  for (let i = 0; i < merged.length; i++) {
+    if (!assignmentByIndex.has(i)) assignmentByIndex.set(i, OTHER_NAME);
   }
 
   // ── Compute demand sums in TypeScript over the FULL footprint ──────────────
@@ -347,10 +369,15 @@ export async function generateCategoryBreakdown(
     result.keywordCategories[kw.keyword.toLowerCase()] = catName;
   });
 
-  // Emit categories in Pass A order, then "Other" last if present
+  // Emit procedure categories by demand desc, then brand/location by demand
+  // desc, with "Other" always last.
+  const allNames = Array.from(sums.keys());
+  const demandOf = (n: string) => sums.get(n)!.monthlyDemand;
+  const isNav    = (n: string) => { const t = catTypeByName.get(n); return t === 'brand' || t === 'location'; };
   const orderedNames = [
-    ...parsed.categories.map(c => c.name).filter(n => sums.has(n)),
-    ...(sums.has(OTHER_NAME) && !catTypeByName.has(OTHER_NAME) ? [OTHER_NAME] : []),
+    ...allNames.filter(n => n !== OTHER_NAME && !isNav(n)).sort((a, b) => demandOf(b) - demandOf(a)),
+    ...allNames.filter(n => n !== OTHER_NAME &&  isNav(n)).sort((a, b) => demandOf(b) - demandOf(a)),
+    ...allNames.filter(n => n === OTHER_NAME),
   ];
 
   for (const name of orderedNames) {

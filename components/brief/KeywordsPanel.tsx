@@ -10,6 +10,33 @@ type KwFilter = 'all' | 'branded' | 'nonBranded' | 'competitorGap';
 type SortCol  = 'keyword' | 'competitor' | 'volume' | 'rank' | null;
 type SortDir  = 'asc' | 'desc';
 
+// v7.80: rank-bucket filter — replaces the old segment pills (segments now
+// live exclusively on the summary cards). 'all' = no rank filtering.
+type RankFilter = 'all' | 'p13' | 'p410' | 'p2' | 'p3p';
+
+// Bucket order is fixed: [1–3, 4–10, Page 2, Page 3+, Unranked/gap]
+const RANK_BUCKETS = [
+  { id: 'p13'  as const, label: '1–3',            color: '#6C63FF' },
+  { id: 'p410' as const, label: '4–10',           color: '#06B6D4' },
+  { id: 'p2'   as const, label: 'Page 2',         color: '#F59E0B' },
+  { id: 'p3p'  as const, label: 'Page 3+',        color: '#EF4444' },
+  { id: 'unr'  as const, label: 'Unranked / gap', color: '#2E2E48' },
+];
+
+function bucketIndexOf(position: number | null): number {
+  if (position === null) return 4;
+  if (position <= 3)     return 0;
+  if (position <= 10)    return 1;
+  if (position <= 20)    return 2;
+  return 3;
+}
+
+function matchesRankFilter(position: number | null, rf: RankFilter): boolean {
+  if (rf === 'all') return true;
+  const idx = { p13: 0, p410: 1, p2: 2, p3p: 3 }[rf];
+  return bucketIndexOf(position) === idx;
+}
+
 interface KeywordRow {
   key:          string;          // unique key for React
   keyword:      string;
@@ -62,12 +89,6 @@ interface KwCategoryBreakdown {
   totalMonthlyDemand: number;
   totalPage1Demand:   number;
   keywordCategories:  Record<string, string>; // lowercase kw → category name
-}
-
-interface KwCatStats {
-  total:   number;  // keywords in this category from allRows
-  ranked:  number;  // ranked keywords (have position)
-  posSum:  number;  // sum of positions (for avg calculation)
 }
 
 // ─── Branded detection — delegated to shared utility ─────────────────────────
@@ -335,15 +356,6 @@ function SortHeader({
   );
 }
 
-// ─── Filter pills ─────────────────────────────────────────────────────────────
-
-const FILTERS: { id: KwFilter; label: string }[] = [
-  { id: 'all',           label: 'All' },
-  { id: 'branded',       label: 'Branded' },
-  { id: 'nonBranded',    label: 'Non-branded' },
-  { id: 'competitorGap', label: 'Competitor Gap' },
-];
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
@@ -358,6 +370,7 @@ export default function KeywordsPanel({
   const [dbKeywords,  setDbKeywords]  = useState<DbKeyword[]>([]);
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
+  const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
   const [showAdd,     setShowAdd]     = useState(false);
   const [newKw,       setNewKw]       = useState('');
   const [newVol,      setNewVol]      = useState('');
@@ -398,12 +411,18 @@ export default function KeywordsPanel({
     () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold),
     [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold],
   );
+  // Segment rows: summary-card filter only (no rank filter) — the category
+  // breakdown needs ALL rank buckets of the active segment for its stacked bars.
+  const segmentRows = useMemo(
+    () => applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
+    [allRows, filter, volThreshold],
+  );
   const visibleRows = useMemo(
     () => applySort(
-      applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
+      segmentRows.filter(r => matchesRankFilter(r.position, rankFilter)),
       sortCol, sortDir,
     ),
-    [allRows, filter, volThreshold, sortCol, sortDir],
+    [segmentRows, rankFilter, sortCol, sortDir],
   );
 
   function handleSort(col: NonNullable<SortCol>) {
@@ -437,26 +456,13 @@ export default function KeywordsPanel({
     };
   }, [allRows, volThreshold]);
 
-  // ── Category stats — per-category keyword counts from full allRows ────────────
-  // Reads _categoryBreakdown stored by synthesis, then maps allRows keywords
-  // via keywordCategories (lowercase kw → category name) to produce per-category
-  // counts and average positions that reflect the FULL keyword footprint.
+  // ── Category breakdown source ─────────────────────────────────────────────
+  // v7.80: cb supplies the category list (names + types) and the complete
+  // keyword → category map from synthesis. ALL aggregation (counts, demand,
+  // rank buckets, averages) is computed client-side in KwCategorySection from
+  // the canonical segmentRows pool, so category totals always balance with
+  // the summary cards for the active segment.
   const cb = (analysis?.semrushSnapshot?._categoryBreakdown ?? null) as KwCategoryBreakdown | null;
-  const catStats = useMemo<Record<string, KwCatStats>>(() => {
-    if (!cb?.keywordCategories) return {};
-    const stats: Record<string, KwCatStats> = {};
-    for (const row of allRows) {
-      const cat = cb.keywordCategories[row.keyword.toLowerCase().trim()];
-      if (!cat) continue;
-      if (!stats[cat]) stats[cat] = { total: 0, ranked: 0, posSum: 0 };
-      stats[cat].total++;
-      if (row.type === 'ranked' && row.position !== null) {
-        stats[cat].ranked++;
-        stats[cat].posSum += row.position;
-      }
-    }
-    return stats;
-  }, [allRows, cb]);
 
   // ── Add keyword ──
   async function handleAdd() {
@@ -1116,27 +1122,40 @@ export default function KeywordsPanel({
         </div>
       )}
 
-      {/* ── Filter pills ── */}
-      <div className="flex items-center gap-2 px-5 py-2 border-b shrink-0" style={{ borderColor: '#111120', background: '#0A0A14' }}>
-        <span className="text-[9px] font-semibold uppercase tracking-widest mr-1" style={{ color: '#252545' }}>Filter</span>
-        {FILTERS.map(f => {
-          const active = filter === f.id;
+      {/* ── Rank-bucket filter pills (v7.80) ── */}
+      {/* Segments live on the summary cards above; these pills filter by rank
+          bucket WITHIN the active segment — both the category breakdown and
+          the keyword table below respond. */}
+      <div className="flex items-center gap-2 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: '#111120', background: '#0A0A14' }}>
+        <span className="text-[9px] font-semibold uppercase tracking-widest mr-1" style={{ color: '#252545' }}>Rank filter</span>
+        {([{ id: 'all' as RankFilter, label: 'All ranks', color: '#8B85FF' },
+           ...RANK_BUCKETS.slice(0, 4).map(b => ({ id: b.id as RankFilter, label: `Ranks ${b.label}`, color: b.color }))
+        ]).map(p => {
+          const active = rankFilter === p.id;
           return (
             <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              className="text-[10px] px-3 py-1 rounded-full border transition-all"
+              key={p.id}
+              onClick={() => setRankFilter(p.id)}
+              className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
               style={{
-                background:   active ? 'rgba(108,99,255,0.14)' : 'transparent',
-                borderColor:  active ? 'rgba(108,99,255,0.6)'  : '#3A3A5C',
-                color:        active ? '#9B96FF'                : '#8888B0',
+                background:   active ? 'rgba(108,99,255,0.12)' : 'transparent',
+                borderColor:  active ? p.color                  : '#3A3A5C',
+                color:        active ? p.color                  : '#8888B0',
               }}
             >
-              {f.label}
+              {p.id !== 'all' && (
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: p.color, display: 'inline-block' }} />
+              )}
+              {p.label}
             </button>
           );
         })}
-        {filter === 'competitorGap' && (
+        {rankFilter !== 'all' && (
+          <span className="ml-auto text-[9px]" style={{ color: '#4A4A70' }}>
+            showing only {RANK_BUCKETS[{ p13: 0, p410: 1, p2: 2, p3p: 3 }[rankFilter]].label} within {FILTER_META[filter].label}
+          </span>
+        )}
+        {rankFilter === 'all' && filter === 'competitorGap' && (
           <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
             from competitor · client not ranking
           </span>
@@ -1148,7 +1167,13 @@ export default function KeywordsPanel({
 
         {/* Category breakdown — inside scroll so it doesn't eat fixed height above the table */}
         {cb && cb.categories && cb.categories.length > 0 && dbLoaded && (
-          <KwCategorySection cb={cb} catStats={catStats} />
+          <KwCategorySection
+            cb={cb}
+            rows={segmentRows}
+            rankFilter={rankFilter}
+            segmentLabel={FILTER_META[filter].label}
+            expectedCount={segmentRows.length}
+          />
         )}
 
         <table className="w-full text-sm">
@@ -1255,7 +1280,12 @@ export default function KeywordsPanel({
   );
 }
 
-// ─── Keyword Landscape category section ──────────────────────────────────────
+// ─── Keyword Landscape category section (v7.80) ──────────────────────────────
+//
+// All aggregation is computed client-side from the canonical segment rows
+// (same pool as the summary cards), keyed through cb.keywordCategories.
+// Keywords without a stored category fall into "Other" so counts ALWAYS
+// balance with the active summary card. Bars are stacked by rank bucket.
 
 function fmtKwAnn(monthly: number): string {
   const a = monthly * 12;
@@ -1263,27 +1293,72 @@ function fmtKwAnn(monthly: number): string {
   return a.toLocaleString();
 }
 
-const KW_RANK_BUCKETS = [
-  { color: '#6C63FF', label: '1–3'  },
-  { color: '#06B6D4', label: '4–10' },
-  { color: '#F59E0B', label: 'P2'   },
-  { color: '#EF4444', label: 'P3+'  },
-];
+const RANK_SEL_INDEX: Record<Exclude<RankFilter, 'all'>, number> = { p13: 0, p410: 1, p2: 2, p3p: 3 };
+
+interface KwCatAgg {
+  name:   string;
+  type:   'procedure' | 'brand' | 'location';
+  kw:     number[];   // keyword counts per bucket [1–3, 4–10, P2, P3+, unranked]
+  vol:    number[];   // monthly volume per bucket
+  posSum: number[];   // sum of positions per bucket (ranked buckets only)
+  totKw:  number;
+  totVol: number;
+}
 
 function KwCategorySection({
   cb,
-  catStats,
+  rows,
+  rankFilter,
+  segmentLabel,
+  expectedCount,
 }: {
-  cb:       KwCategoryBreakdown;
-  catStats: Record<string, KwCatStats>;
+  cb:            KwCategoryBreakdown;
+  rows:          KeywordRow[];
+  rankFilter:    RankFilter;
+  segmentLabel:  string;
+  expectedCount: number;
 }) {
-  const procedureCats = cb.categories.filter(c => c.type === 'procedure');
-  const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
-  if (procedureCats.length === 0 && navCats.length === 0) return null;
+  // ── Aggregate segment rows into categories ──
+  const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
+  for (const c of cb.categories) typeByName[c.name] = c.type;
 
-  const totalMonthly = cb.totalMonthlyDemand;
-  const totalPage1   = cb.totalPage1Demand;
-  const overallShare = totalMonthly > 0 ? (totalPage1 / totalMonthly) * 100 : 0;
+  const aggMap = new Map<string, KwCatAgg>();
+  for (const row of rows) {
+    const catName = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
+    let agg = aggMap.get(catName);
+    if (!agg) {
+      agg = { name: catName, type: typeByName[catName] ?? 'procedure', kw: [0,0,0,0,0], vol: [0,0,0,0,0], posSum: [0,0,0,0,0], totKw: 0, totVol: 0 };
+      aggMap.set(catName, agg);
+    }
+    const b = bucketIndexOf(row.position);
+    agg.kw[b]++;
+    agg.vol[b]  += row.searchVolume;
+    if (row.position !== null && b < 4) agg.posSum[b] += row.position;
+    agg.totKw++;
+    agg.totVol  += row.searchVolume;
+  }
+  if (aggMap.size === 0) return null;
+
+  const cats = Array.from(aggMap.values());
+  const procedureCats = cats.filter(c => c.name !== 'Other' && c.type === 'procedure').sort((a, b) => b.totVol - a.totVol);
+  const navCats       = cats.filter(c => c.name !== 'Other' && (c.type === 'brand' || c.type === 'location')).sort((a, b) => b.totVol - a.totVol);
+  const otherCats     = cats.filter(c => c.name === 'Other');
+
+  const maxVol = Math.max(...cats.map(c => c.totVol), 1);
+  const selIdx = rankFilter === 'all' ? null : RANK_SEL_INDEX[rankFilter];
+
+  // ── Overall rollup (respects rank filter) ──
+  let tKw = 0, tVol = 0, tP1 = 0;
+  for (const c of cats) {
+    tKw  += selIdx === null ? c.totKw  : c.kw[selIdx];
+    tVol += selIdx === null ? c.totVol : c.vol[selIdx];
+    tP1  += selIdx === null ? c.vol[0] + c.vol[1] : (selIdx <= 1 ? c.vol[selIdx] : 0);
+  }
+  const overallShare = tVol > 0 ? (tP1 / tVol) * 100 : 0;
+  const balanced     = selIdx === null && tKw === expectedCount;
+
+  const renderRows = (list: KwCatAgg[], dimmed: boolean) =>
+    list.map(cat => <KwCatRow key={cat.name} cat={cat} selIdx={selIdx} maxVol={maxVol} dimmed={dimmed} />);
 
   return (
     <div style={{ borderBottom: '1px solid #111120', background: '#07070F' }}>
@@ -1292,12 +1367,12 @@ function KwCategorySection({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: '11px', fontWeight: 600, color: '#9090C0', letterSpacing: '.04em' }}>Category Breakdown</span>
           <span style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'rgba(108,99,255,0.1)', border: '1px solid rgba(108,99,255,0.25)', color: '#8080C0' }}>
-            {overallShare.toFixed(1)}% page 1 capture
+            {overallShare.toFixed(1)}% page 1 capture · {segmentLabel}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {KW_RANK_BUCKETS.map(b => (
-            <span key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '9px', color: b.color }}>
+          {RANK_BUCKETS.map(b => (
+            <span key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '9px', color: b.id === 'unr' ? '#55557A' : b.color }}>
               <span style={{ width: 6, height: 6, borderRadius: 1, background: b.color, display: 'inline-block' }} />
               {b.label}
             </span>
@@ -1327,9 +1402,7 @@ function KwCategorySection({
           <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Procedure Lines</span>
         </div>
       )}
-      {procedureCats.map(cat => (
-        <KwCatRow key={cat.name} cat={cat} stats={catStats[cat.name]} dimmed={false} />
-      ))}
+      {renderRows(procedureCats, false)}
 
       {/* Brand & navigation rows */}
       {navCats.length > 0 && (
@@ -1337,18 +1410,25 @@ function KwCategorySection({
           <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Brand &amp; Navigation</span>
         </div>
       )}
-      {navCats.map(cat => (
-        <KwCatRow key={cat.name} cat={cat} stats={catStats[cat.name]} dimmed={true} />
-      ))}
+      {renderRows(navCats, true)}
+
+      {/* Other / uncategorized — always last */}
+      {renderRows(otherCats, true)}
 
       {/* Overall rollup */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '6px 20px 8px', borderTop: '1px solid #111120' }}>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8' }}>Overall</span>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(totalMonthly)}</span>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8B85FF', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(totalPage1)}</span>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: '#6C63FF', textAlign: 'right' }}>{overallShare.toFixed(1)}%</span>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid #111120' }}>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8' }}>
+          Overall{selIdx !== null && <span style={{ fontWeight: 400, color: '#55557A' }}> · {RANK_BUCKETS[selIdx].label} only</span>}
+        </span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tVol > 0 ? fmtKwAnn(tVol) : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8B85FF', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tP1 > 0 ? fmtKwAnn(tP1) : '—'}</span>
+        <span style={{ fontSize: '12px', fontWeight: 700, color: '#6C63FF', textAlign: 'right' }}>{tVol > 0 ? `${overallShare.toFixed(1)}%` : '—'}</span>
         <span />
-        <span />
+        <span style={{ textAlign: 'center' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: balanced ? '#34D399' : '#8080C0', fontVariantNumeric: 'tabular-nums' }}>
+            {tKw.toLocaleString()}{balanced ? ' ✓' : ''}
+          </span>
+        </span>
       </div>
     </div>
   );
@@ -1356,18 +1436,32 @@ function KwCategorySection({
 
 function KwCatRow({
   cat,
-  stats,
+  selIdx,
+  maxVol,
   dimmed,
 }: {
-  cat:    KwCategoryRow;
-  stats?: KwCatStats;
+  cat:    KwCatAgg;
+  selIdx: number | null;   // null = all ranks; 0–3 = selected bucket
+  maxVol: number;
   dimmed: boolean;
 }) {
-  const share    = cat.monthlyDemand > 0 ? (cat.page1Demand / cat.monthlyDemand) * 100 : 0;
-  const barW     = Math.max(cat.page1Demand > 0 ? 1 : 0, share);
-  const hasPage1 = cat.page1Demand > 0;
-  const avgPos   = stats && stats.ranked > 0 ? stats.posSum / stats.ranked : null;
-  const kwCount  = stats?.total ?? 0;
+  const p1Vol   = cat.vol[0] + cat.vol[1];
+  const dispKw  = selIdx === null ? cat.totKw  : cat.kw[selIdx];
+  const dispVol = selIdx === null ? cat.totVol : cat.vol[selIdx];
+  const p1Disp  = selIdx === null ? p1Vol : (selIdx <= 1 ? cat.vol[selIdx] : 0);
+  const share   = cat.totVol > 0 && dispVol > 0 ? ((selIdx === null ? p1Vol : dispVol) / cat.totVol) * 100 : 0;
+
+  // Average position — weighted across ranked buckets (or selected bucket only)
+  let posSum = 0, posKw = 0;
+  if (selIdx === null) {
+    for (let i = 0; i < 4; i++) { posSum += cat.posSum[i]; posKw += cat.kw[i]; }
+  } else {
+    posSum = cat.posSum[selIdx]; posKw = cat.kw[selIdx];
+  }
+  const avgPos = posKw > 0 ? posSum / posKw : null;
+
+  // Stacked bar: length = category demand vs largest category; segments = rank mix
+  const barW = Math.max((cat.totVol / maxVol) * 100, 2);
 
   return (
     <div
@@ -1377,37 +1471,53 @@ function KwCatRow({
         alignItems: 'center',
         padding: '5px 20px',
         borderBottom: '1px solid rgba(255,255,255,0.03)',
-        opacity: dimmed ? 0.5 : 1,
+        opacity: dimmed ? 0.6 : 1,
       }}
     >
-      {/* Category name + mini bar */}
-      <div>
-        <span style={{ fontSize: '12px', color: dimmed ? '#606078' : '#D0D0F0' }}>{cat.name}</span>
-        <div style={{ marginTop: '4px', height: '2px', width: '80%', background: '#111120', borderRadius: '1px', overflow: 'hidden' }}>
-          <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#404060' : '#6C63FF', borderRadius: '1px', transition: 'width 0.6s ease' }} />
+      {/* Category name + stacked rank-bucket bar */}
+      <div style={{ minWidth: 0, paddingRight: 10 }}>
+        <span style={{ fontSize: '12px', color: dimmed ? '#9090B8' : '#D0D0F0', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
+        <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: '#111120', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
+          {cat.vol.map((v, i) => {
+            if (cat.totVol === 0 || v === 0) return null;
+            const dim = selIdx !== null && i !== selIdx;
+            return (
+              <span
+                key={i}
+                style={{
+                  display: 'inline-block',
+                  height: '100%',
+                  width: `${(v / cat.totVol) * 100}%`,
+                  background: RANK_BUCKETS[i].color,
+                  opacity: dim ? 0.15 : 1,
+                  transition: 'opacity 0.2s ease',
+                }}
+              />
+            );
+          })}
         </div>
       </div>
-      {/* Annual demand */}
+      {/* Annual demand (bucket-aware) */}
       <span style={{ fontSize: '11px', color: '#7070A0', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {fmtKwAnn(cat.monthlyDemand)}
+        {dispVol > 0 ? fmtKwAnn(dispVol) : '—'}
       </span>
-      {/* Page 1 */}
-      <span style={{ fontSize: '11px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#505070' : '#8B85FF') : '#333350', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {hasPage1 ? fmtKwAnn(cat.page1Demand) : '—'}
+      {/* Page 1 (bucket-aware) */}
+      <span style={{ fontSize: '11px', fontWeight: p1Disp > 0 ? 600 : 400, color: p1Disp > 0 ? (dimmed ? '#505070' : '#8B85FF') : '#333350', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        {p1Disp > 0 ? fmtKwAnn(p1Disp) : '—'}
       </span>
-      {/* Share */}
-      <span style={{ fontSize: '12px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#505070' : '#E0E0FF') : '#333350', textAlign: 'right' }}>
-        {hasPage1 ? `${share.toFixed(1)}%` : '—'}
+      {/* Share of category demand */}
+      <span style={{ fontSize: '12px', fontWeight: 600, color: share > 0 ? (dimmed ? '#505070' : '#E0E0FF') : '#333350', textAlign: 'right' }}>
+        {share > 0 ? `${share.toFixed(1)}%` : '—'}
       </span>
       {/* Avg position */}
       <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#333350' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
         {avgPos !== null ? avgPos.toFixed(1) : '—'}
       </span>
-      {/* Keywords count from allRows */}
+      {/* Keyword count (bucket-aware) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-        {kwCount > 0 ? (
-          <span style={{ fontSize: '11px', fontWeight: 600, color: '#6060A0', background: '#0F0F1E', border: '1px solid #1E1E30', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
-            {kwCount}
+        {dispKw > 0 ? (
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#8080C0', background: '#0F0F1E', border: '1px solid #1E1E30', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
+            {dispKw.toLocaleString()}
           </span>
         ) : (
           <span style={{ fontSize: '10px', color: '#282838' }}>—</span>
