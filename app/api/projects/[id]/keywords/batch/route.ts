@@ -27,8 +27,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db }              from '@/db';
-import { projectKeywords } from '@/db/schema';
-import { and, eq, sql, or, isNull, inArray }   from 'drizzle-orm';
+import { projectKeywords, projects } from '@/db/schema';
+import { and, eq, sql, or, isNull, inArray, ne }   from 'drizzle-orm';
 
 async function ensureTable() {
   try {
@@ -74,6 +74,37 @@ export async function POST(
   const projectId = params.id;
   const domainNorm = domain.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
 
+  // v7.100: determine whether this upload is the CLIENT's footprint or a
+  // COMPETITOR's. Competitor rows must NEVER be type 'ranked' — 'ranked' means
+  // "the client ranks for this", and competitor positions stored as 'ranked'
+  // were counted as client rankings in every panel (Wayne's 28K airsculpt.com
+  // rows showed up as 36,281 ranked / 0 gap). The competitor's position is
+  // still stored (needed for page-1 Share of Voice) — only the type changes.
+  const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  const clientDomainNorm = (project?.websiteUrl ?? '')
+    .trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  const isClientUpload = domainNorm === '' || domainNorm === clientDomainNorm;
+
+  // v7.100 auto-repair: flip pre-existing COMPETITOR rows that the old logic
+  // stored as 'ranked' back to 'gap'. Competitor rows = domain set and not the
+  // client's domain (client rows have domain ''/NULL or the client domain).
+  // Scoped to this project. Idempotent — runs cheaply on every upload.
+  if (clientDomainNorm) {
+    try {
+      await db.update(projectKeywords)
+        .set({ type: 'gap' })
+        .where(and(
+          eq(projectKeywords.projectId, projectId),
+          eq(projectKeywords.type, 'ranked'),
+          sql`${projectKeywords.domain} IS NOT NULL`,
+          ne(projectKeywords.domain, ''),
+          ne(projectKeywords.domain, clientDomainNorm),
+        ));
+    } catch (err) {
+      console.error('[OrbitIQ] competitor-row type repair failed (non-fatal):', err);
+    }
+  }
+
   // v7.92: duplicate check scoped to THIS domain (client rows have domain ''
   // or NULL from older versions — match both).
   const domainCond = domainNorm === ''
@@ -102,7 +133,10 @@ export async function POST(
       keyword:      kw,
       searchVolume: vol,
       position:     pos,
-      type:         pos !== null && pos <= 100 ? 'ranked' : 'gap',
+      // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
+      // Competitor rows are ALWAYS 'gap' — their position is the competitor's
+      // rank, kept for Share of Voice, not a client ranking.
+      type:         isClientUpload && pos !== null && pos <= 100 ? 'ranked' : 'gap',
       branded:      false,
       source,
       domain:       domainNorm,

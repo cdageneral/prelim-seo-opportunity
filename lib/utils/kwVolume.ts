@@ -194,11 +194,15 @@ export function buildKwPool({
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
     seen.add(kwLow);
+    const isGap = k.type === 'gap';
     pool.push({
       keyword:      k.keyword,
       searchVolume: k.search_volume ?? k.searchVolume ?? 0,
-      position:     k.position     ?? null,
-      isGap:        k.type === 'gap',
+      // v7.100: pool position means the CLIENT's rank. Gap rows (competitor
+      // uploads) store the COMPETITOR's rank in position — kept in the DB for
+      // Share of Voice — so it must not leak into the pool as a client ranking.
+      position:     isGap ? null : (k.position ?? null),
+      isGap,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
       competitor:   k.domain       ?? null,
     });
