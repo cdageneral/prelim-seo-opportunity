@@ -978,7 +978,20 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       </div>
 
       {/* ── Stat Strip ── */}
-      <div className="grid grid-cols-4 gap-3">
+      {/* v7.109: leading "Total Keywords" card = full footprint (ranked + gap),
+          identical to the Keyword Landscape totals, so the ranked-only scope of
+          the next card is obvious: Total − Gap = Ranked. */}
+      <div className="grid grid-cols-5 gap-3">
+        <StatCard
+          label="Total Keywords"
+          value={dbLoaded ? (totalKws + gapKwCount).toLocaleString() : '—'}
+          sub={dbLoaded
+            ? `${fmtAnnual(totalVol + gapVolMonthly)} annual vol — full footprint`
+            : 'Loading…'}
+          sub2={dbLoaded
+            ? `matches Keyword Landscape · ${totalKws.toLocaleString()} ranked + ${gapKwCount.toLocaleString()} gap`
+            : undefined}
+        />
         <StatCard
           label="Ranked Keywords"
           value={dbLoaded ? totalKws.toLocaleString() : '—'}
@@ -986,7 +999,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
             ? `${top3Kws} in top 3 · ${fmtAnnual(totalVol)} annual vol`
             : 'Loading…'}
           sub2={dbLoaded && gapKwCount > 0
-            ? `+${gapKwCount} gap kws (${fmtAnnual(gapVolMonthly)}/yr) excluded — no rankings · Landscape total ${(totalKws + gapKwCount).toLocaleString()}`
+            ? `${gapKwCount.toLocaleString()} gap kws (${fmtAnnual(gapVolMonthly)}/yr) excluded — no client rankings`
             : undefined}
         />
         <StatCard

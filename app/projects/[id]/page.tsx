@@ -971,6 +971,7 @@ export default function ProjectBriefPage() {
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'list' && (
             <KeywordsPanel
               kwVersion={kwVersion}
+              onKeywordsChanged={() => setKwVersion(v => v + 1)}   // v7.108: client kw changes refresh all panels
               projectId={projectId}
               analysis={analysis}
               competitors={competitorDomains}

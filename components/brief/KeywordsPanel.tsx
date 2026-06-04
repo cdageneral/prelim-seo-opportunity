@@ -69,6 +69,7 @@ interface DbKeyword {
 interface Props {
   projectId:   string;
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
+  onKeywordsChanged?: () => void;   // v7.108: fired after any successful keyword mutation here (CSV upload, add, delete/block, clear) so the parent can bump kwVersion and refresh ALL panels (SOV, clusters, etc.)
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
   domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
@@ -366,7 +367,7 @@ function SortHeader({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
-  projectId, kwVersion, analysis, competitors, domain,
+  projectId, kwVersion, onKeywordsChanged, analysis, competitors, domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
 }: Props) {
@@ -558,6 +559,7 @@ export default function KeywordsPanel({
       setNewType('gap');
       setShowAdd(false);
       await fetchDb();
+      onKeywordsChanged?.();   // v7.108: refresh dependent panels
     } finally {
       setAddLoading(false);
     }
@@ -589,6 +591,7 @@ export default function KeywordsPanel({
         });
       }
       await fetchDb();
+      onKeywordsChanged?.();   // v7.108: refresh dependent panels
     } finally {
       setDeletingKey(null);
     }
@@ -711,6 +714,7 @@ export default function KeywordsPanel({
 
     if (csvRef.current) csvRef.current.value = '';
     await fetchDb();
+      onKeywordsChanged?.();   // v7.108: refresh dependent panels
 
     if (added === 0) {
       setCsvStatus({ type: 'error', msg: `All ${skipped} keyword${skipped !== 1 ? 's' : ''} already exist — duplicates skipped.` });
@@ -755,6 +759,7 @@ export default function KeywordsPanel({
 
     setClearStep('Refreshing…');
     await fetchDb();
+      onKeywordsChanged?.();   // v7.108: refresh dependent panels
     setClearLoading(false);
     setClearStep('');
     setShowClearConfirm(false);
