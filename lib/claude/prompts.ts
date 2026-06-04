@@ -77,6 +77,53 @@ Return JSON ONLY — no markdown, no explanation. Category names must come from 
 }`;
 }
 
+// ─── Pass 2.5b: Category Assignment (batch) ──────────────────────────────────
+//
+// v7.74: Assigns a batch of keywords to an EXISTING fixed category list
+// (defined by the first categoryBreakdownPrompt call on the top-200 keywords).
+// Used to extend categorization to the FULL keyword footprint instead of
+// only the top 200. Claude only maps indices → category names; all demand
+// arithmetic stays in TypeScript.
+
+export function categoryAssignmentPrompt(
+  domain: string,
+  industry: string,
+  categories: Array<{ name: string; type: string }>,
+  keywords: MergedKeyword[]
+): string {
+  const catList = categories
+    .map(c => `- "${c.name}" (${c.type})`)
+    .join('\n');
+
+  const kwList = keywords
+    .map((k, i) => `${i}. ${k.keyword}`)
+    .join('\n');
+
+  return `You are assigning search keywords for a ${industry} website (${domain}) to a FIXED list of existing categories.
+
+EXISTING CATEGORIES — you must use these exact names, do not invent new ones:
+${catList}
+- "Other" (use ONLY if a keyword truly fits none of the above)
+
+KEYWORDS (index. keyword):
+${kwList}
+
+RULES:
+1. Assign every keyword index to exactly one category from the list above.
+2. Pricing, cost, reviews, before/after, and how-to keywords belong inside their parent procedure category.
+3. Keywords containing the brand name go to the brand category; brand+city/"near me" go to the location category.
+4. Use "Other" sparingly — only when no listed category fits.
+
+Return JSON ONLY — no markdown, no explanation. Keys are exact category names, values are keyword index arrays:
+{
+  "assignments": {
+    "Category Name A": [0, 4, 9],
+    "Category Name B": [1, 2],
+    "Other": [7]
+  }
+}`;
+}
+
 // ─── Pass 1: Audience Segment Generation ─────────────────────────────────────
 
 export function personaPrompt(

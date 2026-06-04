@@ -22,6 +22,7 @@ import {
   narrativePrompt,
   pptPromptGenerator,
   categoryBreakdownPrompt,
+  categoryAssignmentPrompt,
   type MergedKeyword,
 } from './prompts';
 
@@ -213,9 +214,10 @@ export async function generateCategoryBreakdown(
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} };
   }
 
-  // Cap at 200 keywords (top by volume) so Claude's response fits within token budget.
-  // Keywords are already sorted by traffic desc from Semrush, so the highest-value ones
-  // are first. Remaining keywords will be classified by ThemeClusters Layer 2 signal matching.
+  // ── Pass A: define categories from the top 200 keywords (by volume) ────────
+  // One Claude call can't reliably handle the full footprint, so the top 200
+  // highest-volume keywords (already sorted desc by Semrush/upload builder)
+  // are used to DEFINE the category list and seed assignments.
   const BREAKDOWN_LIMIT = 200;
   const capped = merged.length > BREAKDOWN_LIMIT
     ? merged.slice(0, BREAKDOWN_LIMIT)
@@ -234,7 +236,91 @@ export async function generateCategoryBreakdown(
   // Claude returns categories with name, type, and keywordIndices
   const parsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(text);
 
-  // ── Compute demand sums in TypeScript — no Claude arithmetic ──────────────
+  // Global assignment map: merged-array index → category name.
+  // Seeded from Pass A, extended by Pass B batches below.
+  const assignmentByIndex = new Map<number, string>();
+  const catTypeByName     = new Map<string, 'procedure' | 'brand' | 'location'>();
+
+  for (const cat of parsed.categories) {
+    const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
+    catTypeByName.set(cat.name, catType);
+    for (const idx of cat.keywordIndices) {
+      if (merged[idx]) assignmentByIndex.set(idx, cat.name);
+    }
+  }
+
+  // ── Pass B (v7.74): assign ALL remaining keywords to the fixed category list ──
+  // Previously keywords beyond the top 200 were never categorized, so the
+  // Keyword Landscape category counts/demand only reflected an ~200-keyword
+  // sample. Now the remainder is batched through Claude haiku in parallel
+  // using the Pass A category list. Failed/unmatched keywords fall into "Other".
+  const OTHER_NAME   = 'Other';
+  const ASSIGN_BATCH = 250;
+  const remaining    = merged.length > BREAKDOWN_LIMIT ? merged.slice(BREAKDOWN_LIMIT) : [];
+
+  if (remaining.length > 0 && parsed.categories.length > 0) {
+    const fixedCats = parsed.categories.map(c => ({
+      name: c.name,
+      type: catTypeByName.get(c.name) ?? 'procedure',
+    }));
+    const validNames = new Set(fixedCats.map(c => c.name));
+
+    const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
+    for (let i = 0; i < remaining.length; i += ASSIGN_BATCH) {
+      batches.push({ start: BREAKDOWN_LIMIT + i, kws: remaining.slice(i, i + ASSIGN_BATCH) });
+    }
+    console.log(`[OrbitIQ] Category assignment: ${remaining.length} remaining keywords in ${batches.length} batch(es)`);
+
+    // Run batches with bounded concurrency (5 at a time) to stay within
+    // Anthropic rate limits on very large footprints.
+    const CONCURRENCY = 5;
+    const runBatch = async (batch: { start: number; kws: MergedKeyword[] }) => {
+      try {
+        const bPrompt   = categoryAssignmentPrompt(domain, industry, fixedCats, batch.kws);
+        const bResponse = await getClient().messages.create({
+          model:      MODELS.fast,
+          max_tokens: 4000,
+          messages:   [{ role: 'user', content: bPrompt }],
+        }, { timeout: 100_000 });
+        const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
+        const bParsed = extractJSON<{ assignments: Record<string, number[]> }>(bText);
+
+        for (const [catName, indices] of Object.entries(bParsed.assignments ?? {})) {
+          const resolved = validNames.has(catName) ? catName : OTHER_NAME;
+          for (const localIdx of indices ?? []) {
+            const globalIdx = batch.start + localIdx;
+            if (merged[globalIdx] && !assignmentByIndex.has(globalIdx)) {
+              assignmentByIndex.set(globalIdx, resolved);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[OrbitIQ] Category assignment batch failed (keywords → Other):', (err as any)?.message);
+      }
+      // Any keyword in this batch still unassigned (failed batch or omitted
+      // by Claude) falls into "Other" so totals always cover the full footprint.
+      for (let i = 0; i < batch.kws.length; i++) {
+        const globalIdx = batch.start + i;
+        if (!assignmentByIndex.has(globalIdx)) assignmentByIndex.set(globalIdx, OTHER_NAME);
+      }
+    };
+
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      await Promise.all(batches.slice(i, i + CONCURRENCY).map(runBatch));
+    }
+  }
+
+  // Pass A leftovers (omitted indices within top 200) also fall into "Other"
+  // so every merged keyword is categorized. Skipped if Pass A produced no
+  // categories at all (degenerate case — keep result empty as before).
+  if (parsed.categories.length > 0) {
+    for (let i = 0; i < Math.min(merged.length, BREAKDOWN_LIMIT); i++) {
+      if (!assignmentByIndex.has(i)) assignmentByIndex.set(i, OTHER_NAME);
+    }
+  }
+
+  // ── Compute demand sums in TypeScript over the FULL footprint ──────────────
+  // No Claude arithmetic — all sums below come from actual Semrush/upload volumes.
   const result: CategoryBreakdownResult = {
     categories: [],
     totalMonthlyDemand:    0,
@@ -244,41 +330,50 @@ export async function generateCategoryBreakdown(
     nonBrandedPage1Demand: 0,
     totalKeywordsAnalyzed: merged.length,
     page1CaptureRate:      0,
-    keywordCategories:     {},  // v7.34: populated below
+    keywordCategories:     {},
   };
 
-  for (const cat of parsed.categories) {
-    const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
-    let monthlyDemand = 0;
-    let page1Demand   = 0;
-    let top3Demand    = 0;
+  // Aggregate per category
+  const sums = new Map<string, { monthlyDemand: number; page1Demand: number; top3Demand: number }>();
+  assignmentByIndex.forEach((catName, idx) => {
+    const kw = merged[idx];
+    if (!kw) return;
+    const vol = kw.searchVolume ?? 0;
+    if (!sums.has(catName)) sums.set(catName, { monthlyDemand: 0, page1Demand: 0, top3Demand: 0 });
+    const s = sums.get(catName)!;
+    s.monthlyDemand += vol;
+    if (kw.clientPosition !== null && kw.clientPosition <= 10) s.page1Demand += vol;
+    if (kw.clientPosition !== null && kw.clientPosition <= 3)  s.top3Demand  += vol;
+    result.keywordCategories[kw.keyword.toLowerCase()] = catName;
+  });
 
-    for (const idx of cat.keywordIndices) {
-      const kw = merged[idx];
-      if (!kw) continue;
-      const vol = kw.searchVolume ?? 0;
-      monthlyDemand += vol;
-      if (kw.clientPosition !== null && kw.clientPosition <= 10) page1Demand += vol;
-      if (kw.clientPosition !== null && kw.clientPosition <= 3)  top3Demand  += vol;
-      // v7.34: store keyword→category mapping for ThemeClustersPanel
-      result.keywordCategories[kw.keyword.toLowerCase()] = cat.name;
-    }
+  // Emit categories in Pass A order, then "Other" last if present
+  const orderedNames = [
+    ...parsed.categories.map(c => c.name).filter(n => sums.has(n)),
+    ...(sums.has(OTHER_NAME) && !catTypeByName.has(OTHER_NAME) ? [OTHER_NAME] : []),
+  ];
 
-    result.categories.push({ name: cat.name, type: catType, monthlyDemand, page1Demand, top3Demand });
-    result.totalMonthlyDemand += monthlyDemand;
-    result.totalPage1Demand   += page1Demand;
-    result.totalTop3Demand    += top3Demand;
+  for (const name of orderedNames) {
+    const s       = sums.get(name)!;
+    const catType = catTypeByName.get(name) ?? 'procedure';
+
+    result.categories.push({ name, type: catType, monthlyDemand: s.monthlyDemand, page1Demand: s.page1Demand, top3Demand: s.top3Demand });
+    result.totalMonthlyDemand += s.monthlyDemand;
+    result.totalPage1Demand   += s.page1Demand;
+    result.totalTop3Demand    += s.top3Demand;
 
     if (catType === 'brand' || catType === 'location') {
-      result.brandedPage1Demand    += page1Demand;
+      result.brandedPage1Demand    += s.page1Demand;
     } else {
-      result.nonBrandedPage1Demand += page1Demand;
+      result.nonBrandedPage1Demand += s.page1Demand;
     }
   }
 
   result.page1CaptureRate = result.totalMonthlyDemand > 0
     ? result.totalPage1Demand / result.totalMonthlyDemand
     : 0;
+
+  console.log(`[OrbitIQ] Category breakdown: ${result.categories.length} categories covering ${Object.keys(result.keywordCategories).length}/${merged.length} keywords`);
 
   return result;
 }
