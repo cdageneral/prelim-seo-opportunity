@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { buildKwPool } from '@/lib/utils/kwVolume';
+import { getVolumeMetrics } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -146,36 +146,37 @@ export default function ExecutiveSummarySection({
       .finally(() => setDbLoaded(true));
   }, [projectId]);
 
-  // ── Build unified keyword pool — single source of truth (identical to KeywordsPanel / GoogleSerpSection) ──
-  const _allKwPool = useMemo(() => buildKwPool({
+  // ── Unified pool + volume metrics (getVolumeMetrics calls buildKwPool internally) ──
+  // Wrapping in useMemo avoids re-running on every render; deps match what buildKwPool needs.
+  const _volMetrics = useMemo(() => getVolumeMetrics({
     semrushSnapshot:   analysis?.semrushSnapshot,
     uploadedKeywords:  dbKeywords,
     clientDomain:      propClientDomain ?? (analysis?.semrushSnapshot?.domain ?? ''),
     competitorDomains: manualDomains,
     clientVolMin:      defaultClientThreshold,
-    competitorVolMin:  0,
-  }), [analysis, dbKeywords, propClientDomain, manualDomains, defaultClientThreshold]);
+    competitorVolMin:  defaultCompetitorThreshold,
+  }), [analysis, dbKeywords, propClientDomain, manualDomains, defaultClientThreshold, defaultCompetitorThreshold]);
 
-  // Ranked-only subset — used for position/volume metric cards (mirrors GoogleSerpSection.topKws)
+  // Ranked-only subset — mirrors GoogleSerpSection.topKws for position/volume metric cards
   const topKws: SemKw[] = useMemo(() =>
-    _allKwPool
-      .filter(item => !item.isGap)
-      .map(item => ({
+    _volMetrics.pool
+      .filter((item) => !item.isGap)
+      .map((item) => ({
         keyword:      item.keyword,
         position:     item.position,
         searchVolume: item.searchVolume,
         branded:      item.isBranded,
       })),
-  [_allKwPool]);
+  [_volMetrics]);
 
   // ── Computed stats ────────────────────────────────────────────────────────
-  const posKws      = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
+  const posKws     = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
   // totalKws = ALL keywords (ranked + gap) — matches Keyword Landscape panel exactly
-  const totalKws    = _allKwPool.length;
-  const totalVol    = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-  const top3Vol     = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
-  const page1Vol    = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
-  const posVol      = posKws.reduce((s, k) => s + k.searchVolume, 0);
+  const totalKws   = _volMetrics.pool.length;
+  const totalVol   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  const top3Vol    = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
+  const page1Vol   = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const posVol     = posKws.reduce((s, k) => s + k.searchVolume, 0);
   const weightedPos = posVol > 0
     ? posKws.reduce((s, k) => s + k.position * k.searchVolume, 0) / posVol
     : 0;
@@ -192,12 +193,10 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // ── Market capture metrics — inline from live pool, no useMemo cast or stored fallbacks ──
-  // totalMonthly uses _allKwPool (ranked + gap) = total market demand denominator
-  // page1Monthly uses posKws (already typed number positions) for pg1 volume
-  const totalMonthly      = _allKwPool.reduce((s, k) => s + k.searchVolume, 0);
-  const page1Monthly      = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
-  const captureRate       = totalMonthly > 0 ? page1Monthly / totalMonthly : 0;
+  // Capture metrics directly from _volMetrics — no stored analysis fallbacks
+  const totalMonthly      = _volMetrics.totalMonthly;
+  const page1Monthly      = _volMetrics.page1Monthly;
+  const captureRate       = _volMetrics.captureRate;
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
