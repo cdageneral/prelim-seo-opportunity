@@ -113,11 +113,16 @@ export async function POST(req: NextRequest) {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (mode === 'data') {
+      // v7.113 FIX: findFirst without orderBy returns an ARBITRARY (in practice
+      // the oldest) completed analysis — which predates SERP scanning and holds
+      // a stale footprint. Must be the MOST RECENT completed analysis, same
+      // ordering every other route uses.
       const lastAnalysis = await db.query.analyses.findFirst({
         where: and(
           eq(analyses.projectId, projectId),
           eq(analyses.status, 'completed'),
         ),
+        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
       });
 
       if (!lastAnalysis?.semrushSnapshot) {
@@ -188,11 +193,15 @@ export async function POST(req: NextRequest) {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (mode === 'gaps') {
+      // v7.113 FIX: same latent bug as data mode — no orderBy meant gap scans
+      // could merge against the OLDEST completed analysis (stale footprint,
+      // missing serp-scan coverage) instead of the latest. Present since v7.31.
       const lastAnalysis = await db.query.analyses.findFirst({
         where: and(
           eq(analyses.projectId, projectId),
           eq(analyses.status, 'completed'),
         ),
+        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
       });
 
       if (!lastAnalysis?.semrushSnapshot) {
