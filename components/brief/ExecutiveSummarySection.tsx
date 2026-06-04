@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { getVolumeMetrics } from '@/lib/utils/kwVolume';
+import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -146,51 +146,32 @@ export default function ExecutiveSummarySection({
       .finally(() => setDbLoaded(true));
   }, [projectId]);
 
-  // ── Merge full keyword set (exact mirror of GoogleSerpSection) ──────────────
-  const topKws: SemKw[] = useMemo(() => {
-    const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
+  // ── Canonical keyword pool via shared utility ───────────────────────────────
+  // buildKwPool is the single source of truth (see lib/utils/kwVolume.ts header).
+  // KeywordsPanel and the hero capture-rate metric both use this exact pool, so
+  // every count and volume in this section now matches them by construction.
+  // (Replaced the old inline merge, which skipped gap keywords, didn't dedupe
+  // Semrush rows, and excluded uploaded gap-type rows — producing a different
+  // keyword count and volume total than the Keyword Landscape panel.)
+  const kwPool = useMemo(() => buildKwPool({
+    semrushSnapshot:    analysis.semrushSnapshot ?? {},
+    uploadedKeywords:   dbKeywords,
+    clientDomain:       propClientDomain ?? analysis.semrushSnapshot?.domain ?? '',
+    competitorDomains:  manualDomains,
+    clientVolMin:       defaultClientThreshold,
+    competitorVolMin:   defaultCompetitorThreshold,
+  }), [analysis, dbKeywords, propClientDomain, manualDomains, defaultClientThreshold, defaultCompetitorThreshold]);
 
-    const blockedKeys = new Set(
-      dbKeywords
-        .filter(k => k.source === 'blocked')
-        .map(k => k.keyword.toLowerCase().trim()),
-    );
+  const topKws: SemKw[] = useMemo(() => kwPool.map(item => ({
+    keyword:      item.keyword,
+    position:     item.position != null && Number(item.position) > 0 && isFinite(Number(item.position))
+                    ? Number(item.position)
+                    : null,
+    searchVolume: item.searchVolume,
+    branded:      item.isBranded,
+  })), [kwPool]);
 
-    const semKws: SemKw[] = rawSemKws
-      .filter(k => !blockedKeys.has((k.keyword ?? '').toLowerCase().trim()))
-      .filter(k => defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold)
-      .map(k => ({ ...k, position: k.position != null ? Number(k.position) : null }));
-
-    const gapKeywordKeys = new Set(
-      (analysis.semrushSnapshot?.gapKeywords ?? []).map(
-        (k: any) => (k.keyword ?? '').toLowerCase().trim(),
-      ),
-    );
-    const existingKeys = new Set([
-      ...semKws.map(k => k.keyword.toLowerCase().trim()),
-      ...Array.from(gapKeywordKeys),
-    ]);
-
-    const dbRanked: SemKw[] = [];
-    for (const k of dbKeywords) {
-      if (k.source === 'blocked') continue;
-      if (k.type !== 'ranked') continue;
-      const kwKey = k.keyword.toLowerCase().trim();
-      if (existingKeys.has(kwKey)) continue;
-      existingKeys.add(kwKey);
-      const pos = k.position;
-      dbRanked.push({
-        keyword:      k.keyword,
-        position:     pos != null && Number(pos) > 0 && isFinite(Number(pos)) ? Number(pos) : null,
-        searchVolume: k.searchVolume,
-        branded:      k.branded,
-      });
-    }
-
-    return [...semKws, ...dbRanked];
-  }, [analysis, dbKeywords, defaultClientThreshold]);
-
-  // ── Computed stats (exact mirror of GoogleSerpSection) ────────────────────
+  // ── Computed stats — derived from the canonical kwPool ────────────────────
   const posKws     = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
   const totalKws   = topKws.length;
   const page1Kws   = posKws.filter(k => k.position <= 10).length;
@@ -214,16 +195,8 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // ── Market capture metrics — via shared utility ───────────────────────────
-  const _clientDomain = propClientDomain ?? semSnap.domain ?? '';
-  const _volMetrics   = getVolumeMetrics({
-    semrushSnapshot:    semSnap,
-    uploadedKeywords:   dbKeywords,
-    clientDomain:       _clientDomain,
-    competitorDomains:  manualDomains,
-    clientVolMin:       defaultClientThreshold,
-    competitorVolMin:   defaultCompetitorThreshold,
-  });
+  // ── Market capture metrics — from the same canonical pool as the stats above ──
+  const _volMetrics = computeVolumeMetrics(kwPool);
 
   const totalMonthly      = _volMetrics.totalMonthly > 0
     ? _volMetrics.totalMonthly
