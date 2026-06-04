@@ -481,7 +481,8 @@ function LegendRow({ arc }: { arc: SovArc }) {
         {label}
       </span>
       <span style={{ fontSize: '10px', color: arc.color, fontWeight: isClient ? 700 : 400, flexShrink: 0, marginLeft: '4px', fontVariantNumeric: 'tabular-nums' }}>
-        {Math.round(arc.pct * 100)}%
+        {/* v7.91: sub-1% shares show one decimal instead of rounding to a misleading 0% */}
+        {arc.pct > 0 && arc.pct < 0.01 ? `${(arc.pct * 100).toFixed(1)}%` : `${Math.round(arc.pct * 100)}%`}
       </span>
     </div>
   );
@@ -513,6 +514,10 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
   let basis: 'traffic' | 'volume' | 'tracked' | 'gapOnly';
   let clientVoice: number;
   let compEntries: Array<{ domain: string; voice: number }>;
+  // v7.91: per-domain data readout (row counts + monthly volume) rendered under
+  // the panel so the basis data is always visible and verifiable on screen.
+  let clientKwsUsed = 0;
+  const rowsByComp  = new Map<string, number>();
 
   const snap       = analysis.semrushSnapshot ?? {};
   const clientNorm = normSovDomain(snap.domain ?? '');
@@ -531,13 +536,14 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
     if (compRowsWithPos.length > 0) {
       // Page-1 share: both sides restricted to positions ≤ 10
       basis = 'volume';
-      clientVoice = topKws
-        .filter(k => k?.position != null && k.position <= 10)
-        .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+      const clientP1 = topKws.filter(k => k?.position != null && k.position <= 10);
+      clientKwsUsed  = clientP1.length;
+      clientVoice    = clientP1.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
       for (const r of compRowsWithPos) {
         if (r.position > 10) continue;
         const d = normSovDomain(r.domain);
         byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
+        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
       }
     } else if (compRows.length > 0) {
       // v7.90: uploaded competitor CSVs carry NO rank positions (the uploader
@@ -546,21 +552,24 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
       // — same measure on both sides, explicitly labeled. Re-uploading
       // competitor CSVs with a position column upgrades this to page-1 share.
       basis = 'tracked';
-      clientVoice = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+      clientKwsUsed = topKws.length;
+      clientVoice   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
       for (const r of compRows) {
         const d = normSovDomain(r.domain);
         byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
+        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
       }
     } else {
       basis = 'gapOnly';
-      clientVoice = topKws
-        .filter(k => k?.position != null && k.position <= 10)
-        .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+      const clientP1 = topKws.filter(k => k?.position != null && k.position <= 10);
+      clientKwsUsed  = clientP1.length;
+      clientVoice    = clientP1.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
       for (const g of ((snap.gapKeywords ?? []) as any[])) {
         if (!g?.competitor) continue;
         if ((g.competitorPosition ?? 99) > 10) continue;
         const d = normSovDomain(g.competitor);
         byComp.set(d, (byComp.get(d) ?? 0) + (g.searchVolume ?? 0));
+        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
       }
     }
     compEntries = Array.from(byComp.entries()).map(([domain, voice]) => ({ domain, voice }));
@@ -717,6 +726,19 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
           Brand / manual
         </span>
       </div>
+
+      {/* v7.91: underlying data readout — keyword counts + monthly volume per
+          domain, so the basis behind every percentage is verifiable on screen */}
+      {basis !== 'traffic' && (
+        <p style={{ fontSize: '9px', color: '#383858', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
+          data: Client {clientKwsUsed.toLocaleString()} kws · {Math.round(clientVoice).toLocaleString()}/mo
+          {compEntries.map(c => (
+            <span key={c.domain}>
+              {' · '}{c.domain.replace(/^www\./, '')} {(rowsByComp.get(normSovDomain(c.domain)) ?? 0).toLocaleString()} kws · {Math.round(c.voice).toLocaleString()}/mo
+            </span>
+          ))}
+        </p>
+      )}
     </div>
   );
 }
