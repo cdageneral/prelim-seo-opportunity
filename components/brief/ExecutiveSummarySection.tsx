@@ -326,6 +326,22 @@ export default function ExecutiveSummarySection({
     SEO: '#8B85FF', GEO: '#06B6D4', Content: '#8B85FF', Technical: '#F59E0B', Competitive: '#EF4444',
   };
 
+  // ── Defer render until DB keywords resolve (prevents stale capture-rate flash) ──
+  // Mirrors the v7.67 ThemeClustersPanel fix: first paint used only the stored
+  // snapshot fallbacks, then re-rendered with merged DB keywords — flashing two
+  // different numbers. The fetch's .finally() always sets dbLoaded, so a failed
+  // fetch still unblocks the UI.
+  if (!dbLoaded) {
+    return (
+      <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
+        <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+          <p className="text-[9px] text-orbit-tertiary uppercase tracking-widest mb-1">Market capture rate</p>
+          <p className="text-[11px] text-orbit-secondary">Loading keyword data…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
