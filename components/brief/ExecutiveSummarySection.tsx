@@ -146,33 +146,54 @@ export default function ExecutiveSummarySection({
       .finally(() => setDbLoaded(true));
   }, [projectId]);
 
-  // ── Unified pool + volume metrics (getVolumeMetrics calls buildKwPool internally) ──
-  // Wrapping in useMemo avoids re-running on every render; deps match what buildKwPool needs.
-  const _volMetrics = useMemo(() => getVolumeMetrics({
-    semrushSnapshot:   analysis?.semrushSnapshot,
-    uploadedKeywords:  dbKeywords,
-    clientDomain:      propClientDomain ?? (analysis?.semrushSnapshot?.domain ?? ''),
-    competitorDomains: manualDomains,
-    clientVolMin:      defaultClientThreshold,
-    competitorVolMin:  defaultCompetitorThreshold,
-  }), [analysis, dbKeywords, propClientDomain, manualDomains, defaultClientThreshold, defaultCompetitorThreshold]);
+  // ── Merge full keyword set (exact mirror of GoogleSerpSection) ──────────────
+  const topKws: SemKw[] = useMemo(() => {
+    const rawSemKws = (analysis.semrushSnapshot?.topKeywords ?? []) as SemKw[];
 
-  // Ranked-only subset — mirrors GoogleSerpSection.topKws for position/volume metric cards
-  const topKws: SemKw[] = useMemo(() =>
-    _volMetrics.pool
-      .filter((item) => !item.isGap)
-      .map((item) => ({
-        keyword:      item.keyword,
-        position:     item.position,
-        searchVolume: item.searchVolume,
-        branded:      item.isBranded,
-      })),
-  [_volMetrics]);
+    const blockedKeys = new Set(
+      dbKeywords
+        .filter(k => k.source === 'blocked')
+        .map(k => k.keyword.toLowerCase().trim()),
+    );
 
-  // ── Computed stats ────────────────────────────────────────────────────────
+    const semKws: SemKw[] = rawSemKws
+      .filter(k => !blockedKeys.has((k.keyword ?? '').toLowerCase().trim()))
+      .filter(k => defaultClientThreshold <= 0 || (k.searchVolume ?? 0) >= defaultClientThreshold)
+      .map(k => ({ ...k, position: k.position != null ? Number(k.position) : null }));
+
+    const gapKeywordKeys = new Set(
+      (analysis.semrushSnapshot?.gapKeywords ?? []).map(
+        (k: any) => (k.keyword ?? '').toLowerCase().trim(),
+      ),
+    );
+    const existingKeys = new Set([
+      ...semKws.map(k => k.keyword.toLowerCase().trim()),
+      ...Array.from(gapKeywordKeys),
+    ]);
+
+    const dbRanked: SemKw[] = [];
+    for (const k of dbKeywords) {
+      if (k.source === 'blocked') continue;
+      if (k.type !== 'ranked') continue;
+      const kwKey = k.keyword.toLowerCase().trim();
+      if (existingKeys.has(kwKey)) continue;
+      existingKeys.add(kwKey);
+      const pos = k.position;
+      dbRanked.push({
+        keyword:      k.keyword,
+        position:     pos != null && Number(pos) > 0 && isFinite(Number(pos)) ? Number(pos) : null,
+        searchVolume: k.searchVolume,
+        branded:      k.branded,
+      });
+    }
+
+    return [...semKws, ...dbRanked];
+  }, [analysis, dbKeywords, defaultClientThreshold]);
+
+  // ── Computed stats (exact mirror of GoogleSerpSection) ────────────────────
   const posKws     = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
-  // totalKws = ALL keywords (ranked + gap) — matches Keyword Landscape panel exactly
-  const totalKws   = _volMetrics.pool.length;
+  const totalKws   = topKws.length;
+  const page1Kws   = posKws.filter(k => k.position <= 10).length;
   const totalVol   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
   const top3Vol    = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
   const page1Vol   = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
@@ -184,8 +205,7 @@ export default function ExecutiveSummarySection({
   const volOutsideTop3 = totalVol - top3Vol;
   const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
   const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
-  // Volume-based Pg 1 coverage — matches GoogleSerpSection (page1Vol / totalVol, NOT count-based)
-  const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
+  const page1Pct       = posKws.length > 0 ? Math.round((page1Kws / posKws.length) * 100) : 0;
 
   // ── Market capture ────────────────────────────────────────────────────────
   const semSnap: any   = analysis.semrushSnapshot  ?? {};
@@ -193,10 +213,26 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // Capture metrics directly from _volMetrics — no stored analysis fallbacks
-  const totalMonthly      = _volMetrics.totalMonthly;
-  const page1Monthly      = _volMetrics.page1Monthly;
-  const captureRate       = _volMetrics.captureRate;
+  // ── Market capture metrics — via shared utility ───────────────────────────
+  const _clientDomain = propClientDomain ?? semSnap.domain ?? '';
+  const _volMetrics   = getVolumeMetrics({
+    semrushSnapshot:    semSnap,
+    uploadedKeywords:   dbKeywords,
+    clientDomain:       _clientDomain,
+    competitorDomains:  manualDomains,
+    clientVolMin:       defaultClientThreshold,
+    competitorVolMin:   defaultCompetitorThreshold,
+  });
+
+  const totalMonthly      = _volMetrics.totalMonthly > 0
+    ? _volMetrics.totalMonthly
+    : (cb.totalMonthlyDemand ?? analysis.totalCategoryVolume ?? 0);
+  const page1Monthly      = _volMetrics.page1Monthly > 0
+    ? _volMetrics.page1Monthly
+    : (cb.totalPage1Demand ?? analysis.clientOwnedVolume ?? 0);
+  const captureRate       = totalMonthly > 0
+    ? page1Monthly / totalMonthly
+    : (cb.page1CaptureRate ?? analysis.marketCaptureRate ?? 0);
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
@@ -298,11 +334,11 @@ export default function ExecutiveSummarySection({
 
         <div className="shrink-0">
           <p className="text-[9px] text-orbit-tertiary uppercase tracking-widest mb-1">Market capture rate</p>
-          <p className="font-black leading-none" style={{ fontSize: 48, color: dbLoaded ? '#6C63FF' : '#333350' }}>
-            {dbLoaded ? `${captureRatePct}%` : '—'}
+          <p className="font-black leading-none" style={{ fontSize: 48, color: '#6C63FF' }}>
+            {captureRatePct}%
           </p>
           <p className="text-[10px] mt-1 text-orbit-tertiary">
-            {dbLoaded ? `of ${fmtAnnual(totalMonthly)} annual searches` : 'Loading…'}
+            of {fmtAnnual(totalMonthly)} annual searches
           </p>
         </div>
 
@@ -310,17 +346,17 @@ export default function ExecutiveSummarySection({
 
         <div className="flex-1 min-w-0">
           <p className="text-orbit-primary text-sm font-semibold mb-1">
-            {!dbLoaded ? 'Loading analysis data…' : captureRate < 0.15
+            {captureRate < 0.15
               ? 'Significant capture gap vs. market leaders'
               : captureRate < 0.35
               ? 'Moderate capture rate — room to grow'
               : 'Strong market position — defend and expand'}
           </p>
           <p className="text-orbit-secondary text-[10px] leading-relaxed">
-            {dbLoaded ? (topComp
+            {topComp
               ? `${topComp.domain} holds ${(topCompShare * 100).toFixed(0)}% of total demand. ${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`
-              : `${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`) : ''}
-            {dbLoaded && combinedSerpRate < 30 ? ' AI search visibility is an emerging gap.' : ''}
+              : `${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`}
+            {combinedSerpRate < 30 ? ' AI search visibility is an emerging gap.' : ''}
           </p>
         </div>
 
@@ -332,7 +368,7 @@ export default function ExecutiveSummarySection({
             { label: 'Total keywords',
               value: dbLoaded ? totalKws.toLocaleString() : '—',
               color: '#F0F0FF' },
-            { label: 'Pg 1 vol. share',
+            { label: 'Pg 1 coverage',
               value: dbLoaded ? `${page1Pct}%` : '—',
               color: pg1Color },
             { label: 'Wtd. avg position',
@@ -537,7 +573,7 @@ export default function ExecutiveSummarySection({
                   { label: 'Procedure clusters',
                     value: String(clusterCount > 0 ? clusterCount : categories.length) },
                   { label: 'Annual gap volume',  value: gapVolume > 0 ? fmtAnnual(gapVolume) : '—' },
-                  { label: 'Total keywords',
+                  { label: 'Total ranked kws',
                     value: dbLoaded ? totalKws.toLocaleString() : '—' },
                 ].map(s => (
                   <div key={s.label} className="rounded-md px-2.5 py-1.5 bg-orbit-surface">
