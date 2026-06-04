@@ -81,6 +81,7 @@ export const projectKeywords = pgTable('project_keywords', {
   branded:      boolean('branded').notNull().default(false),
   source:       text('source').notNull(),              // 'custom' | 'csv' | 'blocked'
   domain:       text('domain'),                        // null = client keyword; set = competitor domain (uploaded footprints)
+  serpFeatures: text('serp_features'),                 // v7.103: raw Semrush "SERP Features by Keyword" cell; null = column absent in upload
   createdAt:    timestamp('created_at').defaultNow().notNull(),
 });
 

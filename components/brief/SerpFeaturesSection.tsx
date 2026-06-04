@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
  * SerpFeaturesSection — v7.40
@@ -38,6 +38,7 @@ interface Props {
   competitors?: Competitor[];
   clientName?:  string;
   websiteUrl?:  string;
+  projectId?:   string;   // v7.103: enables uploaded SERP-feature availability
 }
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
@@ -54,6 +55,59 @@ function domainsMatch(a: string, b: string): boolean {
   const na = normDomain(a), nb = normDomain(b);
   if (!na || !nb) return false;
   return na === nb || na.endsWith('.' + nb) || nb.endsWith('.' + na);
+}
+
+// ── v7.103: uploaded Semrush "SERP Features by Keyword" support ───────────────
+// Semrush exports list features as a comma-separated cell, e.g.
+// "AI overview, People also ask, Video, Featured snippet". We map those names
+// onto the same feature buckets the SerpAPI scan uses. Matching is
+// case-insensitive substring so minor Semrush label variations still map.
+
+interface UploadKwRow { keyword: string; serpFeatures: string | null; source: string; }
+
+function semrushFeaturesToBuckets(raw: string): Set<string> {
+  const out = new Set<string>();
+  const f = raw.toLowerCase();
+  if (f.includes('ai overview'))                          out.add('ai_overview');
+  if (f.includes('people also ask'))                      out.add('paa');
+  if (f.includes('video'))                                out.add('video_carousel'); // covers "Video", "Featured video", "Video carousel"
+  if (f.includes('featured snippet'))                     out.add('featured_snippet');
+  if (f.includes('knowledge panel'))                      out.add('knowledge_panel');
+  if (f.includes('local pack'))                           out.add('local_pack');
+  if (f.includes('shopping'))                             out.add('shopping');
+  if (f.includes('image'))                                out.add('image_pack');
+  return out;
+}
+
+interface UploadFeatureCounts {
+  rowsWithFeatureData: number;  // uploaded keywords carrying a SERP Features cell (deduped, unscanned only)
+  aio:   number;
+  paa:   number;
+  video: number;
+  more:  Record<string, number>; // featured_snippet / knowledge_panel / local_pack / shopping / image_pack
+}
+
+function countUploadFeatures(rows: UploadKwRow[], scannedSet: Set<string>): UploadFeatureCounts {
+  const more: Record<string, number> = { featured_snippet: 0, knowledge_panel: 0, local_pack: 0, shopping: 0, image_pack: 0 };
+  let aio = 0, paa = 0, video = 0, withData = 0;
+  // Dedupe by keyword — the same keyword can exist under client + competitor rows.
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const kw = (r.keyword ?? '').trim().toLowerCase();
+    if (!kw || seen.has(kw)) continue;
+    seen.add(kw);
+    if (scannedSet.has(kw)) continue;            // scanned keywords already counted from live SERP data
+    if (r.source === 'blocked') continue;
+    if (!r.serpFeatures) continue;
+    const buckets = semrushFeaturesToBuckets(r.serpFeatures);
+    if (buckets.size === 0) continue;
+    withData++;
+    if (buckets.has('ai_overview'))   aio++;
+    if (buckets.has('paa'))           paa++;
+    if (buckets.has('video_carousel')) video++;
+    for (const k of Object.keys(more)) if (buckets.has(k)) more[k]++;
+  }
+  return { rowsWithFeatureData: withData, aio, paa, video, more };
 }
 
 // ── Data computation ───────────────────────────────────────────────────────────
@@ -568,7 +622,7 @@ const ADD_FEATURES = [
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '' }: Props) {
+export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
   const [aioViewTab,  setAioViewTab]  = useState<AIOViewTab>('keywords');
 
@@ -583,29 +637,61 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const clientDomain = normDomain(serpSnap.domain ?? websiteUrl ?? '');
   const displayClientName = clientName || clientDomain;
 
-  // AIO aggregate metrics
-  const aioAvail  = analysis.aioAvailable ?? 0;
-  const aioAcq    = analysis.aioAcquired  ?? 0;
+  // v7.103: uploaded keyword rows — Semrush CSVs carry a "SERP Features by
+  // Keyword" column which gives feature AVAILABILITY for the whole footprint
+  // (which features exist on each keyword's SERP). It can NOT tell who is
+  // cited, so captured metrics remain SerpAPI-scan based.
+  const [uploadRows, setUploadRows] = useState<UploadKwRow[] | null>(null);
+  useEffect(() => {
+    if (!projectId) { setUploadRows([]); return; }
+    let alive = true;
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then(r => r.json())
+      .then(d => { if (alive) setUploadRows((d.keywords ?? []) as UploadKwRow[]); })
+      .catch(() => { if (alive) setUploadRows([]); });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  const scannedSet = useMemo(
+    () => new Set(scannedKws.map(k => (k.keyword ?? '').trim().toLowerCase())),
+    [scannedKws]
+  );
+  const uploadFeat = useMemo(
+    () => countUploadFeatures(uploadRows ?? [], scannedSet),
+    [uploadRows, scannedSet]
+  );
+
+  // AIO aggregate metrics — scan-side
+  const aioAvailScan = analysis.aioAvailable ?? 0;
+  const aioAcq       = analysis.aioAcquired  ?? 0;
+  // v7.103 hybrid availability: scanned SERPs + uploaded (unscanned) keywords
+  const aioAvail  = aioAvailScan + uploadFeat.aio;
   const aioRate   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
 
   // PAA
-  const paaAvail = featSummary?.withPAA        ?? scannedKws.filter(k => k.paaQuestions?.length > 0).length;
-  const paaAcq   = featSummary?.paaClientCited ?? scannedKws.filter(k => k.paaClientCited).length;
+  const paaAvailScan = featSummary?.withPAA        ?? scannedKws.filter(k => k.paaQuestions?.length > 0).length;
+  const paaAcq       = featSummary?.paaClientCited ?? scannedKws.filter(k => k.paaClientCited).length;
+  const paaAvail = paaAvailScan + uploadFeat.paa;
   const paaRate  = paaAvail > 0 ? Math.round((paaAcq / paaAvail) * 100) : 0;
 
   // Video
-  const videoAvail = featSummary?.withVideo        ?? scannedKws.filter(k => k.serpFeatures?.includes('video_carousel')).length;
-  const videoAcq   = featSummary?.videoClientCited ?? scannedKws.filter(k => k.videoClientCited).length;
+  const videoAvailScan = featSummary?.withVideo        ?? scannedKws.filter(k => k.serpFeatures?.includes('video_carousel')).length;
+  const videoAcq       = featSummary?.videoClientCited ?? scannedKws.filter(k => k.videoClientCited).length;
+  const videoAvail = videoAvailScan + uploadFeat.video;
   const videoRate  = videoAvail > 0 ? Math.round((videoAcq / videoAvail) * 100) : 0;
 
-  // Combined weighted coverage
+  // Combined weighted coverage (hybrid availability; captured = scan-verified)
   const totalAvail   = aioAvail + paaAvail + videoAvail;
   const totalAcq     = aioAcq + paaAcq + videoAcq;
   const combinedRate = totalAvail > 0 ? Math.min(100, Math.round((totalAcq / totalAvail) * 100)) : 0;
+  const uploadAvailTotal = uploadFeat.aio + uploadFeat.paa + uploadFeat.video;
 
-  // More features
+  // More features (scan + upload availability)
   const addFeatureCounts: Record<string, number> = {};
-  ADD_FEATURES.forEach(af => { addFeatureCounts[af.key] = scannedKws.filter(k => k.serpFeatures?.includes(af.key)).length; });
+  ADD_FEATURES.forEach(af => {
+    addFeatureCounts[af.key] =
+      scannedKws.filter(k => k.serpFeatures?.includes(af.key)).length + (uploadFeat.more[af.key] ?? 0);
+  });
   const hasAnyAddFeatures = ADD_FEATURES.some(af => addFeatureCounts[af.key] > 0);
 
   // All computed AIO data
@@ -630,6 +716,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           <div className="flex items-center gap-2 flex-shrink-0">
             {scanDate && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: '#0F0F1E', border: '1px solid #1E1E35', color: '#505070' }}>Scan: {scanDate}</span>}
             {scanned > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: '#0F0F1E', border: '1px solid #1E1E35', color: '#505070' }}>{scanned} kw{scanned !== 1 ? 's' : ''} scanned</span>}
+            {uploadFeat.rowsWithFeatureData > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: '#0F0F1E', border: '1px solid #1E1E35', color: '#505070' }}>{uploadFeat.rowsWithFeatureData.toLocaleString()} kws w/ features from upload</span>}
           </div>
         </div>
       </div>
@@ -649,8 +736,8 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           </div>
           <div className="flex-1 grid grid-cols-3 gap-3">
             {[
-              { label: 'Available', val: totalAvail,            color: '#8888AA', sub: 'total feature slots' },
-              { label: 'Captured',  val: totalAcq,              color: '#22C55E', sub: 'client is cited' },
+              { label: 'Available', val: totalAvail,            color: '#8888AA', sub: uploadAvailTotal > 0 ? `${(totalAvail - uploadAvailTotal).toLocaleString()} scanned + ${uploadAvailTotal.toLocaleString()} from upload` : 'total feature slots' },
+              { label: 'Captured',  val: totalAcq,              color: '#22C55E', sub: uploadAvailTotal > 0 ? 'client cited (scan-verified)' : 'client is cited' },
               { label: 'Gap',       val: totalAvail - totalAcq, color: '#EF4444', sub: 'uncaptured' },
             ].map(s => (
               <div key={s.label} className="bg-orbit-surface border border-orbit-border rounded-lg p-3">
@@ -669,6 +756,22 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           )}
         </div>
       </div>
+
+      {/* v7.103: uploaded-data status note */}
+      {uploadRows !== null && uploadFeat.rowsWithFeatureData === 0 && (uploadRows?.length ?? 0) > 0 && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#1A1205', border: '1px solid #4A3510' }}>
+          <p style={{ fontSize: '11px', color: '#F59E0B', margin: 0 }}>
+            Your uploaded keyword CSVs don&apos;t include a &ldquo;SERP Features by Keyword&rdquo; column, so feature availability here only covers the {scanned} scanned keyword{scanned !== 1 ? 's' : ''}. Re-export from Semrush (Organic Research → Positions) with all columns and re-upload to see feature availability across your full footprint.
+          </p>
+        </div>
+      )}
+      {uploadFeat.rowsWithFeatureData > 0 && (
+        <div style={{ padding: '8px 14px', borderRadius: '8px', background: '#0F0F1E', border: '1px solid #1E1E35' }}>
+          <p style={{ fontSize: '10px', color: '#555570', margin: 0 }}>
+            Availability combines {scanned} SerpAPI-scanned keyword{scanned !== 1 ? 's' : ''} with {uploadFeat.rowsWithFeatureData.toLocaleString()} uploaded keywords carrying Semrush SERP-feature data (deduped). Captured/citation metrics require knowing WHO is cited on each SERP — uploads can&apos;t provide that, so those come from scanned keywords only. Scan more keywords to verify capture across the footprint.
+          </p>
+        </div>
+      )}
 
       {/* Feature Tab Selector */}
       <div className="flex gap-2 flex-wrap">
@@ -689,9 +792,9 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           <div>
             <SectionLabel text="AI Overview Coverage" />
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              <KpiCard label="Available AIOs" value={aio.totalAios} sub={`across ${scanned} tracked queries`} accent="#00B894" wide />
-              <KpiCard label="AIO Penetration" value={`${scanned > 0 ? ((aio.totalAios / scanned) * 100).toFixed(1) : 0}%`} sub={`${aio.totalAios} of ${scanned} queries`} accent="#00B894" wide />
-              <KpiCard label="Your Citation Rate" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} AIOs cited`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
+              <KpiCard label="Available AIOs" value={aio.totalAios + uploadFeat.aio} sub={uploadFeat.aio > 0 ? `${aio.totalAios} scanned + ${uploadFeat.aio.toLocaleString()} from upload` : `across ${scanned} tracked queries`} accent="#00B894" wide />
+              <KpiCard label="AIO Penetration" value={`${scanned > 0 ? ((aio.totalAios / scanned) * 100).toFixed(1) : 0}%`} sub={`${aio.totalAios} of ${scanned} scanned queries`} accent="#00B894" wide />
+              <KpiCard label="Your Citation Rate" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aio.totalAios} scanned AIOs`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
               <KpiCard label="Citation Share" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots} slots`} accent="#6C63FF" />
               <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="position in AIO source list" />
               {aio.topCompetitor && (

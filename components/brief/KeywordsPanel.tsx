@@ -618,6 +618,9 @@ export default function KeywordsPanel({
       return idx >= 0 ? idx : -1; // -1 = not found
     })();
     const typeCol = headerCols.findIndex((h: string) => h === 'type');
+    // v7.103: Semrush "SERP Features by Keyword" column (optional)
+    const featCol = headerCols.findIndex((h: string) =>
+      h === 'serp features by keyword' || h === 'serp features' || h === 'serp_features');
 
     // Parse CSV rows using a proper quoted-field splitter
     function splitCsvLine(line: string): string[] {
@@ -633,7 +636,7 @@ export default function KeywordsPanel({
       return result;
     }
 
-    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean }> = [];
+    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null }> = [];
     for (const line of dataLines) {
       const cols  = splitCsvLine(line);
       const kwText = (cols[kwCol] ?? '').replace(/^"|"$/g, '').trim();
@@ -644,7 +647,9 @@ export default function KeywordsPanel({
         ? ((cols[typeCol] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap')
         : (pos !== null && pos <= 100 ? 'ranked' : 'gap');
       const branded = isBranded(kwText, clientDomain, competitorDomains);
-      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded });
+      // v7.103: raw Semrush feature list, e.g. "AI Overview, People also ask, Video"
+      const feats   = featCol >= 0 ? ((cols[featCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
+      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded, serpFeatures: feats });
     }
 
     if (parsed.length === 0) {
@@ -666,11 +671,12 @@ export default function KeywordsPanel({
           body: JSON.stringify({
             domain: '',
             source: 'csv',
-            keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean }) => ({
+            keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null }) => ({
               keyword:      row.keyword,
               searchVolume: row.searchVolume,
               position:     row.position,
               type:         row.type,
+              serpFeatures: row.serpFeatures,
             })),
           }),
         });

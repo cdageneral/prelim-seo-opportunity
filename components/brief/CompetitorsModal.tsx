@@ -67,7 +67,7 @@ function normDomain(url: string): string {
   return url.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/^www\./, '').split('/')[0];
 }
 
-interface ParsedKw { keyword: string; searchVolume: number; position: number | null; }
+interface ParsedKw { keyword: string; searchVolume: number; position: number | null; serpFeatures: string | null; }
 
 /** v7.92 header-aware competitor CSV parser (same column detection as client uploads). */
 function parseCompetitorCsv(text: string): ParsedKw[] {
@@ -81,6 +81,8 @@ function parseCompetitorCsv(text: string): ParsedKw[] {
   const kwIdx  = findIdx(['keyword', 'keywords', 'ph', 'query'], 0);
   const volIdx = findIdx(['search volume', 'search_volume', 'searchvolume', 'volume', 'monthly volume', 'nq'], 1);
   const posIdxRaw = headerCols.findIndex(h => ['position', 'rank', 'ranking position', 'pos', 'po'].includes(h));
+  // v7.103: Semrush "SERP Features by Keyword" column (optional)
+  const featIdx = headerCols.findIndex(h => ['serp features by keyword', 'serp features', 'serp_features'].includes(h));
 
   function splitLine(line: string): string[] {
     const result: string[] = [];
@@ -105,6 +107,7 @@ function parseCompetitorCsv(text: string): ParsedKw[] {
         keyword:      (cols[kwIdx] ?? '').replace(/^"|"$/g, '').trim().toLowerCase(),
         searchVolume: parseInt(cols[volIdx] ?? '0') || 0,
         position:     pos,
+        serpFeatures: featIdx >= 0 ? ((cols[featIdx] ?? '').replace(/^"|"$/g, '').trim() || null) : null,
       };
     })
     .filter(r => r.keyword.length > 0);

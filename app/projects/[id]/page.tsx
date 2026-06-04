@@ -1029,6 +1029,7 @@ export default function ProjectBriefPage() {
               competitors={project.competitors}
               clientName={project.clientName}
               websiteUrl={project.websiteUrl}
+              projectId={project.id}
             />
           )}
 

@@ -11,6 +11,7 @@
  *     keyword:      string,
  *     searchVolume: number,
  *     position?:    number,
+ *     serpFeatures?: string,   // v7.103: raw "SERP Features by Keyword" cell from Semrush export
  *   }>
  * }
  *
@@ -48,6 +49,12 @@ async function ensureTable() {
     `);
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS domain TEXT
+    `);
+    // v7.103: raw Semrush "SERP Features by Keyword" cell (comma-separated
+    // feature names, e.g. "AI Overview, People also ask, Video"). NULL = the
+    // upload had no SERP Features column (unknown, NOT "no features").
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS serp_features TEXT
     `);
   } catch {
     // Safe to continue — table exists or DB unavailable
@@ -128,11 +135,16 @@ export async function POST(
     if (kw.length === 0) continue;
     const vol = Number(k.searchVolume) || 0;
     const pos = k.position != null && !isNaN(Number(k.position)) ? Number(k.position) : null;
+    // v7.103: keep the raw Semrush feature list; trim + cap length defensively.
+    const feats = typeof k.serpFeatures === 'string' && k.serpFeatures.trim().length > 0
+      ? k.serpFeatures.trim().slice(0, 500)
+      : null;
     byKw.set(kw, {
       projectId,
       keyword:      kw,
       searchVolume: vol,
       position:     pos,
+      serpFeatures: feats,
       // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
       // Competitor rows are ALWAYS 'gap' — their position is the competitor's
       // rank, kept for Share of Voice, not a client ranking.

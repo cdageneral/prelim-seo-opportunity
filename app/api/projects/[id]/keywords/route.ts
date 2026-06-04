@@ -41,6 +41,11 @@ async function ensureTable() {
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS domain TEXT
     `);
+    // v7.103: SERP features from uploaded Semrush CSVs. MUST exist before the
+    // drizzle .select() below — drizzle lists schema columns explicitly.
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS serp_features TEXT
+    `);
   } catch {
     // Table already exists or DB not available — safe to continue
   }

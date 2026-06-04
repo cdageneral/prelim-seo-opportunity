@@ -98,6 +98,37 @@ async function fetchSerpData(keyword: string, market?: Market): Promise<any> {
   return res.json();
 }
 
+// ─── AI Overview Follow-up Fetch (v7.102) ────────────────────────────────────
+// On many SERPs Google serves the AI Overview asynchronously, so the main
+// Google Search API response contains only `ai_overview.page_token` (expires
+// within ~1 minute). SerpAPI requires a second request to the dedicated
+// `google_ai_overview` engine to retrieve the AIO content and its `references`
+// (citation sources). Docs: https://serpapi.com/google-ai-overview-api
+async function fetchAIOverviewByToken(pageToken: string): Promise<any | null> {
+  const API_KEY = process.env.SERP_API_KEY;
+  if (!API_KEY) return null;
+  const params = new URLSearchParams({
+    api_key:    API_KEY,
+    engine:     'google_ai_overview',
+    page_token: pageToken,
+    output:     'json',
+  });
+  try {
+    const res = await fetch(`${SERP_BASE}?${params.toString()}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      console.error(`SerpAPI AIO follow-up error ${res.status}: ${await res.text()}`);
+      return null;
+    }
+    const json = await res.json();
+    return json?.ai_overview ?? null;
+  } catch (err) {
+    console.error('SerpAPI AIO follow-up failed:', err);
+    return null;
+  }
+}
+
 // ─── Parse SERP Response ──────────────────────────────────────────────────────
 
 function extractDomain(url: string): string {
@@ -108,7 +139,7 @@ function extractDomain(url: string): string {
   }
 }
 
-function parseKeywordSerp(keyword: string, data: any, clientDomain: string): KeywordSerpData {
+async function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Promise<KeywordSerpData> {
   // Organic results
   const organicResults: SerpResult[] = (data.organic_results ?? []).map((r: any) => ({
     position: r.position ?? 0,
@@ -119,19 +150,30 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
   }));
 
   // AI Overview detection
-  const aio = data.ai_overview ?? data.answer_box_with_ai_overview;
+  let aio = data.ai_overview ?? data.answer_box_with_ai_overview;
   const hasAIO = !!aio;
-  const aioSources: AIOSource[] = [];
 
-  if (hasAIO && aio?.sources) {
-    for (const src of aio.sources) {
-      if (src.link) {
-        aioSources.push({
-          title:  src.title ?? '',
-          url:    src.link,
-          domain: extractDomain(src.link),
-        });
-      }
+  // v7.102: when Google serves the AIO asynchronously, the inline object holds
+  // only a page_token — fetch the full AIO (incl. references) immediately,
+  // since the token expires within ~1 minute.
+  if (hasAIO && !aio?.references && aio?.page_token) {
+    const full = await fetchAIOverviewByToken(aio.page_token);
+    if (full) aio = full;
+  }
+
+  // v7.102 FIX: SerpAPI returns AIO citation sources under `references`
+  // (each with title/link/source/index) — NOT `sources`. The old `aio.sources`
+  // read always yielded an empty array, zeroing every AIO citation metric.
+  // Docs: https://serpapi.com/google-ai-overview-api
+  const aioSources: AIOSource[] = [];
+  const rawRefs: any[] = aio?.references ?? aio?.sources ?? [];
+  for (const src of rawRefs) {
+    if (src.link) {
+      aioSources.push({
+        title:  src.title ?? '',
+        url:    src.link,
+        domain: extractDomain(src.link),
+      });
     }
   }
 
@@ -211,7 +253,7 @@ export async function batchKeywordScan(
   for (const keyword of batch) {
     try {
       const raw = await fetchSerpData(keyword, market);
-      results.push(parseKeywordSerp(keyword, raw, clientDomain));
+      results.push(await parseKeywordSerp(keyword, raw, clientDomain));
       // 200ms between calls to stay under burst limits
       await new Promise(r => setTimeout(r, 200));
     } catch (err) {
