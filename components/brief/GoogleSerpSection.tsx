@@ -487,38 +487,64 @@ function LegendRow({ arc }: { arc: SovArc }) {
   );
 }
 
-export function SovPanel({ analysis, competitors }: { analysis: any; competitors?: string[] }) {
-  const manualDomains = new Set((competitors ?? []).map(d => d.toLowerCase().trim()));
+function normSovDomain(d: string): string {
+  return (d ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim();
+}
+
+export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any; competitors?: string[]; dbKeywords?: any[] }) {
+  const manualDomains = new Set((competitors ?? []).map(d => normSovDomain(d)));
   const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
   const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
 
-  // ── v7.88: voice basis ──────────────────────────────────────────────────────
-  // Semrush auto-discovery snapshots carry organicTraffic per domain → use it.
-  // CSV-upload snapshots have NO traffic data (keyword exports don't include
-  // it; uploadedFootprint.ts sets it to 0) — previously the donut went blank
-  // after a refresh. Fallback: compute share of voice from the keyword-level
-  // data that IS in the snapshot — page-1 monthly search volume per domain
-  // (client: topKeywords pos ≤ 10; competitors: their gap keywords pos ≤ 10).
-  // Both bases are actual fetched data, never modeled.
+  // ── v7.88/v7.89: voice basis ────────────────────────────────────────────────
+  // 1. Semrush auto-discovery snapshots carry organicTraffic per domain → use it.
+  // 2. CSV-upload snapshots have NO traffic data. Voice = page-1 monthly search
+  //    volume per domain. Client side: snapshot topKeywords pos ≤ 10.
+  //    Competitor side (v7.89 fix): the UPLOADED competitor keyword rows
+  //    (project_keywords.domain = competitor) — these carry each competitor's
+  //    FULL rankings, INCLUDING keywords the client also ranks for. The v7.88
+  //    version wrongly used gapKeywords, which exclude every client-overlap
+  //    keyword and so understated competitors to ~0%.
+  // 3. Last resort (no uploaded competitor rows): gap keywords — labeled as
+  //    gap-only so the limitation is visible.
+  // All bases are actual fetched data, never modeled.
   const trafficTotal = clientTraffic + semComps.reduce((s, c) => s + (c.organicTraffic ?? 0), 0);
-  const basis: 'traffic' | 'volume' = trafficTotal > 0 ? 'traffic' : 'volume';
 
+  let basis: 'traffic' | 'volume' | 'gapOnly';
   let clientVoice: number;
   let compEntries: Array<{ domain: string; voice: number }>;
 
-  if (basis === 'traffic') {
+  const snap       = analysis.semrushSnapshot ?? {};
+  const clientNorm = normSovDomain(snap.domain ?? '');
+  const compRows   = (dbKeywords ?? []).filter(r =>
+    r?.domain && r.source !== 'blocked' && normSovDomain(r.domain) !== clientNorm
+  );
+
+  if (trafficTotal > 0) {
+    basis       = 'traffic';
     clientVoice = clientTraffic;
     compEntries = semComps.map(c => ({ domain: c.domain, voice: c.organicTraffic ?? 0 }));
   } else {
-    const snap = analysis.semrushSnapshot ?? {};
     clientVoice = ((snap.topKeywords ?? []) as any[])
       .filter(k => k?.position != null && k.position <= 10)
       .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+
     const byComp = new Map<string, number>();
-    for (const g of ((snap.gapKeywords ?? []) as any[])) {
-      if (!g?.competitor) continue;
-      if ((g.competitorPosition ?? 99) > 10) continue;
-      byComp.set(g.competitor, (byComp.get(g.competitor) ?? 0) + (g.searchVolume ?? 0));
+    if (compRows.length > 0) {
+      basis = 'volume';
+      for (const r of compRows) {
+        if (r.position == null || r.position > 10) continue;
+        const d = normSovDomain(r.domain);
+        byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
+      }
+    } else {
+      basis = 'gapOnly';
+      for (const g of ((snap.gapKeywords ?? []) as any[])) {
+        if (!g?.competitor) continue;
+        if ((g.competitorPosition ?? 99) > 10) continue;
+        const d = normSovDomain(g.competitor);
+        byComp.set(d, (byComp.get(d) ?? 0) + (g.searchVolume ?? 0));
+      }
     }
     compEntries = Array.from(byComp.entries()).map(([domain, voice]) => ({ domain, voice }));
   }
@@ -530,7 +556,7 @@ export function SovPanel({ analysis, competitors }: { analysis: any; competitors
   let serpIdx = 0;
   let brandIdx = 0;
   for (const c of [...compEntries].sort((a, b) => b.voice - a.voice)) {
-    const isBrand = manualDomains.has(c.domain.toLowerCase().trim());
+    const isBrand = manualDomains.has(normSovDomain(c.domain));
     rawEntries.push({
       domain:  c.domain,
       traffic: c.voice,
@@ -594,9 +620,9 @@ export function SovPanel({ analysis, competitors }: { analysis: any; competitors
       <div>
         <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
         <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
-          {basis === 'traffic'
-            ? 'by organic traffic (Semrush)'
-            : 'by page-1 keyword search volume — monthly, per domain'}
+          {basis === 'traffic' && 'by organic traffic (Semrush)'}
+          {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
+          {basis === 'gapOnly' && 'by page-1 gap-keyword volume only — competitor rankings on shared keywords not available'}
         </p>
       </div>
 
@@ -915,7 +941,7 @@ export default function GoogleSerpSection({ analysis, projectId, domain, competi
       <div className="grid grid-cols-2 gap-3">
 
         {/* Share of Voice */}
-        <SovPanel analysis={analysis} competitors={competitors} />
+        <SovPanel analysis={analysis} competitors={competitors} dbKeywords={dbKeywords} />
 
         {/* Volume Opportunity */}
         <div className="orbit-card p-5 flex flex-col gap-4">

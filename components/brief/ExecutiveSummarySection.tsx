@@ -399,7 +399,7 @@ export default function ExecutiveSummarySection({
           <div className="grid grid-cols-2 gap-3">
 
             {/* Share of Voice — same panel as Google Ranks (nav 06) */}
-            <SovPanel analysis={analysis} competitors={manualDomains} />
+            <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} />
 
             {/* Volume Opportunity Analysis — exact replica of GoogleSerpSection */}
             <div className="orbit-card p-4 flex flex-col gap-3">
