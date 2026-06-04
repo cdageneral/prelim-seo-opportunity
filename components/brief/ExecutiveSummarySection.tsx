@@ -172,8 +172,6 @@ export default function ExecutiveSummarySection({
   const posKws      = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
   // totalKws = ALL keywords (ranked + gap) — matches Keyword Landscape panel exactly
   const totalKws    = _allKwPool.length;
-  const page1Kws    = posKws.filter(k => k.position <= 10).length;
-  const top3Kws     = posKws.filter(k => k.position <= 3).length;
   const totalVol    = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
   const top3Vol     = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
   const page1Vol    = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
@@ -194,23 +192,12 @@ export default function ExecutiveSummarySection({
   const cb: any        = semSnap._categoryBreakdown ?? {};
   const narrative: any = semSnap._narrative         ?? {};
 
-  // ── Market capture metrics — computed entirely from live pool, no stored fallbacks ──
-  // Uses _allKwPool (ranked + gap) so denominator = total market demand
-  const volFromPool = useMemo(() => {
-    const total  = _allKwPool.reduce((s, k) => s + k.searchVolume, 0);
-    const page1  = _allKwPool
-      .filter(k => k.position !== null && (k.position as number) <= 10)
-      .reduce((s, k) => s + k.searchVolume, 0);
-    return {
-      totalMonthly: total,
-      page1Monthly: page1,
-      captureRate:  total > 0 ? page1 / total : 0,
-    };
-  }, [_allKwPool]);
-
-  const totalMonthly      = volFromPool.totalMonthly;
-  const page1Monthly      = volFromPool.page1Monthly;
-  const captureRate       = volFromPool.captureRate;
+  // ── Market capture metrics — inline from live pool, no useMemo cast or stored fallbacks ──
+  // totalMonthly uses _allKwPool (ranked + gap) = total market demand denominator
+  // page1Monthly uses posKws (already typed number positions) for pg1 volume
+  const totalMonthly      = _allKwPool.reduce((s, k) => s + k.searchVolume, 0);
+  const page1Monthly      = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const captureRate       = totalMonthly > 0 ? page1Monthly / totalMonthly : 0;
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
