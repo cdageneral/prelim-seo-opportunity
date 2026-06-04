@@ -214,12 +214,14 @@ export default function ProjectBriefPage() {
   // v7.86: Semrush pulls are now UNCAPPED (full footprint). Before any
   // auto-discover run, fetch a cost estimate and require explicit confirmation
   // so unit spend is never a surprise.
-  async function requestAnalysisWithEstimate(mode: 'full' | 'gaps' = 'full') {
+  async function requestAnalysisWithEstimate(mode: 'full' | 'gaps' | 'data' = 'full') {
     setShowRefreshModal(false);
     setAnalysisError(null);
+    // v7.112: data-only refresh never touches Semrush — skip the cost-estimate
+    // modal entirely (there is nothing to bill or confirm).
     // Upload-based projects never hit Semrush; incomplete runs resume without Phase 1.
     const incomplete = analysis && analysis.status !== 'completed' && analysis.semrushSnapshot;
-    if (dataSource !== 'auto' || incomplete) {
+    if (mode === 'data' || dataSource !== 'auto' || incomplete) {
       triggerAnalysis(mode);
       return;
     }
@@ -239,7 +241,7 @@ export default function ProjectBriefPage() {
     }
   }
 
-  async function triggerAnalysis(mode: 'full' | 'gaps' = 'full') {
+  async function triggerAnalysis(mode: 'full' | 'gaps' | 'data' = 'full') {
     setTriggering(true);
     setAnalysisError(null);
     setAnalysisWarnings([]);

@@ -7,6 +7,12 @@
  *   • mode='gaps'           — gap scan: reuses existing footprint, fetches ONLY
  *                             net-new competitor keywords, runs SerpAPI on those
  *                             only, reuses last LLM probe data (no re-probe)
+ *   • mode='data' (v7.112)  — data-only refresh: ZERO Semrush units. Reuses the
+ *                             existing keyword footprint untouched, RE-scans the
+ *                             previously scanned SERP keywords via SerpAPI
+ *                             (refreshing AIO/PAA/video data incl. AIO citation
+ *                             sources), reuses LLM probe data, then Phase 2
+ *                             re-runs Claude on the refreshed data.
  *   • Upload detection      — if project has csv-sourced keywords in
  *                             project_keywords, Semrush is skipped entirely;
  *                             snapshot is built from uploads instead
@@ -21,7 +27,7 @@ import { db }      from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
-import { getSerpApiSnapshot, buildSnapshotFromKeywordData }  from '@/lib/apis/serp';
+import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan }  from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
@@ -30,7 +36,7 @@ export const maxDuration = 300;
 
 const AnalyzeSchema = z.object({
   projectId: z.string().uuid(),
-  mode:      z.enum(['full', 'gaps']).optional().default('full'),
+  mode:      z.enum(['full', 'gaps', 'data']).optional().default('full'),
 });
 
 function normalizeDomain(url: string): string {
@@ -96,6 +102,86 @@ export async function POST(req: NextRequest) {
   console.log(`[OrbitIQ] Env — SEMRUSH: ${!!process.env.SEMRUSH_API_KEY}, SERP: ${!!process.env.SERP_API_KEY}, OPENAI: ${!!process.env.OPENAI_API_KEY}`);
 
   try {
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // DATA-ONLY REFRESH mode (v7.112) — ZERO Semrush units.
+    // Reuses the existing keyword footprint + LLM probe untouched, and RE-scans
+    // the previously scanned SERP keywords via SerpAPI so AIO/PAA/video data
+    // (including AIO citation sources) is fresh. Phase 2 then re-runs Claude.
+    // This is the only mode that re-scans already-scanned keywords — the
+    // incremental /serp-scan endpoint deliberately never does.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    if (mode === 'data') {
+      const lastAnalysis = await db.query.analyses.findFirst({
+        where: and(
+          eq(analyses.projectId, projectId),
+          eq(analyses.status, 'completed'),
+        ),
+      });
+
+      if (!lastAnalysis?.semrushSnapshot) {
+        await db.update(analyses).set({ status: 'failed' }).where(eq(analyses.id, analysis.id));
+        return NextResponse.json(
+          { error: 'Data-only refresh needs a completed analysis to reuse. Run a full analysis (or upload a footprint) first.' },
+          { status: 400 }
+        );
+      }
+
+      const existingSerp: any = lastAnalysis.serpApiSnapshot ?? null;
+      const prevScanned: string[] = ((existingSerp?.keywords ?? []) as any[])
+        .map((k: any) => k?.keyword as string)
+        .filter(Boolean);
+
+      // Credit safety: SerpAPI charges 1 credit per keyword (plus 1 per async
+      // AIO token follow-up). Cap a single data refresh at 50 re-scans —
+      // highest-coverage first is preserved since we keep stored order.
+      const RESCAN_CAP = 50;
+      const rescanList = prevScanned.slice(0, RESCAN_CAP);
+
+      let serp: any = existingSerp;
+      if (rescanList.length > 0) {
+        try {
+          const freshKws = await batchKeywordScan(rescanList, domain, rescanList.length, market);
+          const freshLow = new Set(freshKws.map(k => k.keyword.toLowerCase()));
+          const carried  = ((existingSerp?.keywords ?? []) as any[])
+            .filter((k: any) => k?.keyword && !freshLow.has(k.keyword.toLowerCase()));
+          serp = buildSnapshotFromKeywordData(domain, [...freshKws, ...carried]);
+          console.log(`[OrbitIQ] Data refresh: re-scanned ${freshKws.length} keywords, ${carried.length} carried forward`);
+
+          // Diagnostic (v7.112): an AI Overview virtually always cites sources.
+          // hasAIO with zero sources means SerpAPI's citation payload was
+          // missing (token follow-up failed / expired) — surface it instead of
+          // letting it silently read as "client not cited".
+          const emptyAIOs = freshKws.filter(k => k.hasAIO && (k.aioSources?.length ?? 0) === 0).length;
+          if (emptyAIOs > 0) {
+            warnings.push(`${emptyAIOs} AI Overview${emptyAIOs !== 1 ? 's' : ''} returned no citation sources from SerpAPI (token follow-up may have failed). Citation metrics for ${emptyAIOs !== 1 ? 'these keywords' : 'this keyword'} are unverifiable this run — re-run the data refresh to retry.`);
+          }
+        } catch (err) {
+          warnings.push(`SerpAPI re-scan failed (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
+        }
+      } else {
+        warnings.push('No previously scanned SERP keywords found — nothing to re-scan. Use "Scan SERP features" in the Keywords panel to scan keywords first.');
+      }
+
+      await db.update(analyses)
+        .set({
+          semrushSnapshot:  lastAnalysis.semrushSnapshot  as any,   // untouched — 0 Semrush units
+          serpApiSnapshot:  serp                          as any,
+          profoundSnapshot: lastAnalysis.profoundSnapshot as any,   // reused
+        })
+        .where(eq(analyses.id, analysis.id));
+
+      console.log(`[OrbitIQ] Data-only refresh Phase 1 complete for ${analysis.id} — ${rescanList.length} keywords re-scanned, 0 Semrush units`);
+      return NextResponse.json({
+        analysisId:  analysis.id,
+        triggeredAt: analysis.triggeredAt,
+        status:      'data_ready',
+        dataMode:    true,
+        rescanned:   rescanList.length,
+        warnings,
+      });
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // GAP SCAN mode — reuse existing footprint, fetch only net-new keywords

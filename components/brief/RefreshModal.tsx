@@ -1,16 +1,19 @@
 'use client';
 
 /**
- * RefreshModal — v7.31
+ * RefreshModal — v7.112
  *
  * Shown when the user clicks "Refresh Analysis" on a project that already
- * has results. Presents two modes:
- *   • Full re-analysis  — recrawls everything (full footprint; unit cost estimated + confirmed before run, v7.86)
- *   • Gap & rank refresh — refreshes client rankings + fetches net-new competitor keywords.
- *     v7.97: the stale "~450 units" badge (pre-v7.86 capped-pull figure) removed — since
- *     v7.86 this mode re-pulls FULL client + competitor footprints, so Semrush cost is
- *     comparable to a full re-analysis (savings are SerpAPI + LLM probe reuse). Both
- *     modes now show "cost shown before run"; the real estimate modal confirms units.
+ * has results. Presents three modes:
+ *   • Data-only refresh (v7.112, default) — ZERO Semrush units. Keeps the keyword
+ *     footprint, re-scans previously scanned SERP keywords via SerpAPI (refreshing
+ *     AIO citation sources), re-runs Claude. No cost-estimate modal — nothing to bill.
+ *   • Gap & rank refresh — refreshes client rankings + fetches net-new competitor
+ *     keywords. v7.97/v7.112: since v7.86 this re-pulls FULL client + competitor
+ *     footprints, so Semrush cost ≈ a full re-analysis (savings are SerpAPI + LLM
+ *     probe reuse) — the card now says this explicitly.
+ *   • Full re-analysis  — recrawls everything (full footprint; unit cost estimated
+ *     + confirmed before run, v7.86).
  */
 
 import { useState } from 'react';
@@ -29,7 +32,7 @@ interface Props {
   lastAnalyzed:  string | null;   // ISO date string
   keywordsCount: number;
   onClose:       () => void;
-  onRun:         (mode: 'full' | 'gaps') => void;
+  onRun:         (mode: 'full' | 'gaps' | 'data') => void;
   // v7.98: project volume floors, editable here before the run. Saving writes
   // to the project record (single source of truth shared with project
   // create/edit), then onRun proceeds — the cost estimate reads the new values.
@@ -39,7 +42,7 @@ interface Props {
 }
 
 export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, onClose, onRun, clientThreshold, competitorThreshold, onSaveThresholds }: Props) {
-  const [mode, setMode] = useState<'full' | 'gaps'>('gaps');
+  const [mode, setMode] = useState<'full' | 'gaps' | 'data'>('data');
   const [clientThresh,     setClientThresh]     = useState<number>(clientThreshold     ?? 0);
   const [competitorThresh, setCompetitorThresh] = useState<number>(competitorThreshold ?? 0);
   const [saving, setSaving] = useState(false);
@@ -100,6 +103,28 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
         {/* Mode cards */}
         <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
 
+          {/* Data-only refresh (v7.112) */}
+          <button
+            onClick={() => setMode('data')}
+            style={{
+              flex: 1, textAlign: 'left', cursor: 'pointer',
+              background: mode === 'data' ? '#101D38' : '#131325',
+              border: `1.5px solid ${mode === 'data' ? '#38BDF8' : '#2A2A4A'}`,
+              borderRadius: '10px', padding: '14px',
+              transition: 'border-color .15s, background .15s',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+              <i className="ti ti-bolt" style={{ fontSize: '18px', color: mode === 'data' ? '#38BDF8' : '#454565' }} aria-hidden="true" />
+              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '20px', fontWeight: 500, background: '#0D2B1D', color: '#4ADE80' }}>0 Semrush units</span>
+            </div>
+            <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Data-only refresh</p>
+            <p style={{ fontSize: '11px', color: '#7070A0', margin: '0 0 8px', lineHeight: 1.5 }}>
+              Keeps your keyword footprint. Re-scans your scanned SERP keywords (fresh AIO citations, PAA, video) and re-runs Claude.
+            </p>
+            <p style={{ fontSize: '10px', color: '#454565', margin: 0 }}>Best for refreshing what you have</p>
+          </button>
+
           {/* Full re-analysis */}
           <button
             onClick={() => setMode('full')}
@@ -139,14 +164,15 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
             </div>
             <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Gap &amp; rank refresh</p>
             <p style={{ fontSize: '11px', color: '#7070A0', margin: '0 0 8px', lineHeight: 1.5 }}>
-              Updates your current rankings, finds new competitor gaps, and re-runs Claude analysis. Reuses SERP &amp; LLM probe data.
+              Re-pulls full footprints from Semrush to update rankings &amp; find new gaps — Semrush cost ≈ full re-analysis. Reuses SERP &amp; LLM data.
             </p>
             <p style={{ fontSize: '10px', color: '#454565', margin: 0 }}>Best for monthly refreshes</p>
           </button>
 
         </div>
 
-        {/* ── Semrush volume floor (v7.98) ── */}
+        {/* ── Semrush volume floor (v7.98) — hidden in data mode (no Semrush pull, v7.112) ── */}
+        {mode !== 'data' && (
         <div style={{ background: '#0F0F1C', border: '0.5px solid #1E1E38', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
             <p style={{ fontSize: '11px', color: '#8080C0', fontWeight: 500, margin: 0 }}>Keyword volume floor</p>
@@ -178,8 +204,25 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
               : 'Saved in project settings — same values as Edit Project.'}
           </p>
         </div>
+        )}
 
         {/* Breakdown panels */}
+        {mode === 'data' && (
+          <div style={{ background: '#131325', border: '0.5px solid #2A2A4A', borderRadius: '8px', padding: '12px', marginBottom: '18px' }}>
+            <p style={{ fontSize: '11px', color: '#8080C0', fontWeight: 500, margin: '0 0 10px' }}>How data-only refresh works</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+              <Row icon="ti-check" iconBg="#0D2B1D" iconColor="#4ADE80" text={<><strong style={{ color: '#C0C0E0' }}>Keyword footprint (Semrush / uploads)</strong><span style={{ color: '#4ADE80' }}> → reused untouched — 0 Semrush units billed</span></>} />
+              <Row icon="ti-refresh" iconBg="#101D38" iconColor="#38BDF8" text={<><strong style={{ color: '#C0C0E0' }}>Scanned SERP keywords</strong><span style={{ color: '#8080C0' }}> → RE-scanned via SerpAPI (up to 50; 1 credit each) — fresh AIO citation sources, PAA &amp; video data</span></>} />
+              <Row icon="ti-check" iconBg="#0D2B1D" iconColor="#4ADE80" text={<><strong style={{ color: '#C0C0E0' }}>LLM probe data</strong><span style={{ color: '#4ADE80' }}> → reused</span></>} />
+              <Row icon="ti-brain" iconBg="#1C1C38" iconColor="#8080C0" text={<><strong style={{ color: '#C0C0E0' }}>Claude analysis</strong><span style={{ color: '#8080C0' }}> → re-runs on the refreshed data</span></>} />
+            </div>
+            <p style={{ fontSize: '10px', color: '#606080', margin: '10px 0 0', lineHeight: 1.5 }}>
+              Keyword rankings are NOT updated in this mode — positions stay as last pulled.
+              Use Gap &amp; rank refresh (or Full re-analysis) when you need fresh Semrush rankings.
+            </p>
+          </div>
+        )}
+
         {mode === 'gaps' && (
           <div style={{ background: '#131325', border: '0.5px solid #2A2A4A', borderRadius: '8px', padding: '12px', marginBottom: '18px' }}>
             <p style={{ fontSize: '11px', color: '#8080C0', fontWeight: 500, margin: '0 0 10px' }}>How gap scan works</p>
@@ -221,8 +264,8 @@ export default function RefreshModal({ clientName, lastAnalyzed, keywordsCount, 
             disabled={saving}
             style={{ background: '#6C63FF', border: 'none', borderRadius: '8px', padding: '9px 18px', color: 'white', fontSize: '13px', fontWeight: 500, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1, display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-            <i className={mode === 'gaps' ? 'ti ti-zoom-scan' : 'ti ti-refresh'} style={{ fontSize: '14px' }} aria-hidden="true" />
-            {saving ? 'Saving thresholds…' : mode === 'gaps' ? 'Run gap & rank refresh' : 'Run full re-analysis'}
+            <i className={mode === 'data' ? 'ti ti-bolt' : mode === 'gaps' ? 'ti ti-zoom-scan' : 'ti ti-refresh'} style={{ fontSize: '14px' }} aria-hidden="true" />
+            {saving ? 'Saving thresholds…' : mode === 'data' ? 'Run data-only refresh (0 Semrush units)' : mode === 'gaps' ? 'Run gap & rank refresh' : 'Run full re-analysis'}
           </button>
         </div>
 
