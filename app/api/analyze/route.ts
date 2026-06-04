@@ -273,6 +273,10 @@ export async function POST(req: NextRequest) {
         } as SemrushSnapshot;
       });
 
+      // v7.96: surface non-fatal warnings collected inside getSemrushSnapshot
+      // (failed/empty competitor gap pulls, over-filtered gap, no competitors).
+      if (semrush.warnings?.length) warnings.push(...semrush.warnings);
+
       // v7.86: Semrush returns PARTIAL rows when the API unit balance runs out
       // mid-pull — surface that instead of silently shipping incomplete data.
       const expected = semrush.overview.organicKeywords;

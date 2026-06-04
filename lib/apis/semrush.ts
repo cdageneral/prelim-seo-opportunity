@@ -58,6 +58,7 @@ export interface SemrushSnapshot {
   gapKeywords:  SemrushKeywordGap[];     // Keywords competitors rank for, client doesn't
   positionDist: Record<string, number>;  // { "1-3": 42, "4-10": 89, "11-20": 134, "21+": 301 }
   fetchedAt:    string;
+  warnings?:    string[];                // v7.96: non-fatal problems during the pull (e.g. failed gap fetches)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -273,10 +274,34 @@ export async function getSemrushSnapshot(
   //   - not competitor-branded (but client-branded terms are allowed)
   const competitorDomainsForBrandFilter = allCompetitorDomains;
 
+  // v7.96: gap-pull failures are no longer silently swallowed. Each competitor
+  // pull records its outcome; failures and empty pulls become snapshot warnings
+  // so the UI can tell the user WHY Competitor Gap is empty instead of showing 0.
+  const warnings: string[] = [];
+  const gapDomains = allCompetitorDomains.slice(0, 5);   // cap at 5 competitor DOMAINS (per-domain pulls are uncapped)
+
   const gapResults = await Promise.all(
-    allCompetitorDomains.slice(0, 5).map(comp =>   // cap at 5 competitor DOMAINS (per-domain pulls are uncapped)
-      getKeywordGap(domain, comp).catch(() => [] as SemrushKeywordGap[])
-    )
+    gapDomains.map(async comp => {
+      try {
+        const rows = await getKeywordGap(domain, comp);
+        console.log(`[OrbitIQ] Gap pull ${comp}: ${rows.length} raw rows`);
+        if (rows.length === 0) {
+          warnings.push(
+            `Competitor gap pull for ${comp} returned 0 rows — ` +
+            `your Semrush API unit balance may be exhausted, or the domain has no US organic data. ` +
+            `Check Subscription info → API units at semrush.com and re-run.`
+          );
+        }
+        return rows;
+      } catch (err) {
+        console.error(`[OrbitIQ] Gap pull FAILED for ${comp}:`, err);
+        warnings.push(
+          `Competitor gap pull for ${comp} failed: ${String((err as any)?.message ?? err)}. ` +
+          `Competitor Gap data is missing this domain — check your Semrush API unit balance and re-run.`
+        );
+        return [] as SemrushKeywordGap[];
+      }
+    })
   );
 
   // Build a set of keywords the client already ranks for (from topKeywords).
@@ -317,6 +342,22 @@ export async function getSemrushSnapshot(
   // Sort by search volume descending so highest-value gaps appear first
   gapKeywords.sort((a, b) => b.searchVolume - a.searchVolume);
 
+  // v7.96: distinguish "no competitors", "pulls returned nothing", and
+  // "pulls returned rows but every row was filtered out".
+  const rawGapRows = gapResults.reduce((s, batch) => s + batch.length, 0);
+  if (gapDomains.length === 0) {
+    warnings.push(
+      `No competitors found (auto-discovery returned none and no manual competitors are set) — ` +
+      `Competitor Gap will be empty. Add competitors in Edit Project and re-run.`
+    );
+  } else if (rawGapRows > 0 && gapKeywords.length === 0) {
+    warnings.push(
+      `Competitor pulls returned ${rawGapRows.toLocaleString()} keyword rows, but every one was filtered out ` +
+      `(client already ranks for it, branded term, or below the gap volume threshold of ${gapVolMin.toLocaleString()}). ` +
+      `Lower the competitor volume threshold in Edit Project if this seems wrong.`
+    );
+  }
+
   // Merge auto + manual competitors for the competitors list stored in snapshot
   const competitors = [
     ...autoCompetitors,
@@ -335,6 +376,7 @@ export async function getSemrushSnapshot(
     gapKeywords,
     positionDist,
     fetchedAt: new Date().toISOString(),
+    warnings,
   };
 }
 
