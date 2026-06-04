@@ -436,7 +436,8 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
             Keywords
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {cluster.keywords.map(kw => (
+            {/* v7.104: cap chips — clusters can hold thousands of keywords on large uploaded footprints */}
+            {cluster.keywords.slice(0, 300).map(kw => (
               <span key={kw.keyword} style={{
                 fontSize: 9,
                 background: kw.isGap ? '#1A1008' : '#0F0F22',
@@ -450,7 +451,12 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
                 )}
               </span>
             ))}
-          </div>
+          {cluster.keywords.length > 300 && (
+              <span style={{ fontSize: 9, color: '#444468', padding: '2px 7px' }}>
+                +{(cluster.keywords.length - 300).toLocaleString()} more — use the Keyword Landscape panel to browse all
+              </span>
+            )}
+            </div>
         </div>
       )}
     </div>

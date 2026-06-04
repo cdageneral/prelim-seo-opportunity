@@ -472,6 +472,20 @@ export default function KeywordsPanel({
     [segmentRows, rankFilter, sortCol, sortDir],
   );
 
+  // v7.104: PAGINATION — rendering all rows froze the browser once uploaded
+  // footprints reached ~30K keywords ("Page Unresponsive"). Only the current
+  // page is rendered; filters/sorts/exports still operate on the full set.
+  const PAGE_SIZE = 100;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const safePage  = Math.min(page, pageCount - 1);
+  const pagedRows = useMemo(
+    () => visibleRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [visibleRows, safePage],
+  );
+  // Reset to page 1 whenever the underlying list changes shape
+  useEffect(() => { setPage(0); }, [filter, rankFilter, sortCol, sortDir, visibleRows.length]);
+
   function handleSort(col: NonNullable<SortCol>) {
     if (sortCol === col) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -1192,7 +1206,7 @@ export default function KeywordsPanel({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map(row => (
+            {pagedRows.map(row => (
               <tr
                 key={row.key}
                 className="border-b border-orbit-border/40 hover:bg-orbit-surface/40 transition-colors group"
@@ -1268,6 +1282,20 @@ export default function KeywordsPanel({
             )}
           </tbody>
         </table>
+        {visibleRows.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-orbit-border" style={{ background: '#0D0D18' }}>
+            <span className="text-[11px] text-orbit-tertiary">
+              Showing {(safePage * PAGE_SIZE + 1).toLocaleString()}–{Math.min((safePage + 1) * PAGE_SIZE, visibleRows.length).toLocaleString()} of {visibleRows.length.toLocaleString()}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button type="button" onClick={() => setPage(0)} disabled={safePage === 0} className="text-[11px] px-2.5 py-1 rounded border border-orbit-border text-orbit-secondary disabled:opacity-30 hover:border-orbit-accent transition-colors">« First</button>
+              <button type="button" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0} className="text-[11px] px-2.5 py-1 rounded border border-orbit-border text-orbit-secondary disabled:opacity-30 hover:border-orbit-accent transition-colors">‹ Prev</button>
+              <span className="text-[11px] text-orbit-secondary px-2">Page {(safePage + 1).toLocaleString()} of {pageCount.toLocaleString()}</span>
+              <button type="button" onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={safePage >= pageCount - 1} className="text-[11px] px-2.5 py-1 rounded border border-orbit-border text-orbit-secondary disabled:opacity-30 hover:border-orbit-accent transition-colors">Next ›</button>
+              <button type="button" onClick={() => setPage(pageCount - 1)} disabled={safePage >= pageCount - 1} className="text-[11px] px-2.5 py-1 rounded border border-orbit-border text-orbit-secondary disabled:opacity-30 hover:border-orbit-accent transition-colors">Last »</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Footer legend ── */}

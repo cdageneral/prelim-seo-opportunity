@@ -922,6 +922,19 @@ export default function GoogleSerpSection({ analysis, projectId, projectName, do
     return kws;
   }, [topKws, filter, sortCol, sortAsc]);
 
+  // v7.104: PAGINATION — rendering the full footprint (30K+ uploaded keywords)
+  // in one table froze the browser ("Page Unresponsive"). Only the current page
+  // renders; filters/sorts/stats still operate on the full set.
+  const KW_PAGE_SIZE = 100;
+  const [kwPage, setKwPage] = useState(0);
+  const kwPageCount = Math.max(1, Math.ceil(filteredKws.length / KW_PAGE_SIZE));
+  const kwSafePage  = Math.min(kwPage, kwPageCount - 1);
+  const pagedKws = useMemo(
+    () => filteredKws.slice(kwSafePage * KW_PAGE_SIZE, (kwSafePage + 1) * KW_PAGE_SIZE),
+    [filteredKws, kwSafePage],
+  );
+  useEffect(() => { setKwPage(0); }, [filter, sortCol, sortAsc, filteredKws.length]);
+
   function toggleSort(col: 'position' | 'volume') {
     if (sortCol === col) setSortAsc(a => !a);
     else { setSortCol(col); setSortAsc(col === 'position'); }
@@ -1152,7 +1165,7 @@ export default function GoogleSerpSection({ analysis, projectId, projectName, do
               </tr>
             </thead>
             <tbody>
-              {filteredKws.map((kw, idx) => {
+              {pagedKws.map((kw, idx) => {
                 const serpKw = serpKwMap[kw.keyword.toLowerCase().trim()];
                 const isBranded = kw.branded === true;
                 const rowBg = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)';
@@ -1213,6 +1226,20 @@ export default function GoogleSerpSection({ analysis, projectId, projectName, do
           {filteredKws.length === 0 && (
             <div style={{ textAlign: 'center', padding: '32px', color: '#444458', fontSize: '13px' }}>
               No keywords in this position range.
+            </div>
+          )}
+          {filteredKws.length > KW_PAGE_SIZE && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 8px', borderTop: '1px solid #1E1E2E' }}>
+              <span style={{ fontSize: '11px', color: '#555570' }}>
+                Showing {(kwSafePage * KW_PAGE_SIZE + 1).toLocaleString()}–{Math.min((kwSafePage + 1) * KW_PAGE_SIZE, filteredKws.length).toLocaleString()} of {filteredKws.length.toLocaleString()}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button type="button" onClick={() => setKwPage(0)} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>« First</button>
+                <button type="button" onClick={() => setKwPage(p => Math.max(0, p - 1))} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>‹ Prev</button>
+                <span style={{ fontSize: '11px', color: '#8888B0', padding: '0 6px' }}>Page {(kwSafePage + 1).toLocaleString()} of {kwPageCount.toLocaleString()}</span>
+                <button type="button" onClick={() => setKwPage(p => Math.min(kwPageCount - 1, p + 1))} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Next ›</button>
+                <button type="button" onClick={() => setKwPage(kwPageCount - 1)} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Last »</button>
+              </div>
             </div>
           )}
         </div>
