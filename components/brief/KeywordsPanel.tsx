@@ -398,9 +398,7 @@ export default function KeywordsPanel({
   const [showClearConfirm,     setShowClearConfirm]     = useState(false);
   const [clearLoading,         setClearLoading]         = useState(false);
   const [clearStep,            setClearStep]            = useState('');
-  const [showCompUpload,        setShowCompUpload]        = useState(false);
-  const [selectedCompDomain,    setSelectedCompDomain]    = useState('');
-  const [compUploadStatus,      setCompUploadStatus]      = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  // v7.101: competitor CSV upload moved to CompetitorsModal (top global nav)
   const csvRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch DB keywords on mount ──
@@ -703,88 +701,6 @@ export default function KeywordsPanel({
   }
 
   // ── Clear all custom/CSV/blocked keywords ──
-  // ── Competitor CSV upload ──
-  async function handleCompetitorUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !selectedCompDomain) return;
-    setCompUploadStatus(null);
-    setCsvProgress({ current: 0, total: 1 });
-    let text = '';
-    try { text = await file.text(); } catch {
-      setCompUploadStatus({ type: 'error', msg: 'Could not read file.' });
-      setCsvProgress(null); return;
-    }
-    const lines = text.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-    // v7.92: FULLY header-aware parsing — identical to the client CSV parser.
-    // The old parser hardcoded col 0 = keyword, col 1 = volume. Semrush keyword
-    // exports are "Keyword, Position, Previous position, Search Volume, ..."
-    // so col 1 put RANK POSITIONS into search_volume (Wayne's competitor rows
-    // showed 17 kws · 133/mo — those were rank numbers, not volumes).
-    const headerCols = (lines[0] ?? '').toLowerCase().split(',').map((c: string) => c.replace(/^"|"$/g, '').trim());
-    const kwIdx = (() => {
-      const i = headerCols.findIndex((h: string) => h === 'keyword' || h === 'keywords' || h === 'ph' || h === 'query');
-      return i >= 0 ? i : 0;
-    })();
-    const volIdx = (() => {
-      const i = headerCols.findIndex((h: string) =>
-        h === 'search volume' || h === 'search_volume' || h === 'searchvolume' || h === 'volume' || h === 'monthly volume' || h === 'nq');
-      return i >= 0 ? i : 1;
-    })();
-    const posIdx = (() => {
-      const i = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position' || h === 'pos' || h === 'po');
-      return i >= 0 ? i : -1;   // -1 = no position column present
-    })();
-    function splitCompCsvLine(line: string): string[] {
-      const result: string[] = [];
-      let cur = ''; let inQuote = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') { inQuote = !inQuote; }
-        else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
-        else { cur += ch; }
-      }
-      result.push(cur.replace(/\r$/, '').trim());
-      return result;
-    }
-    const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
-    const parsed = dataLines.map((line: string) => {
-      const cols   = splitCompCsvLine(line);
-      const posRaw = posIdx >= 0 ? cols[posIdx] : undefined;
-      const pos    = posRaw != null && posRaw !== '' && !isNaN(Number(posRaw)) ? Number(posRaw) : null;
-      return {
-        keyword:      (cols[kwIdx] ?? '').replace(/^"|"$/g, '').trim(),
-        searchVolume: parseInt(cols[volIdx] ?? '0') || 0,
-        position:     pos,
-      };
-    }).filter((r: { keyword: string }) => r.keyword.length > 0);
-    if (!parsed.length) {
-      setCompUploadStatus({ type: 'error', msg: 'No valid rows found.' });
-      setCsvProgress(null); return;
-    }
-    let added = 0; let skipped = 0;
-    const CHUNK = 500;
-    setCsvProgress({ current: 0, total: parsed.length });
-    for (let i = 0; i < parsed.length; i += CHUNK) {
-      try {
-        const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ domain: selectedCompDomain, source: 'csv', keywords: parsed.slice(i, i + CHUNK) }),
-        });
-        if (res.ok) { const d = await res.json(); added += (d.inserted ?? 0) + (d.updated ?? 0); skipped += d.skipped ?? 0; }
-        else skipped += Math.min(CHUNK, parsed.length - i);
-      } catch { skipped += Math.min(CHUNK, parsed.length - i); }
-      setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
-    }
-    setCsvProgress(null);
-    await fetchDb();
-    if (e.target) e.target.value = '';
-    const skipNote = skipped > 0 ? ` · ${skipped} skipped` : '';
-    setCompUploadStatus(added > 0
-      ? { type: 'success', msg: `${added} competitor keywords uploaded/updated${skipNote}.` }
-      : { type: 'error', msg: `No valid keyword rows found in this file.` }
-    );
-    setTimeout(() => { setCompUploadStatus(null); setShowCompUpload(false); }, 5000);
-  }
 
   async function handleClearAll() {
     setClearLoading(true);
@@ -903,20 +819,7 @@ export default function KeywordsPanel({
               </div>
             )}
 
-            {/* Competitor Keywords upload */}
-            {!showClearConfirm && !csvProgress && (
-              <button
-                onClick={() => { setShowCompUpload(v => !v); setCompUploadStatus(null); }}
-                className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-                style={{ color: showCompUpload ? '#F59E0B' : '#7070A0', borderColor: showCompUpload ? 'rgba(245,158,11,0.4)' : '', background: showCompUpload ? 'rgba(245,158,11,0.06)' : '' }}
-                title="Upload a competitor's keyword CSV to populate Competitor Gap"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                </svg>
-                Competitor Gap
-              </button>
-            )}
+            {/* v7.101: competitor CSV upload moved to the Competitors button in the top bar */}
 
             {/* Result toast */}
             {csvStatus && !csvProgress && (
@@ -1075,50 +978,6 @@ export default function KeywordsPanel({
       })()}
 
       {/* ── Add keyword form ── */}
-      {/* ── Competitor keyword upload panel ── */}
-      {showCompUpload && (
-        <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>
-          <p className="text-[11px] font-semibold mb-2" style={{ color: '#F59E0B' }}>Upload Competitor Keywords</p>
-          <p className="text-[10px] text-orbit-tertiary mb-3">
-            These will appear in the <strong>Competitor Gap</strong> filter. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume, position</span> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice.
-          </p>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              value={selectedCompDomain}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedCompDomain(e.target.value)}
-              className="bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2 text-orbit-secondary text-xs focus:outline-none focus:border-orbit-accent"
-            >
-              <option value="">Select competitor…</option>
-              {(competitors ?? []).map((domain: string) => (
-                <option key={domain} value={domain}>{domain}</option>
-              ))}
-            </select>
-            <label
-              className="text-xs border border-orbit-border px-3 py-2 rounded-lg cursor-pointer flex items-center gap-1.5"
-              style={{ color: selectedCompDomain ? '#F59E0B' : '#5A5A7A', pointerEvents: selectedCompDomain ? 'auto' : 'none', opacity: selectedCompDomain ? 1 : 0.5 }}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Choose CSV
-              <input type="file" accept=".csv,.txt" className="hidden" onChange={handleCompetitorUpload} disabled={!selectedCompDomain} />
-            </label>
-            {compUploadStatus && (
-              <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
-                background:  compUploadStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
-                color:       compUploadStatus.type === 'success' ? '#34d399' : '#f87171',
-                borderColor: compUploadStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
-              }}>
-                {compUploadStatus.msg}
-              </span>
-            )}
-            <button
-              onClick={() => { setShowCompUpload(false); setCompUploadStatus(null); }}
-              className="text-orbit-tertiary text-xs px-2"
-            >Cancel</button>
-          </div>
-        </div>
-      )}
 
       {showAdd && (
         <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>

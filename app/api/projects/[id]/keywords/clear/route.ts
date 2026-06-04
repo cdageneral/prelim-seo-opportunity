@@ -4,10 +4,14 @@
  * Bulk-clears keyword rows for a project in a single SQL statement.
  * Far more reliable than individual DELETEs for large keyword sets.
  *
- * Body: { sources?: string[] }  defaults to ['csv','custom','blocked']
+ * Body: { sources?: string[], domain?: string }
+ *   sources defaults to ['csv','custom','blocked']
+ *   domain (v7.101) — when present, only rows tagged with that domain are
+ *   deleted (used by the Competitors manager to clear a single competitor's
+ *   uploaded CSV without touching client keywords or other competitors).
  * Returns: { deleted: number }
  *
- * v7.55.7
+ * v7.101
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -48,11 +52,18 @@ export async function POST(
     ? body.sources
     : ['csv', 'custom', 'blocked'];
 
+  // v7.101: optional per-domain clear (single competitor's uploaded rows)
+  const domain: string | null =
+    typeof body.domain === 'string' && body.domain.trim().length > 0
+      ? body.domain.trim().toLowerCase()
+      : null;
+
   const deleted = await db
     .delete(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, params.id),
       inArray(projectKeywords.source, sources),
+      ...(domain ? [eq(projectKeywords.domain, domain)] : []),
     ))
     .returning({ id: projectKeywords.id });
 

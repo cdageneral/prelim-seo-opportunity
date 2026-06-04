@@ -7,7 +7,7 @@ import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
-import CompetitorsPanel     from '@/components/brief/CompetitorsPanel';
+import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
@@ -177,6 +177,7 @@ export default function ProjectBriefPage() {
   const [showRefreshModal,  setShowRefreshModal]  = useState(false);
   // Edit project modal
   const [showEditProject,   setShowEditProject]   = useState(false);
+  const [showCompetitors,   setShowCompetitors]   = useState(false);   // v7.101: global Competitors manager
 
   // v7.86: Semrush cost-estimate confirm + API warning alerts
   const [estimating,       setEstimating]       = useState(false);
@@ -520,12 +521,21 @@ export default function ProjectBriefPage() {
           industry={project.industry}
           notes={project.notes}
           dataSource={project.dataSource as 'auto' | 'upload'}
-          competitors={project.competitors ?? []}
-          kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
-          kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
           semrushDatabase={(project as any).semrushDatabase ?? 'us'}
           onClose={() => setShowEditProject(false)}
           onSaved={fetchProject}
+        />
+      )}
+
+      {/* ── Competitors manager (v7.101 — moved to global nav) ── */}
+      {showCompetitors && project && (
+        <CompetitorsModal
+          projectId={projectId}
+          competitors={project.competitors ?? []}
+          kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
+          kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
+          onClose={() => setShowCompetitors(false)}
+          onChanged={fetchProject}
         />
       )}
 
@@ -630,6 +640,23 @@ export default function ProjectBriefPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             Edit Project
+          </button>
+          {/* ── Competitors manager (v7.101) ── */}
+          <button
+            onClick={() => setShowCompetitors(true)}
+            className="text-xs border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+            style={{ color: '#F59E0B', borderColor: 'rgba(245,158,11,0.35)' }}
+            title="Manage competitors: add / edit / delete, upload keyword CSVs, clear files, set volume thresholds"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 10-3-3" />
+            </svg>
+            Competitors
+            {(project.competitors?.length ?? 0) > 0 && (
+              <span style={{ fontSize: '9px', fontWeight: 700, background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '10px', padding: '1px 6px' }}>
+                {project.competitors!.length}
+              </span>
+            )}
           </button>
           {/* ── Export buttons — visible once analysis is complete ── */}
           {hasResults && analysis && (

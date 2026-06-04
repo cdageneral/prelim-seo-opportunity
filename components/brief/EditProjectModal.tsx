@@ -1,20 +1,21 @@
 'use client';
 
 /**
- * EditProjectModal — v7.50
+ * EditProjectModal — v7.101
  *
- * Full project settings modal surfaced via "Edit Project" in the global nav.
+ * Project settings modal surfaced via "Edit Project" in the global nav.
  * Sections:
- *   1. Project Info   — client name, website URL, industry, notes
- *   2. Competitors    — full CompetitorsPanel (add / remove with CSV / auto-discover)
- *   3. Keyword Thresholds — client ranked + competitor gap minimum volume presets
+ *   1. Project Info — client name, website URL, industry, notes
+ *   2. Market       — per-project Semrush database / SERP country (v7.99)
  *
- * Saves info + thresholds via PATCH /api/projects/[id].
- * Competitors are managed live by CompetitorsPanel (its own API calls).
+ * v7.101: Competitors and Keyword Volume Thresholds moved to the dedicated
+ * CompetitorsModal (the "Competitors" button in the top global nav) — one
+ * home for add/edit/delete competitors, CSV uploads, clears and thresholds.
+ *
+ * Saves info via PATCH /api/projects/[id].
  */
 
 import { useState } from 'react';
-import CompetitorsPanel from '@/components/brief/CompetitorsPanel';
 import { MARKETS } from '@/lib/utils/markets';
 
 const INDUSTRIES = [
@@ -23,21 +24,6 @@ const INDUSTRIES = [
   'Manufacturing', 'Retail', 'Hospitality', 'Non-profit', 'Other',
 ];
 
-const VOL_PRESETS: { label: string; value: number }[] = [
-  { label: 'All',   value: 0    },
-  { label: '500+',  value: 500  },
-  { label: '1K+',   value: 1000 },
-  { label: '2.4K+', value: 2400 },
-  { label: '5K+',   value: 5000 },
-];
-
-interface Competitor {
-  id:        string;
-  domain:    string;
-  name:      string | null;
-  createdAt: string;
-}
-
 interface Props {
   projectId:   string;
   clientName:  string;
@@ -45,9 +31,6 @@ interface Props {
   industry:    string | null;
   notes:       string | null;
   dataSource:  'auto' | 'upload';
-  competitors: Competitor[];
-  kwVolThresholdClient:     number;
-  kwVolThresholdCompetitor: number;
   semrushDatabase?:         string;   // v7.99: per-project market
   onClose:   () => void;
   onSaved:   () => void;   // re-fetches project after save
@@ -60,9 +43,6 @@ export default function EditProjectModal({
   industry:    initIndustry,
   notes:       initNotes,
   dataSource:  initDataSource,
-  competitors,
-  kwVolThresholdClient:     initClientThresh,
-  kwVolThresholdCompetitor: initCompetitorThresh,
   semrushDatabase:          initMarket,
   onClose,
   onSaved,
@@ -71,8 +51,6 @@ export default function EditProjectModal({
   const [websiteUrl,  setWebsiteUrl]  = useState(initUrl);
   const [industry,    setIndustry]    = useState(initIndustry ?? '');
   const [notes,       setNotes]       = useState(initNotes ?? '');
-  const [clientThresh,     setClientThresh]     = useState<number>(initClientThresh     ?? 0);
-  const [competitorThresh, setCompetitorThresh] = useState<number>(initCompetitorThresh ?? 0);
   const [market,           setMarket]           = useState<string>(initMarket ?? 'us');
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState('');
@@ -99,8 +77,6 @@ export default function EditProjectModal({
           websiteUrl:               websiteUrl.trim(),
           industry:                 industry || undefined,
           notes:                    notes    || undefined,
-          kwVolThresholdClient:     clientThresh,
-          kwVolThresholdCompetitor: competitorThresh,
           semrushDatabase:          market,
         }),
       });
@@ -118,25 +94,6 @@ export default function EditProjectModal({
       setSaving(false);
     }
   }
-
-  // ── Threshold preset button styles ────────────────────────────────────────
-  function presetBtn(value: number, current: number, color: { bg: string; border: string; text: string }) {
-    const active = current === value;
-    return {
-      padding:      '4px 11px',
-      borderRadius: '20px',
-      border:       `1px solid ${active ? color.border : '#3A3A5C'}`,
-      background:   active ? color.bg : 'transparent',
-      color:        active ? color.text : '#8888B0',
-      fontSize:     '11px',
-      cursor:       'pointer',
-      transition:   'all 0.12s',
-      fontWeight:   active ? 600 : 400,
-    } as React.CSSProperties;
-  }
-
-  const clientColor   = { bg: 'rgba(56,189,248,0.14)', border: 'rgba(56,189,248,0.6)', text: '#38BDF8' };
-  const competitorColor = { bg: 'rgba(245,158,11,0.14)', border: 'rgba(245,158,11,0.6)', text: '#F59E0B' };
 
   // ── Section divider ───────────────────────────────────────────────────────
   function SectionLabel({ label }: { label: string }) {
@@ -172,7 +129,7 @@ export default function EditProjectModal({
             </div>
             <div>
               <h2 style={{ fontSize: '15px', fontWeight: 600, color: '#E8E8FF', margin: 0 }}>Edit Project</h2>
-              <p style={{ fontSize: '11px', color: '#555575', margin: '2px 0 0' }}>Settings, competitors &amp; keyword filters</p>
+              <p style={{ fontSize: '11px', color: '#555575', margin: '2px 0 0' }}>Project info &amp; market</p>
             </div>
           </div>
           <button
@@ -242,66 +199,10 @@ export default function EditProjectModal({
             </p>
           </div>
 
-          {/* ── Section 2: Competitors ── */}
-          <SectionLabel label="Competitors" />
-          <div style={{ marginBottom: '22px' }}>
-            <CompetitorsPanel
-              projectId={projectId}
-              competitors={competitors}
-              onChange={onSaved}
-            />
-          </div>
-
-          {/* ── Section 3: Keyword Volume Thresholds ── */}
-          <SectionLabel label="Keyword Volume Thresholds" />
-
-          <div style={{ background: '#0F0F1C', border: '0.5px solid #1E1E38', borderRadius: '10px', padding: '16px', marginBottom: '22px' }}>
-            <p style={{ fontSize: '11px', color: '#7070A0', marginBottom: '16px', lineHeight: 1.5 }}>
-              Keywords below these monthly search volume thresholds are hidden from all analysis panels, and on the next data pull they are excluded inside the Semrush query itself — never fetched, never billed (10 API units per row). Set to <strong style={{ color: '#9090C0' }}>All</strong> to fetch every keyword regardless of volume.
-            </p>
-
-            {/* Client ranked threshold */}
-            <div style={{ marginBottom: '14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <span style={{ fontSize: '10px', fontWeight: 600, color: '#38BDF8', letterSpacing: '.04em' }}>Client ranked keywords</span>
-                <span style={{ fontSize: '10px', color: '#505070' }}>min monthly volume</span>
-                {clientThresh > 0 && (
-                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#38BDF8', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', padding: '1px 8px', borderRadius: '10px' }}>
-                    ≥ {clientThresh >= 1000 ? `${clientThresh / 1000}K` : clientThresh}/mo
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {VOL_PRESETS.map(p => (
-                  <button key={p.value} type="button" onClick={() => setClientThresh(p.value)}
-                    style={presetBtn(p.value, clientThresh, clientColor)}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Competitor gap threshold */}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <span style={{ fontSize: '10px', fontWeight: 600, color: '#F59E0B', letterSpacing: '.04em' }}>Competitor gap keywords</span>
-                <span style={{ fontSize: '10px', color: '#505070' }}>min monthly volume</span>
-                {competitorThresh > 0 && (
-                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#F59E0B', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', padding: '1px 8px', borderRadius: '10px' }}>
-                    ≥ {competitorThresh >= 1000 ? `${competitorThresh / 1000}K` : competitorThresh}/mo
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {VOL_PRESETS.map(p => (
-                  <button key={p.value} type="button" onClick={() => setCompetitorThresh(p.value)}
-                    style={presetBtn(p.value, competitorThresh, competitorColor)}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          {/* v7.101: pointer to the new Competitors manager */}
+          <p style={{ fontSize: '10px', color: '#505070', margin: '0 0 22px', lineHeight: 1.5 }}>
+            Looking for competitors or keyword volume thresholds? They moved to the <strong style={{ color: '#F59E0B' }}>Competitors</strong> button in the top bar.
+          </p>
 
           {/* Feedback messages */}
           {error && (
