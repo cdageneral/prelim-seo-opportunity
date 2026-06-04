@@ -492,17 +492,48 @@ export function SovPanel({ analysis, competitors }: { analysis: any; competitors
   const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
   const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
 
-  // Build entries: client first, then competitors sorted by traffic descending
+  // ── v7.88: voice basis ──────────────────────────────────────────────────────
+  // Semrush auto-discovery snapshots carry organicTraffic per domain → use it.
+  // CSV-upload snapshots have NO traffic data (keyword exports don't include
+  // it; uploadedFootprint.ts sets it to 0) — previously the donut went blank
+  // after a refresh. Fallback: compute share of voice from the keyword-level
+  // data that IS in the snapshot — page-1 monthly search volume per domain
+  // (client: topKeywords pos ≤ 10; competitors: their gap keywords pos ≤ 10).
+  // Both bases are actual fetched data, never modeled.
+  const trafficTotal = clientTraffic + semComps.reduce((s, c) => s + (c.organicTraffic ?? 0), 0);
+  const basis: 'traffic' | 'volume' = trafficTotal > 0 ? 'traffic' : 'volume';
+
+  let clientVoice: number;
+  let compEntries: Array<{ domain: string; voice: number }>;
+
+  if (basis === 'traffic') {
+    clientVoice = clientTraffic;
+    compEntries = semComps.map(c => ({ domain: c.domain, voice: c.organicTraffic ?? 0 }));
+  } else {
+    const snap = analysis.semrushSnapshot ?? {};
+    clientVoice = ((snap.topKeywords ?? []) as any[])
+      .filter(k => k?.position != null && k.position <= 10)
+      .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+    const byComp = new Map<string, number>();
+    for (const g of ((snap.gapKeywords ?? []) as any[])) {
+      if (!g?.competitor) continue;
+      if ((g.competitorPosition ?? 99) > 10) continue;
+      byComp.set(g.competitor, (byComp.get(g.competitor) ?? 0) + (g.searchVolume ?? 0));
+    }
+    compEntries = Array.from(byComp.entries()).map(([domain, voice]) => ({ domain, voice }));
+  }
+
+  // Build entries: client first, then competitors sorted by voice descending
   const rawEntries: SovRawEntry[] = [
-    { domain: 'Client', traffic: clientTraffic, type: 'client', color: '#6C63FF' },
+    { domain: 'Client', traffic: clientVoice, type: 'client', color: '#6C63FF' },
   ];
   let serpIdx = 0;
   let brandIdx = 0;
-  for (const c of [...semComps].sort((a, b) => b.organicTraffic - a.organicTraffic)) {
+  for (const c of [...compEntries].sort((a, b) => b.voice - a.voice)) {
     const isBrand = manualDomains.has(c.domain.toLowerCase().trim());
     rawEntries.push({
       domain:  c.domain,
-      traffic: c.organicTraffic,
+      traffic: c.voice,
       type:    isBrand ? 'brand' : 'serp',
       color:   isBrand
         ? SOV_BRAND_COLORS[brandIdx++ % SOV_BRAND_COLORS.length]
@@ -552,7 +583,7 @@ export function SovPanel({ analysis, competitors }: { analysis: any; competitors
       <div className="orbit-card p-5 flex flex-col gap-3">
         <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
         <p style={{ fontSize: '12px', color: '#555570' }}>
-          No competitor traffic data available. Run analysis to populate.
+          No traffic or page-1 keyword data available yet. Run an analysis to populate.
         </p>
       </div>
     );
@@ -560,7 +591,14 @@ export function SovPanel({ analysis, competitors }: { analysis: any; competitors
 
   return (
     <div className="orbit-card p-5 flex flex-col gap-3">
-      <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+      <div>
+        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
+          {basis === 'traffic'
+            ? 'by organic traffic (Semrush)'
+            : 'by page-1 keyword search volume — monthly, per domain'}
+        </p>
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
 
