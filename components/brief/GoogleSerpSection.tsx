@@ -67,6 +67,7 @@ interface Props {
   domain?:                string;
   competitors?:           string[];
   defaultClientThreshold?: number;  // min monthly vol for ranked keywords — must match KeywordsPanel
+  defaultCompetitorThreshold?: number;  // min monthly vol for gap keywords — must match KeywordsPanel
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -486,7 +487,7 @@ function LegendRow({ arc }: { arc: SovArc }) {
   );
 }
 
-function SovPanel({ analysis, competitors }: { analysis: any; competitors?: string[] }) {
+export function SovPanel({ analysis, competitors }: { analysis: any; competitors?: string[] }) {
   const manualDomains = new Set((competitors ?? []).map(d => d.toLowerCase().trim()));
   const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
   const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
@@ -640,7 +641,7 @@ function SovPanel({ analysis, competitors }: { analysis: any; competitors?: stri
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function GoogleSerpSection({ analysis, projectId, domain, competitors, defaultClientThreshold = 0 }: Props) {
+export default function GoogleSerpSection({ analysis, projectId, domain, competitors, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
   const [filter,     setFilter]     = useState<BucketKey>('all');
   const [sortCol,    setSortCol]    = useState<'position' | 'volume'>('position');
   const [sortAsc,    setSortAsc]    = useState(true);
@@ -667,7 +668,9 @@ export default function GoogleSerpSection({ analysis, projectId, domain, competi
   //      volume threshold is only applied to Semrush keywords in KeywordsPanel, not DB keywords)
   // Build ranked keyword list via shared utility — guarantees identical count to KeywordsPanel.
   // Filter to !isGap: this section is about client rankings only (gap kws have no client position).
-  const topKws: SemKw[] = useMemo(() => {
+  // Pool options identical to KeywordsPanel, so ranked + excluded gaps always
+  // sum to exactly the Keyword Landscape total.
+  const { topKws, gapKwCount, gapVolMonthly } = useMemo(() => {
     const clientDomain = analysis?.semrushSnapshot?.domain ?? domain ?? '';
     const pool = buildKwPool({
       semrushSnapshot:  analysis?.semrushSnapshot,
@@ -675,19 +678,24 @@ export default function GoogleSerpSection({ analysis, projectId, domain, competi
       clientDomain,
       competitorDomains: competitors ?? [],
       clientVolMin:     defaultClientThreshold,
-      competitorVolMin: 0,
+      competitorVolMin: defaultCompetitorThreshold,
     });
-    return pool
-      .filter(item => !item.isGap)
-      .map(item => ({
-        keyword:      item.keyword,
-        position:     item.position != null && item.position > 0 && isFinite(item.position)
-                        ? item.position
-                        : null,
-        searchVolume: item.searchVolume,
-        branded:      item.isBranded,
-      }));
-  }, [analysis, dbKeywords, domain, competitors, defaultClientThreshold]);
+    const gaps = pool.filter(item => item.isGap);
+    return {
+      topKws: pool
+        .filter(item => !item.isGap)
+        .map(item => ({
+          keyword:      item.keyword,
+          position:     item.position != null && item.position > 0 && isFinite(item.position)
+                          ? item.position
+                          : null,
+          searchVolume: item.searchVolume,
+          branded:      item.isBranded,
+        })) as SemKw[],
+      gapKwCount:    gaps.length,
+      gapVolMonthly: gaps.reduce((s, k) => s + k.searchVolume, 0),
+    };
+  }, [analysis, dbKeywords, domain, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
 
   // Recompute positionDist from the FULL merged keyword set.
   // The stored semrushSnapshot.positionDist was built from only the 40 Semrush keywords.
@@ -835,12 +843,14 @@ export default function GoogleSerpSection({ analysis, projectId, domain, competi
       {/* ── Stat Strip ── */}
       <div className="grid grid-cols-4 gap-3">
         <StatCard
-          label="Total Keywords"
+          label="Ranked Keywords"
           value={dbLoaded ? totalKws.toLocaleString() : '—'}
           sub={dbLoaded
-            ? `${top3Kws} in top 3${posKws.length < totalKws ? ` · ${posKws.length} with position data` : ''}`
+            ? `${top3Kws} in top 3 · ${fmtAnnual(totalVol)} annual vol`
             : 'Loading…'}
-          sub2={dbLoaded && totalVol > 0 ? `${fmtAnnual(totalVol)} annual search volume` : undefined}
+          sub2={dbLoaded && gapKwCount > 0
+            ? `+${gapKwCount} gap kws (${fmtAnnual(gapVolMonthly)}/yr) excluded — no rankings · Landscape total ${(totalKws + gapKwCount).toLocaleString()}`
+            : undefined}
         />
         <StatCard
           label="PG 1 Vol. Share"

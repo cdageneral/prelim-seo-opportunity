@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
+import { SovPanel } from '@/components/brief/GoogleSerpSection';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,27 +74,6 @@ function firstSentences(text: string, n: number): string {
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-
-function BarRow({ label, pct, color, isClient = false }: {
-  label: string; pct: number; color: string; isClient?: boolean;
-}) {
-  const w = Math.min(Math.max(pct * 100, 0.5), 100);
-  return (
-    <div className="flex items-center gap-2 mb-[5px]">
-      <span className="text-[10px] w-20 shrink-0 overflow-hidden text-ellipsis whitespace-nowrap"
-        style={{ color: isClient ? '#8B85FF' : '#8888AA', fontWeight: isClient ? 600 : 400 }}>
-        {label}
-      </span>
-      <div className="flex-1 h-[6px] rounded-full" style={{ background: '#1E1E2E' }}>
-        <div className="h-[6px] rounded-full" style={{ width: `${w}%`, background: color }} />
-      </div>
-      <span className="text-[10px] w-8 text-right shrink-0"
-        style={{ color: isClient ? '#8B85FF' : '#8888AA' }}>
-        {pct >= 0.001 ? `${(pct * 100).toFixed(0)}%` : '<1%'}
-      </span>
-    </div>
-  );
-}
 
 function StatRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
   return (
@@ -384,45 +364,8 @@ export default function ExecutiveSummarySection({
           {/* Row 1: Competitors + Google Volume Opportunity */}
           <div className="grid grid-cols-2 gap-3">
 
-            {/* Competitor market share */}
-            <div className="orbit-card p-4">
-              <p className="text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest mb-0.5">Competitor gap</p>
-              <h4 className="text-orbit-primary text-xs font-semibold mb-3">Market share — all players</h4>
-
-              {allPlayers.map(p => (
-                <BarRow
-                  key={p.domain}
-                  label={p.domain}
-                  pct={totalPool > 0 ? p.traffic / totalPool : (p.isClient ? captureRate : 0)}
-                  color={p.isClient ? '#6C63FF' : '#2A2A3D'}
-                  isClient={p.isClient}
-                />
-              ))}
-
-              {uncapturedMonthly > 0 && totalMonthly > 0 && (
-                <div className="flex items-center gap-2 mb-[5px]">
-                  <span className="text-[10px] w-20 shrink-0" style={{ color: '#EF4444' }}>Uncaptured</span>
-                  <div className="flex-1 h-[6px] rounded-full bg-orbit-muted">
-                    <div className="h-[6px] rounded-full"
-                      style={{ width: `${Math.min((uncapturedMonthly / totalMonthly) * 100, 100)}%`, background: 'rgba(239,68,68,0.4)' }} />
-                  </div>
-                  <span className="text-[10px] w-8 text-right shrink-0" style={{ color: '#EF4444' }}>
-                    {((uncapturedMonthly / totalMonthly) * 100).toFixed(0)}%
-                  </span>
-                </div>
-              )}
-
-              <div className="mt-2 pt-2 border-t border-orbit-border">
-                {topComp && (
-                  <StatRow
-                    label="Top competitor gap"
-                    value={gapVsTop > 0 ? `+${(gapVsTop * 100).toFixed(0)}%` : '—'}
-                    valueColor="#F59E0B"
-                  />
-                )}
-                <StatRow label="Non-branded gap keywords" value={String(gapKwCount)} />
-              </div>
-            </div>
+            {/* Share of Voice — same panel as Google Ranks (nav 06) */}
+            <SovPanel analysis={analysis} competitors={manualDomains} />
 
             {/* Volume Opportunity Analysis — exact replica of GoogleSerpSection */}
             <div className="orbit-card p-4 flex flex-col gap-3">
