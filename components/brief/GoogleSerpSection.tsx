@@ -32,6 +32,7 @@ interface DbKeyword {
   type:         string;
   branded:      boolean;
   source:       string;
+  domain?:      string | null;  // v7.110: competitor domain ('' / null = client) — needed for category summary cards
 }
 
 type BucketKey = 'all' | '1-3' | '4-10' | '11-20' | '21+';
@@ -272,6 +273,256 @@ function CategoryPerformanceSection({
           isExpanded={expandedCat === cat.name} onToggle={toggle} expandedKws={expandedKws}
         />
       ))}
+    </div>
+  );
+}
+
+// ── Category Position Summary cards (v7.110) ──────────────────────────────────
+// Four cards rendered between the SOV row and Category Performance:
+//   1. Strongest categories   — highest page-1 volume share
+//   2. Weakest categories     — lowest page-1 volume share
+//   3. Competitor outperforming — categories where a competitor's page-1 volume
+//      (from UPLOADED competitor keyword rows with positions — same source as
+//      SovPanel) beats the client's page-1 volume
+//   4. Largest opportunity    — most uncaptured demand (demand − client page-1 vol)
+// All figures derive from data already computed on this page (_categoryBreakdown
+// demand + categoryRankStats + uploaded competitor rows). Nothing is modeled.
+// Categories under 2% of total demand are excluded so tiny categories can't top
+// the lists (floor relaxed automatically if it leaves fewer than 3 categories).
+
+interface CatSummaryRow {
+  name:      string;
+  demand:    number;          // monthly demand from _categoryBreakdown
+  clientP1:  number;          // monthly page-1 vol — stats first, cb fallback (same rule as CatRow)
+  share:     number;          // clientP1 / demand × 100
+  avgPos:    number | null;
+  ranked:    number;          // ranked kw count in category
+  top3:      number;          // kws at pos 1–3
+  page2plus: number;          // kws at pos 11+
+}
+
+const SUMMARY_ACCENTS = {
+  strong: '#22C55E',
+  weak:   '#EF4444',
+  comp:   '#F59E0B',
+  opp:    '#6C63FF',
+};
+
+function SummaryCardShell({ accent, label, children }: { accent: string; label: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      background: '#13131F', border: '1px solid #1E1E2E', borderLeft: `3px solid ${accent}`,
+      borderRadius: '0 10px 10px 0', padding: '14px 16px', display: 'flex', flexDirection: 'column', minWidth: 0,
+    }}>
+      <p style={{ fontSize: '10px', color: '#8888AA', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', margin: '0 0 8px' }}>
+        {label}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function SummaryRunnerUps({ rows, accent }: { rows: Array<{ name: string; stat: string }>; accent: string }) {
+  if (rows.length === 0) return null;
+  return (
+    <div style={{ borderTop: '1px solid #1A1A2A', paddingTop: '7px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      {rows.map(r => (
+        <div key={r.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+          <span style={{ fontSize: '11px', color: '#A0A0C0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+          <span style={{ fontSize: '11px', color: accent, flexShrink: 0 }}>{r.stat}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SummaryHero({ name, stat, sub, accent }: { name: string; stat: string; sub: string; accent: string }) {
+  return (
+    <div style={{ marginBottom: '10px' }}>
+      <p style={{ fontSize: '15px', fontWeight: 600, color: '#F0F0FF', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</p>
+      <p style={{ fontSize: '11px', color: accent, margin: '3px 0 0' }}>{stat}</p>
+      <p style={{ fontSize: '10px', color: '#555570', margin: '2px 0 0' }}>{sub}</p>
+    </div>
+  );
+}
+
+function SummaryEmpty({ text }: { text: string }) {
+  return <p style={{ fontSize: '11px', color: '#555570', lineHeight: 1.5, margin: 0 }}>{text}</p>;
+}
+
+function CategoryPositionSummary({
+  cb, categoryRankStats, dbKeywords, clientDomain,
+}: {
+  cb:                CategoryBreakdown;
+  categoryRankStats: Record<string, CatRankStats>;
+  dbKeywords:        DbKeyword[];
+  clientDomain:      string;
+}) {
+  const data = useMemo(() => {
+    const totalDemand = cb.totalMonthlyDemand > 0
+      ? cb.totalMonthlyDemand
+      : cb.categories.reduce((s, c) => s + c.monthlyDemand, 0);
+    const floor = totalDemand * 0.02;
+
+    const rows: CatSummaryRow[] = cb.categories
+      .filter(c => c.monthlyDemand > 0)
+      .map(cat => {
+        const stats    = categoryRankStats[cat.name];
+        const clientP1 = (stats?.page1Vol ?? 0) > 0 ? (stats?.page1Vol ?? 0) : cat.page1Demand;
+        return {
+          name:      cat.name,
+          demand:    cat.monthlyDemand,
+          clientP1,
+          share:     (clientP1 / cat.monthlyDemand) * 100,
+          avgPos:    stats && stats.count > 0 ? stats.posSum / stats.count : null,
+          ranked:    stats?.count ?? 0,
+          top3:      stats?.dist['1-3'] ?? 0,
+          page2plus: (stats?.dist['11-20'] ?? 0) + (stats?.dist['21+'] ?? 0),
+        };
+      });
+
+    const floored = rows.filter(r => r.demand >= floor);
+    const pool    = floored.length >= 3 ? floored : rows;
+
+    const strongest = pool
+      .filter(r => r.clientP1 > 0)
+      .sort((a, b) => b.share - a.share || (a.avgPos ?? 999) - (b.avgPos ?? 999))
+      .slice(0, 3);
+
+    const weakest = [...pool]
+      .sort((a, b) => a.share - b.share || b.demand - a.demand)
+      .slice(0, 3);
+
+    const opportunity = pool
+      .map(r => ({ ...r, uncaptured: Math.max(0, r.demand - r.clientP1) }))
+      .filter(r => r.uncaptured > 0)
+      .sort((a, b) => b.uncaptured - a.uncaptured)
+      .slice(0, 3);
+
+    // Competitor page-1 volume per category from uploaded competitor rows WITH positions
+    const clientNorm      = normSovDomain(clientDomain);
+    const compRows        = (dbKeywords ?? []).filter(r =>
+      r.domain && r.source !== 'blocked' && normSovDomain(r.domain) !== clientNorm
+    );
+    const compRowsWithPos = compRows.filter(r => r.position != null);
+    const byCat = new Map<string, Map<string, number>>();
+    for (const r of compRowsWithPos) {
+      if ((r.position as number) > 10) continue;
+      const cat = inferCategoryForKw(r.keyword, cb.keywordCategories, cb.categories);
+      if (!cat) continue;
+      const d = normSovDomain(r.domain as string);
+      let m = byCat.get(cat);
+      if (!m) { m = new Map(); byCat.set(cat, m); }
+      m.set(d, (m.get(d) ?? 0) + (r.searchVolume ?? 0));
+    }
+    const outperform: Array<CatSummaryRow & { comp: string; compP1: number; compShare: number }> = [];
+    for (const row of pool) {
+      const m = byCat.get(row.name);
+      if (!m) continue;
+      let topD = ''; let topV = 0;
+      m.forEach((v, d) => { if (v > topV) { topV = v; topD = d; } });
+      if (topV > row.clientP1) {
+        outperform.push({
+          ...row, comp: topD, compP1: topV,
+          compShare: (topV / row.demand) * 100,
+        });
+      }
+    }
+    outperform.sort((a, b) => (b.compP1 - b.clientP1) - (a.compP1 - a.clientP1));
+
+    return {
+      strongest, weakest, opportunity,
+      outperform:  outperform.slice(0, 3),
+      hasCompPos:  compRowsWithPos.length > 0,
+      hasCompRows: compRows.length > 0,
+    };
+  }, [cb, categoryRankStats, dbKeywords, clientDomain]);
+
+  const { strongest, weakest, opportunity, outperform, hasCompPos, hasCompRows } = data;
+  const posTxt = (p: number | null) => p != null ? ` · avg pos ${p.toFixed(1)}` : '';
+
+  return (
+    <div>
+      <div className="grid grid-cols-4 gap-3">
+
+        <SummaryCardShell accent={SUMMARY_ACCENTS.strong} label="Strongest Categories">
+          {strongest.length === 0 && <SummaryEmpty text="No page-1 rankings in any major category yet." />}
+          {strongest.length > 0 && (
+            <>
+              <SummaryHero
+                name={strongest[0].name}
+                stat={`${Math.round(strongest[0].share)}% page-1 share${posTxt(strongest[0].avgPos)}`}
+                sub={`${fmtAnnual(strongest[0].demand)} annual demand · ${strongest[0].top3} of ${strongest[0].ranked} kws top 3`}
+                accent={SUMMARY_ACCENTS.strong}
+              />
+              <SummaryRunnerUps
+                accent={SUMMARY_ACCENTS.strong}
+                rows={strongest.slice(1).map(r => ({ name: r.name, stat: `${Math.round(r.share)}% share${r.avgPos != null ? ` · pos ${r.avgPos.toFixed(1)}` : ''}` }))}
+              />
+            </>
+          )}
+        </SummaryCardShell>
+
+        <SummaryCardShell accent={SUMMARY_ACCENTS.weak} label="Weakest Categories">
+          {weakest.length === 0 && <SummaryEmpty text="No category demand data — run analysis to populate." />}
+          {weakest.length > 0 && (
+            <>
+              <SummaryHero
+                name={weakest[0].name}
+                stat={`${Math.round(weakest[0].share)}% page-1 share${posTxt(weakest[0].avgPos)}`}
+                sub={`${fmtAnnual(weakest[0].demand)} annual demand · ${weakest[0].page2plus} of ${weakest[0].ranked} kws page 2+`}
+                accent={SUMMARY_ACCENTS.weak}
+              />
+              <SummaryRunnerUps
+                accent={SUMMARY_ACCENTS.weak}
+                rows={weakest.slice(1).map(r => ({ name: r.name, stat: `${Math.round(r.share)}% share${r.avgPos != null ? ` · pos ${r.avgPos.toFixed(1)}` : ''}` }))}
+              />
+            </>
+          )}
+        </SummaryCardShell>
+
+        <SummaryCardShell accent={SUMMARY_ACCENTS.comp} label="Competitor Outperforming">
+          {!hasCompRows && <SummaryEmpty text="No competitor keywords uploaded — add competitor CSVs (Competitors button) to enable this comparison." />}
+          {hasCompRows && !hasCompPos && <SummaryEmpty text="Competitor CSVs have no rank positions — re-upload with a Position column to enable this comparison." />}
+          {hasCompPos && outperform.length === 0 && <SummaryEmpty text="No major category where a competitor's page-1 volume beats yours." />}
+          {outperform.length > 0 && (
+            <>
+              <SummaryHero
+                name={outperform[0].name}
+                stat={`${outperform[0].comp} leads · ${Math.round(outperform[0].compShare)}% vs your ${Math.round(outperform[0].share)}%`}
+                sub={`page-1 volume share · ${fmtAnnual(outperform[0].demand)} annual demand`}
+                accent={SUMMARY_ACCENTS.comp}
+              />
+              <SummaryRunnerUps
+                accent={SUMMARY_ACCENTS.comp}
+                rows={outperform.slice(1).map(r => ({ name: r.name, stat: `${r.comp} ${Math.round(r.compShare)}% vs ${Math.round(r.share)}%` }))}
+              />
+            </>
+          )}
+        </SummaryCardShell>
+
+        <SummaryCardShell accent={SUMMARY_ACCENTS.opp} label="Largest Opportunity">
+          {opportunity.length === 0 && <SummaryEmpty text="Your page 1 already captures effectively all major category demand." />}
+          {opportunity.length > 0 && (
+            <>
+              <SummaryHero
+                name={opportunity[0].name}
+                stat={`${fmtAnnual(opportunity[0].uncaptured)} annual searches uncaptured`}
+                sub={`${Math.min(100, Math.round((opportunity[0].uncaptured / opportunity[0].demand) * 100))}% of category demand not on your page 1`}
+                accent={SUMMARY_ACCENTS.opp}
+              />
+              <SummaryRunnerUps
+                accent={SUMMARY_ACCENTS.opp}
+                rows={opportunity.slice(1).map(r => ({ name: r.name, stat: `${fmtAnnual(r.uncaptured)} uncaptured` }))}
+              />
+            </>
+          )}
+        </SummaryCardShell>
+
+      </div>
+      <p style={{ fontSize: '9px', color: '#3A3A55', margin: '6px 2px 0' }}>
+        Share = client page-1 volume vs category demand · competitor comparison from uploaded competitor keyword positions · categories under 2% of total demand excluded
+      </p>
     </div>
   );
 }
@@ -1110,6 +1361,16 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           )}
         </div>
       </div>
+
+      {/* ── Category Position Summary (v7.110) ── */}
+      {cb && cb.categories && cb.categories.length > 0 && (
+        <CategoryPositionSummary
+          cb={cb}
+          categoryRankStats={categoryRankStats}
+          dbKeywords={dbKeywords}
+          clientDomain={analysis?.semrushSnapshot?.domain ?? domain ?? ''}
+        />
+      )}
 
       {/* ── Category Performance ── */}
       {cb && cb.categories && cb.categories.length > 0 && (
