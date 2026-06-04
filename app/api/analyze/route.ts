@@ -21,7 +21,7 @@ import { db }      from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
-import { getSerpApiSnapshot }  from '@/lib/apis/serp';
+import { getSerpApiSnapshot, buildSnapshotFromKeywordData }  from '@/lib/apis/serp';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 
@@ -191,16 +191,25 @@ export async function POST(req: NextRequest) {
         };
 
         // SerpAPI: scan new client keywords + new gap keywords (up to 5 each)
+        // v7.82: results are MERGED into the previous snapshot instead of
+        // replacing it — incremental serp-scan coverage survives a gap refresh.
         const serpSample = [
           ...newClientKeywords.slice(0, 3).map(k => k.keyword),
           ...newGapKeywords.slice(0, 3).map(k => k.keyword),
         ].slice(0, 5);
-        const serp = serpSample.length > 0
-          ? await getSerpApiSnapshot(domain, serpSample).catch(err => {
-              console.error(`[OrbitIQ] SerpAPI (gap) failed:`, err);
-              return lastAnalysis.serpApiSnapshot as any;
-            })
-          : (lastAnalysis.serpApiSnapshot as any);
+        let serp: any = lastAnalysis.serpApiSnapshot ?? null;
+        if (serpSample.length > 0) {
+          try {
+            const fresh   = await getSerpApiSnapshot(domain, serpSample);
+            const freshLow = new Set(fresh.keywords.map(k => k.keyword.toLowerCase()));
+            const carried  = ((serp?.keywords ?? []) as any[])
+              .filter((k: any) => k?.keyword && !freshLow.has(k.keyword.toLowerCase()));
+            serp = buildSnapshotFromKeywordData(domain, [...fresh.keywords, ...carried]);
+            console.log(`[OrbitIQ] SerpAPI (gap): +${fresh.keywords.length} fresh, ${carried.length} carried forward`);
+          } catch (err) {
+            console.error(`[OrbitIQ] SerpAPI (gap) failed (keeping previous SERP data):`, err);
+          }
+        }
 
         const llmProbe = lastAnalysis.profoundSnapshot as any;
 
@@ -254,7 +263,7 @@ export async function POST(req: NextRequest) {
     // SerpAPI — runs on a sample of top keywords regardless of source
     const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
     console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, scanning ${Math.min(topKeywords.length, 5)} of ${topKeywords.length} keywords`);
-    const serp = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
+    let serp: any = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
       console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
       return {
         domain, keywords: [],
@@ -282,6 +291,22 @@ export async function POST(req: NextRequest) {
     const previousProbe = recentAnalyses
       .find((a: any) => a.id !== analysis.id && a.profoundSnapshot != null)
       ?.profoundSnapshot ?? null;
+
+    // v7.82: carry forward previously scanned SERP keywords so incremental
+    // serp-scan coverage (and its SerpAPI credits) survives a full refresh.
+    // Fresh results win on overlap; carried keywords only fill the gaps.
+    const prevSerp: any = recentAnalyses
+      .find((a: any) => a.id !== analysis.id && (a.serpApiSnapshot as any)?.keywords?.length)
+      ?.serpApiSnapshot ?? null;
+    if (prevSerp) {
+      const freshLow = new Set((serp.keywords ?? []).map((k: any) => k.keyword?.toLowerCase()));
+      const carried  = (prevSerp.keywords as any[])
+        .filter((k: any) => k?.keyword && !freshLow.has(k.keyword.toLowerCase()));
+      if (carried.length > 0) {
+        serp = buildSnapshotFromKeywordData(domain, [...(serp.keywords ?? []), ...carried]);
+        console.log(`[OrbitIQ] SerpAPI: ${carried.length} previously scanned keywords carried forward (total ${serp.keywords.length})`);
+      }
+    }
 
     await db.update(analyses)
       .set({
