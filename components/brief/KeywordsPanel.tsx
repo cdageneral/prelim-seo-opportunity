@@ -107,6 +107,7 @@ function buildRows(
   competitorDomains: string[],
   clientVolMin: number = 0,
   competitorVolMin: number = 0,
+  extraSerp: any[] = [],   // v7.81: freshly scanned batch results (live-merged, no reload)
 ): KeywordRow[] {
   const serpSnap = analysis?.serpApiSnapshot ?? {};
 
@@ -114,6 +115,9 @@ function buildRows(
   const serpMap: Record<string, any> = {};
   for (const k of (serpSnap.keywords ?? [])) {
     serpMap[k.keyword?.toLowerCase()] = k;
+  }
+  for (const k of extraSerp) {
+    if (k?.keyword) serpMap[k.keyword.toLowerCase()] = k;
   }
 
   // Core filtering via shared utility — single source of truth
@@ -149,7 +153,9 @@ function buildRows(
         : false,
       hasPAA:        (serp?.paaQuestions ?? []).length > 0,
       clientInPAA:   serp?.paaClientCited ?? false,
-      hasVideo:      (serp?.serpFeatures ?? []).includes('videos'),
+      // v7.81 fix: serp.ts stores 'video_carousel' — the old 'videos' check
+      // meant the Video pill never lit up even for scanned keywords.
+      hasVideo:      (serp?.serpFeatures ?? []).includes('video_carousel'),
       clientInVideo: serp?.videoClientCited ?? false,
     };
   });
@@ -371,6 +377,10 @@ export default function KeywordsPanel({
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
+  // v7.81: incremental SERP feature scanning
+  const [serpExtra,   setSerpExtra]   = useState<any[]>([]);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError,   setScanError]   = useState('');
   const [showAdd,     setShowAdd]     = useState(false);
   const [newKw,       setNewKw]       = useState('');
   const [newVol,      setNewVol]      = useState('');
@@ -408,9 +418,48 @@ export default function KeywordsPanel({
 
   // ── Build merged rows (project-level thresholds applied at build time) ──
   const allRows = useMemo(
-    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold),
-    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold],
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, serpExtra),
+    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, serpExtra],
   );
+
+  // ── SERP feature coverage (v7.81) — scanned keywords vs canonical pool ──
+  const serpCoverage = useMemo(() => {
+    const set = new Set<string>();
+    for (const k of (analysis?.serpApiSnapshot?.keywords ?? [])) {
+      if (k?.keyword) set.add(k.keyword.toLowerCase());
+    }
+    for (const k of serpExtra) {
+      if (k?.keyword) set.add(k.keyword.toLowerCase());
+    }
+    const scanned = allRows.filter(r => set.has(r.keyword.toLowerCase())).length;
+    return { scanned, total: allRows.length, remaining: allRows.length - scanned };
+  }, [analysis, serpExtra, allRows]);
+
+  // ── Scan next batch of unscanned keywords via SerpAPI ──
+  async function handleSerpScan() {
+    setScanLoading(true);
+    setScanError('');
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/serp-scan`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ batchSize: 75 }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setScanError(data.error ?? 'Scan failed. Try again.');
+        return;
+      }
+      setSerpExtra(prev => [...prev, ...(data.results ?? [])]);
+      if (data.scanned === 0 && data.remaining > 0) {
+        setScanError('No results returned — check SerpAPI credits/rate limit and try again.');
+      }
+    } catch {
+      setScanError('Scan failed — network error.');
+    } finally {
+      setScanLoading(false);
+    }
+  }
   // Segment rows: summary-card filter only (no rank filter) — the category
   // breakdown needs ALL rank buckets of the active segment for its stacked bars.
   const segmentRows = useMemo(
@@ -1160,6 +1209,57 @@ export default function KeywordsPanel({
             from competitor · client not ranking
           </span>
         )}
+      </div>
+
+      {/* ── SERP feature coverage strip (v7.81) ── */}
+      <div className="flex items-center gap-3 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: '#111120', background: '#0A0A14' }}>
+        <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: '#252545' }}>SERP features</span>
+        <span className="text-[10px]" style={{ color: '#7070A0', fontVariantNumeric: 'tabular-nums' }}>
+          {serpCoverage.scanned.toLocaleString()} of {serpCoverage.total.toLocaleString()} keywords scanned
+        </span>
+        {/* coverage mini-bar */}
+        <div style={{ width: 90, height: 4, borderRadius: 2, background: '#14142A', overflow: 'hidden' }}>
+          <div style={{
+            width: serpCoverage.total > 0 ? `${(serpCoverage.scanned / serpCoverage.total) * 100}%` : '0%',
+            height: '100%', background: '#6C63FF', borderRadius: 2, transition: 'width 0.4s ease',
+          }} />
+        </div>
+        {serpCoverage.remaining > 0 ? (
+          <button
+            onClick={handleSerpScan}
+            disabled={scanLoading}
+            className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
+            style={{
+              borderColor: scanLoading ? '#3A3A5C' : 'rgba(108,99,255,0.5)',
+              color:       scanLoading ? '#55557A' : '#9B96FF',
+              background:  scanLoading ? 'transparent' : 'rgba(108,99,255,0.08)',
+              cursor:      scanLoading ? 'default' : 'pointer',
+            }}
+            title={`Scans the ${Math.min(75, serpCoverage.remaining)} highest-volume unscanned keywords. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.`}
+          >
+            {scanLoading ? (
+              <>
+                <svg className="animate-spin" style={{ width: 10, height: 10 }} fill="none" viewBox="0 0 24 24">
+                  <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                Scanning… (~2–3 min)
+              </>
+            ) : (
+              <>Scan next {Math.min(75, serpCoverage.remaining)} keywords · ~{Math.min(75, serpCoverage.remaining)} credits</>
+            )}
+          </button>
+        ) : (
+          <span className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'rgba(52,211,153,0.3)', background: 'rgba(52,211,153,0.08)', color: '#34D399' }}>
+            ✓ full coverage
+          </span>
+        )}
+        {scanError && (
+          <span className="text-[10px]" style={{ color: '#f87171' }}>{scanError}</span>
+        )}
+        <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
+          feeds AIO / PAA / Video pills + SERP Features panel
+        </span>
       </div>
 
       {/* ── Scrollable area: category breakdown + keyword table ── */}

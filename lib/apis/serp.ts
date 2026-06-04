@@ -280,7 +280,18 @@ export async function getSerpApiSnapshot(
   keywords: string[]
 ): Promise<SerpApiSnapshot> {
   const keywordData = await batchKeywordScan(keywords, domain);
+  return buildSnapshotFromKeywordData(domain, keywordData);
+}
 
+// ─── Snapshot rebuild from keyword data (v7.81) ──────────────────────────────
+// Used by the incremental serp-scan endpoint: merge previously scanned keywords
+// with a new batch, then recompute every summary from the combined set so the
+// SERP Features panel and keyword table always reflect total coverage.
+
+export function buildSnapshotFromKeywordData(
+  domain: string,
+  keywordData: KeywordSerpData[]
+): SerpApiSnapshot {
   return {
     domain,
     keywords: keywordData,
