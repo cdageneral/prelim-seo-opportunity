@@ -715,11 +715,22 @@ export default function KeywordsPanel({
       setCsvProgress(null); return;
     }
     const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    // v7.90: header-aware position parsing — previously only keyword+volume were
+    // ingested, so competitor rows had NO rank positions and page-1 share of
+    // voice could not be computed. Accepts 'position' / 'rank' header; falls
+    // back to column 2 if the header row is unrecognized.
+    const headerCols = (lines[0] ?? '').toLowerCase().split(',').map((c: string) => c.replace(/^"|"$/g, '').trim());
+    const posIdx = (() => {
+      const i = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position' || h === 'pos');
+      return i >= 0 ? i : 2;
+    })();
     const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
     const parsed = dataLines.map((line: string) => {
       const cols = line.split(',').map((c: string) => c.replace(/^"|"$/g, '').replace(/\r$/, '').trim());
-      return { keyword: cols[0] ?? '', searchVolume: parseInt(cols[1] ?? '0') || 0 };
-    }).filter((r: { keyword: string; searchVolume: number }) => r.keyword.length > 0);
+      const posRaw = cols[posIdx];
+      const pos    = posRaw != null && posRaw !== '' && !isNaN(Number(posRaw)) ? Number(posRaw) : null;
+      return { keyword: cols[0] ?? '', searchVolume: parseInt(cols[1] ?? '0') || 0, position: pos };
+    }).filter((r: { keyword: string }) => r.keyword.length > 0);
     if (!parsed.length) {
       setCompUploadStatus({ type: 'error', msg: 'No valid rows found.' });
       setCsvProgress(null); return;
@@ -1043,7 +1054,7 @@ export default function KeywordsPanel({
         <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>
           <p className="text-[11px] font-semibold mb-2" style={{ color: '#F59E0B' }}>Upload Competitor Keywords</p>
           <p className="text-[10px] text-orbit-tertiary mb-3">
-            These will appear in the <strong>Competitor Gap</strong> filter. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume</span>
+            These will appear in the <strong>Competitor Gap</strong> filter. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume, position</span> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice.
           </p>
           <div className="flex items-center gap-2 flex-wrap">
             <select

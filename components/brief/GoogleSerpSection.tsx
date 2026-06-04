@@ -510,35 +510,52 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
   // All bases are actual fetched data, never modeled.
   const trafficTotal = clientTraffic + semComps.reduce((s, c) => s + (c.organicTraffic ?? 0), 0);
 
-  let basis: 'traffic' | 'volume' | 'gapOnly';
+  let basis: 'traffic' | 'volume' | 'tracked' | 'gapOnly';
   let clientVoice: number;
   let compEntries: Array<{ domain: string; voice: number }>;
 
   const snap       = analysis.semrushSnapshot ?? {};
   const clientNorm = normSovDomain(snap.domain ?? '');
+  const topKws     = (snap.topKeywords ?? []) as any[];
   const compRows   = (dbKeywords ?? []).filter(r =>
     r?.domain && r.source !== 'blocked' && normSovDomain(r.domain) !== clientNorm
   );
+  const compRowsWithPos = compRows.filter(r => r.position != null);
 
   if (trafficTotal > 0) {
     basis       = 'traffic';
     clientVoice = clientTraffic;
     compEntries = semComps.map(c => ({ domain: c.domain, voice: c.organicTraffic ?? 0 }));
   } else {
-    clientVoice = ((snap.topKeywords ?? []) as any[])
-      .filter(k => k?.position != null && k.position <= 10)
-      .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-
     const byComp = new Map<string, number>();
-    if (compRows.length > 0) {
+    if (compRowsWithPos.length > 0) {
+      // Page-1 share: both sides restricted to positions ≤ 10
       basis = 'volume';
+      clientVoice = topKws
+        .filter(k => k?.position != null && k.position <= 10)
+        .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+      for (const r of compRowsWithPos) {
+        if (r.position > 10) continue;
+        const d = normSovDomain(r.domain);
+        byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
+      }
+    } else if (compRows.length > 0) {
+      // v7.90: uploaded competitor CSVs carry NO rank positions (the uploader
+      // previously only ingested keyword+volume), so page-1 share cannot be
+      // computed. Honest fallback: each domain's TOTAL tracked keyword volume
+      // — same measure on both sides, explicitly labeled. Re-uploading
+      // competitor CSVs with a position column upgrades this to page-1 share.
+      basis = 'tracked';
+      clientVoice = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
       for (const r of compRows) {
-        if (r.position == null || r.position > 10) continue;
         const d = normSovDomain(r.domain);
         byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
       }
     } else {
       basis = 'gapOnly';
+      clientVoice = topKws
+        .filter(k => k?.position != null && k.position <= 10)
+        .reduce((s, k) => s + (k.searchVolume ?? 0), 0);
       for (const g of ((snap.gapKeywords ?? []) as any[])) {
         if (!g?.competitor) continue;
         if ((g.competitorPosition ?? 99) > 10) continue;
@@ -622,6 +639,7 @@ export function SovPanel({ analysis, competitors, dbKeywords }: { analysis: any;
         <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
           {basis === 'traffic' && 'by organic traffic (Semrush)'}
           {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
+          {basis === 'tracked' && 'by total tracked keyword volume — uploaded competitor CSVs have no rank positions; re-upload with a position column for page-1 share'}
           {basis === 'gapOnly' && 'by page-1 gap-keyword volume only — competitor rankings on shared keywords not available'}
         </p>
       </div>
