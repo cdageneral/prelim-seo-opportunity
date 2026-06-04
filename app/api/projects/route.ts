@@ -12,6 +12,7 @@ import { z }      from 'zod';
 import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
+import { MARKETS } from '@/lib/utils/markets';
 
 async function ensureColumns() {
   try {
@@ -23,7 +24,13 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS kw_vol_threshold_competitor INTEGER NOT NULL DEFAULT 0`);
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS semrush_database TEXT NOT NULL DEFAULT 'us'`);   // v7.99
+  } catch { /* already exists */ }
 }
+
+// v7.99: valid market codes come from the single source of truth in markets.ts
+const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];
 
 const CreateProjectSchema = z.object({
   clientName:               z.string().min(1).max(200),
@@ -33,6 +40,7 @@ const CreateProjectSchema = z.object({
   dataSource:               z.enum(['auto', 'upload']).optional().default('auto'),
   kwVolThresholdClient:     z.number().int().min(0).optional().default(0),
   kwVolThresholdCompetitor: z.number().int().min(0).optional().default(0),
+  semrushDatabase:          z.enum(marketCodes).optional().default('us'),   // v7.99: per-project market
 });
 
 export async function GET() {
@@ -55,13 +63,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { dataSource, kwVolThresholdClient, kwVolThresholdCompetitor, ...rest } = parsed.data;
+  const { dataSource, kwVolThresholdClient, kwVolThresholdCompetitor, semrushDatabase, ...rest } = parsed.data;
 
   const [project] = await db.insert(projects).values({
     ...rest,
     dataSource,
     kwVolThresholdClient:     kwVolThresholdClient     ?? 0,
     kwVolThresholdCompetitor: kwVolThresholdCompetitor ?? 0,
+    semrushDatabase:          semrushDatabase          ?? 'us',
     clerkOrgId:  'default',
     clerkUserId: 'default',
   }).returning();

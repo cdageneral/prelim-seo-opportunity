@@ -20,6 +20,7 @@ import { db } from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { batchKeywordScan, buildSnapshotFromKeywordData } from '@/lib/apis/serp';
+import { getMarket } from '@/lib/utils/markets';
 import type { KeywordSerpData } from '@/lib/apis/serp';
 import { buildKwPool } from '@/lib/utils/kwVolume';
 
@@ -109,7 +110,7 @@ export async function POST(
   const batchKeywords = unscanned.slice(0, batchSize).map(p => p.keyword);
   console.log(`[OrbitIQ] SERP scan: ${batchKeywords.length} keywords (${unscanned.length} unscanned of ${pool.length} pool) for ${domain}`);
 
-  const results = await batchKeywordScan(batchKeywords, domain, batchSize);
+  const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase));   // v7.99: market-aware scan
 
   // v7.86: every keyword in the batch failed → almost certainly an account-level
   // problem (out of SerpAPI search credits or rate-limited), not keyword-level.

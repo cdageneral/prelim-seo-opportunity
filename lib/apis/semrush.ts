@@ -87,11 +87,13 @@ async function semrushGet(params: Record<string, string>): Promise<string> {
 
 // ─── Domain Overview ──────────────────────────────────────────────────────────
 
-export async function getDomainOverview(domain: string): Promise<SemrushDomainOverview> {
+// v7.99: all report functions accept a Semrush regional database code
+// (default 'us') so a project can target any market (ca, uk, au, …).
+export async function getDomainOverview(domain: string, database = 'us'): Promise<SemrushDomainOverview> {
   const raw = await semrushGet({
     type:    'domain_ranks',
     domain,
-    database: 'us',
+    database,
     display_limit: '1',
     export_columns: 'Dn,Rk,Or,Ot,Oc,As,Bl',
     // Dn=Domain, Rk=Rank, Or=Organic Keywords, Ot=Organic Traffic,
@@ -131,7 +133,7 @@ function volumeFilter(volMin: number): Record<string, string> {
   return volMin > 0 ? { display_filter: `+|Nq|Gt|${volMin - 1}` } : {};
 }
 
-export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0): Promise<SemrushKeyword[]> {
+export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0, database = 'us'): Promise<SemrushKeyword[]> {
   const all: SemrushKeyword[] = [];
   let offset = 0;
   for (;;) {
@@ -140,7 +142,7 @@ export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0):
     const raw = await semrushGet({
       type:    'domain_organic',
       domain,
-      database: 'us',
+      database,
       display_limit:  String(want),
       display_offset: String(offset),
       display_sort: 'tr_desc',
@@ -164,11 +166,11 @@ export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0):
 
 // ─── Competitor Discovery ─────────────────────────────────────────────────────
 
-export async function getCompetitors(domain: string): Promise<SemrushCompetitor[]> {
+export async function getCompetitors(domain: string, database = 'us'): Promise<SemrushCompetitor[]> {
   const raw = await semrushGet({
     type:    'domain_organic_organic',
     domain,
-    database: 'us',
+    database,
     display_limit: '10',
     export_columns: 'Dn,Co,Or,Ot,Nr',
   });
@@ -192,6 +194,7 @@ export async function getKeywordGap(
   competitorDomain: string,
   limit = 0,
   volMin = 0,          // v7.98: server-side volume floor — filtered rows are never billed
+  database = 'us',     // v7.99: per-project market
 ): Promise<SemrushKeywordGap[]> {
   const all: SemrushKeywordGap[] = [];
   let offset = 0;
@@ -201,7 +204,7 @@ export async function getKeywordGap(
     const raw = await semrushGet({
       type:           'domain_organic',
       domain:         competitorDomain,
-      database:       'us',
+      database,
       display_limit:  String(want),
       display_offset: String(offset),
       display_sort:   'tr_desc',
@@ -265,14 +268,15 @@ export async function getSemrushSnapshot(
   manualCompetitors: string[] = [],   // domains from project.competitors
   gapVolMin = 0,                      // v7.86: project-level threshold (was hardcoded 2,400)
   clientVolMin = 0,                   // v7.98: client volume floor, applied at the API level
+  database = 'us',                    // v7.99: per-project market (Semrush regional database)
 ): Promise<SemrushSnapshot> {
   // Parallel fetch of independent endpoints. v7.98: project volume thresholds
   // are applied INSIDE the Semrush query (display_filter) so excluded rows are
   // never fetched or billed — not just filtered after the fact.
   const [overview, topKeywords, autoCompetitors] = await Promise.all([
-    getDomainOverview(domain),
-    getOrganicKeywords(domain, 0, clientVolMin),
-    getCompetitors(domain),
+    getDomainOverview(domain, database),
+    getOrganicKeywords(domain, 0, clientVolMin, database),
+    getCompetitors(domain, database),
   ]);
 
   // Build the full competitor list: auto-discovered + manually tracked (deduplicated)
@@ -297,7 +301,7 @@ export async function getSemrushSnapshot(
   const gapResults = await Promise.all(
     gapDomains.map(async comp => {
       try {
-        const rows = await getKeywordGap(domain, comp, 0, gapVolMin);
+        const rows = await getKeywordGap(domain, comp, 0, gapVolMin, database);
         console.log(`[OrbitIQ] Gap pull ${comp}: ${rows.length} raw rows`);
         if (rows.length === 0) {
           warnings.push(
@@ -420,10 +424,11 @@ export async function estimateSemrushPull(
   manualCompetitors: string[] = [],
   clientVolMin = 0,
   competitorVolMin = 0,
+  database = 'us',     // v7.99: per-project market — counts are market-specific
 ): Promise<SemrushPullEstimate> {
   const [overview, autoCompetitors] = await Promise.all([
-    getDomainOverview(domain),
-    getCompetitors(domain).catch(() => [] as SemrushCompetitor[]),
+    getDomainOverview(domain, database),
+    getCompetitors(domain, database).catch(() => [] as SemrushCompetitor[]),
   ]);
 
   const autoSet = new Set(autoCompetitors.map(c => c.domain));
@@ -440,7 +445,7 @@ export async function estimateSemrushPull(
     if (known && known > 0) {
       competitors.push({ domain: d, keywords: known });
     } else {
-      const ov = await getDomainOverview(d).catch(() => null);
+      const ov = await getDomainOverview(d, database).catch(() => null);
       competitors.push({ domain: d, keywords: ov?.organicKeywords ?? 0 });
     }
   }

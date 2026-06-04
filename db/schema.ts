@@ -24,6 +24,10 @@ export const projects = pgTable('projects', {
   dataSource:               text('data_source').default('auto').notNull(),  // 'auto' | 'upload'
   kwVolThresholdClient:     integer('kw_vol_threshold_client').default(0).notNull(),
   kwVolThresholdCompetitor: integer('kw_vol_threshold_competitor').default(0).notNull(),
+  // v7.99: market the analysis targets. Semrush regional database code ('us',
+  // 'ca', 'uk', 'au', …) — also drives SerpAPI gl/google_domain via MARKETS map
+  // in lib/utils/markets.ts. NOTE: run `npm run db:push` once after deploying.
+  semrushDatabase:          text('semrush_database').default('us').notNull(),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });

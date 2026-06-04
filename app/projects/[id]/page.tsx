@@ -16,6 +16,7 @@ import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
 import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 import ContentMapSection    from '@/components/brief/ContentMapSection';
 import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection';
+import { getMarket } from '@/lib/utils/markets';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 interface Analysis {
@@ -46,6 +47,7 @@ interface Project {
   dataSource:               string;   // 'auto' | 'upload'
   kwVolThresholdClient:     number;
   kwVolThresholdCompetitor: number;
+  semrushDatabase?:         string;   // v7.99: per-project market
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -521,6 +523,7 @@ export default function ProjectBriefPage() {
           competitors={project.competitors ?? []}
           kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
           kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
+          semrushDatabase={(project as any).semrushDatabase ?? 'us'}
           onClose={() => setShowEditProject(false)}
           onSaved={fetchProject}
         />
@@ -827,9 +830,16 @@ export default function ProjectBriefPage() {
                   </div>
                 ) : (
                   <>
-                    <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>Confirm Semrush pull</p>
+                    <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>
+                      Confirm Semrush pull
+                      {costEstimate.database && (
+                        <span className="ml-2 text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: '#1A1A38', color: '#8B85FF', border: '1px solid #2A2A4A' }}>
+                          {getMarket(costEstimate.database).flag} {getMarket(costEstimate.database).label} database
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs mb-3" style={{ color: '#7070A0' }}>
-                      Full-footprint analysis fetches every keyword Semrush has for each domain. Semrush bills 10 API units per keyword row.
+                      Full-footprint analysis fetches every keyword Semrush has for each domain in this market. Semrush bills 10 API units per keyword row.
                     </p>
                     <div className="rounded-lg p-3 mb-3" style={{ background: '#0A0A14', border: '1px solid #1E1E30' }}>
                       <div className="flex justify-between text-xs py-0.5">

@@ -22,6 +22,7 @@ import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot, buildSnapshotFromKeywordData }  from '@/lib/apis/serp';
+import { getMarket } from '@/lib/utils/markets';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 
@@ -72,6 +73,9 @@ export async function POST(req: NextRequest) {
 
   const domain   = normalizeDomain(project.websiteUrl);
   const industry = project.industry ?? 'General';
+  // v7.99: per-project market — drives the Semrush database AND SerpAPI country
+  // so keyword data and SERP scans always describe the same Google.
+  const market   = getMarket((project as any).semrushDatabase);
 
   const manualCompetitorDomains: string[] = ((project as any).competitors ?? [])
     .map((c: { domain: string }) => c.domain)
@@ -131,12 +135,12 @@ export async function POST(req: NextRequest) {
         const gapsClientFloor = (project as any).kwVolThresholdClient ?? 0;
         const gapsCompFloor   = (project as any).kwVolThresholdCompetitor ?? 0;
         const [freshClientKws, ...gapResults] = await Promise.all([
-          getOrganicKeywords(domain, 0, gapsClientFloor).catch(err => {
+          getOrganicKeywords(domain, 0, gapsClientFloor, market.code).catch(err => {
             warnings.push(`Client ranking refresh failed — positions were NOT updated this run: ${String((err as any)?.message ?? err)}. Check your Semrush API unit balance and re-run.`);
             return [] as Awaited<ReturnType<typeof getOrganicKeywords>>;
           }),
           ...allCompetitorDomains.slice(0, 5).map(comp =>
-            getKeywordGap(domain, comp, 0, gapsCompFloor).catch(err => {
+            getKeywordGap(domain, comp, 0, gapsCompFloor, market.code).catch(err => {
               warnings.push(`Competitor gap pull for ${comp} failed: ${String((err as any)?.message ?? err)}. Gap data is missing this domain — check your Semrush API unit balance and re-run.`);
               return [] as SemrushKeywordGap[];
             })
@@ -218,7 +222,7 @@ export async function POST(req: NextRequest) {
         let serp: any = lastAnalysis.serpApiSnapshot ?? null;
         if (serpSample.length > 0) {
           try {
-            const fresh   = await getSerpApiSnapshot(domain, serpSample);
+            const fresh   = await getSerpApiSnapshot(domain, serpSample, market);
             const freshLow = new Set(fresh.keywords.map(k => k.keyword.toLowerCase()));
             const carried  = ((serp?.keywords ?? []) as any[])
               .filter((k: any) => k?.keyword && !freshLow.has(k.keyword.toLowerCase()));
@@ -274,6 +278,7 @@ export async function POST(req: NextRequest) {
         manualCompetitorDomains,
         (project as any).kwVolThresholdCompetitor ?? 0,   // v7.86: project setting, not hardcoded 2,400
         (project as any).kwVolThresholdClient ?? 0,       // v7.98: client floor applied at the API level
+        market.code,                                       // v7.99: per-project market
       ).catch(err => {
         console.error(`[OrbitIQ] Semrush failed:`, err);
         warnings.push(`Semrush fetch failed — keyword data is missing for this run: ${String((err as any)?.message ?? err)}`);
@@ -308,7 +313,7 @@ export async function POST(req: NextRequest) {
     // SerpAPI — runs on a sample of top keywords regardless of source
     const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
     console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, scanning ${Math.min(topKeywords.length, 5)} of ${topKeywords.length} keywords`);
-    let serp: any = await getSerpApiSnapshot(domain, topKeywords).catch(err => {
+    let serp: any = await getSerpApiSnapshot(domain, topKeywords, market).catch(err => {
       console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
       warnings.push(`SerpAPI scan failed — SERP features (AIO/PAA/Video) are unavailable for this run: ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
       return {

@@ -48,8 +48,9 @@ export async function GET(
       manualCompetitorDomains,
       (project as any).kwVolThresholdClient ?? 0,
       (project as any).kwVolThresholdCompetitor ?? 0,
+      (project as any).semrushDatabase ?? 'us',   // v7.99: per-project market
     );
-    return NextResponse.json(estimate);
+    return NextResponse.json({ ...estimate, database: (project as any).semrushDatabase ?? 'us' });
   } catch (err) {
     return NextResponse.json(
       { error: `Semrush estimate failed: ${String((err as any)?.message ?? err)}` },

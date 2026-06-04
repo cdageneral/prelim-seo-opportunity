@@ -12,6 +12,8 @@
  * Credit strategy: Batch keywords; cache all results in Neon analyses.serpapi_snapshot
  */
 
+import { getMarket, type Market } from '@/lib/utils/markets';
+
 const SERP_BASE = 'https://serpapi.com/search';;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -67,17 +69,22 @@ export interface SerpApiSnapshot {
 
 // ─── Core SERP Fetch ──────────────────────────────────────────────────────────
 
-async function fetchSerpData(keyword: string): Promise<any> {
+// v7.99: market-aware. The market's gl/hl/google_domain (lib/utils/markets.ts)
+// make SerpAPI scan the SAME country's Google as the Semrush keyword database,
+// so AIO/PAA/Video data matches the market being analyzed.
+async function fetchSerpData(keyword: string, market?: Market): Promise<any> {
   const API_KEY = process.env.SERP_API_KEY;
   if (!API_KEY) throw new Error('SERP_API_KEY is not set — skipping SerpAPI');
+  const m = market ?? getMarket('us');
   const params = new URLSearchParams({
-    api_key:  API_KEY,
-    engine:   'google',
-    q:        keyword,
-    hl:       'en',
-    gl:       'us',
-    num:      '10',
-    output:   'json',
+    api_key:       API_KEY,
+    engine:        'google',
+    q:             keyword,
+    hl:            m.serpHl,
+    gl:            m.serpGl,
+    google_domain: m.googleDomain,
+    num:           '10',
+    output:        'json',
   });
 
   // 15-second hard timeout per keyword — prevents one slow SERP call from
@@ -194,7 +201,8 @@ function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Key
 export async function batchKeywordScan(
   keywords: string[],
   clientDomain: string,
-  limit = 5
+  limit = 5,
+  market?: Market,   // v7.99: per-project market
 ): Promise<KeywordSerpData[]> {
   const batch = keywords.slice(0, limit);
   const results: KeywordSerpData[] = [];
@@ -202,7 +210,7 @@ export async function batchKeywordScan(
   // Sequential with small delay to respect rate limits (200/hr on Growth plan)
   for (const keyword of batch) {
     try {
-      const raw = await fetchSerpData(keyword);
+      const raw = await fetchSerpData(keyword, market);
       results.push(parseKeywordSerp(keyword, raw, clientDomain));
       // 200ms between calls to stay under burst limits
       await new Promise(r => setTimeout(r, 200));
@@ -277,9 +285,10 @@ function buildTopAIOCompetitors(
 
 export async function getSerpApiSnapshot(
   domain: string,
-  keywords: string[]
+  keywords: string[],
+  market?: Market,   // v7.99: per-project market
 ): Promise<SerpApiSnapshot> {
-  const keywordData = await batchKeywordScan(keywords, domain);
+  const keywordData = await batchKeywordScan(keywords, domain, 5, market);
   return buildSnapshotFromKeywordData(domain, keywordData);
 }
 

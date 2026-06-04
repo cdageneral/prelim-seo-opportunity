@@ -15,6 +15,7 @@
 
 import { useState } from 'react';
 import CompetitorsPanel from '@/components/brief/CompetitorsPanel';
+import { MARKETS } from '@/lib/utils/markets';
 
 const INDUSTRIES = [
   'SaaS / Software', 'E-commerce', 'Healthcare', 'Finance / Fintech',
@@ -47,6 +48,7 @@ interface Props {
   competitors: Competitor[];
   kwVolThresholdClient:     number;
   kwVolThresholdCompetitor: number;
+  semrushDatabase?:         string;   // v7.99: per-project market
   onClose:   () => void;
   onSaved:   () => void;   // re-fetches project after save
 }
@@ -61,6 +63,7 @@ export default function EditProjectModal({
   competitors,
   kwVolThresholdClient:     initClientThresh,
   kwVolThresholdCompetitor: initCompetitorThresh,
+  semrushDatabase:          initMarket,
   onClose,
   onSaved,
 }: Props) {
@@ -70,6 +73,7 @@ export default function EditProjectModal({
   const [notes,       setNotes]       = useState(initNotes ?? '');
   const [clientThresh,     setClientThresh]     = useState<number>(initClientThresh     ?? 0);
   const [competitorThresh, setCompetitorThresh] = useState<number>(initCompetitorThresh ?? 0);
+  const [market,           setMarket]           = useState<string>(initMarket ?? 'us');
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState('');
   const [success, setSuccess] = useState(false);
@@ -97,6 +101,7 @@ export default function EditProjectModal({
           notes:                    notes    || undefined,
           kwVolThresholdClient:     clientThresh,
           kwVolThresholdCompetitor: competitorThresh,
+          semrushDatabase:          market,
         }),
       });
       if (!res.ok) {
@@ -209,7 +214,7 @@ export default function EditProjectModal({
             </FieldWrap>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '22px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
             <FieldWrap label="Industry">
               <select value={industry} onChange={e => setIndustry(e.target.value)} style={inputStyle}>
                 <option value="">Select industry...</option>
@@ -224,6 +229,17 @@ export default function EditProjectModal({
                 style={inputStyle}
               />
             </FieldWrap>
+          </div>
+
+          <div style={{ marginBottom: '22px' }}>
+            <FieldWrap label="Market">
+              <select value={market} onChange={e => setMarket(e.target.value)} style={inputStyle}>
+                {MARKETS.map(m => <option key={m.code} value={m.code}>{m.flag} {m.label}</option>)}
+              </select>
+            </FieldWrap>
+            <p style={{ fontSize: '10px', color: '#505070', marginTop: '4px', lineHeight: 1.5 }}>
+              Which country&apos;s Google to analyze — sets the Semrush keyword database and the country for SERP feature scans. Changing this requires a full re-analysis; existing data stays from the previous market until then.
+            </p>
           </div>
 
           {/* ── Section 2: Competitors ── */}

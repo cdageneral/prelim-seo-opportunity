@@ -12,6 +12,7 @@
  */
 
 import { useState } from 'react';
+import { MARKETS } from '@/lib/utils/markets';
 
 const INDUSTRIES = [
   'SaaS / Software', 'E-commerce', 'Healthcare', 'Finance / Fintech',
@@ -37,6 +38,7 @@ interface Props {
 export default function NewProjectModal({ onClose, onCreated }: Props) {
   const [form,       setForm]       = useState({ clientName: '', websiteUrl: '', industry: '', notes: '' });
   const [dataSource, setDataSource] = useState<'auto' | 'upload' | null>(null);
+  const [market,     setMarket]     = useState<string>('us');   // v7.99: Semrush database / SerpAPI country
 
   // Competitors
   const [competitors,    setCompetitors]    = useState<CompetitorEntry[]>([]);
@@ -85,6 +87,7 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
           dataSource,
           kwVolThresholdClient:     clientThresh,
           kwVolThresholdCompetitor: competitorThresh,
+          semrushDatabase:          market,
         }),
       });
       const data = await res.json();
@@ -176,6 +179,15 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
               <option value="">Select industry...</option>
               {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
             </select>
+          </Field>
+
+          <Field label="Market">
+            <select value={market} onChange={e => setMarket(e.target.value)} style={inputStyle}>
+              {MARKETS.map(m => <option key={m.code} value={m.code}>{m.flag} {m.label}</option>)}
+            </select>
+            <p style={{ fontSize: '10px', color: '#505070', marginTop: '4px' }}>
+              Which country&apos;s Google to analyze — sets the Semrush keyword database AND the country used for SERP feature scans.
+            </p>
           </Field>
 
           {/* ── Keyword data source ── */}
