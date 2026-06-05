@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.123 — 2026-06-05 · AIO scan moved INTO the Citation Rate card — one in-card action language
+
+**Feedback (Wayne):** "This button got lost — I thought that was the refresh button I hit in the citation rate card. We have to make all UI changes very intuitive for an average user." (He re-scanned the 9 existing AIOs thinking he was expanding coverage to all 359.) Mockup rendered before build.
+
+**Changes (SerpFeaturesSection.tsx, display/wiring only):**
+- The standalone v7.121 "Scan N AIO keywords" banner is REMOVED.
+- The expand-coverage action now lives INSIDE the Citation Rate card: context line "350 of your 359 available AIOs aren't citation-verified yet" + violet button "Verify all 359 AIOs · ~350 credits" (same batched scan + live merge as before).
+- One visual rule across cards: **amber = fix stale data ("Refresh required")**, **violet = expand coverage (cost always shown)**. `KpiCard` now takes an `actions` array so a card can carry both (Citation Rate card shows amber + violet together when both apply).
+- Scan/refresh errors surface in one line under the KPI strip.
+
+**Verification:** jsdom 6/6 (banner gone, violet button inside the card with correct counts/cost, healthy data shows no amber, click → `filter:'aio'` POST, button self-clears at full coverage, denominator recomputes live). Full `npx tsc --noEmit` exit 0.
+
 ## v7.122 — 2026-06-05 · In-card "Refresh required" buttons — per-card targeted refreshes
 
 **Request (Wayne):** "If any card summary needs a data refresh, add a button in that card that says refresh required. When we hit that button it only refreshes the data it needs — mini refresh options plus the overall ones." Mockup rendered and approved (button inside the card body, full width at the bottom).

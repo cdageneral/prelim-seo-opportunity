@@ -327,23 +327,50 @@ function TabBar({ children }: { children: React.ReactNode }) {
 
 // ── KPI Cards strip ────────────────────────────────────────────────────────────
 
-// v7.122: cards can carry their own targeted refresh. When `stale` is set the
-// card border turns amber, the reason renders under the value, and a
-// full-width "Refresh required" button sits at the bottom of the card body —
-// it refreshes ONLY the data this card depends on (Wayne's mini-refresh).
+// v7.122: cards carry their own targeted actions. v7.123 (Wayne: "the banner
+// button got lost — make UI changes intuitive"): ONE visual language, all
+// actions INSIDE the card they affect —
+//   amber  = fix stale data ("Refresh required")
+//   violet = expand coverage (scan more keywords; cost always shown)
+// The standalone AIO-scan banner was removed in favor of the in-card button.
 interface CardStale {
-  reason:   string;            // why the data is stale (shown in the card)
+  reason:   string;            // context line shown above the button
   label:    string;            // button label incl. credit cost
   onClick:  () => void;
   running:  boolean;
   progress: string | null;     // e.g. "12/34" while running
+  tone?:    'amber' | 'violet';   // default amber
 }
 
-function KpiCard({ label, value, sub, accent, wide, stale }: { label: string; value: string | number; sub?: string; accent?: string; wide?: boolean; stale?: CardStale | null }) {
+function CardActionButton({ a }: { a: CardStale }) {
+  const violet = a.tone === 'violet';
+  return (
+    <>
+      <p style={{ fontSize: '10px', color: violet ? '#8888AA' : '#F59E0B', margin: 0, lineHeight: 1.45, overflowWrap: 'break-word' }}>{a.reason}</p>
+      <button
+        onClick={a.onClick}
+        disabled={a.running}
+        style={{
+          width: '100%', marginTop: '4px', padding: '7px 10px', borderRadius: '7px',
+          fontSize: '11px', fontWeight: 600, border: 'none',
+          background: a.running ? '#1A1A2E' : violet ? '#6C63FF' : '#F59E0B',
+          color: a.running ? '#8888AA' : violet ? '#FFFFFF' : '#1A1205',
+          cursor: a.running ? 'wait' : 'pointer',
+        }}
+      >
+        {a.running ? `${violet ? 'Scanning' : 'Refreshing'}… ${a.progress ?? ''}` : a.label}
+      </button>
+    </>
+  );
+}
+
+function KpiCard({ label, value, sub, accent, wide, actions }: { label: string; value: string | number; sub?: string; accent?: string; wide?: boolean; actions?: Array<CardStale | null | undefined> }) {
+  const acts = (actions ?? []).filter((a): a is CardStale => !!a);
+  const hasAmber = acts.some(a => a.tone !== 'violet');
   return (
     <div style={{
       background: accent ? `${accent}10` : '#0A0A18',
-      border: `1px solid ${stale ? '#4A3510' : accent ? `${accent}30` : '#1A1A2A'}`,
+      border: `1px solid ${hasAmber ? '#4A3510' : accent ? `${accent}30` : '#1A1A2A'}`,
       borderRadius: '10px', padding: '14px 16px',
       flex: wide ? 2 : 1, minWidth: 0,
       display: 'flex', flexDirection: 'column', gap: '4px',
@@ -352,24 +379,7 @@ function KpiCard({ label, value, sub, accent, wide, stale }: { label: string; va
       <p style={{ fontSize: '22px', fontWeight: 700, color: accent ?? '#E0E0F8', lineHeight: 1, margin: 0 }}>{value}</p>
       {/* v7.120: sub-lines WRAP instead of ellipsis-truncating */}
       {sub && <p style={{ fontSize: '10px', color: '#555570', margin: 0, lineHeight: 1.45, overflowWrap: 'break-word' }}>{sub}</p>}
-      {stale && (
-        <>
-          <p style={{ fontSize: '10px', color: '#F59E0B', margin: 0, lineHeight: 1.45, overflowWrap: 'break-word' }}>{stale.reason}</p>
-          <button
-            onClick={stale.onClick}
-            disabled={stale.running}
-            style={{
-              width: '100%', marginTop: '4px', padding: '7px 10px', borderRadius: '7px',
-              fontSize: '11px', fontWeight: 600, border: 'none',
-              background: stale.running ? '#1A1A2E' : '#F59E0B',
-              color: stale.running ? '#8888AA' : '#1A1205',
-              cursor: stale.running ? 'wait' : 'pointer',
-            }}
-          >
-            {stale.running ? `Refreshing… ${stale.progress ?? ''}` : stale.label}
-          </button>
-        </>
-      )}
+      {acts.map((a, i) => <CardActionButton key={i} a={a} />)}
     </div>
   );
 }
@@ -916,6 +926,18 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   ].filter(Boolean).join(' · ');
   const citeStale = mkStale('cite', citeStaleKws, citeStaleReason);
 
+  // v7.123: expand-coverage action (violet) — lives inside the Citation Rate
+  // card. Replaces the v7.121 standalone banner, which read as disconnected
+  // from the card it served.
+  const aioExpand: CardStale | null = (!projectId || uploadFeat.aio === 0) ? null : {
+    tone:     'violet',
+    reason:   `${uploadFeat.aio.toLocaleString()} of your ${aioAvail.toLocaleString()} available AIOs aren't citation-verified yet`,
+    label:    `Verify all ${aioAvail.toLocaleString()} AIOs · ~${uploadFeat.aio.toLocaleString()} credits`,
+    onClick:  scanAioKeywords,
+    running:  aioScan.running,
+    progress: aioScan.running ? `${aioScan.done}/${aioScan.total}` : null,
+  };
+
   // v7.117: landscape rows for all three feature tables
   const aioBrandRows: LandscapeRow[] = useMemo(() => aio.brandStats.map(b => ({
     name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
@@ -1033,43 +1055,20 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   citations ÷ citations available. Citations are countable only
                   on scanned AIOs; the scan CTA below extends the denominator to
                   the full footprint with real SerpAPI data, never estimates. */}
-              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide stale={citeStale} />
-              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" stale={citeStale} />
+              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide actions={[citeStale, aioExpand]} />
+              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" actions={[citeStale]} />
               {aio.topCompetitor && (
                 <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`cited in ${aio.topCompetitor.aiosAcquired} of ${aio.totalAios} scanned AIOs`} accent="#FF6584" />
               )}
               <KpiCard label="Others" value={`${(aio.othersShare * 100).toFixed(1)}%`} sub={`non-tracked domains' share of the ${aio.totalSlots} citation links`} />
             </div>
-            {rescan.error && <p style={{ fontSize: '11px', color: '#EF4444', margin: '8px 0 0' }}>{rescan.error}</p>}
+            {(rescan.error || aioScan.error) && <p style={{ fontSize: '11px', color: '#EF4444', margin: '8px 0 0' }}>{rescan.error ?? aioScan.error}</p>}
           </div>
 
-          {/* v7.121: extend the citation denominator with REAL scans of the
-              uploaded AIO-flagged keywords (Wayne: "pull the SerpAPI info for
-              just those available AIOs"). 1 SerpAPI credit per keyword. */}
-          {projectId && (uploadFeat.aio > 0 || aioScan.running || aioScan.error) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '8px', background: '#0F0F1E', border: '1px solid #1E1E35', flexWrap: 'wrap' }}>
-              <p style={{ fontSize: '11px', color: '#8888AA', margin: 0, flex: 1, minWidth: '220px' }}>
-                Citation data covers <strong style={{ color: '#C0C0E8' }}>{aio.totalAios}</strong> of <strong style={{ color: '#C0C0E8' }}>{aioAvail.toLocaleString()}</strong> available AIOs.
-                {uploadFeat.aio > 0 && <> Scanning the remaining <strong style={{ color: '#C0C0E8' }}>{uploadFeat.aio.toLocaleString()}</strong> AIO keyword{uploadFeat.aio !== 1 ? 's' : ''} makes the Citation Rate denominator cover the full footprint.</>}
-              </p>
-              <button
-                onClick={scanAioKeywords}
-                disabled={aioScan.running || uploadFeat.aio === 0}
-                style={{
-                  padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
-                  background: aioScan.running ? '#1A1A2E' : '#6C63FF', color: aioScan.running ? '#8888AA' : '#FFFFFF',
-                  border: 'none', cursor: aioScan.running ? 'wait' : 'pointer', whiteSpace: 'nowrap',
-                }}
-              >
-                {aioScan.running
-                  ? `Scanning… ${aioScan.done}/${aioScan.total}`
-                  : uploadFeat.aio === 0
-                    ? '✓ Full AIO coverage'
-                    : `Scan ${uploadFeat.aio.toLocaleString()} AIO keywords (~${uploadFeat.aio.toLocaleString()} SerpAPI credits)`}
-              </button>
-              {aioScan.error && <p style={{ fontSize: '11px', color: '#EF4444', margin: 0, width: '100%' }}>{aioScan.error}</p>}
-            </div>
-          )}
+          {/* v7.123: the standalone AIO-scan banner is GONE — Wayne hit the
+              in-card refresh thinking it was this. The expand-coverage action
+              now lives INSIDE the Citation Rate card (violet button), one
+              consistent in-card pattern. */}
 
           {/* v7.115: Gap callout removed (scanned-only count read as contradictory
               next to hybrid availability). v7.116 (Wayne): the Citation Landscape
