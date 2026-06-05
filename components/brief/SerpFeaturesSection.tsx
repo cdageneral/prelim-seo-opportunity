@@ -336,7 +336,10 @@ function KpiCard({ label, value, sub, accent, wide }: { label: string; value: st
     }}>
       <p style={{ fontSize: '9px', fontWeight: 700, color: accent ?? '#555570', textTransform: 'uppercase', letterSpacing: '.08em', margin: '0 0 6px' }}>{label}</p>
       <p style={{ fontSize: '22px', fontWeight: 700, color: accent ?? '#E0E0F8', lineHeight: 1, margin: 0 }}>{value}</p>
-      {sub && <p style={{ fontSize: '10px', color: '#555570', margin: '4px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</p>}
+      {/* v7.120: sub-lines WRAP instead of ellipsis-truncating — the v7.119
+          unit/denominator explanations were getting clipped ("5 of 108 cita…"),
+          hiding exactly the context they exist to provide. */}
+      {sub && <p style={{ fontSize: '10px', color: '#555570', margin: '4px 0 0', lineHeight: 1.45, overflowWrap: 'break-word' }}>{sub}</p>}
     </div>
   );
 }
@@ -695,8 +698,16 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const featSummary = serpSnap.serpFeatureSummary;
   const aioSummary  = serpSnap.aioSummary;
 
-  const scannedKws: SerpKw[] = serpSnap.keywords ?? [];
-  const scanned  = featSummary?.scanned ?? scannedKws.length;
+  // v7.121: AIO-targeted scans merge results live into the panel without a
+  // reload — extraScanned holds fresh batches; fresh wins on keyword overlap.
+  const [extraScanned, setExtraScanned] = useState<SerpKw[]>([]);
+  const scannedKws: SerpKw[] = useMemo(() => {
+    const base: SerpKw[] = serpSnap.keywords ?? [];
+    if (extraScanned.length === 0) return base;
+    const freshLow = new Set(extraScanned.map(k => (k.keyword ?? '').toLowerCase()));
+    return [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...extraScanned];
+  }, [serpSnap.keywords, extraScanned]);
+  const scanned  = scannedKws.length;
   const scanDate = serpSnap.fetchedAt ? new Date(serpSnap.fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 
   const clientDomain = normDomain(serpSnap.domain ?? websiteUrl ?? '');
@@ -726,22 +737,27 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     [uploadRows, scannedSet]
   );
 
-  // AIO aggregate metrics — scan-side
-  const aioAvailScan = analysis.aioAvailable ?? 0;
-  const aioAcq       = analysis.aioAcquired  ?? 0;
+  // All computed AIO data — v7.121: computed BEFORE the aggregate metrics so
+  // availability/acquired always reflect the LIVE scanned set (in-panel AIO
+  // scans update these without a reload; analysis.aioAvailable goes stale).
+  const aio = useAIOData(scannedKws, clientDomain, displayClientName, competitors, aioSummary?.clientCited ?? 0);
+
+  // AIO aggregate metrics — scan-side (live)
+  const aioAvailScan = aio.totalAios;
+  const aioAcq       = aio.clientStats?.aiosAcquired ?? 0;
   // v7.103 hybrid availability: scanned SERPs + uploaded (unscanned) keywords
   const aioAvail  = aioAvailScan + uploadFeat.aio;
   const aioRate   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
 
-  // PAA
-  const paaAvailScan = featSummary?.withPAA        ?? scannedKws.filter(k => k.paaQuestions?.length > 0).length;
-  const paaAcq       = featSummary?.paaClientCited ?? scannedKws.filter(k => k.paaClientCited).length;
+  // PAA (live from scanned set — stored summaries go stale after in-panel scans)
+  const paaAvailScan = scannedKws.filter(k => (k.paaQuestions?.length ?? 0) > 0).length;
+  const paaAcq       = scannedKws.filter(k => k.paaClientCited).length;
   const paaAvail = paaAvailScan + uploadFeat.paa;
   const paaRate  = paaAvail > 0 ? Math.round((paaAcq / paaAvail) * 100) : 0;
 
-  // Video
-  const videoAvailScan = featSummary?.withVideo        ?? scannedKws.filter(k => k.serpFeatures?.includes('video_carousel')).length;
-  const videoAcq       = featSummary?.videoClientCited ?? scannedKws.filter(k => k.videoClientCited).length;
+  // Video (live)
+  const videoAvailScan = scannedKws.filter(k => k.serpFeatures?.includes('video_carousel')).length;
+  const videoAcq       = scannedKws.filter(k => k.videoClientCited).length;
   const videoAvail = videoAvailScan + uploadFeat.video;
   const videoRate  = videoAvail > 0 ? Math.round((videoAcq / videoAvail) * 100) : 0;
 
@@ -759,13 +775,36 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   });
   const hasAnyAddFeatures = ADD_FEATURES.some(af => addFeatureCounts[af.key] > 0);
 
-  // All computed AIO data
-  const aio = useAIOData(scannedKws, clientDomain, displayClientName, competitors, aioSummary?.clientCited ?? aioAcq);
-
-  // Citation rate for KPI display
-  const clientCitationRatePct = aio.totalAios > 0
-    ? ((aio.clientStats?.aiosAcquired ?? 0) / aio.totalAios * 100).toFixed(1)
-    : '0.0';
+  // v7.121: targeted scan of uploaded AIO-flagged keywords (batched; merges live)
+  const [aioScan, setAioScan] = useState<{ running: boolean; done: number; total: number; error: string | null }>({ running: false, done: 0, total: 0, error: null });
+  async function scanAioKeywords() {
+    if (!projectId || aioScan.running) return;
+    const total = uploadFeat.aio;
+    setAioScan({ running: true, done: 0, total, error: null });
+    let done = 0;
+    try {
+      for (;;) {
+        const res  = await fetch(`/api/projects/${projectId}/serp-scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ batchSize: 75, filter: 'aio' }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setAioScan(s => ({ ...s, running: false, error: data?.error ?? 'Scan failed.' })); return; }
+        done += data.scanned ?? 0;
+        if (data.results?.length) {
+          setExtraScanned(prev => {
+            const lo = new Set((data.results as SerpKw[]).map(r => (r.keyword ?? '').toLowerCase()));
+            return [...prev.filter(k => !lo.has((k.keyword ?? '').toLowerCase())), ...(data.results as SerpKw[])];
+          });
+        }
+        setAioScan(s => ({ ...s, done }));
+        if (!data.remaining || !data.scanned) break;
+      }
+      setAioScan(s => ({ ...s, running: false }));
+    } catch (e: any) {
+      setAioScan(s => ({ ...s, running: false, error: String(e?.message ?? e) }));
+    }
+  }
 
   // v7.117: landscape rows for all three feature tables
   const aioBrandRows: LandscapeRow[] = useMemo(() => aio.brandStats.map(b => ({
@@ -880,15 +919,11 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <KpiCard label="Available AIOs" value={aio.totalAios + uploadFeat.aio} sub={uploadFeat.aio > 0 ? `${aio.totalAios} scanned + ${uploadFeat.aio.toLocaleString()} from upload` : `across ${scanned} tracked queries`} accent="#00B894" wide />
               <KpiCard label="AIO Penetration" value={`${scanned > 0 ? ((aio.totalAios / scanned) * 100).toFixed(1) : 0}%`} sub={`${aio.totalAios} of ${scanned} scanned queries`} accent="#00B894" wide />
-              {/* v7.118 (Wayne): the single "Your Citation Rate" card mixed denominators
-                  with the hybrid Available card next to it (22.2% vs 359 available).
-                  Split into the same two rates the landscape table uses. */}
-              <KpiCard label="Citation Rate (verified sample)" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aio.totalAios} scanned AIOs — who's cited is only visible on scanned SERPs`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
-              <KpiCard label="Citation Rate (footprint)" value={aioAvail > 0 ? `${(((aio.clientStats?.aiosAcquired ?? 0) / aioAvail) * 100).toFixed(1)}%` : '—'} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aioAvail.toLocaleString()} available AIOs — verified floor, rises as more keywords are scanned`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
-              {/* v7.119 (Wayne): every card states its UNIT + denominator basis —
-                  slots ≠ AIOs (each scanned AIO cites ~12 sources; slots are those
-                  individual citation links, countable only on scanned SERPs). */}
-              <KpiCard label="Citation Share" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots} citation links inside the ${aio.totalAios} scanned AIOs (not keywords)`} accent="#6C63FF" />
+              {/* v7.121 (Wayne): ONE citation rate, his definition — client's
+                  citations ÷ citations available. Citations are countable only
+                  on scanned AIOs; the scan CTA below extends the denominator to
+                  the full footprint with real SerpAPI data, never estimates. */}
+              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide />
               <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" />
               {aio.topCompetitor && (
                 <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`cited in ${aio.topCompetitor.aiosAcquired} of ${aio.totalAios} scanned AIOs`} accent="#FF6584" />
@@ -896,6 +931,34 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               <KpiCard label="Others" value={`${(aio.othersShare * 100).toFixed(1)}%`} sub={`non-tracked domains' share of the ${aio.totalSlots} citation links`} />
             </div>
           </div>
+
+          {/* v7.121: extend the citation denominator with REAL scans of the
+              uploaded AIO-flagged keywords (Wayne: "pull the SerpAPI info for
+              just those available AIOs"). 1 SerpAPI credit per keyword. */}
+          {projectId && (uploadFeat.aio > 0 || aioScan.running || aioScan.error) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '8px', background: '#0F0F1E', border: '1px solid #1E1E35', flexWrap: 'wrap' }}>
+              <p style={{ fontSize: '11px', color: '#8888AA', margin: 0, flex: 1, minWidth: '220px' }}>
+                Citation data covers <strong style={{ color: '#C0C0E8' }}>{aio.totalAios}</strong> of <strong style={{ color: '#C0C0E8' }}>{aioAvail.toLocaleString()}</strong> available AIOs.
+                {uploadFeat.aio > 0 && <> Scanning the remaining <strong style={{ color: '#C0C0E8' }}>{uploadFeat.aio.toLocaleString()}</strong> AIO keyword{uploadFeat.aio !== 1 ? 's' : ''} makes the Citation Rate denominator cover the full footprint.</>}
+              </p>
+              <button
+                onClick={scanAioKeywords}
+                disabled={aioScan.running || uploadFeat.aio === 0}
+                style={{
+                  padding: '7px 14px', borderRadius: '7px', fontSize: '12px', fontWeight: 600,
+                  background: aioScan.running ? '#1A1A2E' : '#6C63FF', color: aioScan.running ? '#8888AA' : '#FFFFFF',
+                  border: 'none', cursor: aioScan.running ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                {aioScan.running
+                  ? `Scanning… ${aioScan.done}/${aioScan.total}`
+                  : uploadFeat.aio === 0
+                    ? '✓ Full AIO coverage'
+                    : `Scan ${uploadFeat.aio.toLocaleString()} AIO keywords (~${uploadFeat.aio.toLocaleString()} SerpAPI credits)`}
+              </button>
+              {aioScan.error && <p style={{ fontSize: '11px', color: '#EF4444', margin: 0, width: '100%' }}>{aioScan.error}</p>}
+            </div>
+          )}
 
           {/* v7.115: Gap callout removed (scanned-only count read as contradictory
               next to hybrid availability). v7.116 (Wayne): the Citation Landscape

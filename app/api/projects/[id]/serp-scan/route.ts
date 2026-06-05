@@ -47,6 +47,10 @@ export async function POST(
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const batchSize = Math.min(Math.max(parseInt(body?.batchSize, 10) || DEFAULT_BATCH, 1), MAX_BATCH);
+  // v7.121: filter='aio' scans ONLY uploaded keywords whose Semrush
+  // "SERP Features by Keyword" cell includes an AI Overview — used to make the
+  // Citation Rate denominator cover the full footprint with verified data.
+  const scanFilter: 'all' | 'aio' = body?.filter === 'aio' ? 'aio' : 'all';
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -94,7 +98,28 @@ export async function POST(
   const existing: KeywordSerpData[] = serpSnap.keywords ?? [];
   const scannedSet = new Set(existing.map(k => k.keyword?.toLowerCase()));
 
-  const unscanned = pool
+  // v7.121: AIO filter — candidate pool is the uploaded keywords carrying an
+  // "AI Overview" flag in their Semrush SERP-features cell (deduped, blocked
+  // rows excluded), matching countUploadFeatures in the SERP Features panel so
+  // the button's remaining count and this pool always agree.
+  let candidates: Array<{ keyword: string; searchVolume: number }>;
+  if (scanFilter === 'aio') {
+    const seen = new Set<string>();
+    candidates = [];
+    for (const r of dbKws as any[]) {
+      const kw = (r.keyword ?? '').trim();
+      const lo = kw.toLowerCase();
+      if (!kw || seen.has(lo)) continue;
+      seen.add(lo);
+      if (r.source === 'blocked') continue;
+      if (!((r.serpFeatures ?? '') as string).toLowerCase().includes('ai overview')) continue;
+      candidates.push({ keyword: kw, searchVolume: r.searchVolume ?? 0 });
+    }
+  } else {
+    candidates = pool;
+  }
+
+  const unscanned = candidates
     .filter(p => !scannedSet.has(p.keyword.toLowerCase()))
     .sort((a, b) => b.searchVolume - a.searchVolume);
 
@@ -102,13 +127,14 @@ export async function POST(
     return NextResponse.json({
       scanned: 0, results: [],
       totalScanned: existing.length,
-      poolTotal:    pool.length,
+      poolTotal:    candidates.length,
       remaining:    0,
+      filter:       scanFilter,
     });
   }
 
   const batchKeywords = unscanned.slice(0, batchSize).map(p => p.keyword);
-  console.log(`[OrbitIQ] SERP scan: ${batchKeywords.length} keywords (${unscanned.length} unscanned of ${pool.length} pool) for ${domain}`);
+  console.log(`[OrbitIQ] SERP scan (${scanFilter}): ${batchKeywords.length} keywords (${unscanned.length} unscanned of ${candidates.length} pool) for ${domain}`);
 
   const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase));   // v7.99: market-aware scan
 
@@ -131,13 +157,14 @@ export async function POST(
     .set({ serpApiSnapshot: newSnap as any })
     .where(eq(analyses.id, analysis.id));
 
-  console.log(`[OrbitIQ] SERP scan complete: +${results.length} (total ${mergedKeywords.length}/${pool.length})`);
+  console.log(`[OrbitIQ] SERP scan complete (${scanFilter}): +${results.length} (total ${mergedKeywords.length}/${candidates.length})`);
 
   return NextResponse.json({
     scanned:      results.length,
     results,      // panel live-merges these into the table without a reload
     totalScanned: mergedKeywords.length,
-    poolTotal:    pool.length,
+    poolTotal:    candidates.length,
     remaining:    Math.max(unscanned.length - results.length, 0),
+    filter:       scanFilter,
   });
 }
