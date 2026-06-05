@@ -885,12 +885,15 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   Split into the same two rates the landscape table uses. */}
               <KpiCard label="Citation Rate (verified sample)" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aio.totalAios} scanned AIOs — who's cited is only visible on scanned SERPs`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
               <KpiCard label="Citation Rate (footprint)" value={aioAvail > 0 ? `${(((aio.clientStats?.aiosAcquired ?? 0) / aioAvail) * 100).toFixed(1)}%` : '—'} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aioAvail.toLocaleString()} available AIOs — verified floor, rises as more keywords are scanned`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
-              <KpiCard label="Citation Share" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots} slots`} accent="#6C63FF" />
-              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="position in AIO source list" />
+              {/* v7.119 (Wayne): every card states its UNIT + denominator basis —
+                  slots ≠ AIOs (each scanned AIO cites ~12 sources; slots are those
+                  individual citation links, countable only on scanned SERPs). */}
+              <KpiCard label="Citation Share" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots} citation links inside the ${aio.totalAios} scanned AIOs (not keywords)`} accent="#6C63FF" />
+              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" />
               {aio.topCompetitor && (
-                <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`${aio.topCompetitor.aiosAcquired} AIOs`} accent="#FF6584" />
+                <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`cited in ${aio.topCompetitor.aiosAcquired} of ${aio.totalAios} scanned AIOs`} accent="#FF6584" />
               )}
-              <KpiCard label="Others" value={`${(aio.othersShare * 100).toFixed(1)}%`} sub="non-tracked domains" />
+              <KpiCard label="Others" value={`${(aio.othersShare * 100).toFixed(1)}%`} sub={`non-tracked domains' share of the ${aio.totalSlots} citation links`} />
             </div>
           </div>
 

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.119 — 2026-06-05 · KPI sub-lines now state UNIT + basis (slots ≠ AIOs)
+
+**Question (Wayne):** "If there are 359 AIOs why does Citation Share say 5 of 108?"
+
+**Answer (math verified correct):** Citation Share counts citation SLOTS, not AIOs — each scanned AIO cites multiple sources (his 9 scanned AIOs hold 108 individual citation links; Sonobello owns 5 → 4.6%). Slots are only countable on scanned SERPs. The sub-line "5 of 108 slots" didn't declare the unit, violating the v7.118 rule that every card on this panel states its denominator.
+
+**Change (SerpFeaturesSection.tsx, sub-line copy only — no math touched):**
+- Citation Share → "N of M citation links inside the X scanned AIOs (not keywords)"
+- Avg Citation Position → "avg rank in the source list of scanned AIOs citing you"
+- Top Competitor → "cited in N of X scanned AIOs"
+- Others → "non-tracked domains' share of the M citation links"
+
+**Verification:** Full `npx tsc --noEmit` exit 0 (complete real node_modules). SSR render of the real component 5/5 — new sub-lines render with fixture math (2 of 11 links), v7.118 rate cards intact.
+
 ## v7.118 — 2026-06-05 · "Your Citation Rate" KPI split into verified-sample + footprint rates
 
 **Request (Wayne):** "There are 359 AIOs available and they have been cited in 2 of them. How can the citation rate be 22.2%? The card says 2 of 9 — there are not 9 AIOs, there are 359."
