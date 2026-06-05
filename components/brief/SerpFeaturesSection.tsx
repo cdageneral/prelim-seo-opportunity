@@ -364,6 +364,27 @@ function CardActionButton({ a }: { a: CardStale }) {
   );
 }
 
+// v7.124 (Wayne): every scan shows a persistent progress indicator so the user
+// always knows work is still happening. Bar pulses while a batch is in flight
+// (progress counts only move between batches).
+function ScanProgress({ label, done, total }: { label: string; done: number; total: number }) {
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  return (
+    <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#0F0F1E', border: '1px solid #2A2A4A' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+        <p style={{ fontSize: '11px', color: '#C0C0E8', margin: 0, fontWeight: 600 }}>{label}</p>
+        <p style={{ fontSize: '11px', color: '#8888AA', margin: 0 }}>{done} of {total} keywords · {pct}%</p>
+      </div>
+      <div style={{ background: '#1A1A2E', borderRadius: '3px', height: '6px', overflow: 'hidden' }}>
+        <div className="animate-pulse" style={{ background: '#6C63FF', height: '6px', borderRadius: '3px', width: `${Math.max(pct, 3)}%`, transition: 'width .4s' }} />
+      </div>
+      <p style={{ fontSize: '10px', color: '#555570', margin: '6px 0 0' }}>
+        Working — each batch of 25 keywords takes roughly 1–2 minutes. Results save after every batch, so nothing is lost if this stops; keep this tab open.
+      </p>
+    </div>
+  );
+}
+
 function KpiCard({ label, value, sub, accent, wide, actions }: { label: string; value: string | number; sub?: string; accent?: string; wide?: boolean; actions?: Array<CardStale | null | undefined> }) {
   const acts = (actions ?? []).filter((a): a is CardStale => !!a);
   const hasAmber = acts.some(a => a.tone !== 'violet');
@@ -830,6 +851,18 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   });
   const hasAnyAddFeatures = ADD_FEATURES.some(af => addFeatureCounts[af.key] > 0);
 
+  // v7.124: batches shrunk 75 → 25. AIO-flagged keywords usually need a SECOND
+  // SerpAPI request (async AIO token follow-up), so 75 × ~3-5s could exceed
+  // Vercel's 300s function limit — the platform then returns a plain-text
+  // error page ("An error o…"), which res.json() choked on. 25 × ~5s ≈ 125s
+  // worst case, comfortably inside the limit.
+  const SCAN_BATCH = 25;
+  // Non-JSON response (platform timeout/error page) → null instead of a throw.
+  async function safeJson(res: { json: () => Promise<any> }): Promise<any | null> {
+    try { return await res.json(); } catch { return null; }
+  }
+  const SAVED_NOTE = 'All completed batches are already saved — click the button again to continue from where it stopped.';
+
   // v7.121: targeted scan of uploaded AIO-flagged keywords (batched; merges live)
   const [aioScan, setAioScan] = useState<{ running: boolean; done: number; total: number; error: string | null }>({ running: false, done: 0, total: 0, error: null });
   async function scanAioKeywords() {
@@ -841,10 +874,13 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       for (;;) {
         const res  = await fetch(`/api/projects/${projectId}/serp-scan`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ batchSize: 75, filter: 'aio' }),
+          body: JSON.stringify({ batchSize: SCAN_BATCH, filter: 'aio' }),
         });
-        const data = await res.json();
-        if (!res.ok) { setAioScan(s => ({ ...s, running: false, error: data?.error ?? 'Scan failed.' })); return; }
+        const data = await safeJson(res);
+        if (!res.ok || !data) {
+          setAioScan(s => ({ ...s, running: false, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout while scanning). ${SAVED_NOTE}` }));
+          return;
+        }
         done += data.scanned ?? 0;
         if (data.results?.length) {
           setExtraScanned(prev => {
@@ -857,7 +893,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       }
       setAioScan(s => ({ ...s, running: false }));
     } catch (e: any) {
-      setAioScan(s => ({ ...s, running: false, error: String(e?.message ?? e) }));
+      setAioScan(s => ({ ...s, running: false, error: `${String(e?.message ?? e)} — ${SAVED_NOTE}` }));
     }
   }
 
@@ -887,14 +923,14 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     setRescan({ key, done: 0, total: kws.length, error: null });
     let done = 0;
     try {
-      for (let i = 0; i < kws.length; i += 75) {
-        const slice = kws.slice(i, i + 75);
+      for (let i = 0; i < kws.length; i += SCAN_BATCH) {
+        const slice = kws.slice(i, i + SCAN_BATCH);
         const res = await fetch(`/api/projects/${projectId}/serp-scan`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filter: 'rescan', keywords: slice, batchSize: 75 }),
+          body: JSON.stringify({ filter: 'rescan', keywords: slice, batchSize: SCAN_BATCH }),
         });
-        const data = await res.json();
-        if (!res.ok) { setRescan({ key: null, done, total: kws.length, error: data?.error ?? 'Refresh failed.' }); return; }
+        const data = await safeJson(res);
+        if (!res.ok || !data) { setRescan({ key: null, done, total: kws.length, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout while scanning). ${SAVED_NOTE}` }); return; }
         if (data.results?.length) {
           setExtraScanned(prev => {
             const lo = new Set((data.results as SerpKw[]).map(r => (r.keyword ?? '').toLowerCase()));
@@ -906,7 +942,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       }
       setRescan({ key: null, done, total: kws.length, error: null });
     } catch (e: any) {
-      setRescan({ key: null, done, total: kws.length, error: String(e?.message ?? e) });
+      setRescan({ key: null, done, total: kws.length, error: `${String(e?.message ?? e)} — ${SAVED_NOTE}` });
     }
   }
   const mkStale = (key: string, kws: string[], reason: string, label?: string): CardStale | null => (
@@ -1064,6 +1100,10 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             </div>
             {(rescan.error || aioScan.error) && <p style={{ fontSize: '11px', color: '#EF4444', margin: '8px 0 0' }}>{rescan.error ?? aioScan.error}</p>}
           </div>
+
+          {/* v7.124: persistent progress indicators — visible whenever any scan runs */}
+          {aioScan.running && <ScanProgress label="Verifying AIO citations via SerpAPI" done={aioScan.done} total={aioScan.total} />}
+          {rescan.key !== null && <ScanProgress label="Refreshing stale scan data via SerpAPI" done={rescan.done} total={rescan.total} />}
 
           {/* v7.123: the standalone AIO-scan banner is GONE — Wayne hit the
               in-card refresh thinking it was this. The expand-coverage action

@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.124 — 2026-06-05 · Scan timeout fix + persistent progress bars on every scan
+
+**Symptom (Wayne):** AIO scan failed with `Unexpected token 'A', "An error o"… is not valid JSON`. Also requested: "any scans always show a progress indicator so the user knows something is still working."
+
+**Root cause:** 75-keyword batches of AIO-flagged keywords can exceed Vercel's 300s function limit — AIO keywords usually require a SECOND SerpAPI request (async token follow-up), so 75 × ~3–5s ≈ 225–375s. On timeout Vercel returns a plain-text error page; the panel's `res.json()` choked on it, surfacing the raw parse error. **Completed batches were saved server-side — no credits lost.**
+
+**Fixes (SerpFeaturesSection.tsx):**
+- Batch size 75 → 25 for both the AIO scan and the in-card rescans (25 × ~5s ≈ 125s worst case, well inside the limit).
+- `safeJson()` guard: non-JSON responses no longer throw — both runners now show "The server returned an unexpected NNN response (likely a timeout while scanning). All completed batches are already saved — click the button again to continue from where it stopped." Resume is automatic: the server pool excludes already-scanned keywords.
+- New `ScanProgress` bar rendered under the KPI strip whenever ANY scan runs: label, N of M keywords, %, pulsing fill while a batch is in flight, and the note "results save after every batch — keep this tab open." Shown for the violet AIO scan and all amber rescans (buttons keep their inline counts too).
+
+**Verification:** jsdom 5/5 — progress bar visible mid-flight with the keep-tab-open note, batchSize 25 asserted on the wire, simulated 504 plain-text page → friendly resume message (no raw "Unexpected token" ever shown), bar clears when the scan stops. Full `npx tsc --noEmit` exit 0.
+
 ## v7.123 — 2026-06-05 · AIO scan moved INTO the Citation Rate card — one in-card action language
 
 **Feedback (Wayne):** "This button got lost — I thought that was the refresh button I hit in the citation rate card. We have to make all UI changes very intuitive for an average user." (He re-scanned the 9 existing AIOs thinking he was expanding coverage to all 359.) Mockup rendered before build.
