@@ -27,7 +27,9 @@ interface SerpKw {
   aioSources:       Array<{ domain: string; title: string; url: string }>;
   paaQuestions:     string[];
   paaClientCited:   boolean;
+  paaSources?:      Array<{ question: string; title: string; url: string; domain: string }>;   // v7.117 (absent on older scans)
   videoClientCited: boolean;
+  videoSources?:    Array<{ title: string; url: string; domain: string; channel?: string }>;   // v7.117 (absent on older scans)
   clientRank:       number | null;
 }
 
@@ -350,23 +352,22 @@ interface LandscapeRow {
   slots:    number;
 }
 
-function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots, footprintAvail }: {
-  brandStats: BrandStats[];
-  otherDomains: Array<{ domain: string; aiosAcquired: number; citationSlots: number; citationRate: number }>;
-  totalAios: number;
-  totalSlots: number;
-  footprintAvail: number;  // hybrid AIO availability (scanned + uploads) for the footprint rate
+// v7.117: generic competitive landscape table — used by the AIO, PAA and
+// Video tabs (same layout, different source data + labels).
+function CitationLandscape({ title, subtitle, unitLabel, marketDenLabel, brandRows, otherRows, totalFeature, totalSlots, footprintAvail, staleNotice }: {
+  title: string;
+  subtitle: string;
+  unitLabel: string;        // 'AIOs' | 'PAAs' | 'Carousels'
+  marketDenLabel: string;   // e.g. 'scanned AIO-triggering keywords'
+  brandRows: LandscapeRow[];
+  otherRows: LandscapeRow[];
+  totalFeature: number;     // scanned keywords showing this feature
+  totalSlots: number;       // total source slots across those keywords
+  footprintAvail: number;   // hybrid availability (scanned + uploads) for the footprint rate
+  staleNotice?: string | null;  // set when stored scans predate source capture
 }) {
   const [tab, setTab] = useState<LandscapeTab>('brands');
 
-  const brandRows: LandscapeRow[] = useMemo(() => brandStats.map(b => ({
-    name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
-    aios: b.aiosAcquired, slots: b.citationSlots,
-  })), [brandStats]);
-  const otherRows: LandscapeRow[] = useMemo(() => otherDomains.map(o => ({
-    name: o.domain, domain: o.domain, isClient: false, isBrand: false,
-    aios: o.aiosAcquired, slots: o.citationSlots,
-  })), [otherDomains]);
   const allRows: LandscapeRow[] = useMemo(
     () => [...brandRows, ...otherRows].sort((a, b) => b.aios - a.aios || b.slots - a.slots),
     [brandRows, otherRows]
@@ -376,12 +377,26 @@ function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots, fo
   const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
   const GRID = 'minmax(140px,1.1fr) minmax(120px,1fr) 110px 110px 150px 160px';
 
+  if (staleNotice) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div>
+          <p style={{ fontSize: '15px', fontWeight: 700, color: '#E0E0F8', margin: 0 }}>{title}</p>
+          <p style={{ fontSize: '11px', color: '#8888AA', margin: '2px 0 0' }}>{subtitle}</p>
+        </div>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#1A1205', border: '1px solid #4A3510' }}>
+          <p style={{ fontSize: '11px', color: '#F59E0B', margin: 0 }}>{staleNotice}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <p style={{ fontSize: '15px', fontWeight: 700, color: '#E0E0F8', margin: 0 }}>Citation landscape</p>
-          <p style={{ fontSize: '11px', color: '#8888AA', margin: '2px 0 0' }}>Everything cited in AIOs — pivot from your tracked competitive set to the wider web, or see it all in one ranking.</p>
+          <p style={{ fontSize: '15px', fontWeight: 700, color: '#E0E0F8', margin: 0 }}>{title}</p>
+          <p style={{ fontSize: '11px', color: '#8888AA', margin: '2px 0 0' }}>{subtitle}</p>
         </div>
         <TabBar>
           <TabBtn active={tab === 'brands'} onClick={() => setTab('brands')}>
@@ -398,7 +413,7 @@ function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots, fo
 
       {/* Header */}
       <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: '0 12px', padding: '6px 12px', borderBottom: '1px solid #1A1A2A' }}>
-        {['Brand', 'Domain', 'AIOs acquired', 'Citation slots', 'Citation rate (market)', 'Citation rate (footprint)'].map((h, i) => (
+        {['Brand', 'Domain', `${unitLabel} acquired`, 'Citation slots', 'Citation rate (market)', 'Citation rate (footprint)'].map((h, i) => (
           <span key={h} style={{ fontSize: '9px', fontWeight: 700, color: '#333350', textTransform: 'uppercase', letterSpacing: '.06em', textAlign: i > 1 ? 'right' : 'left' }}>{h}</span>
         ))}
       </div>
@@ -420,16 +435,89 @@ function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots, fo
           <span style={{ fontSize: '11px', color: '#666688', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.domain}</span>
           <span style={{ fontSize: '13px', fontWeight: 600, color: r.isClient ? '#A0A0FF' : '#C0C0E8', textAlign: 'right' }}>{r.aios}</span>
           <span style={{ fontSize: '13px', color: '#9999B8', textAlign: 'right' }}>{r.slots}</span>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: r.isClient ? '#A0A0FF' : '#C0C0E8', textAlign: 'right' }}>{totalAios > 0 ? pct(r.aios / totalAios) : '—'}</span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: r.isClient ? '#A0A0FF' : '#C0C0E8', textAlign: 'right' }}>{totalFeature > 0 ? pct(r.aios / totalFeature) : '—'}</span>
           <span style={{ fontSize: '13px', color: '#9999B8', textAlign: 'right' }}>{footprintAvail > 0 ? pct(r.aios / footprintAvail) : '—'}</span>
         </div>
       ))}
 
       <p style={{ fontSize: '10px', color: '#444458', marginTop: '2px' }}>
-        Market rate = AIOs cited in ÷ {totalAios} scanned AIO-triggering keywords · Footprint rate = same wins ÷ {footprintAvail.toLocaleString()} available AIOs across the full footprint (scanned + uploaded — only scanned SERPs can verify citations, so this is a verified floor) · {totalSlots} citation slots across all scanned AIOs
+        Market rate = {unitLabel} acquired ÷ {totalFeature} {marketDenLabel} · Footprint rate = same wins ÷ {footprintAvail.toLocaleString()} available across the full footprint (scanned + uploaded — only scanned SERPs reveal sources, so this is a verified floor) · {totalSlots} source slots across all scanned {unitLabel.toLowerCase()}
       </p>
     </div>
   );
+}
+
+// ── v7.117: PAA / Video landscape data builder ─────────────────────────────────
+// Pure helper: aggregates per-domain (and per-channel, for video) coverage of a
+// SERP feature across scanned keywords. Brand matching: domain match, plus
+// channel-name match for video (most carousel entries host on youtube.com, so
+// the channel name is the meaningful attribution).
+function buildFeatureLandscape(
+  scannedKws:  SerpKw[],
+  clientDomain: string,
+  clientName:   string,
+  competitors:  Competitor[],
+  hasFeature:  (kw: SerpKw) => boolean,
+  getSources:  (kw: SerpKw) => Array<{ domain: string; channel?: string }> | undefined,
+) {
+  const featKws = scannedKws.filter(hasFeature);
+  const total   = featKws.length;
+  const hasSourceData = featKws.some(kw => Array.isArray(getSources(kw)));
+
+  const brands: Array<{ name: string; domain: string; isClient: boolean }> = [
+    { name: clientName || clientDomain, domain: clientDomain, isClient: true },
+    ...(competitors ?? []).map(c => ({ name: c.name || normDomain(c.domain), domain: normDomain(c.domain), isClient: false })),
+  ].filter(b => b.domain);
+
+  const normName = (s: string) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const channelMatchesBrand = (channel: string | undefined, brandName: string) => {
+    if (!channel) return false;
+    const c = normName(channel), b = normName(brandName);
+    return b.length >= 3 && (c.includes(b) || b.includes(c));
+  };
+  const sourceMatchesBrand = (src: { domain: string; channel?: string }, b: { name: string; domain: string }) =>
+    domainsMatch(src.domain, b.domain) || channelMatchesBrand(src.channel, b.name);
+
+  let totalSlots = 0;
+  const brandAgg = new Map<string, { aios: number; slots: number }>();
+  brands.forEach(b => brandAgg.set(b.domain, { aios: 0, slots: 0 }));
+  const otherAgg = new Map<string, { name: string; domain: string; aios: number; slots: number }>();
+
+  for (const kw of featKws) {
+    const sources = getSources(kw) ?? [];
+    totalSlots += sources.length;
+    const brandSeen = new Set<string>();
+    const otherSeen = new Set<string>();
+    for (const src of sources) {
+      const brand = brands.find(b => sourceMatchesBrand(src, b));
+      if (brand) {
+        const e = brandAgg.get(brand.domain)!;
+        e.slots += 1;
+        if (!brandSeen.has(brand.domain)) { e.aios += 1; brandSeen.add(brand.domain); }
+      } else {
+        // Group non-tracked video entries by channel when present (youtube.com
+        // alone would lump every channel together); PAA entries by domain.
+        const key  = normName(src.channel ?? '') || normDomain(src.domain);
+        if (!key) continue;
+        const e = otherAgg.get(key) ?? { name: src.channel || normDomain(src.domain), domain: normDomain(src.domain), aios: 0, slots: 0 };
+        e.slots += 1;
+        if (!otherSeen.has(key)) { e.aios += 1; otherSeen.add(key); }
+        otherAgg.set(key, e);
+      }
+    }
+  }
+
+  const brandRows: LandscapeRow[] = brands.map(b => ({
+    name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
+    aios: brandAgg.get(b.domain)!.aios, slots: brandAgg.get(b.domain)!.slots,
+  })).sort((a, b) => (b.isClient ? 1 : 0) - (a.isClient ? 1 : 0) || b.aios - a.aios);
+
+  const otherRows: LandscapeRow[] = Array.from(otherAgg.values())
+    .map(o => ({ name: o.name, domain: o.domain, isClient: false, isBrand: false, aios: o.aios, slots: o.slots }))
+    .sort((a, b) => b.aios - a.aios || b.slots - a.slots)
+    .slice(0, 30);
+
+  return { total, totalSlots, hasSourceData, brandRows, otherRows };
 }
 
 // ── Keyword Drilldown ──────────────────────────────────────────────────────────
@@ -679,6 +767,27 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     ? ((aio.clientStats?.aiosAcquired ?? 0) / aio.totalAios * 100).toFixed(1)
     : '0.0';
 
+  // v7.117: landscape rows for all three feature tables
+  const aioBrandRows: LandscapeRow[] = useMemo(() => aio.brandStats.map(b => ({
+    name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
+    aios: b.aiosAcquired, slots: b.citationSlots,
+  })), [aio.brandStats]);
+  const aioOtherRows: LandscapeRow[] = useMemo(() => aio.otherDomains.map(o => ({
+    name: o.domain, domain: o.domain, isClient: false, isBrand: false,
+    aios: o.aiosAcquired, slots: o.citationSlots,
+  })), [aio.otherDomains]);
+  const paaLand = useMemo(
+    () => buildFeatureLandscape(scannedKws, clientDomain, displayClientName, competitors,
+      k => (k.paaQuestions?.length ?? 0) > 0, k => k.paaSources),
+    [scannedKws, clientDomain, displayClientName, competitors]
+  );
+  const videoLand = useMemo(
+    () => buildFeatureLandscape(scannedKws, clientDomain, displayClientName, competitors,
+      k => !!k.serpFeatures?.includes('video_carousel'), k => k.videoSources),
+    [scannedKws, clientDomain, displayClientName, competitors]
+  );
+  const STALE_MSG = (feat: string) => `Your stored scan predates v7.117, which began capturing ${feat} sources — competitive coverage can't be shown for it. Run Refresh → Data-only refresh (0 Semrush units) to re-scan and populate this table.`;
+
   return (
     <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4 animate-fade-in">
 
@@ -771,7 +880,11 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <KpiCard label="Available AIOs" value={aio.totalAios + uploadFeat.aio} sub={uploadFeat.aio > 0 ? `${aio.totalAios} scanned + ${uploadFeat.aio.toLocaleString()} from upload` : `across ${scanned} tracked queries`} accent="#00B894" wide />
               <KpiCard label="AIO Penetration" value={`${scanned > 0 ? ((aio.totalAios / scanned) * 100).toFixed(1) : 0}%`} sub={`${aio.totalAios} of ${scanned} scanned queries`} accent="#00B894" wide />
-              <KpiCard label="Your Citation Rate" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aio.totalAios} scanned AIOs`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
+              {/* v7.118 (Wayne): the single "Your Citation Rate" card mixed denominators
+                  with the hybrid Available card next to it (22.2% vs 359 available).
+                  Split into the same two rates the landscape table uses. */}
+              <KpiCard label="Citation Rate (verified sample)" value={`${clientCitationRatePct}%`} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aio.totalAios} scanned AIOs — who's cited is only visible on scanned SERPs`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
+              <KpiCard label="Citation Rate (footprint)" value={aioAvail > 0 ? `${(((aio.clientStats?.aiosAcquired ?? 0) / aioAvail) * 100).toFixed(1)}%` : '—'} sub={`${aio.clientStats?.aiosAcquired ?? 0} of ${aioAvail.toLocaleString()} available AIOs — verified floor, rises as more keywords are scanned`} accent={aio.clientStats?.aiosAcquired ? '#6C63FF' : '#EF4444'} wide />
               <KpiCard label="Citation Share" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots} slots`} accent="#6C63FF" />
               <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="position in AIO source list" />
               {aio.topCompetitor && (
@@ -792,9 +905,13 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           ) : (
             <>
               <CitationLandscape
-                brandStats={aio.brandStats}
-                otherDomains={aio.otherDomains}
-                totalAios={aio.totalAios}
+                title="Citation landscape"
+                subtitle="Everything cited in AIOs — pivot from your tracked competitive set to the wider web, or see it all in one ranking."
+                unitLabel="AIOs"
+                marketDenLabel="scanned AIO-triggering keywords"
+                brandRows={aioBrandRows}
+                otherRows={aioOtherRows}
+                totalFeature={aio.totalAios}
                 totalSlots={aio.totalSlots}
                 footprintAvail={aioAvail}
               />
@@ -827,6 +944,23 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               </div>
             )}
           </div>
+
+          {/* v7.117: PAA competitive landscape — same position/layout as the AIO table */}
+          {scannedKws.length > 0 && paaLand.total > 0 && (
+            <CitationLandscape
+              title="Citation landscape"
+              subtitle="Every source answering a People Also Ask question — your tracked competitive set vs the wider web."
+              unitLabel="PAAs"
+              marketDenLabel="scanned keywords with a PAA box"
+              brandRows={paaLand.brandRows}
+              otherRows={paaLand.otherRows}
+              totalFeature={paaLand.total}
+              totalSlots={paaLand.totalSlots}
+              footprintAvail={paaAvail}
+              staleNotice={paaLand.hasSourceData ? null : STALE_MSG('PAA answer')}
+            />
+          )}
+
           {scannedKws.length === 0 ? (
             <p style={{ fontSize: '12px', color: '#555570' }}>No SERP scan data available.</p>
           ) : (
@@ -875,6 +1009,25 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               </div>
             )}
           </div>
+
+          {/* v7.117: Video competitive landscape — same position/layout. Non-tracked
+              entries grouped by CHANNEL when present (most carousel videos host on
+              youtube.com, so the channel is the meaningful attribution). */}
+          {scannedKws.length > 0 && videoLand.total > 0 && (
+            <CitationLandscape
+              title="Citation landscape"
+              subtitle="Every video in the carousels — your tracked competitive set vs the wider web (non-tracked entries grouped by channel)."
+              unitLabel="Carousels"
+              marketDenLabel="scanned keywords with a video carousel"
+              brandRows={videoLand.brandRows}
+              otherRows={videoLand.otherRows}
+              totalFeature={videoLand.total}
+              totalSlots={videoLand.totalSlots}
+              footprintAvail={videoAvail}
+              staleNotice={videoLand.hasSourceData ? null : STALE_MSG('video carousel')}
+            />
+          )}
+
           {scannedKws.length === 0 ? <p style={{ fontSize: '12px', color: '#555570' }}>No SERP scan data available.</p> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {scannedKws.map((kw: SerpKw) => {

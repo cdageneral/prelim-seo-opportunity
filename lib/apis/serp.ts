@@ -32,6 +32,23 @@ export interface AIOSource {
   domain: string;
 }
 
+// v7.117: PAA answer sources + video carousel entries are now STORED (the old
+// parser dropped every non-client domain), enabling competitive landscape
+// tables for PAA and Video — same as the AIO citation landscape.
+export interface PAASource {
+  question: string;
+  title:    string;
+  url:      string;
+  domain:   string;
+}
+
+export interface VideoSource {
+  title:    string;
+  url:      string;
+  domain:   string;   // hosting domain (usually youtube.com)
+  channel?: string;   // channel / source name when SerpAPI provides it
+}
+
 export interface KeywordSerpData {
   keyword:          string;
   searchVolume?:    number;   // Passed in from Semrush data
@@ -41,8 +58,10 @@ export interface KeywordSerpData {
   featuredSnippet:  SerpResult | null;
   paaQuestions:     string[];        // People Also Ask questions
   paaClientCited:   boolean;         // Client domain appears in a PAA answer link
+  paaSources?:      PAASource[];     // v7.117: every PAA answer source (absent on pre-v7.117 scans)
   serpFeatures:     string[];        // ['featured_snippet', 'knowledge_panel', 'local_pack', ...]
   videoClientCited: boolean;         // Client domain appears in the video carousel
+  videoSources?:    VideoSource[];   // v7.117: every video carousel entry (absent on pre-v7.117 scans)
   clientRank:       number | null;   // Client's position on this SERP (null = not found)
 }
 
@@ -191,6 +210,20 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
   const clientNorm = clientDomain.replace(/^www\./, '');
   const rawPAA: any[] = data.related_questions ?? [];
   const paaQuestions: string[] = rawPAA.map((q: any) => q.question ?? '');
+  // v7.117: store EVERY PAA answer source (question + link domain), not just
+  // the client-cited boolean — feeds the PAA competitive landscape table.
+  const paaSources: PAASource[] = [];
+  for (const q of rawPAA) {
+    const link: string = q.link ?? q.source?.link ?? '';
+    if (link) {
+      paaSources.push({
+        question: q.question ?? '',
+        title:    q.title ?? q.source?.title ?? '',
+        url:      link,
+        domain:   extractDomain(link),
+      });
+    }
+  }
   // Client is cited in PAA if its domain appears in any PAA answer link
   const paaClientCited: boolean = rawPAA.some((q: any) => {
     const link: string = q.link ?? q.source?.link ?? '';
@@ -214,6 +247,21 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
     return link && extractDomain(link).includes(clientNorm);
   });
 
+  // v7.117: store EVERY video carousel entry (hosting domain + channel name
+  // when provided) — feeds the Video competitive landscape table. Most entries
+  // host on youtube.com, so the channel name is the meaningful attribution.
+  const videoSources: VideoSource[] = [];
+  for (const v of (data.videos ?? [])) {
+    if (!v?.link) continue;
+    const rawChannel = typeof v.channel === 'string' ? v.channel : v.channel?.name;
+    videoSources.push({
+      title:   v.title ?? '',
+      url:     v.link,
+      domain:  extractDomain(v.link),
+      channel: rawChannel || (typeof v.source === 'string' ? v.source : undefined),
+    });
+  }
+
   // Client rank
   const clientResult = organicResults.find(r =>
     r.domain.includes(clientNorm)
@@ -228,8 +276,10 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
     featuredSnippet,
     paaQuestions,
     paaClientCited,
+    paaSources,
     serpFeatures,
     videoClientCited,
+    videoSources,
     clientRank,
   };
 }
