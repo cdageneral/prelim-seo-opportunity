@@ -904,9 +904,19 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const staleSets = useMemo(() => {
     const now = Date.now();
     const emptyAio: string[] = [], missingPaa: string[] = [], missingVideo: string[] = [], outdated: string[] = [];
+    let confirmedSourceless = 0;
     for (const k of scannedKws) {
       if (!k.keyword) continue;
-      if (k.hasAIO && (k.aioSources?.length ?? 0) === 0) emptyAio.push(k.keyword);
+      // v7.125 FIX (Wayne: "I click these buttons but it flashes and goes
+      // back"): an AIO with zero sources is only STALE if it was never fetched
+      // by the modern scanner (no per-keyword scannedAt). If a fresh scan
+      // confirmed the AIO exposes no citation links, that's a verified fact —
+      // re-flagging it created an infinite refresh loop charging credits per
+      // click. Confirmed-sourceless AIOs are reported as info instead.
+      if (k.hasAIO && (k.aioSources?.length ?? 0) === 0) {
+        if (k.scannedAt) confirmedSourceless++;
+        else emptyAio.push(k.keyword);
+      }
       if ((k.paaQuestions?.length ?? 0) > 0 && !Array.isArray(k.paaSources)) missingPaa.push(k.keyword);
       if (k.serpFeatures?.includes('video_carousel') && !Array.isArray(k.videoSources)) missingVideo.push(k.keyword);
       if (k.scannedAt) {
@@ -914,7 +924,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
         if (Number.isFinite(t) && now - t > STALE_DAYS * 86_400_000) outdated.push(k.keyword);
       }
     }
-    return { emptyAio, missingPaa, missingVideo, outdated };
+    return { emptyAio, missingPaa, missingVideo, outdated, confirmedSourceless };
   }, [scannedKws]);
 
   const [rescan, setRescan] = useState<{ key: string | null; done: number; total: number; error: string | null }>({ key: null, done: 0, total: 0, error: null });
@@ -1091,7 +1101,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   citations ÷ citations available. Citations are countable only
                   on scanned AIOs; the scan CTA below extends the denominator to
                   the full footprint with real SerpAPI data, never estimates. */}
-              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide actions={[citeStale, aioExpand]} />
+              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs${staleSets.confirmedSourceless > 0 ? ` · ${staleSets.confirmedSourceless} AIO${staleSets.confirmedSourceless !== 1 ? 's' : ''} expose no citation links (scan-confirmed)` : ''}`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide actions={[citeStale, aioExpand]} />
               <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" actions={[citeStale]} />
               {aio.topCompetitor && (
                 <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`cited in ${aio.topCompetitor.aiosAcquired} of ${aio.totalAios} scanned AIOs`} accent="#FF6584" />

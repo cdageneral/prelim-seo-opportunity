@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.125 — 2026-06-05 · Fix: "Refresh required" loop on AIOs that genuinely have no citation links
+
+**Symptom (Wayne):** "I click these buttons but it flashes and goes back to this." The amber refresh on 5 AIOs re-scanned them (≈5 credits per click), the scan succeeded — and the button instantly reappeared.
+
+**Root cause:** those 5 AIOs genuinely expose no citation links (or SerpAPI cannot retrieve them). The re-scan correctly saved that result, but the v7.122 staleness rule treated ANY empty-source AIO as stale → infinite refresh loop that charges credits on every click.
+
+**Fix (SerpFeaturesSection.tsx):** empty-source AIOs are only STALE when they lack a per-keyword `scannedAt` (i.e., never fetched by the modern scanner). Once a fresh scan confirms an AIO has no citation links, that's a verified fact: it leaves the stale set and is reported as information on the Citation Rate card — "N AIOs expose no citation links (scan-confirmed)". No math changes; those AIOs contribute 0 to the citations-available denominator, as before.
+
+**Also confirmed working in Wayne's screenshot:** the full AIO scan succeeded post-v7.124 — 299 citation-verified AIOs, 3,171 citations available, rate 0.4% (12 citations), avg position 2.0.
+
+**Verification:** jsdom 5/5 reproducing the exact loop — legacy-empty kw flagged (1 credit, not 2), confirmed-empty shown as info, click re-scans exactly the legacy kw, button does NOT reappear when sources remain empty (now scan-confirmed), info count updates to 2. Full `npx tsc --noEmit` exit 0.
+
 ## v7.124 — 2026-06-05 · Scan timeout fix + persistent progress bars on every scan
 
 **Symptom (Wayne):** AIO scan failed with `Unexpected token 'A', "An error o"… is not valid JSON`. Also requested: "any scans always show a progress indicator so the user knows something is still working."
