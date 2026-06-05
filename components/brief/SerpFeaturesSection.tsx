@@ -31,6 +31,7 @@ interface SerpKw {
   videoClientCited: boolean;
   videoSources?:    Array<{ title: string; url: string; domain: string; channel?: string }>;   // v7.117 (absent on older scans)
   clientRank:       number | null;
+  scannedAt?:       string;   // v7.122: per-keyword scan timestamp (absent on older scans)
 }
 
 interface Competitor { id: string; domain: string; name: string | null; }
@@ -326,20 +327,49 @@ function TabBar({ children }: { children: React.ReactNode }) {
 
 // ── KPI Cards strip ────────────────────────────────────────────────────────────
 
-function KpiCard({ label, value, sub, accent, wide }: { label: string; value: string | number; sub?: string; accent?: string; wide?: boolean }) {
+// v7.122: cards can carry their own targeted refresh. When `stale` is set the
+// card border turns amber, the reason renders under the value, and a
+// full-width "Refresh required" button sits at the bottom of the card body —
+// it refreshes ONLY the data this card depends on (Wayne's mini-refresh).
+interface CardStale {
+  reason:   string;            // why the data is stale (shown in the card)
+  label:    string;            // button label incl. credit cost
+  onClick:  () => void;
+  running:  boolean;
+  progress: string | null;     // e.g. "12/34" while running
+}
+
+function KpiCard({ label, value, sub, accent, wide, stale }: { label: string; value: string | number; sub?: string; accent?: string; wide?: boolean; stale?: CardStale | null }) {
   return (
     <div style={{
       background: accent ? `${accent}10` : '#0A0A18',
-      border: `1px solid ${accent ? `${accent}30` : '#1A1A2A'}`,
+      border: `1px solid ${stale ? '#4A3510' : accent ? `${accent}30` : '#1A1A2A'}`,
       borderRadius: '10px', padding: '14px 16px',
       flex: wide ? 2 : 1, minWidth: 0,
+      display: 'flex', flexDirection: 'column', gap: '4px',
     }}>
-      <p style={{ fontSize: '9px', fontWeight: 700, color: accent ?? '#555570', textTransform: 'uppercase', letterSpacing: '.08em', margin: '0 0 6px' }}>{label}</p>
+      <p style={{ fontSize: '9px', fontWeight: 700, color: accent ?? '#555570', textTransform: 'uppercase', letterSpacing: '.08em', margin: 0 }}>{label}</p>
       <p style={{ fontSize: '22px', fontWeight: 700, color: accent ?? '#E0E0F8', lineHeight: 1, margin: 0 }}>{value}</p>
-      {/* v7.120: sub-lines WRAP instead of ellipsis-truncating — the v7.119
-          unit/denominator explanations were getting clipped ("5 of 108 cita…"),
-          hiding exactly the context they exist to provide. */}
-      {sub && <p style={{ fontSize: '10px', color: '#555570', margin: '4px 0 0', lineHeight: 1.45, overflowWrap: 'break-word' }}>{sub}</p>}
+      {/* v7.120: sub-lines WRAP instead of ellipsis-truncating */}
+      {sub && <p style={{ fontSize: '10px', color: '#555570', margin: 0, lineHeight: 1.45, overflowWrap: 'break-word' }}>{sub}</p>}
+      {stale && (
+        <>
+          <p style={{ fontSize: '10px', color: '#F59E0B', margin: 0, lineHeight: 1.45, overflowWrap: 'break-word' }}>{stale.reason}</p>
+          <button
+            onClick={stale.onClick}
+            disabled={stale.running}
+            style={{
+              width: '100%', marginTop: '4px', padding: '7px 10px', borderRadius: '7px',
+              fontSize: '11px', fontWeight: 600, border: 'none',
+              background: stale.running ? '#1A1A2E' : '#F59E0B',
+              color: stale.running ? '#8888AA' : '#1A1205',
+              cursor: stale.running ? 'wait' : 'pointer',
+            }}
+          >
+            {stale.running ? `Refreshing… ${stale.progress ?? ''}` : stale.label}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -357,7 +387,7 @@ interface LandscapeRow {
 
 // v7.117: generic competitive landscape table — used by the AIO, PAA and
 // Video tabs (same layout, different source data + labels).
-function CitationLandscape({ title, subtitle, unitLabel, marketDenLabel, brandRows, otherRows, totalFeature, totalSlots, footprintAvail, staleNotice }: {
+function CitationLandscape({ title, subtitle, unitLabel, marketDenLabel, brandRows, otherRows, totalFeature, totalSlots, footprintAvail, staleNotice, staleAction }: {
   title: string;
   subtitle: string;
   unitLabel: string;        // 'AIOs' | 'PAAs' | 'Carousels'
@@ -368,6 +398,7 @@ function CitationLandscape({ title, subtitle, unitLabel, marketDenLabel, brandRo
   totalSlots: number;       // total source slots across those keywords
   footprintAvail: number;   // hybrid availability (scanned + uploads) for the footprint rate
   staleNotice?: string | null;  // set when stored scans predate source capture
+  staleAction?: CardStale | null;  // v7.122: in-place targeted refresh for the stale data
 }) {
   const [tab, setTab] = useState<LandscapeTab>('brands');
 
@@ -387,8 +418,22 @@ function CitationLandscape({ title, subtitle, unitLabel, marketDenLabel, brandRo
           <p style={{ fontSize: '15px', fontWeight: 700, color: '#E0E0F8', margin: 0 }}>{title}</p>
           <p style={{ fontSize: '11px', color: '#8888AA', margin: '2px 0 0' }}>{subtitle}</p>
         </div>
-        <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#1A1205', border: '1px solid #4A3510' }}>
-          <p style={{ fontSize: '11px', color: '#F59E0B', margin: 0 }}>{staleNotice}</p>
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: '#1A1205', border: '1px solid #4A3510', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <p style={{ fontSize: '11px', color: '#F59E0B', margin: 0, flex: 1, minWidth: '220px' }}>{staleNotice}</p>
+          {staleAction && (
+            <button
+              onClick={staleAction.onClick}
+              disabled={staleAction.running}
+              style={{
+                padding: '7px 13px', borderRadius: '7px', fontSize: '11px', fontWeight: 600, border: 'none',
+                background: staleAction.running ? '#1A1A2E' : '#F59E0B',
+                color: staleAction.running ? '#8888AA' : '#1A1205',
+                cursor: staleAction.running ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              {staleAction.running ? `Refreshing… ${staleAction.progress ?? ''}` : staleAction.label}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -806,6 +851,71 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     }
   }
 
+  // ── v7.122: per-card staleness detection + targeted rescan ────────────────
+  // All rules are detected from real stored data; a card only shows its
+  // "Refresh required" button when a rule is genuinely true.
+  const STALE_DAYS = 30;
+  const staleSets = useMemo(() => {
+    const now = Date.now();
+    const emptyAio: string[] = [], missingPaa: string[] = [], missingVideo: string[] = [], outdated: string[] = [];
+    for (const k of scannedKws) {
+      if (!k.keyword) continue;
+      if (k.hasAIO && (k.aioSources?.length ?? 0) === 0) emptyAio.push(k.keyword);
+      if ((k.paaQuestions?.length ?? 0) > 0 && !Array.isArray(k.paaSources)) missingPaa.push(k.keyword);
+      if (k.serpFeatures?.includes('video_carousel') && !Array.isArray(k.videoSources)) missingVideo.push(k.keyword);
+      if (k.scannedAt) {
+        const t = Date.parse(k.scannedAt);
+        if (Number.isFinite(t) && now - t > STALE_DAYS * 86_400_000) outdated.push(k.keyword);
+      }
+    }
+    return { emptyAio, missingPaa, missingVideo, outdated };
+  }, [scannedKws]);
+
+  const [rescan, setRescan] = useState<{ key: string | null; done: number; total: number; error: string | null }>({ key: null, done: 0, total: 0, error: null });
+  async function runRescan(key: string, kws: string[]) {
+    if (!projectId || rescan.key || kws.length === 0) return;
+    setRescan({ key, done: 0, total: kws.length, error: null });
+    let done = 0;
+    try {
+      for (let i = 0; i < kws.length; i += 75) {
+        const slice = kws.slice(i, i + 75);
+        const res = await fetch(`/api/projects/${projectId}/serp-scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filter: 'rescan', keywords: slice, batchSize: 75 }),
+        });
+        const data = await res.json();
+        if (!res.ok) { setRescan({ key: null, done, total: kws.length, error: data?.error ?? 'Refresh failed.' }); return; }
+        if (data.results?.length) {
+          setExtraScanned(prev => {
+            const lo = new Set((data.results as SerpKw[]).map(r => (r.keyword ?? '').toLowerCase()));
+            return [...prev.filter(k => !lo.has((k.keyword ?? '').toLowerCase())), ...(data.results as SerpKw[])];
+          });
+        }
+        done += data.scanned ?? 0;
+        setRescan(s => ({ ...s, done }));
+      }
+      setRescan({ key: null, done, total: kws.length, error: null });
+    } catch (e: any) {
+      setRescan({ key: null, done, total: kws.length, error: String(e?.message ?? e) });
+    }
+  }
+  const mkStale = (key: string, kws: string[], reason: string, label?: string): CardStale | null => (
+    !projectId || kws.length === 0 ? null : {
+      reason,
+      label: label ?? `Refresh required · ~${kws.length} credit${kws.length !== 1 ? 's' : ''}`,
+      onClick: () => runRescan(key, kws),
+      running: rescan.key === key,
+      progress: rescan.key === key ? `${rescan.done}/${rescan.total}` : null,
+    }
+  );
+  // Citation cards: stale when AIOs lack sources OR scans are outdated
+  const citeStaleKws = useMemo(() => Array.from(new Set([...staleSets.emptyAio, ...staleSets.outdated])), [staleSets]);
+  const citeStaleReason = [
+    staleSets.emptyAio.length > 0 ? `${staleSets.emptyAio.length} scanned AIO${staleSets.emptyAio.length !== 1 ? 's' : ''} returned no citation sources` : null,
+    staleSets.outdated.length > 0 ? `${staleSets.outdated.length} scan${staleSets.outdated.length !== 1 ? 's' : ''} older than ${STALE_DAYS} days` : null,
+  ].filter(Boolean).join(' · ');
+  const citeStale = mkStale('cite', citeStaleKws, citeStaleReason);
+
   // v7.117: landscape rows for all three feature tables
   const aioBrandRows: LandscapeRow[] = useMemo(() => aio.brandStats.map(b => ({
     name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
@@ -923,13 +1033,14 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   citations ÷ citations available. Citations are countable only
                   on scanned AIOs; the scan CTA below extends the denominator to
                   the full footprint with real SerpAPI data, never estimates. */}
-              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide />
-              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" />
+              <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs`} accent={aio.clientStats?.citationSlots ? '#6C63FF' : '#EF4444'} wide stale={citeStale} />
+              <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" stale={citeStale} />
               {aio.topCompetitor && (
                 <KpiCard label={`Top Competitor · ${aio.topCompetitor.name}`} value={`${(aio.topCompetitor.citationRate * 100).toFixed(1)}%`} sub={`cited in ${aio.topCompetitor.aiosAcquired} of ${aio.totalAios} scanned AIOs`} accent="#FF6584" />
               )}
               <KpiCard label="Others" value={`${(aio.othersShare * 100).toFixed(1)}%`} sub={`non-tracked domains' share of the ${aio.totalSlots} citation links`} />
             </div>
+            {rescan.error && <p style={{ fontSize: '11px', color: '#EF4444', margin: '8px 0 0' }}>{rescan.error}</p>}
           </div>
 
           {/* v7.121: extend the citation denominator with REAL scans of the
@@ -1024,6 +1135,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               totalSlots={paaLand.totalSlots}
               footprintAvail={paaAvail}
               staleNotice={paaLand.hasSourceData ? null : STALE_MSG('PAA answer')}
+              staleAction={paaLand.hasSourceData ? null : mkStale('paa', staleSets.missingPaa, '', `Refresh required — re-scan ${staleSets.missingPaa.length} keyword${staleSets.missingPaa.length !== 1 ? 's' : ''} (~${staleSets.missingPaa.length} credits)`)}
             />
           )}
 
@@ -1091,6 +1203,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               totalSlots={videoLand.totalSlots}
               footprintAvail={videoAvail}
               staleNotice={videoLand.hasSourceData ? null : STALE_MSG('video carousel')}
+              staleAction={videoLand.hasSourceData ? null : mkStale('video', staleSets.missingVideo, '', `Refresh required — re-scan ${staleSets.missingVideo.length} keyword${staleSets.missingVideo.length !== 1 ? 's' : ''} (~${staleSets.missingVideo.length} credits)`)}
             />
           )}
 

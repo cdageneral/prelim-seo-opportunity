@@ -63,6 +63,7 @@ export interface KeywordSerpData {
   videoClientCited: boolean;         // Client domain appears in the video carousel
   videoSources?:    VideoSource[];   // v7.117: every video carousel entry (absent on pre-v7.117 scans)
   clientRank:       number | null;   // Client's position on this SERP (null = not found)
+  scannedAt?:       string;          // v7.122: ISO timestamp of THIS keyword's scan (absent on older scans) — powers per-card scan-age staleness
 }
 
 export interface SerpApiSnapshot {
@@ -281,6 +282,7 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
     videoClientCited,
     videoSources,
     clientRank,
+    scannedAt: new Date().toISOString(),   // v7.122: per-keyword scan timestamp
   };
 }
 

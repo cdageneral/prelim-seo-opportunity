@@ -50,7 +50,18 @@ export async function POST(
   // v7.121: filter='aio' scans ONLY uploaded keywords whose Semrush
   // "SERP Features by Keyword" cell includes an AI Overview — used to make the
   // Citation Rate denominator cover the full footprint with verified data.
-  const scanFilter: 'all' | 'aio' = body?.filter === 'aio' ? 'aio' : 'all';
+  // v7.122: filter='rescan' RE-scans an explicit list of already-scanned
+  // keywords (body.keywords) — powers the in-card "Refresh required" buttons,
+  // refreshing only the stale subset a card depends on. Only keywords that are
+  // genuinely in the stored scan set are accepted (credit safety).
+  const scanFilter: 'all' | 'aio' | 'rescan' =
+    body?.filter === 'aio' ? 'aio' : body?.filter === 'rescan' ? 'rescan' : 'all';
+  const rescanRequested: string[] = scanFilter === 'rescan' && Array.isArray(body?.keywords)
+    ? (body.keywords as any[]).filter((k): k is string => typeof k === 'string' && k.trim().length > 0).slice(0, MAX_BATCH)
+    : [];
+  if (scanFilter === 'rescan' && rescanRequested.length === 0) {
+    return NextResponse.json({ error: 'filter=rescan requires a non-empty keywords array.' }, { status: 400 });
+  }
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -119,22 +130,36 @@ export async function POST(
     candidates = pool;
   }
 
-  const unscanned = candidates
-    .filter(p => !scannedSet.has(p.keyword.toLowerCase()))
-    .sort((a, b) => b.searchVolume - a.searchVolume);
+  // v7.122: rescan mode — target list is the requested keywords that genuinely
+  // exist in the stored scan set; everything else (pool logic) is bypassed.
+  let batchKeywords: string[];
+  let unscannedCount = 0;
+  if (scanFilter === 'rescan') {
+    batchKeywords = rescanRequested.filter(k => scannedSet.has(k.toLowerCase())).slice(0, batchSize);
+    if (batchKeywords.length === 0) {
+      return NextResponse.json(
+        { error: 'None of the requested keywords are in the stored scan set — nothing to re-scan.' },
+        { status: 400 }
+      );
+    }
+  } else {
+    const unscanned = candidates
+      .filter(p => !scannedSet.has(p.keyword.toLowerCase()))
+      .sort((a, b) => b.searchVolume - a.searchVolume);
+    unscannedCount = unscanned.length;
 
-  if (unscanned.length === 0) {
-    return NextResponse.json({
-      scanned: 0, results: [],
-      totalScanned: existing.length,
-      poolTotal:    candidates.length,
-      remaining:    0,
-      filter:       scanFilter,
-    });
+    if (unscanned.length === 0) {
+      return NextResponse.json({
+        scanned: 0, results: [],
+        totalScanned: existing.length,
+        poolTotal:    candidates.length,
+        remaining:    0,
+        filter:       scanFilter,
+      });
+    }
+    batchKeywords = unscanned.slice(0, batchSize).map(p => p.keyword);
   }
-
-  const batchKeywords = unscanned.slice(0, batchSize).map(p => p.keyword);
-  console.log(`[OrbitIQ] SERP scan (${scanFilter}): ${batchKeywords.length} keywords (${unscanned.length} unscanned of ${candidates.length} pool) for ${domain}`);
+  console.log(`[OrbitIQ] SERP scan (${scanFilter}): ${batchKeywords.length} keywords for ${domain}`);
 
   const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase));   // v7.99: market-aware scan
 
@@ -147,24 +172,26 @@ export async function POST(
     );
   }
 
-  // Merge — no overlap by construction (only unscanned keywords were sent).
+  // Merge. Default/aio: no overlap by construction (only unscanned sent).
+  // v7.122 rescan: FRESH WINS — re-scanned keywords replace their old entries.
   // Summaries are recomputed over the COMBINED set so the SERP Features panel
   // reflects total coverage, not just the latest batch.
-  const mergedKeywords = [...existing, ...results];
+  const freshLow = new Set(results.map(r => r.keyword.toLowerCase()));
+  const mergedKeywords = [...existing.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...results];
   const newSnap = buildSnapshotFromKeywordData(domain, mergedKeywords);
 
   await db.update(analyses)
     .set({ serpApiSnapshot: newSnap as any })
     .where(eq(analyses.id, analysis.id));
 
-  console.log(`[OrbitIQ] SERP scan complete (${scanFilter}): +${results.length} (total ${mergedKeywords.length}/${candidates.length})`);
+  console.log(`[OrbitIQ] SERP scan complete (${scanFilter}): +${results.length} (total ${mergedKeywords.length})`);
 
   return NextResponse.json({
     scanned:      results.length,
     results,      // panel live-merges these into the table without a reload
     totalScanned: mergedKeywords.length,
     poolTotal:    candidates.length,
-    remaining:    Math.max(unscanned.length - results.length, 0),
+    remaining:    scanFilter === 'rescan' ? 0 : Math.max(unscannedCount - results.length, 0),
     filter:       scanFilter,
   });
 }
