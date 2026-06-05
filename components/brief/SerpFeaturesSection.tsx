@@ -805,20 +805,11 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             </div>
           </div>
 
-          {/* Gap callout */}
-          {(aio.clientStats?.aiosAcquired ?? 0) < aio.totalAios && aio.totalAios > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 16px', borderRadius: '8px', background: '#150A2A', border: '1px solid #3A1A6A' }}>
-              <div>
-                <p style={{ fontSize: '10px', color: '#9B6FCA', fontWeight: 600, margin: '0 0 2px', textTransform: 'uppercase', letterSpacing: '.06em' }}>Gap</p>
-                <p style={{ fontSize: '18px', fontWeight: 700, color: '#C08AF0', margin: 0 }}>
-                  {aio.totalAios - (aio.clientStats?.aiosAcquired ?? 0)} uncaptured AIO{aio.totalAios - (aio.clientStats?.aiosAcquired ?? 0) !== 1 ? 's' : ''}
-                </p>
-              </div>
-              <p style={{ fontSize: '11px', color: '#8888AA', flex: 1, margin: 0 }}>
-                {displayClientName} is missing from <strong style={{ color: '#C08AF0' }}>{aio.totalAios - (aio.clientStats?.aiosAcquired ?? 0)}</strong> of <strong style={{ color: '#C08AF0' }}>{aio.totalAios}</strong> AIO-triggering keywords. These are direct citation opportunities.
-              </p>
-            </div>
-          )}
+          {/* Gap callout REMOVED in v7.115 (Wayne): it counted only the scanned
+              AIO subset (e.g. "7 of 9") which read as contradictory next to the
+              hybrid "Available AIOs" figure (359 incl. uploads). The same
+              scanned-only gap is still visible via the Missing pill in the
+              Keyword Drilldown below. */}
 
           {scannedKws.length === 0 ? (
             <p style={{ fontSize: '12px', color: '#555570' }}>No SERP scan data available. Run analysis to populate.</p>
