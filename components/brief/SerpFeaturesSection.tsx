@@ -43,7 +43,6 @@ interface Props {
 }
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
-type AIOViewTab  = 'keywords' | 'landscape';
 type LandscapeTab = 'brands' | 'others' | 'all';
 type KwFilter    = 'aio' | 'missing' | 'won' | 'all';
 
@@ -197,23 +196,30 @@ function useAIOData(
     );
     const othersShare = totalSlots > 0 ? otherSlots / totalSlots : 0;
 
-    // Other domains (non-tracked) with counts — for the "Other domains" landscape tab
-    const otherDomainMap = new Map<string, number>();
+    // Other domains (non-tracked) — v7.116: track BOTH distinct AIOs acquired
+    // (keywords where the domain is cited at least once) and total citation
+    // slots, so the landscape table reports the same metrics for every row.
+    const otherDomainMap = new Map<string, { aios: number; slots: number }>();
     aioKws.forEach(kw => {
+      const seenThisKw = new Set<string>();
       (kw.aioSources ?? []).forEach(s => {
         const d = normDomain(s.domain);
         if (d && !trackedDomains.has(d)) {
-          otherDomainMap.set(d, (otherDomainMap.get(d) ?? 0) + 1);
+          const e = otherDomainMap.get(d) ?? { aios: 0, slots: 0 };
+          e.slots += 1;
+          if (!seenThisKw.has(d)) { e.aios += 1; seenThisKw.add(d); }
+          otherDomainMap.set(d, e);
         }
       });
     });
     const otherDomains = Array.from(otherDomainMap.entries())
-      .map(([domain, count]) => ({
+      .map(([domain, v]) => ({
         domain,
-        citationSlots: count,
-        citationRate: totalSlots > 0 ? count / totalSlots : 0,
+        aiosAcquired:  v.aios,
+        citationSlots: v.slots,
+        citationRate:  totalAios > 0 ? v.aios / totalAios : 0,  // market rate, same basis as brands
       }))
-      .sort((a, b) => b.citationSlots - a.citationSlots)
+      .sort((a, b) => b.aiosAcquired - a.aiosAcquired || b.citationSlots - a.citationSlots)
       .slice(0, 30);
 
     // Enriched keyword data for drilldown
@@ -335,121 +341,92 @@ function KpiCard({ label, value, sub, accent, wide }: { label: string; value: st
 
 // ── Citation Landscape ─────────────────────────────────────────────────────────
 
-function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots }: {
+interface LandscapeRow {
+  name:     string;
+  domain:   string;
+  isClient: boolean;
+  isBrand:  boolean;
+  aios:     number;
+  slots:    number;
+}
+
+function CitationLandscape({ brandStats, otherDomains, totalAios, totalSlots, footprintAvail }: {
   brandStats: BrandStats[];
-  otherDomains: Array<{ domain: string; citationSlots: number; citationRate: number }>;
+  otherDomains: Array<{ domain: string; aiosAcquired: number; citationSlots: number; citationRate: number }>;
   totalAios: number;
   totalSlots: number;
+  footprintAvail: number;  // hybrid AIO availability (scanned + uploads) for the footprint rate
 }) {
   const [tab, setTab] = useState<LandscapeTab>('brands');
 
-  const allRows = useMemo(() => {
-    const brands = brandStats.map(b => ({ domain: b.domain, name: b.name, slots: b.citationSlots, rate: b.citationRate, isClient: b.isClient, isBrand: true }));
-    const others = otherDomains.map(o => ({ domain: o.domain, name: o.domain, slots: o.citationSlots, rate: o.citationRate, isClient: false, isBrand: false }));
-    return [...brands, ...others].sort((a, b) => b.slots - a.slots);
-  }, [brandStats, otherDomains]);
+  const brandRows: LandscapeRow[] = useMemo(() => brandStats.map(b => ({
+    name: b.name, domain: b.domain, isClient: b.isClient, isBrand: true,
+    aios: b.aiosAcquired, slots: b.citationSlots,
+  })), [brandStats]);
+  const otherRows: LandscapeRow[] = useMemo(() => otherDomains.map(o => ({
+    name: o.domain, domain: o.domain, isClient: false, isBrand: false,
+    aios: o.aiosAcquired, slots: o.citationSlots,
+  })), [otherDomains]);
+  const allRows: LandscapeRow[] = useMemo(
+    () => [...brandRows, ...otherRows].sort((a, b) => b.aios - a.aios || b.slots - a.slots),
+    [brandRows, otherRows]
+  );
 
-  const maxBrandSlots = brandStats[0]?.citationSlots ?? 1;
-  const maxOtherSlots = otherDomains[0]?.citationSlots ?? 1;
-
+  const rows = tab === 'brands' ? brandRows : tab === 'others' ? otherRows : allRows;
   const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
-
-  const TableHeader = () => (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 100px 120px', gap: '0 12px', padding: '6px 12px', borderBottom: '1px solid #1A1A2A', marginBottom: '4px' }}>
-      {['Brand / Domain', 'AIOs Cited', 'Slots', 'Citation Rate'].map(h => (
-        <span key={h} style={{ fontSize: '9px', fontWeight: 700, color: '#333350', textTransform: 'uppercase', letterSpacing: '.06em', textAlign: h !== 'Brand / Domain' ? 'right' : 'left' }}>{h}</span>
-      ))}
-    </div>
-  );
-
-  const BrandRow = ({ b, maxSlots }: { b: BrandStats; maxSlots: number }) => (
-    <div style={{
-      display: 'grid', gridTemplateColumns: '1fr 120px 100px 120px', gap: '0 12px',
-      padding: '8px 12px', borderRadius: '7px', alignItems: 'center',
-      background: b.isClient ? 'rgba(108,99,255,0.08)' : 'transparent',
-      border: `1px solid ${b.isClient ? 'rgba(108,99,255,0.25)' : 'transparent'}`,
-      marginBottom: '3px',
-    }}>
-      <div style={{ minWidth: 0 }}>
-        <span style={{ fontSize: '12px', fontWeight: b.isClient ? 600 : 500, color: b.isClient ? '#A0A0FF' : '#D0D0E8', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {b.name}
-          {b.isClient && <span style={{ marginLeft: '6px', fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(108,99,255,0.25)', color: '#8B85FF' }}>client</span>}
-        </span>
-        <span style={{ fontSize: '10px', color: '#444458' }}>{b.domain}</span>
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
-          <div style={{ width: '48px', background: '#1A1A2A', borderRadius: '2px', height: '3px' }}>
-            <div style={{ background: b.isClient ? '#6C63FF' : '#334', borderRadius: '2px', height: '3px', width: `${maxSlots > 0 ? Math.min(100, (b.aiosAcquired / maxSlots) * 100) : 0}%` }} />
-          </div>
-          <span style={{ fontSize: '12px', fontWeight: 600, color: b.isClient ? '#6C63FF' : '#C0C0E8', minWidth: '28px', textAlign: 'right' }}>{b.aiosAcquired}</span>
-        </div>
-      </div>
-      <span style={{ fontSize: '12px', color: '#888899', textAlign: 'right' }}>{b.citationSlots}</span>
-      <span style={{ fontSize: '12px', fontWeight: 600, color: b.isClient ? '#6C63FF' : '#888899', textAlign: 'right' }}>{pct(b.citationRate)}</span>
-    </div>
-  );
-
-  const OtherRow = ({ o, i }: { o: typeof otherDomains[0]; i: number }) => (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 100px 120px', gap: '0 12px', padding: '7px 12px', borderRadius: '6px', alignItems: 'center', background: '#080812', marginBottom: '3px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-        <span style={{ fontSize: '10px', color: '#2A2A40', width: '18px', textAlign: 'right', flexShrink: 0 }}>{i + 1}</span>
-        <span style={{ fontSize: '11px', color: '#9090B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.domain}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
-        <div style={{ width: '40px', background: '#1A1A2A', borderRadius: '2px', height: '3px' }}>
-          <div style={{ background: '#334', borderRadius: '2px', height: '3px', width: `${maxOtherSlots > 0 ? Math.min(100, (o.citationSlots / maxOtherSlots) * 100) : 0}%` }} />
-        </div>
-        <span style={{ fontSize: '11px', color: '#7070A0', minWidth: '24px', textAlign: 'right' }}>{o.citationSlots}</span>
-      </div>
-      <span style={{ fontSize: '11px', color: '#555570', textAlign: 'right' }}>—</span>
-      <span style={{ fontSize: '11px', color: '#555570', textAlign: 'right' }}>{pct(o.citationRate)}</span>
-    </div>
-  );
+  const GRID = 'minmax(140px,1.1fr) minmax(120px,1fr) 110px 110px 150px 160px';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-      <TabBar>
-        <TabBtn active={tab === 'brands'} onClick={() => setTab('brands')}>
-          Tracked brands <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{brandStats.length}</span>
-        </TabBtn>
-        <TabBtn active={tab === 'others'} onClick={() => setTab('others')}>
-          Other domains <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{otherDomains.length}</span>
-        </TabBtn>
-        <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>
-          All <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{brandStats.length + otherDomains.length}</span>
-        </TabBtn>
-      </TabBar>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p style={{ fontSize: '15px', fontWeight: 700, color: '#E0E0F8', margin: 0 }}>Citation landscape</p>
+          <p style={{ fontSize: '11px', color: '#8888AA', margin: '2px 0 0' }}>Everything cited in AIOs — pivot from your tracked competitive set to the wider web, or see it all in one ranking.</p>
+        </div>
+        <TabBar>
+          <TabBtn active={tab === 'brands'} onClick={() => setTab('brands')}>
+            Tracked brands <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{brandRows.length}</span>
+          </TabBtn>
+          <TabBtn active={tab === 'others'} onClick={() => setTab('others')}>
+            Other domains <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{otherRows.length}</span>
+          </TabBtn>
+          <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>
+            All <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.7 }}>{allRows.length}</span>
+          </TabBtn>
+        </TabBar>
+      </div>
 
-      {tab === 'brands' && (
-        <>
-          <TableHeader />
-          {brandStats.map(b => <BrandRow key={b.domain} b={b} maxSlots={maxBrandSlots} />)}
-          {brandStats.length === 0 && <p style={{ fontSize: '12px', color: '#555570' }}>No competitor data configured for this project.</p>}
-        </>
-      )}
+      {/* Header */}
+      <div style={{ display: 'grid', gridTemplateColumns: GRID, gap: '0 12px', padding: '6px 12px', borderBottom: '1px solid #1A1A2A' }}>
+        {['Brand', 'Domain', 'AIOs acquired', 'Citation slots', 'Citation rate (market)', 'Citation rate (footprint)'].map((h, i) => (
+          <span key={h} style={{ fontSize: '9px', fontWeight: 700, color: '#333350', textTransform: 'uppercase', letterSpacing: '.06em', textAlign: i > 1 ? 'right' : 'left' }}>{h}</span>
+        ))}
+      </div>
 
-      {tab === 'others' && (
-        <>
-          <p style={{ fontSize: '11px', color: '#8888AA', margin: '0 0 4px' }}>Non-tracked domains cited in AI Overviews, ranked by citation slots.</p>
-          <TableHeader />
-          {otherDomains.map((o, i) => <OtherRow key={o.domain} o={o} i={i} />)}
-          {otherDomains.length === 0 && <p style={{ fontSize: '12px', color: '#555570' }}>No other domains detected.</p>}
-        </>
-      )}
+      {rows.length === 0 && <p style={{ fontSize: '12px', color: '#555570' }}>{tab === 'others' ? 'No other domains detected.' : 'No citation data yet — run a SERP scan.'}</p>}
 
-      {tab === 'all' && (
-        <>
-          <TableHeader />
-          {allRows.map((row, i) => row.isBrand
-            ? <BrandRow key={row.domain} b={brandStats.find(b => b.domain === row.domain)!} maxSlots={Math.max(maxBrandSlots, maxOtherSlots)} />
-            : <OtherRow key={row.domain} o={{ domain: row.domain, citationSlots: row.slots, citationRate: row.rate }} i={i} />
-          )}
-        </>
-      )}
+      {rows.map((r) => (
+        <div key={`${r.isBrand ? 'b' : 'o'}-${r.domain}`} style={{
+          display: 'grid', gridTemplateColumns: GRID, gap: '0 12px',
+          padding: '10px 12px', borderRadius: '7px', alignItems: 'center',
+          background: r.isClient ? 'rgba(108,99,255,0.10)' : 'transparent',
+          border: `1px solid ${r.isClient ? 'rgba(108,99,255,0.30)' : 'transparent'}`,
+          borderBottom: r.isClient ? '1px solid rgba(108,99,255,0.30)' : '1px solid #12121E',
+        }}>
+          <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: r.isClient ? 700 : r.isBrand ? 600 : 500, color: r.isClient ? '#E0E0F8' : r.isBrand ? '#D0D0E8' : '#9090B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+            {r.isClient && <span style={{ fontSize: '9px', padding: '2px 8px', borderRadius: '10px', background: 'rgba(108,99,255,0.25)', color: '#A0A0FF', flexShrink: 0 }}>client</span>}
+          </div>
+          <span style={{ fontSize: '11px', color: '#666688', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.domain}</span>
+          <span style={{ fontSize: '13px', fontWeight: 600, color: r.isClient ? '#A0A0FF' : '#C0C0E8', textAlign: 'right' }}>{r.aios}</span>
+          <span style={{ fontSize: '13px', color: '#9999B8', textAlign: 'right' }}>{r.slots}</span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: r.isClient ? '#A0A0FF' : '#C0C0E8', textAlign: 'right' }}>{totalAios > 0 ? pct(r.aios / totalAios) : '—'}</span>
+          <span style={{ fontSize: '13px', color: '#9999B8', textAlign: 'right' }}>{footprintAvail > 0 ? pct(r.aios / footprintAvail) : '—'}</span>
+        </div>
+      ))}
 
-      <p style={{ fontSize: '10px', color: '#2A2A40', marginTop: '2px' }}>
-        Citation rate = AIOs cited in ÷ {totalAios} AIO-triggering keywords · {totalSlots} total citation slots across all AIOs
+      <p style={{ fontSize: '10px', color: '#444458', marginTop: '2px' }}>
+        Market rate = AIOs cited in ÷ {totalAios} scanned AIO-triggering keywords · Footprint rate = same wins ÷ {footprintAvail.toLocaleString()} available AIOs across the full footprint (scanned + uploaded — only scanned SERPs can verify citations, so this is a verified floor) · {totalSlots} citation slots across all scanned AIOs
       </p>
     </div>
   );
@@ -625,7 +602,6 @@ const ADD_FEATURES = [
 
 export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
-  const [aioViewTab,  setAioViewTab]  = useState<AIOViewTab>('keywords');
 
   const serpSnap    = analysis.serpApiSnapshot ?? {};
   const featSummary = serpSnap.serpFeatureSummary;
@@ -805,38 +781,32 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             </div>
           </div>
 
-          {/* Gap callout REMOVED in v7.115 (Wayne): it counted only the scanned
-              AIO subset (e.g. "7 of 9") which read as contradictory next to the
-              hybrid "Available AIOs" figure (359 incl. uploads). The same
-              scanned-only gap is still visible via the Missing pill in the
-              Keyword Drilldown below. */}
+          {/* v7.115: Gap callout removed (scanned-only count read as contradictory
+              next to hybrid availability). v7.116 (Wayne): the Citation Landscape
+              table now lives HERE — always visible, reference-style layout with
+              Tracked brands / Other domains / All tabs — and the old
+              Drilldown/Landscape view toggle is gone (drilldown renders below). */}
 
           {scannedKws.length === 0 ? (
             <p style={{ fontSize: '12px', color: '#555570' }}>No SERP scan data available. Run analysis to populate.</p>
           ) : (
             <>
-              {/* View toggle */}
-              <TabBar>
-                <TabBtn active={aioViewTab === 'keywords'}  onClick={() => setAioViewTab('keywords')}>Keyword Drilldown</TabBtn>
-                <TabBtn active={aioViewTab === 'landscape'} onClick={() => setAioViewTab('landscape')}>Citation Landscape</TabBtn>
-              </TabBar>
+              <CitationLandscape
+                brandStats={aio.brandStats}
+                otherDomains={aio.otherDomains}
+                totalAios={aio.totalAios}
+                totalSlots={aio.totalSlots}
+                footprintAvail={aioAvail}
+              />
 
-              {aioViewTab === 'keywords' && (
+              <div>
+                <SectionLabel text="Keyword Drilldown" />
                 <KeywordDrilldown
                   keywords={aio.enrichedKws}
                   clientDomain={clientDomain}
                   clientName={displayClientName}
                 />
-              )}
-
-              {aioViewTab === 'landscape' && (
-                <CitationLandscape
-                  brandStats={aio.brandStats}
-                  otherDomains={aio.otherDomains}
-                  totalAios={aio.totalAios}
-                  totalSlots={aio.totalSlots}
-                />
-              )}
+              </div>
             </>
           )}
         </div>
