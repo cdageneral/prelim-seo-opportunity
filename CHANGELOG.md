@@ -1,5 +1,22 @@
 # OrbitIQ Changelog
 
+## v7.126 — 2026-06-05 · AIO Keyword Drilldown redesigned to match the AIO Coverage Tracker layout
+
+**Request (Wayne):** "In the AIO section of the SERP features for the keyword drill down — modify the existing layout to match the screenshot from the AIO Coverage Tracker." (Two-column expansion: AI Overview Answer panel + Tracked Brand Hits on the left, numbered Citations list with source-type tags on the right.)
+
+**Changes:**
+- `lib/apis/serp.ts` — NEW `KeywordSerpData.aioText`: the verbatim AI Overview answer text, flattened from SerpAPI's `ai_overview.text_blocks` (paragraphs, headings, list items incl. nesting), capped at 6,000 chars. Captured on every scan from v7.126 on. **Pre-v7.126 scans stored citation links only — they have NO answer text, and the UI says so instead of inventing one.**
+- `components/brief/SerpFeaturesSection.tsx` — the expanded drill-down row (old flat "All AIO sources" chip list) is now the Coverage-Tracker layout:
+  - **AI Overview Answer** (left): scrollable panel with the captured answer text; dashed placeholder with re-scan instruction when text wasn't captured (older scans).
+  - **Tracked Brand Hits** (left): one chip per tracked brand (client first, client dot purple / competitor dots pink). Status per brand: `cited #N` (1-based position in this AIO's citation list), `· mentioned` appended when the brand name appears in the captured answer text (whole-word, case-insensitive — only evaluated when text exists), `mentioned` alone, or `absent`. Green border = any hit, red = absent.
+  - **Citations (N)** (right): numbered list — clickable title (falls back to domain), domain, and a type tag: `industry` (domain matches a tracked brand), `wikipedia`, or `other`. Client rows highlighted with "★ you". Scroll-capped at ~320px.
+  - Rows are now expandable when the AIO has citations OR captured answer text. Empty-source AIOs show "no citation links (scan-confirmed)" — consistent with the v7.125 staleness rule (no behavior change there).
+- All classification is deterministic (tracked-domain match / wikipedia.org suffix); nothing is modeled or guessed.
+
+**Data caveat (important):** the Answer panel and "mentioned" detection only populate for keywords scanned on v7.126+. Existing AIO data (citations, positions, brand cited/absent) is unaffected and fully accurate. Re-scan keywords to fill in answer text.
+
+**Verification:** full `npx tsc --noEmit` exit 0 (clean install); jsdom interaction harness 27/27 on the new expanded layout — text+sources full layout (chips `cited #2`, `cited #1 · mentioned`, tags industry/wikipedia/other, ★ you, numbered #1–#4), sources-without-text re-scan placeholder, text-without-sources scan-confirmed note + mentioned-only chip, word-boundary negatives ("TD" ≠ "today", "Sono" ≠ "sonobello") and positive (standalone "TD"), non-expandable empty row, collapse toggle. Parser harness 9/9 against the real serp.ts module — paragraph/heading/list/nested text_blocks flattened, `Title: snippet` join, 6,000-char cap with ellipsis, no text_blocks → aioText undefined with references intact, no AIO → no text. All buttons remain `type` unchanged; no new API calls — answer text rides along on the existing scan request at zero extra credits.
+
 ## v7.125 — 2026-06-05 · Fix: "Refresh required" loop on AIOs that genuinely have no citation links
 
 **Symptom (Wayne):** "I click these buttons but it flashes and goes back to this." The amber refresh on 5 AIOs re-scanned them (≈5 credits per click), the scan succeeded — and the button instantly reappeared.

@@ -55,6 +55,7 @@ export interface KeywordSerpData {
   organicResults:   SerpResult[];
   hasAIO:           boolean;
   aioSources:       AIOSource[];     // Domains cited in the AI Overview
+  aioText?:         string;          // v7.126: the AI Overview answer text (from SerpAPI text_blocks; absent on pre-v7.126 scans — never fabricated)
   featuredSnippet:  SerpResult | null;
   paaQuestions:     string[];        // People Also Ask questions
   paaClientCited:   boolean;         // Client domain appears in a PAA answer link
@@ -159,6 +160,36 @@ function extractDomain(url: string): string {
   }
 }
 
+// v7.126: flatten SerpAPI ai_overview.text_blocks into plain text.
+// Block types observed in the wild (https://serpapi.com/google-ai-overview-api):
+// paragraph (snippet), heading (snippet), list (list[].title/snippet, can nest),
+// table / expandable (ignored beyond their snippets). Verbatim text only.
+function extractAIOText(aio: any): string | undefined {
+  if (!aio) return undefined;
+  const out: string[] = [];
+  const walk = (blocks: any[]) => {
+    for (const b of blocks ?? []) {
+      if (!b || typeof b !== 'object') continue;
+      if (typeof b.snippet === 'string' && b.snippet.trim()) out.push(b.snippet.trim());
+      if (Array.isArray(b.list)) {
+        for (const item of b.list) {
+          if (!item || typeof item !== 'object') continue;
+          const title = typeof item.title === 'string' ? item.title.trim() : '';
+          const snip  = typeof item.snippet === 'string' ? item.snippet.trim() : '';
+          const line  = title && snip ? `${title}: ${snip}` : (title || snip);
+          if (line) out.push(line);
+          if (Array.isArray(item.list)) walk([{ list: item.list }]);
+        }
+      }
+      if (Array.isArray(b.text_blocks)) walk(b.text_blocks);
+    }
+  };
+  walk(aio.text_blocks ?? []);
+  if (out.length === 0) return undefined;
+  const text = out.join('\n');
+  return text.length > 6000 ? text.slice(0, 6000) + '…' : text;
+}
+
 async function parseKeywordSerp(keyword: string, data: any, clientDomain: string): Promise<KeywordSerpData> {
   // Organic results
   const organicResults: SerpResult[] = (data.organic_results ?? []).map((r: any) => ({
@@ -196,6 +227,13 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
       });
     }
   }
+
+  // v7.126: AI Overview answer TEXT. SerpAPI returns the rendered answer as
+  // `text_blocks` (paragraph / heading / list items, possibly nested). We store
+  // the verbatim text (joined with newlines, capped at 6000 chars) so the panel
+  // can show the actual answer. Absent on pre-v7.126 scans — the UI says so
+  // instead of inventing text.
+  const aioText = extractAIOText(aio);
 
   // Featured snippet
   const fsRaw = data.answer_box;
@@ -274,6 +312,7 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
     organicResults,
     hasAIO,
     aioSources,
+    aioText,
     featuredSnippet,
     paaQuestions,
     paaClientCited,

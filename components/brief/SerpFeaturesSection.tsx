@@ -25,6 +25,7 @@ interface SerpKw {
   serpFeatures:     string[];
   hasAIO:           boolean;
   aioSources:       Array<{ domain: string; title: string; url: string }>;
+  aioText?:         string;   // v7.126: AI Overview answer text (absent on pre-v7.126 scans)
   paaQuestions:     string[];
   paaClientCited:   boolean;
   paaSources?:      Array<{ question: string; title: string; url: string; domain: string }>;   // v7.117 (absent on older scans)
@@ -601,10 +602,11 @@ function buildFeatureLandscape(
 
 // ── Keyword Drilldown ──────────────────────────────────────────────────────────
 
-function KeywordDrilldown({ keywords, clientDomain, clientName }: {
+function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
   keywords: EnrichedKw[];
   clientDomain: string;
   clientName: string;
+  competitors: Competitor[];
 }) {
   const [filter, setFilter]     = useState<KwFilter>('aio');
   const [search, setSearch]     = useState('');
@@ -637,6 +639,27 @@ function KeywordDrilldown({ keywords, clientDomain, clientName }: {
 
   function toggleExpand(kw: string) {
     setExpanded(prev => { const s = new Set(prev); s.has(kw) ? s.delete(kw) : s.add(kw); return s; });
+  }
+
+  // v7.126: tracked brands (client first) for the Tracked Brand Hits strip
+  const trackedBrands = useMemo(() => ([
+    { name: clientName || clientDomain, domain: clientDomain, isClient: true },
+    ...(competitors ?? []).map(c => ({ name: c.name || normDomain(c.domain), domain: normDomain(c.domain), isClient: false })),
+  ].filter(b => b.domain)), [clientName, clientDomain, competitors]);
+
+  // v7.126: citation source classification — deterministic, from tracked set
+  function sourceTag(domain: string): 'industry' | 'wikipedia' | 'other' {
+    if (trackedBrands.some(b => domainsMatch(domain, b.domain))) return 'industry';
+    if (normDomain(domain).endsWith('wikipedia.org')) return 'wikipedia';
+    return 'other';
+  }
+
+  // v7.126: brand "mentioned" check — whole-word match of the brand name inside
+  // the captured AIO answer text. Only runs when text was captured; never inferred.
+  function brandMentioned(name: string, text?: string): boolean {
+    if (!text || !name || name.length < 2) return false;
+    const esc = name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try { return new RegExp(`\\b${esc}\\b`, 'i').test(text); } catch { return false; }
   }
 
   return (
@@ -676,7 +699,8 @@ function KeywordDrilldown({ keywords, clientDomain, clientName }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
           {filtered.map(kw => {
             const isExpanded = expanded.has(kw.keyword);
-            const hasSources = kw.hasAIO && (kw.aioSources?.length ?? 0) > 0;
+            // v7.126: expandable when there's ANYTHING verified to show — citations or captured answer text
+            const hasSources = kw.hasAIO && ((kw.aioSources?.length ?? 0) > 0 || !!kw.aioText);
             return (
               <div key={kw.keyword} style={{ background: '#08080F', border: '1px solid #12121E', borderRadius: '7px', overflow: 'hidden' }}>
                 <button
@@ -721,28 +745,94 @@ function KeywordDrilldown({ keywords, clientDomain, clientName }: {
                   </div>
                 </button>
 
-                {/* Expanded: full AIO source list */}
+                {/* v7.126: Expanded — AIO Coverage Tracker layout: Answer + Brand Hits | Citations */}
                 {isExpanded && hasSources && (
-                  <div style={{ padding: '0 12px 10px', borderTop: '1px solid #0F0F1E' }}>
-                    <p style={{ fontSize: '9px', color: '#333350', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.07em', margin: '8px 0 5px' }}>
-                      All AIO sources ({kw.aioSources.length})
-                    </p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                      {kw.aioSources.map((src, i) => {
-                        const isMe = domainsMatch(src.domain, clientDomain);
-                        return (
-                          <span key={i} title={src.title || src.url} style={{
-                            padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 500,
-                            background: isMe ? 'rgba(108,99,255,0.15)' : '#12121E',
-                            border: `1px solid ${isMe ? 'rgba(108,99,255,0.4)' : '#1A1A2A'}`,
-                            color: isMe ? '#A0A0FF' : '#7070A0',
-                          }}>
-                            <span style={{ fontSize: '9px', color: '#444458', marginRight: '3px' }}>#{i + 1}</span>
-                            {src.domain}
-                            {isMe && <span style={{ marginLeft: '4px', fontSize: '9px', color: '#6C63FF' }}>★</span>}
-                          </span>
-                        );
-                      })}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.1fr) minmax(0,1fr)', gap: '20px', padding: '14px 16px 16px', borderTop: '1px solid #0F0F1E', background: '#060610' }}>
+
+                    {/* LEFT — AI Overview Answer + Tracked Brand Hits */}
+                    <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div>
+                        <p style={{ fontSize: '9px', color: '#444466', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.09em', margin: '0 0 7px' }}>
+                          AI Overview Answer
+                        </p>
+                        {kw.aioText ? (
+                          <div style={{ background: '#0A0A18', border: '1px solid #16162A', borderRadius: '9px', padding: '12px 14px', maxHeight: '230px', overflowY: 'auto', fontSize: '12px', lineHeight: 1.65, color: '#C0C0E8', whiteSpace: 'pre-wrap' }}>
+                            {kw.aioText}
+                          </div>
+                        ) : (
+                          <div style={{ background: '#0A0A18', border: '1px dashed #1E1E35', borderRadius: '9px', padding: '12px 14px', fontSize: '11px', lineHeight: 1.55, color: '#555570' }}>
+                            Answer text not captured for this keyword — scans before v7.126 stored citation links only. Re-scan this keyword to capture the actual AI Overview answer.
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <p style={{ fontSize: '9px', color: '#444466', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.09em', margin: '0 0 7px' }}>
+                          Tracked Brand Hits
+                        </p>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {trackedBrands.map((b, bi) => {
+                            const idx = (kw.aioSources ?? []).findIndex(s => domainsMatch(s.domain, b.domain));
+                            const cited = idx >= 0;
+                            const mentioned = brandMentioned(b.name, kw.aioText);
+                            const hit = cited || mentioned;
+                            const status = cited
+                              ? `cited #${idx + 1}${mentioned ? ' · mentioned' : ''}`
+                              : mentioned ? 'mentioned' : 'absent';
+                            return (
+                              <span key={bi} style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                padding: '5px 11px', borderRadius: '8px', fontSize: '11px', fontWeight: 600,
+                                background: hit ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.05)',
+                                border: `1px solid ${hit ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.18)'}`,
+                                color: '#D0D0F0',
+                              }}>
+                                <span style={{ width: '7px', height: '7px', borderRadius: '2px', background: b.isClient ? '#6C63FF' : '#EC4899', flexShrink: 0 }} />
+                                {b.name}
+                                <span style={{ fontWeight: 700, fontSize: '10px', color: hit ? '#22C55E' : '#EF4444' }}>{status}</span>
+                              </span>
+                            );
+                          })}
+                          {trackedBrands.length === 0 && (
+                            <span style={{ fontSize: '11px', color: '#555570' }}>No tracked brands configured.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* RIGHT — Citations */}
+                    <div style={{ minWidth: 0 }}>
+                      <p style={{ fontSize: '9px', color: '#444466', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.09em', margin: '0 0 4px' }}>
+                        Citations ({kw.aioSources?.length ?? 0})
+                      </p>
+                      {(kw.aioSources?.length ?? 0) > 0 ? (
+                        <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                          {kw.aioSources.map((src, i) => {
+                            const isMe = domainsMatch(src.domain, clientDomain);
+                            const tag = sourceTag(src.domain);
+                            return (
+                              <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '8px 2px', borderBottom: '1px solid #10101E' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 700, color: '#444466', flexShrink: 0, paddingTop: '2px' }}>#{i + 1}</span>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <a href={src.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: isMe ? '#A0A0FF' : '#D0D0F0', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {src.title || src.domain}{isMe && <span style={{ marginLeft: '5px', fontSize: '10px', color: '#6C63FF' }}>★ you</span>}
+                                  </a>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '3px' }}>
+                                    <span style={{ fontSize: '10px', color: '#555570', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{normDomain(src.domain)}</span>
+                                    <span style={{ flexShrink: 0, padding: '1px 7px', borderRadius: '8px', fontSize: '9px', fontWeight: 600, background: '#12121E', border: '1px solid #1E1E35', color: tag === 'industry' ? '#A0A0C8' : '#666688' }}>
+                                      {tag}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p style={{ fontSize: '11px', color: '#555570', margin: '6px 0 0' }}>
+                          This AIO exposes no citation links (scan-confirmed).
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1148,6 +1238,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   keywords={aio.enrichedKws}
                   clientDomain={clientDomain}
                   clientName={displayClientName}
+                  competitors={competitors}
                 />
               </div>
             </>
