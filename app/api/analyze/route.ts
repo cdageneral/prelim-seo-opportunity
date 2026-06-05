@@ -113,19 +113,44 @@ export async function POST(req: NextRequest) {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (mode === 'data') {
-      // v7.113 FIX: findFirst without orderBy returns an ARBITRARY (in practice
-      // the oldest) completed analysis — which predates SERP scanning and holds
-      // a stale footprint. Must be the MOST RECENT completed analysis, same
-      // ordering every other route uses.
-      const lastAnalysis = await db.query.analyses.findFirst({
+      // v7.114 FIX: don't trust a single "latest completed" row. A data-mode
+      // run COPIES snapshots into a new completed analysis, so after the
+      // v7.112 no-orderBy bug the latest completed row can hold the OLDEST
+      // run's snapshots (no scanned keywords, stale footprint) while the real
+      // assets live in older rows. Recover each asset independently across
+      // recent completed analyses — the same pattern full mode has used for
+      // serp carry-forward since v7.82:
+      //  • serpApiSnapshot — most recent row that actually HAS scanned keywords
+      //  • semrushSnapshot — row whose snapshot has the NEWEST fetchedAt
+      //    (fetchedAt is stamped when Semrush data was genuinely pulled/merged;
+      //    data-mode copies retain the old stamp, so this skips polluted rows)
+      //  • profoundSnapshot — most recent row that has one
+      const recentCompleted = await db.query.analyses.findMany({
         where: and(
           eq(analyses.projectId, projectId),
           eq(analyses.status, 'completed'),
         ),
         orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+        limit: 15,
       });
 
-      if (!lastAnalysis?.semrushSnapshot) {
+      const fetchedAtMs = (s: any) => {
+        const t = Date.parse(s?.fetchedAt ?? '');
+        return Number.isFinite(t) ? t : 0;
+      };
+      let baseSemrush: any = null;
+      for (const a of recentCompleted) {
+        const s: any = a.semrushSnapshot;
+        if (s && (!baseSemrush || fetchedAtMs(s) > fetchedAtMs(baseSemrush))) baseSemrush = s;
+      }
+      const existingSerp: any = recentCompleted
+        .map((a: any) => a.serpApiSnapshot as any)
+        .filter((s: any) => (s?.keywords?.length ?? 0) > 0)
+        .sort((a: any, b: any) => fetchedAtMs(b) - fetchedAtMs(a))[0] ?? null;
+      const baseProbe: any = recentCompleted
+        .find((a: any) => a.profoundSnapshot != null)?.profoundSnapshot ?? null;
+
+      if (!baseSemrush) {
         await db.update(analyses).set({ status: 'failed' }).where(eq(analyses.id, analysis.id));
         return NextResponse.json(
           { error: 'Data-only refresh needs a completed analysis to reuse. Run a full analysis (or upload a footprint) first.' },
@@ -133,7 +158,6 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const existingSerp: any = lastAnalysis.serpApiSnapshot ?? null;
       const prevScanned: string[] = ((existingSerp?.keywords ?? []) as any[])
         .map((k: any) => k?.keyword as string)
         .filter(Boolean);
@@ -142,7 +166,25 @@ export async function POST(req: NextRequest) {
       // AIO token follow-up). Cap a single data refresh at 50 re-scans —
       // highest-coverage first is preserved since we keep stored order.
       const RESCAN_CAP = 50;
-      const rescanList = prevScanned.slice(0, RESCAN_CAP);
+      let rescanList = prevScanned.slice(0, RESCAN_CAP);
+
+      // v7.114: if NO keyword has ever been scanned, fall back to a fresh scan
+      // of the top client keywords by volume instead of doing nothing — that's
+      // what a "data refresh" should mean on a never-scanned project.
+      let usedFallback = false;
+      if (rescanList.length === 0) {
+        const topKws: string[] = ((baseSemrush.topKeywords ?? []) as any[])
+          .slice()
+          .sort((a: any, b: any) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0))
+          .map((k: any) => k.keyword as string)
+          .filter(Boolean)
+          .slice(0, 10);
+        if (topKws.length > 0) {
+          rescanList = topKws;
+          usedFallback = true;
+          warnings.push(`No previously scanned SERP keywords found — scanned your top ${topKws.length} keywords by volume instead (${topKws.length} SerpAPI credits). Use "Scan SERP features" in the Keywords panel to extend coverage.`);
+        }
+      }
 
       let serp: any = existingSerp;
       if (rescanList.length > 0) {
@@ -166,18 +208,18 @@ export async function POST(req: NextRequest) {
           warnings.push(`SerpAPI re-scan failed (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
         }
       } else {
-        warnings.push('No previously scanned SERP keywords found — nothing to re-scan. Use "Scan SERP features" in the Keywords panel to scan keywords first.');
+        warnings.push('No keywords available to scan — the reused footprint has no keywords. Run a full analysis or upload a footprint first.');
       }
 
       await db.update(analyses)
         .set({
-          semrushSnapshot:  lastAnalysis.semrushSnapshot  as any,   // untouched — 0 Semrush units
-          serpApiSnapshot:  serp                          as any,
-          profoundSnapshot: lastAnalysis.profoundSnapshot as any,   // reused
+          semrushSnapshot:  baseSemrush as any,   // untouched — 0 Semrush units
+          serpApiSnapshot:  serp        as any,
+          profoundSnapshot: baseProbe   as any,   // reused
         })
         .where(eq(analyses.id, analysis.id));
 
-      console.log(`[OrbitIQ] Data-only refresh Phase 1 complete for ${analysis.id} — ${rescanList.length} keywords re-scanned, 0 Semrush units`);
+      console.log(`[OrbitIQ] Data-only refresh Phase 1 complete for ${analysis.id} — ${rescanList.length} keywords ${usedFallback ? 'scanned (fallback)' : 're-scanned'}, 0 Semrush units`);
       return NextResponse.json({
         analysisId:  analysis.id,
         triggeredAt: analysis.triggeredAt,
@@ -193,22 +235,41 @@ export async function POST(req: NextRequest) {
     // ══════════════════════════════════════════════════════════════════════════
 
     if (mode === 'gaps') {
-      // v7.113 FIX: same latent bug as data mode — no orderBy meant gap scans
-      // could merge against the OLDEST completed analysis (stale footprint,
-      // missing serp-scan coverage) instead of the latest. Present since v7.31.
-      const lastAnalysis = await db.query.analyses.findFirst({
+      // v7.113 FIX: no orderBy meant gap scans could merge against the OLDEST
+      // completed analysis (stale footprint, missing serp-scan coverage).
+      // v7.114: per-asset recovery across recent completed analyses, same as
+      // data mode — footprint by newest fetchedAt (skips rows that merely
+      // copied an old snapshot), serp snapshot from the row that actually has
+      // scanned keywords, probe from the most recent row that has one.
+      const gapRecent = await db.query.analyses.findMany({
         where: and(
           eq(analyses.projectId, projectId),
           eq(analyses.status, 'completed'),
         ),
         orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+        limit: 15,
       });
+      const gapFetchedAtMs = (s: any) => {
+        const t = Date.parse(s?.fetchedAt ?? '');
+        return Number.isFinite(t) ? t : 0;
+      };
+      let gapBaseSemrush: any = null;
+      for (const a of gapRecent) {
+        const s: any = a.semrushSnapshot;
+        if (s && (!gapBaseSemrush || gapFetchedAtMs(s) > gapFetchedAtMs(gapBaseSemrush))) gapBaseSemrush = s;
+      }
+      const gapBaseSerp: any = gapRecent
+        .map((a: any) => a.serpApiSnapshot as any)
+        .filter((s: any) => (s?.keywords?.length ?? 0) > 0)
+        .sort((a: any, b: any) => gapFetchedAtMs(b) - gapFetchedAtMs(a))[0] ?? null;
+      const gapBaseProbe: any = gapRecent
+        .find((a: any) => a.profoundSnapshot != null)?.profoundSnapshot ?? null;
 
-      if (!lastAnalysis?.semrushSnapshot) {
+      if (!gapBaseSemrush) {
         console.log(`[OrbitIQ] Gap scan: no completed analysis found — falling back to full mode`);
         // Fall through to full mode below
       } else {
-        const existingSnapshot = lastAnalysis.semrushSnapshot as SemrushSnapshot;
+        const existingSnapshot = gapBaseSemrush as SemrushSnapshot;
         const existingRanked   = new Set(
           (existingSnapshot.topKeywords ?? []).map((k: any) => (k.keyword as string).toLowerCase().trim())
         );
@@ -314,7 +375,7 @@ export async function POST(req: NextRequest) {
           ...newClientKeywords.slice(0, 3).map(k => k.keyword),
           ...newGapKeywords.slice(0, 3).map(k => k.keyword),
         ].slice(0, 5);
-        let serp: any = lastAnalysis.serpApiSnapshot ?? null;
+        let serp: any = gapBaseSerp;
         if (serpSample.length > 0) {
           try {
             const fresh   = await getSerpApiSnapshot(domain, serpSample, market);
@@ -329,7 +390,7 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        const llmProbe = lastAnalysis.profoundSnapshot as any;
+        const llmProbe = gapBaseProbe;
 
         await db.update(analyses)
           .set({
