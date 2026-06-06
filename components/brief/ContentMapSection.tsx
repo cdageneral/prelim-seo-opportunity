@@ -598,7 +598,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
 
   if (!hasData) {
     return (
-      <div style={{ padding: '60px 24px', textAlign: 'center' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '60px 24px', textAlign: 'center' }}>
         <div style={{ fontSize: 36, marginBottom: 14 }}>📋</div>
         <p style={{ color: '#4A4A6A', fontSize: 13 }}>
           Run an analysis to populate the Content Plan. Keyword clusters are required.
@@ -608,7 +608,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0, padding: '12px 16px' }}>
       {/* Header */}
       <div style={{ marginBottom: 22 }}>
         <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>

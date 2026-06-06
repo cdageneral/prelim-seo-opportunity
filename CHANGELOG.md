@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.131 — 2026-06-05 · Fix: Content Map panel would not scroll
+
+**Request (Wayne):** "In the content panel from the left side nav, it does not seem to be allowing me to scroll up and down."
+
+**Root cause:** The left-nav content area (`app/projects/[id]/page.tsx`) renders each section inside `<main className="flex-1 overflow-hidden flex flex-col">`. Because `main` is `overflow-hidden`, every section must supply its own scroll container. The other raw-rendered sections do: ExecutiveSummary / GoogleSerp / SerpFeatures use `overflow-y-auto flex-1`, KeywordsPanel uses an inner `overflow-auto flex-1 min-h-0` table, ThemeClustersPanel uses `flex:1, overflowY:auto`. **ContentMapSection's root `<div>` was the only one without one** — it was just `display:flex; flexDirection:column; gap:0`. With no `flex:1` and no `overflowY:auto`, its content was clipped at the bottom of the viewport with no way to scroll (the "Content Plan" / Content Map nav item).
+
+**Fix (`components/brief/ContentMapSection.tsx`, display-only — no data/logic change):**
+- Main return root `<div>`: added `flex: 1, minHeight: 0, overflowY: 'auto'` and `padding: '12px 16px'` (mirrors the sibling ThemeClustersPanel pattern; the section is rendered raw in `page.tsx` with no wrapper, so padding now also gives the content breathing room instead of touching the edges).
+- Empty-state return root `<div>`: added `flex: 1, minHeight: 0, overflowY: 'auto'` for consistency.
+
+**Verified:** full-project `tsc --noEmit` exit 0 in a clean `/tmp` env (`npm install --ignore-scripts`), 0 errors, 0 in the changed file. Scroll audit across all eight nav sections confirms each now resolves to exactly one scroll container under the `overflow-hidden` main (overview / keywords-list / keywords-clusters / content / serp / serpFeatures + the page.tsx-wrapped llm / audienceSegments / journeys). Before/after layout preview rendered in chat. No other section touched.
+
 ## v7.130 — 2026-06-05 · Executive Summary rebuilt around the GEO story (landscape → two worlds → journey → continuous cycle)
 
 **Request (Wayne):** the old exec read as "a lot of data, not a story." Reshape it so a CMO instantly gets: where they stand, where their gaps are, who's beating them, and what to do — framed inside the company GEO narrative (discovery shifting from search links to AI answers; ranked content largely uncited in LLMs). Direction chosen across a design session: hybrid editorial-headline + answer-grid, competition kept as supporting evidence (not a headline), industry stats used as conceptual framing only (never presented as client-measured data), and story elements the app can't yet measure shipped as visible "coming" placeholders.
