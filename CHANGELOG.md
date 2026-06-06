@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.138 — 2026-06-06 · FIX (no data loss): a failed/interrupted run no longer masks existing results — page shows the latest COMPLETED analysis
+
+**Symptom (Wayne):** after a Full re-analysis failed with a network error, the project showed the pre-run data-source picker ("How should OrbitIQ source keyword footprint data?") as if all data was gone.
+
+**Root cause — display only, NO data was lost.** Every `/api/analyze` run `INSERT`s a NEW `analyses` row (route.ts:90); old completed rows are retained (the data-mode recovery already relies on this, scanning up to 15 recent completed rows). But the project page derived the displayed analysis as `project.analyses?.[0]` — the newest row by `triggeredAt`, regardless of status. The failed re-run became row [0] with `status:'failed'`, so `hasResults = (status==='completed')` was false and the UI fell back to the run screen, **masking** the prior completed analysis still sitting in the DB at row [1]. Pre-existing logic since well before the rank-distribution work — the failed run merely exposed it.
+
+**Fix (1 file, `app/projects/[id]/page.tsx`, display-selection only):**
+- `const latestAnalysis = project?.analyses?.[0] ?? null;` (newest row, any status)
+- `const analysis = project?.analyses?.find(a => a.status === 'completed') ?? latestAnalysis;` — display now prefers the most recent COMPLETED analysis, falling back to the newest row only when nothing has completed yet (true first run / first-run-in-progress).
+- The resume/checkpoint detection (`requestAnalysisWithEstimate` + `triggerAnalysis`) now reads `latestAnalysis` instead of the displayed row, so resuming an interrupted run still targets that interrupted run (not the last good one). Report/keyword-count refs continue to use the displayed (completed) `analysis`, which is correct.
+
+**Effect:** Wayne's existing completed analysis reappears immediately on load — **no re-run, no API units**. A failed/interrupted refresh now leaves the last good results on screen (with the dismissable failure banner), instead of blanking the project. The projects API still returns the latest 5 rows, so the completed row is in range in the realistic case (a failed run is row [0], the completed one row [1]).
+
+**Verification (machine):** **full-project `tsc --noEmit` exit 0** (real deps installed in a clean /tmp copy — 505 packages; the whole app type-checks, incl. the v7.136/137 rank-distribution changes). Row-selection unit test **8/8**: failed-newest→displays completed + resume targets the failed row; running-newest→keeps showing completed + resume targets running; only-failed→run screen; only-completed; empty→run screen; newest-completed wins after a successful refresh.
+
 ## v7.137 — 2026-06-06 · Rank Distribution hardening: gap-refresh keeps client volume in sync + uploaded (CSV) footprints now populate the cards
 
 **Request (Wayne):** two follow-ups to v7.136's Rank Distribution, approved after review: (1) in Gap & rank refresh mode, keep client volume-per-band in sync with the refreshed counts; (2) populate the competitor distribution for projects running on an uploaded CSV footprint (which skip the Semrush pull), so they get the cards too.

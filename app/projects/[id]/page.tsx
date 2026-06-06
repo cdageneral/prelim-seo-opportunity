@@ -204,7 +204,17 @@ export default function ProjectBriefPage() {
   const [pptPrompt,   setPptPrompt]   = useState<string | null>(null);
   const [pptCopied,   setPptCopied]   = useState(false);
 
-  const analysis   = project?.analyses?.[0] ?? null;
+  // v7.138 FIX: the page used to display analyses[0] (newest row) unconditionally.
+  // Every analyze run INSERTS a new row, so a failed/interrupted newer run (e.g. a
+  // refresh that hit a network error) became analyses[0] with status!=='completed'
+  // and MASKED the previously completed results — the project looked empty / fell
+  // back to the pre-run screen even though the completed analysis was still in the
+  // DB. Display now prefers the most recent COMPLETED analysis, falling back to the
+  // newest row only when nothing has completed yet (true first run / in-progress).
+  // `latestAnalysis` (newest row, any status) is kept for the resume/checkpoint
+  // logic, which must target the interrupted run, not the last good one.
+  const latestAnalysis = project?.analyses?.[0] ?? null;
+  const analysis   = project?.analyses?.find((a: any) => a.status === 'completed') ?? latestAnalysis;
   const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
   const navScores  = calcNavScores(analysis);
@@ -233,7 +243,9 @@ export default function ProjectBriefPage() {
     // v7.112: data-only refresh never touches Semrush — skip the cost-estimate
     // modal entirely (there is nothing to bill or confirm).
     // Upload-based projects never hit Semrush; incomplete runs resume without Phase 1.
-    const incomplete = analysis && analysis.status !== 'completed' && analysis.semrushSnapshot;
+    // v7.138: resume detection targets the NEWEST row (the interrupted run), not the
+    // displayed completed one.
+    const incomplete = latestAnalysis && latestAnalysis.status !== 'completed' && latestAnalysis.semrushSnapshot;
     if (mode === 'data' || dataSource !== 'auto' || incomplete) {
       triggerAnalysis(mode);
       return;
@@ -269,13 +281,13 @@ export default function ProjectBriefPage() {
       // checkpointed server-side, so this resumes where it stopped — no
       // duplicate API spend.
       let analysisId: string;
-      const incomplete = analysis
-        && analysis.status !== 'completed'
-        && analysis.semrushSnapshot;
+      const incomplete = latestAnalysis
+        && latestAnalysis.status !== 'completed'
+        && latestAnalysis.semrushSnapshot;
 
       if (incomplete) {
-        console.log('[OrbitIQ] Resuming interrupted synthesis for', analysis.id);
-        analysisId = analysis.id;
+        console.log('[OrbitIQ] Resuming interrupted synthesis for', latestAnalysis.id);
+        analysisId = latestAnalysis.id;
       } else {
         const res1  = await fetch('/api/analyze', {
           method:  'POST',
