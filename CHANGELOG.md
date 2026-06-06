@@ -1,5 +1,25 @@
 # OrbitIQ Changelog
 
+## v7.136 — 2026-06-06 · Keywords: split-screen Rank Distribution (client vs selectable competitor) — kw + volume + share per rank band
+
+**Request (Wayne):** On the Keywords panel, under the summary cards, add a split-screen horizontal bar chart — client volume/rank distribution (1–3, 4–10, Page 2, Page 3+) on the left, the same for competitors on the right. Then: add search volume to each band alongside the keyword count and the share %. Rendered in-chat and approved before build. Rebased onto v7.135 (the v7.134/v7.135 numbers were taken by a parallel session's Exec-LLM and Clusters-layout changes; this work is orthogonal — it touches only `KeywordsPanel.tsx` and `semrush.ts`, which those releases did not).
+
+**Data integrity (told Wayne up front):**
+- The **client** side is a true full-footprint distribution — `semrushSnapshot.positionDist` (counts) and the new `positionVol` (monthly volume), both bucketed from the client's full organic pull (`topKeywords`).
+- The **competitor** side needed new data: the app never persisted a competitor's full-footprint distribution (only the filtered *gap* subset, deduped across competitors — not defensible per-competitor). So v7.136 persists `competitorPositionDist` (counts) and `competitorPositionVol` (monthly volume), keyed by competitor domain. These are computed from the competitor organic rows **already fetched** for the gap analysis (`gapResults`, before gap filtering) — **zero additional Semrush API units**. Empty competitor pulls are skipped, so no fabricated all-zero band is ever stored.
+- Per Wayne's choice (AskUserQuestion): the competitor card is a **selectable dropdown** over the tracked competitor domains, defaulting to `analysis.topCompetitor` when present.
+- The share % and bar length are **volume-driven** (each band's volume as a share of that entity's total footprint volume); the footer is page-1 share by volume. Volume is annualized for display via `fmtKwAnn` (monthly × 12) to match the Category Breakdown's "Annual Demand" convention directly below. Older snapshots (pre-v7.136, no volume fields) fall back to count-based bars/%; snapshots with no competitor field show a "re-run to populate" hint (Wayne re-runs once — 0 extra units — to populate).
+
+**Changes (2 files, additive — no existing metric/classification logic changed):**
+- `lib/apis/semrush.ts` — `SemrushSnapshot` gains optional `positionVol`, `competitorPositionDist`, `competitorPositionVol`. New pure helpers `buildVolumeDistribution`, `buildCompetitorPositionDistribution`, `buildCompetitorVolumeDistribution` (identical bucket cutoffs to `buildPositionDistribution`: ≤3 / ≤10 / ≤20 / 21+; competitor rows with no/zero rank are skipped). Per-competitor dists built from `gapResults[i]` (↔ `gapDomains[i]`) and added to the returned snapshot (persisted via the existing jsonb write — no route change).
+- `components/brief/KeywordsPanel.tsx` — new `RankDistributionSplit` + `RankDistBars` rendered directly under the summary cards. Reads only from the canonical snapshot; client left / competitor right; per band: `count kw · annual vol · volume %`; shared bar scale across both cards; competitor dropdown; volume-mode and count-mode; competitor empty-state. App dark styling + existing rank-bucket colors (#6C63FF / #06B6D4 / #F59E0B / #EF4444).
+
+**Verification (machine):**
+- Isolated `tsc --noEmit` (TS 5.5.4, project's strict/bundler settings) over the two changed files + their real dependency (`lib/utils/kwVolume.ts`): **exit 0, no type errors**.
+- jsdom harness mounting the **real** extracted `RankDistributionSplit` via react-dom/client: **19/19** — header + bands render, client `6 kw` + annualized `7.3M` vol + `14.9%` page-1 vol share, default competitor = `topCompetitor`, compA `54.6%`, dropdown switch → compB `150 kw` + `10.6%`, empty-competitor "Re-run the analysis" hint + no `<select>`, count-mode hides volume token and shows count-based `8.5%`, null client → renders nothing.
+- Pure-function data check on the real `semrush.ts` bucketing helpers: **13/13** — count and volume bucket boundaries exact (1/3/4/10/11/20/21/100), competitor 0/null-rank rows skipped with no volume leak.
+- In-chat render approved before build.
+
 ## v7.135 — 2026-06-06 · Clusters: top cards rearranged into 2-column layout (total hero left, group cards stacked right) + total card now clickable
 
 **Request (Wayne):** On the Clusters panel, rearrange the top card panels — put the overall total clusters / volume on the left, and stack all three group cards (Leading, Trailing, Low Competition) on the right. Make every card clickable to filter the cluster grid by that grouping. Rendered an in-chat preview first; approved, then built.

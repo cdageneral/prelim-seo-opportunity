@@ -56,7 +56,18 @@ export interface SemrushSnapshot {
   topKeywords:  SemrushKeyword[];        // Top 50 organic keywords
   competitors:  SemrushCompetitor[];     // Top 10 competitors
   gapKeywords:  SemrushKeywordGap[];     // Keywords competitors rank for, client doesn't
-  positionDist: Record<string, number>;  // { "1-3": 42, "4-10": 89, "11-20": 134, "21+": 301 }
+  positionDist: Record<string, number>;  // { "1-3": 42, "4-10": 89, "11-20": 134, "21+": 301 }  (keyword COUNTS)
+  // v7.136: search-volume per rank band (sum of MONTHLY searchVolume), same four
+  // keys as positionDist. Lets the UI show kw count + volume + volume-share per
+  // band. Summed from topKeywords — already pulled, zero extra Semrush units.
+  positionVol?: Record<string, number>;
+  // v7.136: per-competitor FULL-footprint rank distribution, keyed by competitor
+  // domain. Computed from the competitor organic rows ALREADY pulled for the gap
+  // analysis (before gap filtering) — zero additional Semrush API cost. Same four
+  // buckets as positionDist (counts) / positionVol (monthly volume), so the client
+  // and each competitor are directly comparable. Absent on pre-v7.136 snapshots.
+  competitorPositionDist?: Record<string, Record<string, number>>;  // counts
+  competitorPositionVol?:  Record<string, Record<string, number>>;  // monthly volume
   fetchedAt:    string;
   warnings?:    string[];                // v7.96: non-fatal problems during the pull (e.g. failed gap fetches)
 }
@@ -261,6 +272,51 @@ function buildPositionDistribution(keywords: SemrushKeyword[]): Record<string, n
   return dist;
 }
 
+// v7.136: same buckets, but SUM the monthly searchVolume per band instead of
+// counting. Mirrors buildPositionDistribution exactly so counts and volume share
+// one bucket definition.
+function buildVolumeDistribution(keywords: SemrushKeyword[]): Record<string, number> {
+  const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+  for (const kw of keywords) {
+    const v = kw.searchVolume ?? 0;
+    if (kw.position <= 3)       dist['1-3']  += v;
+    else if (kw.position <= 10) dist['4-10'] += v;
+    else if (kw.position <= 20) dist['11-20'] += v;
+    else                        dist['21+']  += v;
+  }
+  return dist;
+}
+
+// v7.136: competitor-side equivalents over the gap-pull rows (full footprint,
+// keyed on competitorPosition). Rows with no/zero rank are skipped so we never
+// invent a bucket.
+function buildCompetitorPositionDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
+  const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+  for (const r of rows) {
+    const p = r.competitorPosition;
+    if (!p || p <= 0)  continue;
+    if (p <= 3)        dist['1-3']++;
+    else if (p <= 10)  dist['4-10']++;
+    else if (p <= 20)  dist['11-20']++;
+    else               dist['21+']++;
+  }
+  return dist;
+}
+
+function buildCompetitorVolumeDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
+  const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+  for (const r of rows) {
+    const p = r.competitorPosition;
+    if (!p || p <= 0)  continue;
+    const v = r.searchVolume ?? 0;
+    if (p <= 3)        dist['1-3']  += v;
+    else if (p <= 10)  dist['4-10'] += v;
+    else if (p <= 20)  dist['11-20'] += v;
+    else               dist['21+']  += v;
+  }
+  return dist;
+}
+
 // ─── Full Snapshot (main entry point) ─────────────────────────────────────────
 
 export async function getSemrushSnapshot(
@@ -321,6 +377,19 @@ export async function getSemrushSnapshot(
       }
     })
   );
+
+  // v7.136: per-competitor FULL-footprint rank distribution (counts + monthly
+  // volume), computed from the organic rows just fetched above (before any gap
+  // filtering). gapResults[i] corresponds to gapDomains[i]. Zero extra Semrush
+  // units — pure reuse. Empty pulls are skipped so no fabricated all-zero band.
+  const competitorPositionDist: Record<string, Record<string, number>> = {};
+  const competitorPositionVol:  Record<string, Record<string, number>> = {};
+  gapDomains.forEach((comp, i) => {
+    const rows = gapResults[i] ?? [];
+    if (rows.length === 0) return;
+    competitorPositionDist[comp] = buildCompetitorPositionDistribution(rows);
+    competitorPositionVol[comp]  = buildCompetitorVolumeDistribution(rows);
+  });
 
   // Build a set of keywords the client already ranks for (from topKeywords).
   // These should never appear as gap keywords — competitor ranking for them too is not a gap.
@@ -385,6 +454,7 @@ export async function getSemrushSnapshot(
   ];
 
   const positionDist = buildPositionDistribution(topKeywords);
+  const positionVol  = buildVolumeDistribution(topKeywords);   // v7.136
 
   return {
     domain,
@@ -393,6 +463,9 @@ export async function getSemrushSnapshot(
     competitors,
     gapKeywords,
     positionDist,
+    positionVol,
+    competitorPositionDist,
+    competitorPositionVol,
     fetchedAt: new Date().toISOString(),
     warnings,
   };

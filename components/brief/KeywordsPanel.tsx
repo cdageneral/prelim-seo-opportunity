@@ -1021,6 +1021,22 @@ export default function KeywordsPanel({
         );
       })()}
 
+      {/* ── Rank distribution split (v7.136) ── */}
+      {/* Client vs a selectable competitor: keyword count + search volume + volume
+          share across the same four rank bands. Client counts = positionDist,
+          client volume = positionVol; competitor counts/volume =
+          competitorPositionDist / competitorPositionVol (full footprint, computed
+          at analysis time, zero extra Semrush units). Bars + % are volume-driven.
+          Older snapshots lack the competitor fields → graceful re-run hint. */}
+      <RankDistributionSplit
+        clientDomain={clientDomain}
+        positionDist={(analysis?.semrushSnapshot?.positionDist ?? null) as Record<string, number> | null}
+        positionVol={(analysis?.semrushSnapshot?.positionVol ?? null) as Record<string, number> | null}
+        competitorPositionDist={(analysis?.semrushSnapshot?.competitorPositionDist ?? null) as Record<string, Record<string, number>> | null}
+        competitorPositionVol={(analysis?.semrushSnapshot?.competitorPositionVol ?? null) as Record<string, Record<string, number>> | null}
+        topCompetitor={(analysis?.topCompetitor ?? null) as string | null}
+      />
+
       {/* ── Add keyword form ── */}
 
       {showAdd && (
@@ -1373,6 +1389,199 @@ interface KwCatAgg {
   posSum: number[];   // sum of positions per bucket (ranked buckets only)
   totKw:  number;
   totVol: number;
+}
+
+// ─── Rank distribution split (v7.136) ───────────────────────────────────────
+// Two side-by-side cards: client (left) vs a selectable competitor (right).
+// Each rank band shows keyword count + search volume + volume share. Bars and
+// the share % are volume-driven (volume is the meaningful weight); the footer
+// is page-1 share by volume. Everything reads straight from the canonical
+// Semrush snapshot — nothing modeled. When a snapshot predates the volume
+// fields the cards fall back to count-only. Bars share one scale so the two
+// cards are directly comparable. Volume is annualized (fmtKwAnn) to match the
+// Category Breakdown's "Annual Demand" convention just below.
+
+const RANK_DIST_BANDS = [
+  { key: '1-3',   label: '1–3',     color: '#6C63FF' },
+  { key: '4-10',  label: '4–10',    color: '#06B6D4' },
+  { key: '11-20', label: 'Page 2',  color: '#F59E0B' },
+  { key: '21+',   label: 'Page 3+', color: '#EF4444' },
+] as const;
+
+function distTotal(dist: Record<string, number> | null): number {
+  if (!dist) return 0;
+  return RANK_DIST_BANDS.reduce((s, b) => s + (dist[b.key] ?? 0), 0);
+}
+
+function RankDistBars({
+  counts, vols, volMode, sharedMax,
+}: {
+  counts:    Record<string, number>;
+  vols:      Record<string, number> | null;
+  volMode:   boolean;
+  sharedMax: number;
+}) {
+  const metric = volMode && vols ? vols : counts;
+  const total  = distTotal(metric);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {RANK_DIST_BANDS.map(b => {
+        const c    = counts[b.key] ?? 0;
+        const v    = vols ? (vols[b.key] ?? 0) : 0;
+        const m    = metric[b.key] ?? 0;
+        const pct  = total > 0 ? (m / total) * 100 : 0;
+        const barW = sharedMax > 0 ? (m / sharedMax) * 100 : 0;
+        return (
+          <div key={b.key}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, gap: 6 }}>
+              <span style={{ fontSize: 11, color: b.color, display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: b.color, display: 'inline-block' }} />
+                {b.label}
+              </span>
+              <span style={{ fontSize: 11, color: '#8080B0', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {c.toLocaleString()} kw{volMode && vols ? <> · {v > 0 ? fmtKwAnn(v) : '—'}</> : null} · <span style={{ color: '#C8C8F0' }}>{pct.toFixed(1)}%</span>
+              </span>
+            </div>
+            <div style={{ height: 8, background: '#111120', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${barW}%`, background: b.color, borderRadius: 3, transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RankDistributionSplit({
+  clientDomain,
+  positionDist,
+  positionVol,
+  competitorPositionDist,
+  competitorPositionVol,
+  topCompetitor,
+}: {
+  clientDomain:           string;
+  positionDist:           Record<string, number> | null;
+  positionVol:            Record<string, number> | null;
+  competitorPositionDist: Record<string, Record<string, number>> | null;
+  competitorPositionVol:  Record<string, Record<string, number>> | null;
+  topCompetitor:          string | null;
+}) {
+  const compDomains   = competitorPositionDist ? Object.keys(competitorPositionDist) : [];
+  const defaultDomain = topCompetitor && compDomains.includes(topCompetitor) ? topCompetitor : (compDomains[0] ?? '');
+  const [selDomain, setSelDomain] = useState<string>(defaultDomain);
+
+  // Hooks must run before any early return.
+  if (!positionDist || distTotal(positionDist) === 0) return null;
+
+  const activeDomain = compDomains.includes(selDomain) ? selDomain : defaultDomain;
+  const compDist     = activeDomain ? (competitorPositionDist?.[activeDomain] ?? null) : null;
+  const compVol      = activeDomain ? (competitorPositionVol?.[activeDomain]  ?? null) : null;
+  const hasComp      = !!compDist && distTotal(compDist) > 0;
+
+  const volMode = !!positionVol && distTotal(positionVol) > 0;
+
+  // Bar/share metric: volume when available, else counts.
+  const clientMetric = volMode ? positionVol! : positionDist;
+  const compMetric   = volMode ? (compVol ?? compDist) : compDist;
+
+  const sharedMax = Math.max(
+    ...RANK_DIST_BANDS.map(b => clientMetric[b.key] ?? 0),
+    ...(hasComp && compMetric ? RANK_DIST_BANDS.map(b => compMetric[b.key] ?? 0) : []),
+    1,
+  );
+
+  const clientCount   = distTotal(positionDist);
+  const clientMetTot  = distTotal(clientMetric);
+  const clientP1      = (clientMetric['1-3'] ?? 0) + (clientMetric['4-10'] ?? 0);
+  const clientP1Pct   = clientMetTot > 0 ? (clientP1 / clientMetTot) * 100 : 0;
+
+  const compCount     = distTotal(compDist);
+  const compMetTot    = compMetric ? distTotal(compMetric) : 0;
+  const compP1        = compMetric ? (compMetric['1-3'] ?? 0) + (compMetric['4-10'] ?? 0) : 0;
+  const compP1Pct     = compMetTot > 0 ? (compP1 / compMetTot) * 100 : 0;
+
+  const cardBase = {
+    background: '#0A0A14', border: '1px solid #1A1A30', borderRadius: 8, padding: '12px 14px',
+  };
+  const p1Label = volMode ? 'Page 1 share (vol)' : 'Page 1 share';
+
+  return (
+    <div style={{ borderBottom: '1px solid #111120', background: '#07070F', padding: '12px 14px 14px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: '#9090C0', letterSpacing: '.04em' }}>Rank Distribution</span>
+        <span style={{ fontSize: 9, color: '#3A3A5C', letterSpacing: '.04em' }}>
+          {volMode ? 'kw · annual vol · % of footprint vol · shared scale' : 'kw · % of footprint · shared scale'}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        {/* Client card */}
+        <div style={cardBase}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+            <i className="ti ti-user-search" style={{ fontSize: 13, color: '#8B85FF' }} aria-hidden="true" />
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#C8C8F0' }}>Client</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#6060A0', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {extractBrand(clientDomain) || clientDomain || '—'} · {clientCount.toLocaleString()} kw{volMode ? <> · {fmtKwAnn(clientMetTot)} vol</> : null}
+          </div>
+          <RankDistBars counts={positionDist} vols={positionVol} volMode={volMode} sharedMax={sharedMax} />
+          <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid #14142A', display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, color: '#55557A' }}>{p1Label}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#8B85FF', fontVariantNumeric: 'tabular-nums' }}>{clientP1Pct.toFixed(1)}%</span>
+          </div>
+        </div>
+
+        {/* Competitor card */}
+        <div style={cardBase}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <i className="ti ti-users-group" style={{ fontSize: 13, color: '#F59E0B' }} aria-hidden="true" />
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#C8C8F0' }}>Competitor</span>
+            </div>
+            {compDomains.length > 1 && (
+              <select
+                value={activeDomain}
+                onChange={e => setSelDomain(e.target.value)}
+                title="Choose competitor"
+                style={{
+                  fontSize: 10, color: '#C8C8F0', background: '#111120', border: '1px solid #2A2A45',
+                  borderRadius: 5, padding: '2px 6px', maxWidth: 130, outline: 'none', cursor: 'pointer',
+                }}
+              >
+                {compDomains.map(d => (
+                  <option key={d} value={d} style={{ background: '#0A0A14' }}>{extractBrand(d) || d}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: '#6060A0', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {hasComp
+              ? <>{extractBrand(activeDomain) || activeDomain} · {compCount.toLocaleString()} kw{volMode && compVol ? <> · {fmtKwAnn(compMetTot)} vol</> : null}</>
+              : <>competitor footprint</>}
+          </div>
+
+          {hasComp ? (
+            <>
+              <RankDistBars counts={compDist!} vols={compVol} volMode={volMode && !!compVol} sharedMax={sharedMax} />
+              <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid #14142A', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, color: '#55557A' }}>{volMode && compVol ? 'Page 1 share (vol)' : 'Page 1 share'}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', fontVariantNumeric: 'tabular-nums' }}>{compP1Pct.toFixed(1)}%</span>
+              </div>
+            </>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 6, padding: '20px 8px', minHeight: 120 }}>
+              <i className="ti ti-refresh" style={{ fontSize: 18, color: '#3A3A5C' }} aria-hidden="true" />
+              <span style={{ fontSize: 11, color: '#6060A0', lineHeight: 1.5 }}>
+                Re-run the analysis to populate the<br />competitor rank distribution.
+              </span>
+              <span style={{ fontSize: 9, color: '#3A3A5C' }}>computed from data already pulled · 0 extra Semrush units</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function KwCategorySection({
