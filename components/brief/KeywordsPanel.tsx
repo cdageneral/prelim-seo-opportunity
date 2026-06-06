@@ -64,6 +64,7 @@ interface DbKeyword {
   type:         string;
   branded:      boolean;
   source:       string;
+  domain?:      string | null;   // competitor domain for uploaded gap rows (v7.31+); present at runtime
 }
 
 interface Props {
@@ -440,6 +441,18 @@ export default function KeywordsPanel({
     [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned],
   );
 
+  // ── Full-footprint pool for the summary cards (v7.139) ─────────────────────
+  // Wayne's decision: "All Keywords" = the client's ENTIRE footprint + all
+  // competitor-gap keywords, so the headline reconciles with the Rank
+  // Distribution client count (which shows the full footprint, not the
+  // volume-floored set). Built with NO volume floors (clientVolMin=0,
+  // competitorVolMin=0). The table below intentionally stays volume-filtered
+  // (allRows), so the cards read higher than the visible table rows — by design.
+  const summaryRows = useMemo(
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, 0, 0, mergedScanned),
+    [analysis, dbKeywords, clientDomain, competitorDomains, mergedScanned],
+  );
+
   // ── SERP feature coverage (v7.81) — scanned keywords vs canonical pool ──
   const serpCoverage = useMemo(() => {
     const set = new Set<string>();
@@ -518,24 +531,73 @@ export default function KeywordsPanel({
   const ranked = visibleRows.filter(r => r.type === 'ranked').length;
   const gap    = visibleRows.filter(r => r.type === 'gap').length;
 
-  // ── Summary card stats — always computed from full allRows, annualised × 12 ──
+  // ── Summary card stats — v7.139: full footprint basis (summaryRows, no floors),
+  //    annualised × 12. allCount = client footprint + competitor gap. ──────────
   const kwSummary = useMemo(() => {
-    const brandedRows  = allRows.filter(r =>  r.branded);
-    const nonBrandRows = allRows.filter(r => !r.branded);
-    const gapRows      = allRows.filter(r => r.type === 'gap' && !!r.competitor);
-    const gapFiltered  = gapRows.filter(r => r.searchVolume >= volThreshold);
+    const brandedRows  = summaryRows.filter(r =>  r.branded);
+    const nonBrandRows = summaryRows.filter(r => !r.branded);
+    const gapRows      = summaryRows.filter(r => r.type === 'gap' && !!r.competitor);
+    const clientRows   = summaryRows.filter(r => r.type !== 'gap');
     const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
     return {
-      allCount:      allRows.length,
-      allVol:        ann(allRows),
+      allCount:      summaryRows.length,
+      allVol:        ann(summaryRows),
       brandedCount:  brandedRows.length,
       brandedVol:    ann(brandedRows),
       nonBrandCount: nonBrandRows.length,
       nonBrandVol:   ann(nonBrandRows),
-      gapCount:      gapFiltered.length,
-      gapVol:        ann(gapFiltered),
+      gapCount:      gapRows.length,
+      gapVol:        ann(gapRows),
+      clientCount:   clientRows.length,          // non-gap (client footprint) — for the breakdown sub-line
     };
-  }, [allRows, volThreshold]);
+  }, [summaryRows]);
+
+  // ── Competitor rank distribution source (v7.139) ───────────────────────────
+  // Prefer the full-footprint dists computed at analysis time. When they're
+  // absent (older snapshot, or a refresh mode that doesn't rebuild them — the
+  // reason the competitor card stayed empty after Wayne's refresh), bucket the
+  // competitor keywords ALREADY on the page instead: uploaded competitor CSV
+  // rows (domain + position) and snapshot gapKeywords (competitor +
+  // competitorPosition). Zero extra Semrush units, exactly as the card promises.
+  const competitorDist = useMemo(() => {
+    const snap     = analysis?.semrushSnapshot ?? {};
+    const snapDist = (snap.competitorPositionDist ?? null) as Record<string, Record<string, number>> | null;
+    const snapVol  = (snap.competitorPositionVol  ?? null) as Record<string, Record<string, number>> | null;
+    const snapHas  = !!snapDist && Object.values(snapDist).some(d => distTotal(d) > 0);
+    if (snapHas) return { dist: snapDist, vol: snapVol, fromFallback: false };
+
+    const band = (p: number) => p <= 3 ? '1-3' : p <= 10 ? '4-10' : p <= 20 ? '11-20' : '21+';
+    const dist: Record<string, Record<string, number>> = {};
+    const vol:  Record<string, Record<string, number>> = {};
+    const seen  = new Set<string>();
+    const add = (domain: string | null | undefined, pos: number | null | undefined, v: number, kw: string) => {
+      if (!domain) return;
+      const p = Number(pos);
+      if (!p || p <= 0) return;
+      const key = `${domain.toLowerCase()}|${kw.toLowerCase().trim()}`;
+      if (seen.has(key)) return;        // dedupe across both sources (uploaded rows added first → win)
+      seen.add(key);
+      const k = band(p);
+      (dist[domain] ??= { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 })[k]++;
+      (vol[domain]  ??= { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 })[k] += (v || 0);
+    };
+    // Uploaded competitor CSV rows (gap rows store the competitor's rank in position)
+    for (const r of dbKeywords) {
+      if ((r.source ?? '') === 'blocked') continue;
+      if (r.type !== 'gap') continue;
+      add(r.domain, r.position, r.searchVolume ?? 0, r.keyword ?? '');
+    }
+    // Auto-detected gap keywords already saved in the snapshot
+    for (const g of (snap.gapKeywords ?? [])) {
+      add(g.competitor, g.competitorPosition, g.searchVolume ?? 0, g.keyword ?? '');
+    }
+    const any = Object.values(dist).some(d => distTotal(d) > 0);
+    return any
+      ? { dist, vol, fromFallback: true }
+      : { dist: null as Record<string, Record<string, number>> | null,
+          vol:  null as Record<string, Record<string, number>> | null,
+          fromFallback: false };
+  }, [analysis, dbKeywords]);
 
   // ── Category breakdown source ─────────────────────────────────────────────
   // v7.80: cb supplies the category list (names + types) and the complete
@@ -785,8 +847,13 @@ export default function KeywordsPanel({
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  // v7.139 scroll fix: the panel root is now the single vertical scroller (was
+  // overflow-hidden with only the inner table scrolling — once the v7.136 Rank
+  // Distribution was added to the fixed top region, that region could exceed the
+  // viewport and the cards/chart became unreachable). The whole panel now
+  // scrolls, matching every other section rendered into the overflow-hidden <main>.
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden animate-fade-in">
+    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto animate-fade-in">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>
@@ -937,7 +1004,10 @@ export default function KeywordsPanel({
             id: 'all', label: 'All Keywords', count: kwSummary.allCount, vol: kwSummary.allVol,
             accent: '#9B96FF', activeBg: 'rgba(108,99,255,0.10)', activeBdr: 'rgba(108,99,255,0.45)',
             dimBg: 'rgba(108,99,255,0.04)', dimBdr: 'rgba(108,99,255,0.15)',
-            icon: 'ti-list', subtitle: 'Total keyword footprint',
+            icon: 'ti-list',
+            subtitle: dbLoaded
+              ? `${kwSummary.clientCount.toLocaleString()} client + ${(kwSummary.allCount - kwSummary.clientCount).toLocaleString()} gap`
+              : 'Total keyword footprint',
           },
           {
             id: 'branded', label: 'Branded', count: kwSummary.brandedCount, vol: kwSummary.brandedVol,
@@ -1032,8 +1102,9 @@ export default function KeywordsPanel({
         clientDomain={clientDomain}
         positionDist={(analysis?.semrushSnapshot?.positionDist ?? null) as Record<string, number> | null}
         positionVol={(analysis?.semrushSnapshot?.positionVol ?? null) as Record<string, number> | null}
-        competitorPositionDist={(analysis?.semrushSnapshot?.competitorPositionDist ?? null) as Record<string, Record<string, number>> | null}
-        competitorPositionVol={(analysis?.semrushSnapshot?.competitorPositionVol ?? null) as Record<string, Record<string, number>> | null}
+        competitorPositionDist={competitorDist.dist}
+        competitorPositionVol={competitorDist.vol}
+        competitorFromFallback={competitorDist.fromFallback}
         topCompetitor={(analysis?.topCompetitor ?? null) as string | null}
       />
 
@@ -1234,8 +1305,11 @@ export default function KeywordsPanel({
         </span>
       </div>
 
-      {/* ── Scrollable area: category breakdown + keyword table ── */}
-      <div className="overflow-auto flex-1 min-h-0">
+      {/* ── Category breakdown + keyword table ──
+          v7.139: vertical scrolling now lives on the panel root; this wrapper
+          only handles horizontal overflow for the wide table. No fixed height,
+          so it flows into the root scroller and nothing gets clipped. */}
+      <div className="overflow-x-auto">
 
         {/* Category breakdown — inside scroll so it doesn't eat fixed height above the table */}
         {cb && cb.categories && cb.categories.length > 0 && dbLoaded && (
@@ -1458,6 +1532,7 @@ function RankDistributionSplit({
   positionVol,
   competitorPositionDist,
   competitorPositionVol,
+  competitorFromFallback = false,
   topCompetitor,
 }: {
   clientDomain:           string;
@@ -1465,6 +1540,7 @@ function RankDistributionSplit({
   positionVol:            Record<string, number> | null;
   competitorPositionDist: Record<string, Record<string, number>> | null;
   competitorPositionVol:  Record<string, Record<string, number>> | null;
+  competitorFromFallback?: boolean;
   topCompetitor:          string | null;
 }) {
   const compDomains   = competitorPositionDist ? Object.keys(competitorPositionDist) : [];
@@ -1568,6 +1644,11 @@ function RankDistributionSplit({
                 <span style={{ fontSize: 11, color: '#55557A' }}>{volMode && compVol ? 'Page 1 share (vol)' : 'Page 1 share'}</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', fontVariantNumeric: 'tabular-nums' }}>{compP1Pct.toFixed(1)}%</span>
               </div>
+              {competitorFromFallback && (
+                <div style={{ marginTop: 7, fontSize: 9, color: '#3A3A5C', lineHeight: 1.4 }}>
+                  computed from competitor keywords already on file · 0 Semrush units
+                </div>
+              )}
             </>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 6, padding: '20px 8px', minHeight: 120 }}>
