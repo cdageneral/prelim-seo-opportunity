@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.127 — 2026-06-05 · Fix: Executive Summary "Volume Opportunity" (99%) disagreed with the Google Rank panel (83%)
+
+**Symptom (Wayne):** "On the exec summary it says there is a 99% volume opportunity, however on the Google Rank panel (which is where the exec summary should be pulling from) it says 83%. Why is it wrong?" Both screenshots agreed on Positions 1–3 (1.4M) and Positions 4–10 (518K) but diverged wildly on Page 2+ (exec 217.2M vs rank panel 6.2M) and on the total (exec 219.2M vs 8.1M).
+
+**Root cause (`components/brief/ExecutiveSummarySection.tsx`):** the panels share identical distribution math; the bug was in the **input to `totalVol`**, not the formula. `totalVol` summed `searchVolume` over the *entire* `kwPool`, which includes **gap keywords** — terms the client does NOT rank for, sourced from competitor/gap uploads. By design (`lib/utils/kwVolume.ts`), every gap row carries `position = null`. The volume bars compute `Page 2+ = totalVol − page1Vol`, and `page1Vol`/`top3Vol` only count `posKws` (position ≠ null) — so all the null-position gap volume silently fell into the "Page 2+ (11+)" bucket, inflating both the total and the "% outside top 3". This turned ~211M of non-ranked gap volume into fake "Page 2+ rankings" and pushed the headline from the correct ~83% to 99%.
+
+`GoogleSerpSection.tsx` — the source of truth — already excludes gaps from its volume basis (`pool.filter(item => !item.isGap)`), which is why the rank panel read correctly.
+
+**Fix:** `totalVol` now sums only non-gap pool items, mirroring GoogleSerpSection exactly:
+```ts
+// before:
+const totalVol = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);          // included gap volume
+// after:
+const totalVol = kwPool.reduce((s, item) => s + (item.isGap ? 0 : (item.searchVolume ?? 0)), 0);
+```
+This corrects every metric whose denominator is `totalVol`: **% outside top 3**, **Top-3 volume %**, **Page-1 coverage %**, and the three Volume Opportunity bars. `totalKws` (the keyword-count card) intentionally still counts the full pool, so it continues to match the **Keyword Landscape** panel — only the *volume* basis changed. `top3Vol`/`page1Vol`/`posVol`/`weightedPos` were already gap-free (they filter on `posKws`), so they're unchanged. Market-capture rate is computed from a separate block and is unaffected.
+
+**Verification:** numeric reconciliation harness replicating BOTH panels' exact `reduce` expressions on a controlled pool (ranked top-3 / 4–10 / 11+, a ranked-but-position-unknown row, and three gap rows) — fixed exec now equals GoogleSerpSection on **total, top3, page1, Page 2+, and % outside top 3** (5/5 PASS); old code confirmed divergent (99% vs truth). Isolated `tsc --noEmit --strict` on the new expression against the real `KwPoolItem` interface: exit 0. Full-project `tsc` was not runnable in this packaging sandbox (the copied `node_modules` is missing `@types/node` — the untouched v7.126 throws the identical error here; v7.126 shipped `tsc` exit 0 on a clean install). The change is a single self-contained arithmetic expression touching no imports, types, or JSX.
+
 ## v7.126 — 2026-06-05 · AIO Keyword Drilldown redesigned to match the AIO Coverage Tracker layout
 
 **Request (Wayne):** "In the AIO section of the SERP features for the keyword drill down — modify the existing layout to match the screenshot from the AIO Coverage Tracker." (Two-column expansion: AI Overview Answer panel + Tracked Brand Hits on the left, numbered Citations list with source-type tags on the right.)

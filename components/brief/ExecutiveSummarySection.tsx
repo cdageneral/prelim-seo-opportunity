@@ -157,7 +157,21 @@ export default function ExecutiveSummarySection({
   const posKws     = topKws.filter((k): k is SemKw & { position: number } => k.position !== null);
   const totalKws   = topKws.length;
   const page1Kws   = posKws.filter(k => k.position <= 10).length;
-  const totalVol   = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
+  // v7.127 BUGFIX — Volume Opportunity disagreed with the Google Rank panel
+  // (exec showed 99% outside top 3 vs the rank panel's 83%). Root cause: this
+  // total summed EVERY keyword in the pool, including GAP keywords (terms the
+  // client does NOT rank for, sourced from competitor/gap uploads). Gap rows
+  // carry position=null (see lib/utils/kwVolume.ts), so their volume landed in
+  // the "Page 2+ (11+)" bucket (totalVol − page1Vol) and inflated the total —
+  // turning ~211M of non-ranked gap volume into fake "Page 2+ rankings".
+  // GoogleSerpSection (the source of truth) excludes gaps from its volume basis
+  // via `pool.filter(item => !item.isGap)`; we now mirror that exactly so the
+  // two panels reconcile. NOTE: totalKws above intentionally keeps the FULL
+  // pool so the keyword-count card still matches the Keyword Landscape panel —
+  // only the volume basis changes here. (top3Vol/page1Vol/posVol/weightedPos
+  // already excluded gaps for free, since they filter on posKws where
+  // position !== null.)
+  const totalVol   = kwPool.reduce((s, item) => s + (item.isGap ? 0 : (item.searchVolume ?? 0)), 0);
   const top3Vol    = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
   const page1Vol   = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
   const posVol     = posKws.reduce((s, k) => s + k.searchVolume, 0);
