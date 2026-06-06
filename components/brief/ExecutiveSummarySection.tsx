@@ -66,6 +66,12 @@ function fmtAnnual(monthly: number): string {
   return String(Math.round(a));
 }
 
+function fmtCompact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`;
+  return String(Math.round(n));
+}
+
 function normDomain(d: string): string {
   return d.toLowerCase().replace(/^www\./, '');
 }
@@ -390,6 +396,53 @@ export default function ExecutiveSummarySection({
     absent:  { bg: '#2A2A3A', fg: '#8888AA', label: 'absent' },
   };
 
+  // ── v7.131: GEO Visibility Score (equal-weighted; formula shown on screen) ──
+  const scoreDims = [
+    { label: 'Traditional', val: page1Pct, color: '#22C55E' },
+    ...(aiVisPct !== null ? [{ label: 'AI visibility', val: aiVisPct, color: '#EF4444' }] : []),
+    { label: 'Journey', val: Math.round((journeyStagesCovered / 4) * 100), color: '#06B6D4' },
+  ];
+  const geoScore = scoreDims.length ? Math.round(scoreDims.reduce((s, d) => s + d.val, 0) / scoreDims.length) : 0;
+  const geoScoreColor = geoScore < 25 ? '#EF4444' : geoScore < 50 ? '#F59E0B' : '#22C55E';
+  const aiMeasured = aiVisPct !== null;
+
+  // ── v7.131: Read-confidence meter (which data signals are present) ──────────
+  const signals = [
+    { key: 'Keywords',          ok: totalKws > 0 },
+    { key: 'Competitors',       ok: sovComps.length > 0 },
+    { key: 'AI Overviews',      ok: aioAvail > 0 },
+    { key: 'LLM probe',         ok: overallTotal > 0 },
+    { key: 'Journey clusters',  ok: (clusterCount > 0 || categories.length > 0) },
+  ];
+  const signalsOk      = signals.filter(s => s.ok).length;
+  const confidencePct  = Math.round((signalsOk / signals.length) * 100);
+  const missingSignals = signals.filter(s => !s.ok).map(s => s.key);
+  const confColor      = confidencePct >= 80 ? '#22C55E' : confidencePct >= 50 ? '#F59E0B' : '#EF4444';
+
+  // ── v7.131: Quick-wins ladder + modeled value-at-stake (CTR-by-position) ────
+  const CTR: Record<number, number> = { 1: .28, 2: .15, 3: .10, 4: .07, 5: .05, 6: .04, 7: .03, 8: .025, 9: .02, 10: .018 };
+  const ctrAt = (p: number) => CTR[p] ?? (p <= 20 ? 0.01 : 0.005);
+  const nearMiss    = posKws.filter(k => k.position >= 4 && k.position <= 10);
+  const climber     = posKws.filter(k => k.position >= 11 && k.position <= 20);
+  const nearMissVol = nearMiss.reduce((s, k) => s + k.searchVolume, 0);
+  const climberVol  = climber.reduce((s, k) => s + k.searchVolume, 0);
+  const quickClicks = Math.round(nearMiss.reduce((s, k) => s + Math.max(0, ctrAt(3) - ctrAt(k.position)) * k.searchVolume * 12, 0));
+  const climbClicks = Math.round(climber.reduce((s, k) => s + Math.max(0, ctrAt(8) - ctrAt(k.position)) * k.searchVolume * 12, 0));
+  const betClicks   = Math.round(ctrAt(8) * gapVolume * 12);
+  const ladder = [
+    { tier: 'Quick win', color: '#22C55E', move: 'Near-misses (pos 4–10) → push to top 3',     n: nearMiss.length, volMonthly: nearMissVol, clicks: quickClicks },
+    { tier: 'Climber',   color: '#F59E0B', move: 'Page-2 (pos 11–20) → push to page 1',         n: climber.length,  volMonthly: climberVol,  clicks: climbClicks },
+    { tier: 'Big bet',   color: '#EF4444', move: 'Net-new (gaps) → build content authority',    n: gapKwCount,      volMonthly: gapVolume,   clicks: betClicks },
+  ];
+
+  // ── v7.131: Head-to-head vs top rival (same SOV + gap pool, no new data) ────
+  const rivalDomain   = topComp ? topComp.domain : '';
+  const clientPage1Kw = page1Kws;
+  const rivalPage1Kw  = rivalDomain
+    ? dbKeywords.filter(k => normDomain((k as any).domain ?? '') === rivalDomain && k.position != null && Number(k.position) > 0 && Number(k.position) <= 10).length
+    : 0;
+  const rivalGapCount = rivalDomain ? gapItems.filter(i => normDomain(i.competitor ?? '') === rivalDomain).length : 0;
+
   // ── Defer render until DB keywords resolve (prevents stale capture-rate flash) ──
   // Mirrors the v7.67 ThemeClustersPanel fix: first paint used only the stored
   // snapshot fallbacks, then re-rendered with merged DB keywords — flashing two
@@ -409,7 +462,42 @@ export default function ExecutiveSummarySection({
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
-      {/* ═══ THE LANDSCAPE — headline renders ONLY when narrative data exists (v7.130) ═══ */}
+      {/* ═══ v7.131 — GEO VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
+      <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 14, alignItems: 'center' }}>
+          <div style={{ textAlign: 'center', paddingRight: 14, borderRight: '1px solid #1E1E2E' }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: '#8888AA' }}>GEO Visibility Score</p>
+            <p style={{ margin: '4px 0 0', fontSize: 40, fontWeight: 800, lineHeight: 1, color: geoScoreColor }}>
+              {geoScore}<span style={{ fontSize: 16, color: '#555570' }}>/100</span>
+            </p>
+          </div>
+          <div>
+            <p style={{ margin: '0 0 6px', fontSize: 10, color: '#555570' }}>
+              Equal-weighted ⅓ each · {scoreDims.map(d => `${d.label.toLowerCase()} ${d.val}`).join(' · ')}{aiMeasured ? '' : ' · AI not yet measured (excluded)'}
+            </p>
+            <div className="flex flex-col gap-1.5">
+              {scoreDims.map(d => (
+                <div key={d.label} className="flex items-center gap-2">
+                  <span style={{ width: 82, fontSize: 11, color: d.color }}>{d.label}</span>
+                  <div style={{ flex: 1, background: '#1E1E2E', borderRadius: 3, height: 7 }}>
+                    <div style={{ width: `${Math.min(100, d.val)}%`, background: d.color, height: 7, borderRadius: 3 }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: '#8888AA', width: 28, textAlign: 'right' }}>{d.val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ textAlign: 'center', paddingLeft: 14, borderLeft: '1px solid #1E1E2E', minWidth: 110 }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: '#8888AA' }}>Read confidence</p>
+            <p style={{ margin: '4px 0 2px', fontSize: 22, fontWeight: 700, color: confColor }}>{confidencePct}%</p>
+            <p style={{ margin: 0, fontSize: 9, color: '#555570' }}>
+              {signalsOk} of {signals.length} signals{missingSignals.length > 0 ? ` · missing: ${missingSignals.join(', ')}` : ' · all present'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ THE LANDSCAPE — headline renders ONLY when narrative data exists ═══ */}
       {narrativeText ? (
         <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
           <p className="text-[9px] uppercase mb-1" style={{ color: '#6C63FF', letterSpacing: '.12em' }}>
@@ -494,50 +582,60 @@ export default function ExecutiveSummarySection({
         </p>
       </div>
 
-      {/* ═══ SUPPORTING EVIDENCE: who's beating me + where volume sits ═══ */}
+      {/* ═══ SUPPORTING EVIDENCE: who's beating me (SOV) + head-to-head scorecard ═══ */}
       <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} />
 
-        <div className="orbit-card p-4 flex flex-col gap-3">
-          <p className="text-orbit-secondary text-xs font-medium">Where the volume sits</p>
-          {dbLoaded && totalVol > 0 ? (
-            <>
-              <div className="flex items-center gap-3 py-1">
-                <div>
-                  <p style={{ color: '#EF4444', fontSize: '32px', fontWeight: 700, lineHeight: 1, margin: 0 }}>{pctOutsideTop3}%</p>
-                  <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '4px' }}>of volume outside top 3</p>
-                </div>
-                <div style={{ width: '1px', height: '46px', background: '#1E1E2E', flexShrink: 0 }} />
-                <div>
-                  <p style={{ color: '#F0F0FF', fontSize: '13px', fontWeight: 600, margin: 0 }}>{fmtAnnual(volOutsideTop3)}<span style={{ color: '#444458', fontWeight: 400, fontSize: '11px' }}> / yr</span></p>
-                  <p style={{ color: '#555570', fontSize: '9px', margin: '2px 0 0' }}>out of {fmtAnnual(totalVol)} total</p>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                {[
-                  { label: 'Positions 1–3', vol: top3Vol, color: '#6C63FF' },
-                  { label: 'Positions 4–10', vol: page1Vol - top3Vol, color: '#06B6D4' },
-                  { label: 'Page 2+ (11+)', vol: totalVol - page1Vol, color: '#EF4444' },
-                ].map(row => {
-                  const pct = totalVol > 0 ? (row.vol / totalVol) * 100 : 0;
-                  return (
-                    <div key={row.label}>
-                      <div className="flex justify-between mb-1">
-                        <span style={{ fontSize: '10px', color: '#8888AA' }}>{row.label}</span>
-                        <span style={{ fontSize: '10px', fontWeight: 600, color: row.color }}>{fmtAnnual(row.vol)}<span style={{ color: '#444458', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span></span>
-                      </div>
-                      <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '5px' }}>
-                        <div style={{ background: row.color, borderRadius: '3px', height: '5px', width: `${Math.min(100, pct)}%` }} />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <p className="text-orbit-tertiary text-[10px]">No keyword volume data available. Run analysis to see results.</p>
-          )}
+        {topComp ? (
+          <div className="orbit-card p-4">
+            <p className="text-orbit-secondary text-xs font-medium mb-3">Head-to-head · vs {rivalDomain} (your top rival)</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '7px 14px', alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: '#555570' }} />
+              <span style={{ fontSize: 10, color: '#6C63FF', textAlign: 'right' }}>You</span>
+              <span style={{ fontSize: 10, color: '#F59E0B', textAlign: 'right' }}>{rivalDomain}</span>
+
+              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Share of voice</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#6C63FF', textAlign: 'right' }}>{Math.round(clientShare * 100)}%</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{Math.round(topCompShare * 100)}%</span>
+
+              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Page-1 keywords</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#6C63FF', textAlign: 'right' }}>{clientPage1Kw.toLocaleString()}</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{rivalPage1Kw > 0 ? rivalPage1Kw.toLocaleString() : '—'}</span>
+
+              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Gap kws they own</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#555570', textAlign: 'right' }}>—</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{rivalGapCount.toLocaleString()}</span>
+            </div>
+            {rivalPage1Kw === 0 ? (
+              <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
+                Rival page-1 count needs a competitor keyword CSV with positions — upload to populate.
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className="orbit-card p-4 flex items-center justify-center">
+            <p className="text-orbit-tertiary text-[10px]">Add a competitor to see the head-to-head scorecard.</p>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ WHERE TO SPEND FIRST — QUICK-WINS LADDER (effort vs payoff) ═══ */}
+      <div className="orbit-card p-4">
+        <p className="text-orbit-secondary text-xs font-medium mb-3">Where to spend first · effort vs payoff</p>
+        <div className="flex flex-col gap-2">
+          {ladder.map(t => (
+            <div key={t.tier} style={{ display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: 12, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: t.color }}>{t.tier}</span>
+              <span style={{ fontSize: 11, color: '#F0F0FF' }}>{t.move}</span>
+              <span style={{ fontSize: 11, color: '#8888AA', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                {t.n.toLocaleString()} kws · {fmtAnnual(t.volMonthly)}/yr · <span style={{ color: '#6C63FF' }}>~{fmtCompact(t.clicks)} clicks</span>
+              </span>
+            </div>
+          ))}
         </div>
+        <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
+          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: '#8888AA' }}>modeled</span> from an industry-average organic CTR-by-position curve (pos 1≈28%, pos 3≈10%, pos 8≈2.5%); they show the upside of each move, not a guarantee.
+        </p>
       </div>
 
       {/* ═══ THE CONTINUOUS CYCLE — SECURE THE COVERAGE GAPS ═══ */}
@@ -570,14 +668,14 @@ export default function ExecutiveSummarySection({
         </div>
       </div>
 
-      {/* ═══ SLIM ROLL-UP FOOTER (preserves exec→panel roll-up; framing only, no fabricated signals) ═══ */}
+      {/* ═══ SLIM ROLL-UP FOOTER ═══ */}
       <div className="flex items-center justify-between gap-3"
         style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10, flexWrap: 'wrap' }}>
         <span className="text-[9px]" style={{ color: '#555570' }}>
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
         <span className="text-[9px]" style={{ color: '#8888AA' }}>
-          Rolls up · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {sovTotal > 0 && sovClient ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Clusters {clusterCount > 0 ? clusterCount : categories.length} · Journeys {journeyStagesCovered}/4
+          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {sovTotal > 0 && sovClient ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>
 

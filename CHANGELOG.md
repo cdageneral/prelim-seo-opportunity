@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.133 — 2026-06-05 · Exec value-adds rebased onto v7.132 (GEO Score, confidence, quick-wins ladder, head-to-head) — parallel-session merge
+
+**Why this version exists:** a parallel session shipped v7.131 (Content Map scroll fix) and v7.132 (SERP one-click auto-batch) on top of v7.130. This session independently built the Executive Summary value-adds and first packaged them (incorrectly) as v7.131, colliding with the scroll-fix release. RESOLUTION: the exec value-adds were rebased on top of v7.132-src and shipped here as v7.133, so this single build carries EVERYTHING: v7.130 GEO-story reframe + v7.131 scroll fix + v7.132 background SERP scan + the exec value-adds below. The mislabeled standalone v7.131 exec build was removed; v7.131 is restored to its true scroll-fix content. DEPLOY v7.133.
+
+**Exec value-adds (items 2–6 from Wayne's value brainstorm; all from existing canonical data, zero new sources):**
+- **GEO Visibility Score (0–100)** — lead KPI band. Equal-weighted mean of Traditional (`page1Pct`), AI visibility (`aiVisPct` = AIO citation rate → LLM fallback), Journey (`journeyStagesCovered/4·100`). If AI is unmeasured the dimension is EXCLUDED and the formula line says so (never zero-filled). Shows score + three component bars + live formula; added to the roll-up footer.
+- **Read-confidence meter** — % of 5 data signals present (keywords / competitors / AI Overviews / LLM probe / journey clusters) with missing ones named.
+- **Where to spend first — quick-wins ladder** — three effort/payoff tiers from real position bands (Quick win pos 4–10→top3, Climber pos 11–20→page1, Big bet gaps→new content) with measured kw count + searches/yr. Replaces the old standalone volume-split card.
+- **Value-at-stake (modeled clicks)** — per-tier estimated annual clicks via an industry-average organic CTR-by-position curve (pos1 .28 … pos8 .025); on-screen note labels searches measured, clicks modeled.
+- **Head-to-head vs top rival** — scorecard beside the SOV donut: Share of voice, Page-1 keywords (rival from uploaded competitor rows; "—" + upload hint when absent), Gap kws they own. Top rival + shares from the same `computeSov()`; gap attribution from canonical `gapItems`.
+
+**Changes vs v7.132:** `components/brief/ExecutiveSummarySection.tsx` only — added `fmtCompact()`, score/confidence/ladder/CTR/head-to-head derivations, render extended (score band as lead, head-to-head replaces the volume-split card in the evidence row, ladder before the priority actions). v7.132's SERP-scan and v7.131's scroll fix are untouched and intact.
+
+**Verification:** full-project `tsc --noEmit` exit 0 in a clean /tmp env that includes the v7.131 scroll fix + v7.132 SERP-scan code (so the merge type-checks end-to-end). jsdom harness on the REAL merged component: 30/30 — deterministic score math (with-AI 100/6/75→60; AI-excluded 100/75→88), confidence 5/5 vs 3/5 w/ named missing signals, all three ladder tiers + modeled-click labels, head-to-head vs rival + share-of-voice row, old volume-split removed, all 15 v7.130 checks green. Zip: 72 files, inner folder orbitiq-v7.133/, integrity OK.
+
 ## v7.132 — 2026-06-05 · SERP scan: one-click auto-batch + runs in the background across panels
 
 **Request (Wayne):** the SERP scan made him click "Scan next 75" over and over. He asked for (1) a single button that batches automatically to completion, and (2) the scan to keep running in the background while he navigates to other panels. Chose (via prompt): full background scan + a credit-cost confirmation before auto-running.
