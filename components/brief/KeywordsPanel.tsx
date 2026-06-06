@@ -884,13 +884,16 @@ export default function KeywordsPanel({
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
-  // v7.139 scroll fix: the panel root is now the single vertical scroller (was
-  // overflow-hidden with only the inner table scrolling — once the v7.136 Rank
-  // Distribution was added to the fixed top region, that region could exceed the
-  // viewport and the cards/chart became unreachable). The whole panel now
-  // scrolls, matching every other section rendered into the overflow-hidden <main>.
+  // v7.139/v7.144 scroll fix: the panel root is the single vertical scroller.
+  // v7.144 — root is now a plain BLOCK scroll container (NOT `flex flex-col`).
+  // Why: as a flex column, the table wrapper (a scroll container, since
+  // `overflow-x-auto` makes overflow-y compute to `auto`) was a flex item with an
+  // automatic `min-height: 0`, so flexbox shrank IT to absorb the overflow instead
+  // of letting the panel scroll. With tall content (e.g. after a big CSV reload)
+  // the wrapper collapsed and nothing scrolled. As a block, children stack in
+  // normal flow at their natural height and the root scrolls the whole panel.
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-y-auto animate-fade-in">
+    <div className="flex-1 min-h-0 overflow-y-auto animate-fade-in">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>

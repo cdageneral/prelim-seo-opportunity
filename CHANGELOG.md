@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.144 — 2026-06-06 · FIX (recurring): Keywords panel wouldn't scroll after a large CSV reload — root made a plain block scroller
+
+**Symptom (Wayne):** reloaded the CSV files, and the Keywords panel stopped scrolling again.
+
+**Root cause — a flexbox scroll-stealing trap.** v7.139 made the panel root the vertical scroller (`flex flex-col flex-1 min-h-0 overflow-y-auto`) and gave the table wrapper `overflow-x-auto`. But `overflow-x: auto` makes the browser compute `overflow-y` to `auto` too, so the wrapper became a **scroll container** — and a scroll container that is a **flex item gets an automatic `min-height: 0`**. So in the flex column, every fixed section above (toolbar, summary cards, Rank Distribution, scan bars — all `shrink-0`) kept its size while flexbox shrank the **only** shrinkable item, the table wrapper, down to absorb the overflow. The panel root therefore never overflowed (so it never scrolled), and once the reloaded CSVs made the content tall, the wrapper collapsed and the page froze in place. This is the same class of bug as the earlier scroll reports — it only surfaced again at large data volume.
+
+**Fix (`components/brief/KeywordsPanel.tsx`, 1 line):** the root is now a plain **block** scroll container — `flex-1 min-h-0 overflow-y-auto` (dropped `flex flex-col`). With no flex context, children stack in normal flow at their natural height and the root scrolls the entire panel; the table wrapper's `overflow-x-auto` still gives the wide table its own horizontal scroll without ever stealing the vertical scroll. No flex-item `min-height: 0` trap, so it can't recur at any data size. (Children used `shrink-0` only to hold size in the flex column — harmless no-ops in block flow; layout is visually identical.)
+
+**Panel audit (per Wayne's standing request that ALL panels scroll):** Executive Summary, Content Map, Google Ranks, SERP Features each root on `overflow-y-auto flex-1`; LLM / Audience / Journeys are wrapped in a scroller by `page.tsx`; Theme Clusters uses a compact fixed-header + inner `overflow-y:auto` body that fits. Keywords was the only one with the flex-item trap.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom harness on the real component → **19/19**, including a new guard (**A1b**) asserting the root is the block scroller and is NOT a `flex flex-col` (locks the fix against regression), alongside the existing A1 `overflow-y-auto` check. All v7.140–v7.143 checks still green.
+
 ## v7.143 — 2026-06-06 · Hardened client CSV upload: reports "saved X of N rows" + stores client rows under one canonical tag
 
 **Context (verified against Wayne's live DB):** the client footprint showed ~171 even though `sonobello-high volume.csv` has 731 rows. Reading `project_keywords` directly: only ~171 unique client keywords are actually stored, split across TWO tags — ~168 rows with a blank domain and ~123 tagged with the literal client domain `sonobello.com` (both `type:ranked`, overlapping). The competitor blocks (airsculpt.com ~456, bruggemanplasticsurgery.com ~76) are intact. So the panel was faithfully reporting the DB; the **stored client data was incomplete** — the 731-row upload didn't fully persist, and earlier uploads tagged client rows two different ways. Wayne chose "harden the upload + re-upload."
