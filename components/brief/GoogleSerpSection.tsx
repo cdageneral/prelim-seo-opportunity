@@ -773,7 +773,29 @@ function normSovDomain(d: string): string {
   return (d ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].trim();
 }
 
-export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }) {
+// v7.129 — SINGLE SOURCE OF TRUTH for Share-of-Voice shares. The body below was
+// extracted verbatim from SovPanel so the Executive Summary hero can read the
+// SAME ranked entries and percentages the donut renders. Previously the hero
+// computed its own organic-traffic-only share, truncated to the top 4
+// competitors, which disagreed with this panel (different basis, different
+// denominator). Both now call computeSov(), so they reconcile by construction.
+export interface SovComputed {
+  basis:         'traffic' | 'volume' | 'tracked' | 'gapOnly';
+  rawEntries:    SovRawEntry[];   // client first, then competitors sorted by voice desc
+  total:         number;
+  clientVoice:   number;
+  clientKwsUsed: number;
+  compEntries:   Array<{ domain: string; voice: number }>;
+  rowsByComp:    Map<string, number>;
+  zeroP1Domains: Array<{ domain: string; rows: number; minPos: number }>;
+  compRows:      any[];
+  clientDisplay: string;
+}
+
+export function computeSov(
+  { analysis, competitors, dbKeywords, clientLabel }:
+  { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }
+): SovComputed {
   const manualDomains = new Set((competitors ?? []).map(d => normSovDomain(d)));
   const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
   const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
@@ -893,7 +915,17 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
     });
   }
 
-  const total    = rawEntries.reduce((s, e) => s + e.traffic, 0);
+  const total = rawEntries.reduce((s, e) => s + e.traffic, 0);
+
+  return { basis, rawEntries, total, clientVoice, clientKwsUsed, compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay };
+}
+
+export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }) {
+  const {
+    basis, rawEntries, total, clientVoice, clientKwsUsed,
+    compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay,
+  } = computeSov({ analysis, competitors, dbKeywords, clientLabel });
+
   const TOP_N    = 6;
   const topRaw   = rawEntries.slice(0, TOP_N);
   const otherT   = rawEntries.slice(TOP_N).reduce((s, e) => s + e.traffic, 0);

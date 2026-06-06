@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.129 — 2026-06-05 · Exec sourcing audit (pass 2 of 3): hero competitor share now matches the Share-of-Voice donut
+
+**Context:** continuation of the v7.128 audit. The Executive Summary hero claimed "[topComp] holds X% of total demand," but that figure was computed independently from the Share-of-Voice donut rendered directly below it — so two different competitor-share numbers appeared inches apart.
+
+**Root cause:** the hero built its own share from organic traffic only, and truncated the field to the **top 4** competitors before computing the denominator. SovPanel (Google Ranks, nav 06) uses **all** competitors and a basis that is traffic when Semrush traffic exists, otherwise page-1 keyword volume. Different inputs, different denominator → different percentage.
+
+**Fix — single source of truth:**
+- `components/brief/GoogleSerpSection.tsx` — extracted SovPanel's entire share computation **verbatim** into a new exported pure function `computeSov({ analysis, competitors, dbKeywords, clientLabel })` returning `{ basis, rawEntries, total, clientVoice, clientKwsUsed, compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay }` (typed via the new `SovComputed` interface). `SovPanel` now calls `computeSov()` and destructures it, then builds the donut arcs/legend/readout exactly as before — zero rendering change. All the v7.88–v7.111 basis logic (traffic / volume / tracked / gapOnly, the zero-page-1 diagnostics, the on-screen data readout) is untouched; it simply lives in one function now.
+- `components/brief/ExecutiveSummarySection.tsx` — the hero's competitor-share block now calls the SAME `computeSov()` (with the same `manualDomains` and client label this exec already passes to its `SovPanel`), and derives `topComp` / `topCompShare` / `clientShare` / `gapVsTop` from its `rawEntries` + `total`. Removed the old traffic-only, top-4-truncated `allPlayers` math. The hero narrative ("topComp holds X%") and the "Competitor gap" signal card now reconcile with the donut by construction.
+
+**Verification:** isolated `tsc --noEmit --strict` on `computeSov`'s signature and the hero's consumption — exit 0. Behavioral parity harness porting `computeSov` + both consumers (SovPanel donut and the hero) across a traffic-basis fixture (5 competitors — exercising the old top-4 truncation bug) and a volume-basis fixture (CSV upload, no traffic, page-1-only): both consumers return identical client % and identical top-competitor domain + % — 2/2 PASS. Confirmed SovPanel references only destructured values (no dangling references to the moved locals `compRowsWithPos`, `compDiag`, `semComps`, `trafficTotal`, `byComp`, etc.), GoogleSerpSection braces balanced (787/787), exec declares `clientDomain` once. Full-project `tsc` not runnable in the packaging sandbox (copied `node_modules` missing `@types/node`, as in v7.127/v7.128; clean-install builds remain green).
+
+**Remaining (pass 3):** SERP feature coverage (#3) still reads the stale snapshot summary instead of SERP Features' live scanned set. LLM rate (#5) and Theme-clusters count (#6) recomputed-but-consistent follow-ups.
+
 ## v7.128 — 2026-06-05 · Exec Summary sourcing audit (pass 1 of 3): gap stats, Journeys signal, ranked-count label now pull from their owning panels
 
 **Request (Wayne):** "Go through the exec summary and make sure all data points and mentions are pulling from the individual panels from the left nav. The left nav should hold the entire detail; bits and pieces are pulled forward to the exec summary."

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
-import { SovPanel } from '@/components/brief/GoogleSerpSection';
+import { SovPanel, computeSov } from '@/components/brief/GoogleSerpSection';
 import { buildClusters } from '@/components/brief/JourneySection';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -221,21 +221,27 @@ export default function ExecutiveSummarySection({
   const combinedSerpRate = totalAvail > 0 ? Math.round((totalAcq / totalAvail) * 100) : 0;
 
   // ── Competitor market share ───────────────────────────────────────────────
-  const clientTraffic = semSnap.overview?.organicTraffic ?? 0;
-  const clientDomain  = normDomain(propClientDomain ?? analysis.domain ?? '');
-  const rawComps: any[] = semSnap.competitors ?? [];
-  const allPlayers = [
-    { domain: clientDomain || 'Client', traffic: clientTraffic, isClient: true },
-    ...rawComps
-      .filter((c: any) => normDomain(c.domain ?? '') !== clientDomain)
-      .sort((a: any, b: any) => (b.organicTraffic ?? 0) - (a.organicTraffic ?? 0))
-      .slice(0, 4)
-      .map((c: any) => ({ domain: normDomain(c.domain ?? ''), traffic: c.organicTraffic ?? 0, isClient: false })),
-  ];
-  const totalPool    = allPlayers.reduce((s, p) => s + p.traffic, 0);
-  const topComp      = allPlayers.find(p => !p.isClient);
-  const topCompShare = totalPool > 0 && topComp ? topComp.traffic / totalPool : 0;
-  const clientShare  = totalPool > 0 ? clientTraffic / totalPool : captureRate;
+  // v7.129 — Now sourced from computeSov() — the SAME computation the Share-of-
+  // Voice donut (SovPanel, nav 06) renders, and the SovPanel shown right below
+  // in this exec. Previously the hero built its own organic-traffic-only share
+  // truncated to the top 4 competitors, so the "topComp holds X%" figure in the
+  // narrative disagreed with the donut beside it. They now reconcile by
+  // construction: identical ranked entries, identical denominator (= sum of all
+  // entry voices), identical basis (traffic when Semrush traffic exists, else
+  // page-1 keyword volume). Pass the SAME competitors (manualDomains) and label
+  // used for this exec's SovPanel render so the two cards match exactly.
+  const clientDomain = normDomain(propClientDomain ?? analysis.domain ?? '');
+  const _sov         = useMemo(
+    () => computeSov({ analysis, competitors: manualDomains, dbKeywords, clientLabel: projectName ?? propClientDomain }),
+    [analysis, manualDomains, dbKeywords, projectName, propClientDomain],
+  );
+  const sovTotal     = _sov.total;
+  const sovClient    = _sov.rawEntries.find(e => e.type === 'client');
+  const sovComps     = _sov.rawEntries.filter(e => e.type !== 'client');  // already sorted by voice desc
+  const _topEntry    = sovTotal > 0 && sovComps.length > 0 ? sovComps[0] : undefined;
+  const topComp      = _topEntry ? { domain: normDomain(_topEntry.domain), traffic: _topEntry.traffic } : undefined;
+  const topCompShare = topComp && sovTotal > 0 ? topComp.traffic / sovTotal : 0;
+  const clientShare  = sovTotal > 0 && sovClient ? sovClient.traffic / sovTotal : captureRate;
   const gapVsTop     = topCompShare - clientShare;
 
   // ── Journey stage coverage (nav 04) ───────────────────────────────────────
