@@ -253,14 +253,23 @@ export default function ExecutiveSummarySection({
   // intent mapping is the deterministic default (AI refinement of 'unmatched'
   // keywords is UI-cached state not available here, and only shifts unmatched
   // terms into the awareness stage).
-  const journeyStagesCovered = useMemo(() => {
+  const journeyStages = useMemo(() => {
+    const STAGE_ORDER = ['awareness', 'consideration', 'decision', 'retention'] as const;
+    const STAGE_LABELS: Record<string, string> = { awareness: 'Awareness', consideration: 'Consideration', decision: 'Decision', retention: 'Retention' };
     const clusters = buildClusters(analysis, {}, clientDomain, manualDomains, dbKeywords);
-    const stages = new Set<string>();
+    const agg: Record<string, { client: number; total: number }> = {};
+    STAGE_ORDER.forEach(s => { agg[s] = { client: 0, total: 0 }; });
     clusters.forEach(c => c.subClusters.forEach(sc => {
-      if (sc.clientVolume > 0) stages.add(sc.stage);
+      if (agg[sc.stage]) { agg[sc.stage].client += sc.clientVolume; agg[sc.stage].total += sc.totalVolume; }
     }));
-    return stages.size;
+    return STAGE_ORDER.map(s => {
+      const { client, total } = agg[s];
+      const share = total > 0 ? client / total : 0;
+      const status: 'present' | 'thin' | 'absent' = client <= 0 ? 'absent' : share < 0.2 ? 'thin' : 'present';
+      return { stage: s as string, label: STAGE_LABELS[s], client, total, share, status };
+    });
   }, [analysis, clientDomain, manualDomains, dbKeywords]);
+  const journeyStagesCovered = journeyStages.filter(s => s.status !== 'absent').length;
 
   // ── LLM visibility ────────────────────────────────────────────────────────
   // v7.80: supports both probe shapes. v2 (llm_probe_v2) reports the UNBRANDED
@@ -364,6 +373,23 @@ export default function ExecutiveSummarySection({
     SEO: '#8B85FF', GEO: '#06B6D4', Content: '#8B85FF', Technical: '#F59E0B', Competitive: '#EF4444',
   };
 
+  // ── AI visibility — single defendable figure (v7.130) ──────────────────────
+  const aiVisPct: number | null =
+    aioAvail > 0 ? aioRate
+    : overallTotal > 0 ? overallLlmRate
+    : null;
+  const aiVisDenom =
+    aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
+    : overallTotal > 0 ? `of ${overallTotal} AI probes citing you`
+    : 'run an AIO scan to measure';
+  const aiVisColor = aiVisPct === null ? '#555570' : aiVisPct < 20 ? '#EF4444' : aiVisPct < 50 ? '#F59E0B' : '#22C55E';
+
+  const STATUS_STYLE: Record<'present' | 'thin' | 'absent', { bg: string; fg: string; label: string }> = {
+    present: { bg: '#166534', fg: '#86EFAC', label: 'present' },
+    thin:    { bg: '#854D0E', fg: '#FDE68A', label: 'thin' },
+    absent:  { bg: '#2A2A3A', fg: '#8888AA', label: 'absent' },
+  };
+
   // ── Defer render until DB keywords resolve (prevents stale capture-rate flash) ──
   // Mirrors the v7.67 ThemeClustersPanel fix: first paint used only the stored
   // snapshot fallbacks, then re-rendered with merged DB keywords — flashing two
@@ -383,323 +409,143 @@ export default function ExecutiveSummarySection({
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
-      {/* ═══ HERO ═══ */}
-      <div className="orbit-card p-4 flex items-center gap-4"
-        style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
-
-        <div className="shrink-0">
-          <p className="text-[9px] text-orbit-tertiary uppercase tracking-widest mb-1">Market capture rate</p>
-          <p className="font-black leading-none" style={{ fontSize: 48, color: '#6C63FF' }}>
-            {captureRatePct}%
+      {/* ═══ THE LANDSCAPE — headline renders ONLY when narrative data exists (v7.130) ═══ */}
+      {narrativeText ? (
+        <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+          <p className="text-[9px] uppercase mb-1" style={{ color: '#6C63FF', letterSpacing: '.12em' }}>
+            The landscape · your position in the new discovery ecosystem
           </p>
-          <p className="text-[10px] mt-1 text-orbit-tertiary">
-            of {fmtAnnual(totalMonthly)} annual searches
+          <p className="font-semibold" style={{ fontSize: 18, color: '#F0F0FF', lineHeight: 1.35 }}>
+            You win page-1 rankings for <span style={{ color: '#22C55E' }}>{page1Pct}%</span> of demand
+            {aiVisPct !== null
+              ? <> — but you&rsquo;re cited in just <span style={{ color: aiVisColor }}>{aiVisPct}%</span> of the AI answers your buyers now read first.</>
+              : <>. AI-answer visibility is not yet measured — run an AIO scan to see it.</>}
           </p>
-        </div>
-
-        <div className="self-stretch w-px shrink-0 bg-orbit-border" />
-
-        <div className="flex-1 min-w-0">
-          <p className="text-orbit-primary text-sm font-semibold mb-1">
-            {captureRate < 0.15
-              ? 'Significant capture gap vs. market leaders'
-              : captureRate < 0.35
-              ? 'Moderate capture rate — room to grow'
-              : 'Strong market position — defend and expand'}
-          </p>
-          <p className="text-orbit-secondary text-[10px] leading-relaxed">
-            {topComp
-              ? `${topComp.domain} holds ${(topCompShare * 100).toFixed(0)}% of total demand. ${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`
-              : `${fmtAnnual(uncapturedMonthly)} annual searches remain uncaptured across ${gapKwCount} non-branded keywords.`}
-            {combinedSerpRate < 30 ? ' AI search visibility is an emerging gap.' : ''}
+          <p className="text-orbit-secondary mt-2" style={{ fontSize: 11, lineHeight: 1.6 }}>
+            {narrativeText}
           </p>
         </div>
+      ) : null}
 
-        <div className="self-stretch w-px shrink-0 bg-orbit-border" />
-
-        {/* 4 mini stat tiles — uses live DB-computed values */}
-        <div className="grid grid-cols-2 gap-2 shrink-0" style={{ width: 210 }}>
+      {/* ═══ THE APPROACH — TWO WORLDS OF VISIBILITY ═══ */}
+      <div>
+        <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary">
+          The approach · two worlds of visibility
+        </p>
+        <div className="grid grid-cols-4 gap-2">
           {[
-            { label: 'Total keywords',
-              value: dbLoaded ? totalKws.toLocaleString() : '—',
-              color: '#F0F0FF' },
-            { label: 'Pg 1 vol. share',
-              value: dbLoaded ? `${page1Pct}%` : '—',
-              color: pg1Color },
-            { label: 'Wtd. avg position',
-              value: dbLoaded && weightedPos > 0 ? weightedPos.toFixed(1) : '—',
-              color: avgPosColor },
-            { label: 'Top-3 vol share',
-              value: dbLoaded && totalVol > 0 ? `${top3VolPct}%` : '—',
-              color: top3VolPct < 10 ? '#EF4444' : top3VolPct < 25 ? '#F59E0B' : '#22C55E' },
-          ].map(s => (
-            <div key={s.label} className="rounded-md px-2.5 py-2 text-center bg-orbit-surface">
-              <p className="text-[9px] uppercase tracking-wider mb-1 text-orbit-tertiary">{s.label}</p>
-              <p className="text-lg font-bold leading-none" style={{ color: s.color }}>{s.value}</p>
+            { key: 'trad', accent: '#22C55E', icon: 'Traditional',
+              big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: '#F0F0FF',
+              sub: 'of demand ranked page 1' },
+            { key: 'ai', accent: '#EF4444', icon: 'AI visibility',
+              big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
+              sub: aiVisDenom },
+            { key: 'gap', accent: '#F59E0B', icon: 'Coverage gap',
+              big: gapVolume > 0 ? fmtAnnual(gapVolume) : '—', bigSuffix: '', bigColor: '#F59E0B',
+              sub: `${gapKwCount} non-branded voids / yr` },
+            { key: 'journey', accent: '#06B6D4', icon: 'Journey',
+              big: `${journeyStagesCovered}`, bigSuffix: ' of 4', bigColor: '#F0F0FF',
+              sub: 'stages with organic coverage' },
+          ].map(b => (
+            <div key={b.key} className="orbit-card p-3"
+              style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0' }}>
+              <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: b.accent }}>{b.icon}</p>
+              <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor, marginTop: 8 }}>
+                {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: '#8888AA' }}>{b.bigSuffix}</span> : null}
+              </p>
+              <p className="text-[9px] mt-1" style={{ color: '#8888AA' }}>{b.sub}</p>
             </div>
           ))}
         </div>
       </div>
 
-      {/* ═══ BODY: 2/3 grid + 1/3 signals ═══ */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 200px' }}>
+      {/* ═══ WHERE YOU DISAPPEAR ACROSS THE JOURNEY ═══ */}
+      <div className="orbit-card p-4">
+        <p className="text-orbit-secondary text-xs font-medium mb-3">Where you disappear across the journey</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '84px repeat(4,1fr)', gap: 6, alignItems: 'center' }}>
+          <span />
+          {journeyStages.map(s => (
+            <span key={`h-${s.stage}`} className="text-[9px]" style={{ color: '#8888AA', textAlign: 'center' }}>{s.label}</span>
+          ))}
 
-        <div className="flex flex-col gap-3">
-
-          {/* Row 1: Competitors + Google Volume Opportunity */}
-          <div className="grid grid-cols-2 gap-3">
-
-            {/* Share of Voice — same panel as Google Ranks (nav 06) */}
-            <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} />
-
-            {/* Volume Opportunity Analysis — exact replica of GoogleSerpSection */}
-            <div className="orbit-card p-4 flex flex-col gap-3">
-              <p className="text-orbit-secondary text-xs font-medium">Volume Opportunity Analysis</p>
-
-              {dbLoaded && totalVol > 0 ? (
-                <>
-                  {/* Big metric */}
-                  <div className="flex items-center gap-3 py-1">
-                    <div>
-                      <p style={{ color: '#EF4444', fontSize: '36px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
-                        {pctOutsideTop3}%
-                      </p>
-                      <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '4px' }}>
-                        of volume outside top 3
-                      </p>
-                    </div>
-                    <div style={{ width: '1px', height: '50px', background: '#1E1E2E', flexShrink: 0 }} />
-                    <div>
-                      <p style={{ color: '#F0F0FF', fontSize: '14px', fontWeight: 600, margin: 0 }}>
-                        {fmtAnnual(volOutsideTop3)}
-                        <span style={{ color: '#444458', fontWeight: 400, fontSize: '11px' }}> / yr</span>
-                      </p>
-                      <p style={{ color: '#8888AA', fontSize: '10px', margin: '3px 0 0' }}>annual searches pos 4+</p>
-                      <p style={{ color: '#555570', fontSize: '9px', margin: '2px 0 0' }}>
-                        out of {fmtAnnual(totalVol)} total
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Volume breakdown bars — exact match to GoogleSerpSection */}
-                  <div className="flex flex-col gap-2">
-                    {[
-                      { label: 'Positions 1–3',  vol: top3Vol,             color: '#6C63FF' },
-                      { label: 'Positions 4–10', vol: page1Vol - top3Vol,  color: '#06B6D4' },
-                      { label: 'Page 2+ (11+)',  vol: totalVol - page1Vol, color: '#EF4444' },
-                    ].map(row => {
-                      const pct = totalVol > 0 ? (row.vol / totalVol) * 100 : 0;
-                      return (
-                        <div key={row.label}>
-                          <div className="flex justify-between mb-1">
-                            <span style={{ fontSize: '10px', color: '#8888AA' }}>{row.label}</span>
-                            <span style={{ fontSize: '10px', fontWeight: 600, color: row.color }}>
-                              {fmtAnnual(row.vol)}
-                              <span style={{ color: '#444458', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span>
-                            </span>
-                          </div>
-                          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '5px' }}>
-                            <div style={{
-                              background: row.color, borderRadius: '3px', height: '5px',
-                              width: `${Math.min(100, pct)}%`,
-                            }} />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Opportunity insight callout */}
-                  <div style={{
-                    background: '#0F0F1E', border: '1px solid #1E1E35',
-                    borderLeft: '3px solid #6C63FF', borderRadius: '0 8px 8px 0', padding: '8px 10px',
-                  }}>
-                    <p style={{ fontSize: '10px', color: '#8888AA', lineHeight: 1.5, margin: 0 }}>
-                      <span style={{ color: '#C0C0E8', fontWeight: 500 }}>Opportunity: </span>
-                      Moving {Math.min(5, posDist['4-10'] ?? 0)} of your Pos 4–10 keywords
-                      into top 3 could unlock{' '}
-                      <span style={{ color: '#6C63FF', fontWeight: 600 }}>
-                        ~{fmtAnnual(Math.round((page1Vol - top3Vol) * 0.3))}
-                      </span>{' '}
-                      additional annual searches.
-                    </p>
-                  </div>
-                </>
-              ) : !dbLoaded ? (
-                <p className="text-orbit-tertiary text-[10px]">Loading keyword data…</p>
-              ) : (
-                <p className="text-orbit-tertiary text-[10px]">No keyword volume data available. Run analysis to see results.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Row 2: LLM + Content inventory */}
-          <div className="grid grid-cols-2 gap-3">
-
-            {/* LLM visibility */}
-            <div className="orbit-card p-4">
-              <p className="text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest mb-0.5">LLM visibility</p>
-              <h4 className="text-orbit-primary text-xs font-semibold mb-3">AI search presence</h4>
-
-              {isLlmProbe && llmPlatforms.length > 0 ? (
-                <>
-                  {llmPlatforms.map((p: any) => {
-                    const pct      = Math.round((p.mentionRate ?? 0) * 100);
-                    const col      = pct < 34 ? '#EF4444' : pct < 67 ? '#F59E0B' : '#22C55E';
-                    const bgBadge  = p.platform === 'claude' ? 'rgba(108,99,255,.15)' : 'rgba(34,197,94,.1)';
-                    const txtBadge = p.platform === 'claude' ? '#8B85FF' : '#22C55E';
-                    return (
-                      <div key={p.platform}
-                        className="flex items-center gap-2 mb-2 rounded-md px-2.5 py-1.5 bg-orbit-surface">
-                        <span className="text-[9px] font-bold rounded px-1.5 py-1 shrink-0"
-                          style={{ background: bgBadge, color: txtBadge }}>
-                          {p.platform === 'claude' ? 'CL' : 'GP'}
-                        </span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[10px] font-semibold text-orbit-primary mb-1">{p.label ?? p.platform}</p>
-                          <div className="h-1 rounded-full overflow-hidden bg-orbit-muted">
-                            <div className="h-1 rounded-full" style={{ width: `${pct}%`, background: col }} />
-                          </div>
-                          <p className="text-[9px] mt-0.5 text-orbit-tertiary">
-                            {p.mentionCount ?? 0}/{p.results?.length ?? 3} prompts cited
-                          </p>
-                        </div>
-                        <span className="text-xs font-bold shrink-0" style={{ color: col }}>{pct}%</span>
-                      </div>
-                    );
-                  })}
-                  {bestExcerpt && (
-                    <div className="mt-2 rounded-md px-2.5 py-2 text-[9px] leading-relaxed bg-orbit-surface text-orbit-tertiary">
-                      &ldquo;{bestExcerpt.length > 140 ? bestExcerpt.slice(0, 137) + '…' : bestExcerpt}&rdquo;
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-orbit-tertiary text-[10px]">Run analysis to see LLM probe results.</p>
-              )}
-            </div>
-
-            {/* Content + journey inventory */}
-            <div className="orbit-card p-4">
-              <p className="text-orbit-tertiary text-[9px] font-medium uppercase tracking-widest mb-0.5">Content + journey coverage</p>
-              <h4 className="text-orbit-primary text-xs font-semibold mb-3">Opportunity inventory</h4>
-
-              <div className="grid grid-cols-2 gap-1.5 mb-3">
-                {[
-                  { label: 'Content gaps',
-                    value: contentGapsFromDb.length > 0 ? String(contentGapsFromDb.length) : gapKwCount > 0 ? `${gapKwCount}+` : '—' },
-                  { label: 'Procedure clusters',
-                    value: String(clusterCount > 0 ? clusterCount : categories.length) },
-                  { label: 'Annual gap volume',  value: gapVolume > 0 ? fmtAnnual(gapVolume) : '—' },
-                  // v7.128 — label said "ranked" but showed totalKws (which
-                  // includes non-ranked gap keywords). Now shows the actual
-                  // ranked count (posKws.length) = keywords with a real
-                  // position, matching Google Ranks (06). Total-keyword count
-                  // (incl. gaps) still lives in the hero "Total keywords" tile.
-                  { label: 'Total ranked kws',
-                    value: dbLoaded ? posKws.length.toLocaleString() : '—' },
-                ].map(s => (
-                  <div key={s.label} className="rounded-md px-2.5 py-1.5 bg-orbit-surface">
-                    <p className="text-[9px] mb-0.5 text-orbit-tertiary">{s.label}</p>
-                    <p className="text-sm font-bold text-orbit-primary">{s.value}</p>
-                  </div>
-                ))}
+          <span className="text-[9px]" style={{ color: '#22C55E' }}>Organic</span>
+          {journeyStages.map(s => {
+            const st = STATUS_STYLE[s.status];
+            return (
+              <div key={`o-${s.stage}`} title={s.total > 0 ? `${Math.round(s.share * 100)}% client share of stage volume` : 'no stage volume'}
+                style={{ background: st.bg, color: st.fg, height: 26, borderRadius: 4,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 500 }}>
+                {st.label}
               </div>
+            );
+          })}
 
-              <StatRow label="Competitor gap keywords" value={String(gapKwCount)} />
-              <StatRow
-                label="SERP feature coverage"
-                value={totalAvail > 0 ? `${combinedSerpRate}%` : '—'}
-                valueColor={combinedSerpRate < 30 ? '#EF4444' : combinedSerpRate < 60 ? '#F59E0B' : '#22C55E'}
-              />
-              <StatRow
-                label="LLM mention rate"
-                value={overallTotal > 0 ? `${overallLlmRate}%` : '—'}
-                valueColor={llmColor}
-              />
+          <span className="text-[9px]" style={{ color: '#555570' }}>AI</span>
+          {journeyStages.map(s => (
+            <div key={`a-${s.stage}`}
+              style={{ background: '#16161F', color: '#555570', height: 26, borderRadius: 4,
+                border: '1px dashed #2A2A3A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
+              coming
             </div>
-          </div>
-
-          {/* Narrative */}
-          {narrativeText ? (
-            <div className="px-4 py-3 text-[10px] leading-relaxed text-orbit-secondary"
-              style={{
-                background: '#111118', borderLeft: '3px solid #6C63FF',
-                borderTop: '1px solid #1E1E2E', borderRight: '1px solid #1E1E2E',
-                borderBottom: '1px solid #1E1E2E', borderRadius: '0 8px 8px 0',
-              }}>
-              {narrativeText}
-            </div>
-          ) : null}
+          ))}
         </div>
+        <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
+          AI-per-stage visibility, audience segments, and Sentinel live signals are in build — this row activates once LLM probes are mapped to journey stages.
+        </p>
+      </div>
 
-        {/* ── SIGNALS COLUMN ── */}
-        <div className="flex flex-col">
-          <p className="text-[9px] font-bold uppercase tracking-widest pb-2 mb-2 text-orbit-tertiary"
-            style={{ borderBottom: '1px solid #1E1E2E' }}>
-            Panel signals
-          </p>
+      {/* ═══ SUPPORTING EVIDENCE: who's beating me + where volume sits ═══ */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+        <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} />
 
-          <SignalCard
-            source="Market gap"
-            value={`${captureRatePct}%`}
-            desc={`Market capture — ${fmtAnnual(uncapturedMonthly)} searches/yr uncaptured`}
-            accentColor={captureColor}
-          />
-          <SignalCard
-            source="Competitor gap"
-            value={topComp && gapVsTop > 0 ? `+${(gapVsTop * 100).toFixed(0)}%` : `${gapKwCount}`}
-            desc={topComp ? `${topComp.domain} leads — ${gapKwCount} gap keywords` : `${gapKwCount} gap keywords identified`}
-            accentColor="#F59E0B"
-          />
-          <SignalCard
-            source="Google ranks"
-            value={dbLoaded ? `${page1Pct}%` : '—'}
-            desc={dbLoaded
-              ? `Page 1 coverage — wtd. avg pos ${weightedPos > 0 ? weightedPos.toFixed(1) : '—'}`
-              : 'Loading…'}
-            accentColor={pg1Color}
-          />
-          <SignalCard
-            source="SERP features"
-            value={aioAvail > 0 ? `${aioRate}%` : '—'}
-            desc={aioAvail > 0 ? `AIO acquired — ${100 - aioRate}% of slots uncaptured` : 'No AIO data available'}
-            accentColor={aioColor}
-          />
-          <SignalCard
-            source="LLM visibility"
-            value={overallTotal > 0 ? `${overallLlmRate}%` : '—'}
-            desc={overallTotal > 0 ? `Cited in ${overallMentions} of ${overallTotal} AI probes` : 'No LLM probe data'}
-            accentColor={llmColor}
-          />
-          <SignalCard
-            source="Theme clusters"
-            value={String(clusterCount > 0 ? clusterCount : categories.length)}
-            desc={`Procedure clusters — ${fmtAnnual(totalMonthly)} annual search volume`}
-            accentColor="#8B85FF"
-          />
-          <SignalCard
-            source="Content map"
-            value={String(gapKwCount)}
-            desc="Competitor gap keywords — highest ROI opportunity"
-            accentColor="#F59E0B"
-          />
-          <SignalCard
-            source="Journeys"
-            value={`${journeyStagesCovered} of 4`}
-            desc="Journey stages with client page-1 coverage"
-            accentColor={journeyStagesCovered >= 3 ? '#22C55E' : journeyStagesCovered === 2 ? '#F59E0B' : '#EF4444'}
-          />
+        <div className="orbit-card p-4 flex flex-col gap-3">
+          <p className="text-orbit-secondary text-xs font-medium">Where the volume sits</p>
+          {dbLoaded && totalVol > 0 ? (
+            <>
+              <div className="flex items-center gap-3 py-1">
+                <div>
+                  <p style={{ color: '#EF4444', fontSize: '32px', fontWeight: 700, lineHeight: 1, margin: 0 }}>{pctOutsideTop3}%</p>
+                  <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '4px' }}>of volume outside top 3</p>
+                </div>
+                <div style={{ width: '1px', height: '46px', background: '#1E1E2E', flexShrink: 0 }} />
+                <div>
+                  <p style={{ color: '#F0F0FF', fontSize: '13px', fontWeight: 600, margin: 0 }}>{fmtAnnual(volOutsideTop3)}<span style={{ color: '#444458', fontWeight: 400, fontSize: '11px' }}> / yr</span></p>
+                  <p style={{ color: '#555570', fontSize: '9px', margin: '2px 0 0' }}>out of {fmtAnnual(totalVol)} total</p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2">
+                {[
+                  { label: 'Positions 1–3', vol: top3Vol, color: '#6C63FF' },
+                  { label: 'Positions 4–10', vol: page1Vol - top3Vol, color: '#06B6D4' },
+                  { label: 'Page 2+ (11+)', vol: totalVol - page1Vol, color: '#EF4444' },
+                ].map(row => {
+                  const pct = totalVol > 0 ? (row.vol / totalVol) * 100 : 0;
+                  return (
+                    <div key={row.label}>
+                      <div className="flex justify-between mb-1">
+                        <span style={{ fontSize: '10px', color: '#8888AA' }}>{row.label}</span>
+                        <span style={{ fontSize: '10px', fontWeight: 600, color: row.color }}>{fmtAnnual(row.vol)}<span style={{ color: '#444458', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span></span>
+                      </div>
+                      <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '5px' }}>
+                        <div style={{ background: row.color, borderRadius: '3px', height: '5px', width: `${Math.min(100, pct)}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p className="text-orbit-tertiary text-[10px]">No keyword volume data available. Run analysis to see results.</p>
+          )}
         </div>
       </div>
 
-      {/* ═══ PRIORITY ACTIONS ═══ */}
+      {/* ═══ THE CONTINUOUS CYCLE — SECURE THE COVERAGE GAPS ═══ */}
       <div>
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
           style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10 }}>
-          {hasFallbackActions ? 'Recommended priorities' : 'AI-generated priorities'}
+          The continuous cycle · {hasFallbackActions ? 'recommended priorities to secure coverage' : 'AI-generated priorities to secure coverage'}
         </p>
-
         <div className="grid grid-cols-3 gap-3">
           {actions.map((a, i) => {
             const catColor = CATEGORY_TEXT[a.category]  ?? '#8B85FF';
@@ -722,6 +568,17 @@ export default function ExecutiveSummarySection({
             );
           })}
         </div>
+      </div>
+
+      {/* ═══ SLIM ROLL-UP FOOTER (preserves exec→panel roll-up; framing only, no fabricated signals) ═══ */}
+      <div className="flex items-center justify-between gap-3"
+        style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10, flexWrap: 'wrap' }}>
+        <span className="text-[9px]" style={{ color: '#555570' }}>
+          Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
+        </span>
+        <span className="text-[9px]" style={{ color: '#8888AA' }}>
+          Rolls up · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {sovTotal > 0 && sovClient ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Clusters {clusterCount > 0 ? clusterCount : categories.length} · Journeys {journeyStagesCovered}/4
+        </span>
       </div>
 
     </div>

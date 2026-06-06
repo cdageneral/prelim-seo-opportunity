@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.130 — 2026-06-05 · Executive Summary rebuilt around the GEO story (landscape → two worlds → journey → continuous cycle)
+
+**Request (Wayne):** the old exec read as "a lot of data, not a story." Reshape it so a CMO instantly gets: where they stand, where their gaps are, who's beating them, and what to do — framed inside the company GEO narrative (discovery shifting from search links to AI answers; ranked content largely uncited in LLMs). Direction chosen across a design session: hybrid editorial-headline + answer-grid, competition kept as supporting evidence (not a headline), industry stats used as conceptual framing only (never presented as client-measured data), and story elements the app can't yet measure shipped as visible "coming" placeholders.
+
+**Layout (replaces the hero + 8-card signals rail + 2/3 body grid):**
+- **The landscape — headline band**, rendered ONLY when narrative data exists (`narrativeText` truthy; else hidden and the grid leads). States the core contrast from real metrics: page-1 demand share vs AI-answer citation rate, with the AI narrative as subhead. Honors Wayne's "hide headline if no narrative" choice.
+- **The approach — two worlds of visibility (4 boxes):** Traditional (page-1 volume share), AI visibility (citation rate), Coverage gap (gap volume + count), Journey (stages covered). Every box states its denominator on screen.
+- **Where you disappear across the journey:** real per-stage ORGANIC coverage row (present / thin / absent, derived from `buildClusters` client vs total stage volume, 20% share floor = "thin"); the AI row ships as four disabled "coming" cells with an on-screen note that AI-per-stage, audience segments, and Sentinel live signals are in build.
+- **Supporting evidence:** Share-of-Voice donut (`SovPanel`, the competitive "who's beating me" — kept as evidence, not a headline) beside the volume-distribution split.
+- **The continuous cycle:** the priority-action cards, reframed as "secure the coverage gaps."
+- **Slim roll-up footer:** one line rolling up every nav panel's headline number (framing only — the Sentinel/IQ.Impact monitoring line carries NO fabricated signal data).
+
+**Data integrity:** zero new data sources. Every figure still flows from the existing canonical helpers — `buildKwPool` (traditional visibility, gap, volume split), `computeSov` (SOV + footer share), `buildClusters` (journey stages), the stored AIO/LLM snapshots (AI visibility). So the exec continues to reconcile with Keyword Landscape (02), Google Ranks (06), Journeys (04), and SERP Features (07) by construction. The new `aiVisPct` is the AIO citation rate, falling back to the LLM-probe mention rate, and `null` (em dash + "run an AIO scan") when neither has data — never fabricated.
+
+**Changes:** `components/brief/ExecutiveSummarySection.tsx` only. Swapped the `journeyStagesCovered` count for a richer `journeyStages` reducer (per-stage client/total volume + present/thin/absent status, covered-count derived from it); added `aiVisPct`/`aiVisDenom`/`aiVisColor` and `STATUS_STYLE`; replaced the entire render. All upstream computations kept verbatim. The old `SignalCard`/`StatRow` helpers remain defined but unused (no longer rendered).
+
+**Verification:** full-project `tsc --noEmit` exit 0 in a clean `npm install --ignore-scripts` env in /tmp (505 packages, @types present — the defendable tsc env). jsdom interaction harness mounting the REAL component (esbuild bundle, mocked `/keywords` fetch, two fixtures): 15/15 — narrative-present headline shown + narrative text + two-worlds + AI 6% + "of 359 AI Overviews" denominator + journey present/absent chips + AI "coming" ×4 + continuous-cycle + roll-up footer + traditional-box label; and the narrative-absent fixture: headline HIDDEN, AI box em dash + "run an AIO scan", grid still renders. Real rendered text extract captured from the harness output.
+
 ## v7.129 — 2026-06-05 · Exec sourcing audit (pass 2 of 3): hero competitor share now matches the Share-of-Voice donut
 
 **Context:** continuation of the v7.128 audit. The Executive Summary hero claimed "[topComp] holds X% of total demand," but that figure was computed independently from the Share-of-Voice donut rendered directly below it — so two different competitor-share numbers appeared inches apart.
