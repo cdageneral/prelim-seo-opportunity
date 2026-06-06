@@ -435,13 +435,14 @@ export default function ExecutiveSummarySection({
     { tier: 'Big bet',   color: '#EF4444', move: 'Net-new (gaps) → build content authority',    n: gapKwCount,      volMonthly: gapVolume,   clicks: betClicks },
   ];
 
-  // ── v7.131: Head-to-head vs top rival (same SOV + gap pool, no new data) ────
-  const rivalDomain   = topComp ? topComp.domain : '';
-  const clientPage1Kw = page1Kws;
-  const rivalPage1Kw  = rivalDomain
-    ? dbKeywords.filter(k => normDomain((k as any).domain ?? '') === rivalDomain && k.position != null && Number(k.position) > 0 && Number(k.position) <= 10).length
-    : 0;
-  const rivalGapCount = rivalDomain ? gapItems.filter(i => normDomain(i.competitor ?? '') === rivalDomain).length : 0;
+  // ── v7.134: LLM sentiment-when-mentioned for the LLM-visibility card ────────
+  const _llmSent: any = llmSnap.sentiment ?? {};
+  const llmSent = {
+    pos:   _llmSent.positive ?? 0,
+    neu:   _llmSent.neutral  ?? 0,
+    neg:   _llmSent.negative ?? 0,
+    total: _llmSent.totalMentions ?? ((_llmSent.positive ?? 0) + (_llmSent.neutral ?? 0) + (_llmSent.negative ?? 0)),
+  };
 
   // ── Defer render until DB keywords resolve (prevents stale capture-rate flash) ──
   // Mirrors the v7.67 ThemeClustersPanel fix: first paint used only the stored
@@ -582,41 +583,62 @@ export default function ExecutiveSummarySection({
         </p>
       </div>
 
-      {/* ═══ SUPPORTING EVIDENCE: who's beating me (SOV) + head-to-head scorecard ═══ */}
+      {/* ═══ SUPPORTING EVIDENCE: Share of Voice on Google + LLM visibility ═══ */}
       <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} />
+        <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} title="Share of Voice on Google" />
 
-        {topComp ? (
-          <div className="orbit-card p-4">
-            <p className="text-orbit-secondary text-xs font-medium mb-3">Head-to-head · vs {rivalDomain} (your top rival)</p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '7px 14px', alignItems: 'center' }}>
-              <span style={{ fontSize: 10, color: '#555570' }} />
-              <span style={{ fontSize: 10, color: '#6C63FF', textAlign: 'right' }}>You</span>
-              <span style={{ fontSize: 10, color: '#F59E0B', textAlign: 'right' }}>{rivalDomain}</span>
-
-              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Share of voice</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#6C63FF', textAlign: 'right' }}>{Math.round(clientShare * 100)}%</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{Math.round(topCompShare * 100)}%</span>
-
-              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Page-1 keywords</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#6C63FF', textAlign: 'right' }}>{clientPage1Kw.toLocaleString()}</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{rivalPage1Kw > 0 ? rivalPage1Kw.toLocaleString() : '—'}</span>
-
-              <span style={{ fontSize: 11, color: '#F0F0FF' }}>Gap kws they own</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#555570', textAlign: 'right' }}>—</span>
-              <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', textAlign: 'right' }}>{rivalGapCount.toLocaleString()}</span>
-            </div>
-            {rivalPage1Kw === 0 ? (
-              <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
-                Rival page-1 count needs a competitor keyword CSV with positions — upload to populate.
-              </p>
-            ) : null}
-          </div>
-        ) : (
-          <div className="orbit-card p-4 flex items-center justify-center">
-            <p className="text-orbit-tertiary text-[10px]">Add a competitor to see the head-to-head scorecard.</p>
-          </div>
-        )}
+        <div className="orbit-card p-4">
+          <p className="text-orbit-secondary text-xs font-medium mb-1">LLM visibility · AI answer citations</p>
+          {(isLlmProbeV1 || isLlmProbeV2) && llmPlatforms.length > 0 ? (
+            <>
+              {llmPlatforms.map((p: any) => {
+                const pct      = Math.round((p.mentionRate ?? 0) * 100);
+                const col      = pct < 34 ? '#EF4444' : pct < 67 ? '#F59E0B' : '#22C55E';
+                const bgBadge  = p.platform === 'claude' ? 'rgba(108,99,255,.15)' : 'rgba(34,197,94,.1)';
+                const txtBadge = p.platform === 'claude' ? '#8B85FF' : '#22C55E';
+                return (
+                  <div key={p.platform} className="flex items-center gap-2 mt-2 rounded-md px-2.5 py-1.5 bg-orbit-surface">
+                    <span className="text-[9px] font-bold rounded px-1.5 py-1 shrink-0" style={{ background: bgBadge, color: txtBadge }}>
+                      {p.platform === 'claude' ? 'CL' : 'GP'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-semibold text-orbit-primary mb-1">{p.label ?? p.platform}</p>
+                      <div className="h-1 rounded-full overflow-hidden bg-orbit-muted">
+                        <div className="h-1 rounded-full" style={{ width: `${pct}%`, background: col }} />
+                      </div>
+                      <p className="text-[9px] mt-0.5 text-orbit-tertiary">{p.mentionCount ?? 0}/{p.results?.length ?? 0} prompts cited</p>
+                    </div>
+                    <span className="text-xs font-bold shrink-0" style={{ color: col }}>{pct}%</span>
+                  </div>
+                );
+              })}
+              <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid #1E1E2E' }}>
+                <span className="text-[10px] text-orbit-secondary">Overall citation rate</span>
+                <span className="text-[11px] font-semibold" style={{ color: llmColor }}>{overallLlmRate}% · {overallMentions}/{overallTotal} prompts</span>
+              </div>
+              {llmSent.total > 0 ? (
+                <div className="mt-2">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-[9px] text-orbit-tertiary">Sentiment when mentioned</span>
+                    <span className="text-[9px] text-orbit-tertiary">{llmSent.total} mentions</span>
+                  </div>
+                  <div className="flex rounded-full overflow-hidden" style={{ height: 6, background: '#1E1E2E' }}>
+                    <div style={{ width: `${(llmSent.pos / llmSent.total) * 100}%`, background: '#22C55E' }} />
+                    <div style={{ width: `${(llmSent.neu / llmSent.total) * 100}%`, background: '#8888AA' }} />
+                    <div style={{ width: `${(llmSent.neg / llmSent.total) * 100}%`, background: '#EF4444' }} />
+                  </div>
+                  <div className="flex gap-3 mt-1">
+                    <span className="text-[9px]" style={{ color: '#22C55E' }}>{llmSent.pos} positive</span>
+                    <span className="text-[9px]" style={{ color: '#8888AA' }}>{llmSent.neu} neutral</span>
+                    <span className="text-[9px]" style={{ color: '#EF4444' }}>{llmSent.neg} negative</span>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-orbit-tertiary text-[10px] mt-2">Run the LLM probe to see AI answer citations.</p>
+          )}
+        </div>
       </div>
 
       {/* ═══ WHERE TO SPEND FIRST — QUICK-WINS LADDER (effort vs payoff) ═══ */}

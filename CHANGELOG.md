@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.134 — 2026-06-05 · Exec: SOV card renamed "Share of Voice on Google" + head-to-head replaced with LLM visibility (platform bars + sentiment)
+
+**Request (Wayne):** on the Executive Summary, rename the Share-of-Voice card to "Share of Voice on Google", and replace the right-side head-to-head scorecard with an LLM-visibility view.
+
+**Data-integrity note (told Wayne up front):** the LLM probe (`llm_probe_v2`) records whether OUR brand was mentioned per answer (+ platform + sentiment), but does NOT capture which competitors appear in those answers — so a true competitor "share of voice" for LLMs is not computable from stored data without re-architecting the probe + a re-scan. Wayne chose (AskUserQuestion) the honest, available-now option: per-platform mention bars + sentiment. (True LLM SOV remains a future build: extract competitor brand mentions from probe responses.)
+
+**Changes (2 files, display-only — no metric/data logic changed):**
+- `components/brief/GoogleSerpSection.tsx` — `SovPanel` gains an optional `title` prop (defaults to "Share of Voice"); the three header render states (notice / empty / main) now show `{title ?? 'Share of Voice'}`. The Google Ranks (nav 06) call passes no title, so it is UNCHANGED ("Share of Voice"); only the exec overrides it.
+- `components/brief/ExecutiveSummarySection.tsx` — exec's `SovPanel` now passes `title="Share of Voice on Google"`. The head-to-head scorecard (and its now-dead rival derivations) is REPLACED by an LLM-visibility card: per-platform mention-rate bars (Claude / ChatGPT badge + bar + "N/M prompts cited" + %), an "Overall citation rate" line (`overallLlmRate` · mentions/total), and a "Sentiment when mentioned" stacked bar (positive/neutral/negative) shown only when `llmSent.total > 0`. All values come from the already-computed `llmPlatforms` / `overallLlmRate` / `overallMentions` / `overallTotal` and the probe's `sentiment` aggregate — zero new data. Empty state: "Run the LLM probe to see AI answer citations."
+
+**Verification:** full-project `tsc --noEmit` exit 0 (clean /tmp env incl. v7.131 scroll fix + v7.132 serp scan). jsdom harness on the REAL component: 33/33 — adds SOV-titled-"on Google", LLM card title, overall citation-rate line, sentiment bar (1 positive), head-to-head removed; all prior 28 checks (score math, confidence, ladder, journey, headline gating, etc.) still green. Built on v7.133 (carries the full merged feature set). Zip 72 files, inner folder orbitiq-v7.134/, integrity OK.
+
 ## v7.133 — 2026-06-05 · Exec value-adds rebased onto v7.132 (GEO Score, confidence, quick-wins ladder, head-to-head) — parallel-session merge
 
 **Why this version exists:** a parallel session shipped v7.131 (Content Map scroll fix) and v7.132 (SERP one-click auto-batch) on top of v7.130. This session independently built the Executive Summary value-adds and first packaged them (incorrectly) as v7.131, colliding with the scroll-fix release. RESOLUTION: the exec value-adds were rebased on top of v7.132-src and shipped here as v7.133, so this single build carries EVERYTHING: v7.130 GEO-story reframe + v7.131 scroll fix + v7.132 background SERP scan + the exec value-adds below. The mislabeled standalone v7.131 exec build was removed; v7.131 is restored to its true scroll-fix content. DEPLOY v7.133.

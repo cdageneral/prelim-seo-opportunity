@@ -920,7 +920,7 @@ export function computeSov(
   return { basis, rawEntries, total, clientVoice, clientKwsUsed, compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay };
 }
 
-export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }) {
+export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string }) {
   const {
     basis, rawEntries, total, clientVoice, clientKwsUsed,
     compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay,
@@ -967,7 +967,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
   if (basis === 'tracked') {
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
-        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '12px', color: '#8888B0', lineHeight: 1.6 }}>
           Share of Voice is computed from <span style={{ color: '#C0C0E8' }}>page-1 keyword volume per domain</span>, and the uploaded competitor keywords have no rank positions, so it cannot be calculated yet.
         </p>
@@ -984,7 +984,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
   if (total === 0) {
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
-        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '12px', color: '#555570' }}>
           No traffic or page-1 keyword data available yet. Run an analysis to populate.
         </p>
@@ -995,7 +995,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel }: { a
   return (
     <div className="orbit-card p-5 flex flex-col gap-3">
       <div>
-        <p className="text-orbit-secondary text-xs font-medium">Share of Voice</p>
+        <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
           {basis === 'traffic' && 'by organic traffic (Semrush)'}
           {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
