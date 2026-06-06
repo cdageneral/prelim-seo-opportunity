@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.143 — 2026-06-06 · Hardened client CSV upload: reports "saved X of N rows" + stores client rows under one canonical tag
+
+**Context (verified against Wayne's live DB):** the client footprint showed ~171 even though `sonobello-high volume.csv` has 731 rows. Reading `project_keywords` directly: only ~171 unique client keywords are actually stored, split across TWO tags — ~168 rows with a blank domain and ~123 tagged with the literal client domain `sonobello.com` (both `type:ranked`, overlapping). The competitor blocks (airsculpt.com ~456, bruggemanplasticsurgery.com ~76) are intact. So the panel was faithfully reporting the DB; the **stored client data was incomplete** — the 731-row upload didn't fully persist, and earlier uploads tagged client rows two different ways. Wayne chose "harden the upload + re-upload."
+
+**Changes (2 files):**
+- `components/brief/KeywordsPanel.tsx` (client CSV uploader) — full row accounting. The result toast now reads **"Saved X of N CSV rows"** with a breakdown of everything that didn't land: duplicate keywords in the file, blank/unparseable rows, and — critically — **rows that failed to save** (HTTP/network errors are now counted as `failed`, not silently folded into "skipped"). A partial upload (the cause of the 731→171 gap) is now impossible to miss instead of looking like a clean success. Toast persists 10s.
+- `app/api/projects/[id]/keywords/batch/route.ts` — (1) client rows are stored under **one canonical tag** (blank domain) so the footprint can never split across `''` vs the literal client domain again; (2) a client re-upload's replace/dedup scope now covers the **whole** client bucket (`''` + NULL + client domain), so re-uploading heals the existing split in place. Competitor uploads and the v7.100 competitor-row repair are unchanged.
+
+**What Wayne does next:** re-upload `sonobello-high volume.csv` via the Keyword Landscape **Upload CSV** button. The toast will say e.g. "Saved 731 of 731 CSV rows" — or, if rows still drop, exactly how many failed, which tells us precisely where to look next. Client footprint then reflects the full CSV.
+
+**Verification (machine):** isolated `tsc --noEmit` (component + `kwVolume`) → **exit 0**. Component jsdom harness → **18/18** (unchanged render). New **route harness 8/8** (real `POST` bundled via esbuild with stubbed `@/db`/`@/db/schema`/`drizzle-orm`/`next/server`): client rows stored under blank domain + kept `ranked`; existing client rows (any tag) detected for replace; in-file duplicate counted as skipped; inserted+updated = unique payload; competitor rows keep their domain and are forced to `gap`. Includes the v7.142 pool-precedence fix.
+
 ## v7.142 — 2026-06-06 · FIX: uploaded client CSV footprint was being swallowed by the auto-crawl gap set (client showed 136 instead of the full 731)
 
 **Symptom (Wayne):** uploaded the client footprint CSV (`sonobello-high volume.csv`, 731 keyword rows) but the panel showed only **136** client keywords.

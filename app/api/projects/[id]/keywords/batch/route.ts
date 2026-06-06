@@ -112,10 +112,18 @@ export async function POST(
     }
   }
 
-  // v7.92: duplicate check scoped to THIS domain (client rows have domain ''
-  // or NULL from older versions — match both).
-  const domainCond = domainNorm === ''
-    ? or(eq(projectKeywords.domain, ''), isNull(projectKeywords.domain))
+  // v7.92/v7.143: duplicate + replace scope. For CLIENT uploads, treat the whole
+  // client bucket as ONE — blank domain, NULL (legacy), AND the literal client
+  // domain. Some earlier client uploads were tagged with the client's own domain
+  // (e.g. sonobello.com), splitting the footprint across two tags; a client
+  // re-upload now refreshes all of them so the split is healed.
+  const clientDomainConds = [
+    eq(projectKeywords.domain, ''),
+    isNull(projectKeywords.domain),
+    ...(clientDomainNorm ? [eq(projectKeywords.domain, clientDomainNorm)] : []),
+  ];
+  const domainCond = isClientUpload
+    ? or(...clientDomainConds)
     : eq(projectKeywords.domain, domainNorm);
 
   const existing = await db
@@ -151,7 +159,9 @@ export async function POST(
       type:         isClientUpload && pos !== null && pos <= 100 ? 'ranked' : 'gap',
       branded:      false,
       source,
-      domain:       domainNorm,
+      // v7.143: store client rows under ONE canonical tag (blank domain) so the
+      // footprint can never split across '' vs the literal client domain again.
+      domain:       isClientUpload ? '' : domainNorm,
     });
   }
   const rows     = Array.from(byKw.values());

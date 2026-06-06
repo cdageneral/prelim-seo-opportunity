@@ -784,8 +784,12 @@ export default function KeywordsPanel({
     }
 
     // Send all keywords to the batch endpoint in chunks of 500
-    // This avoids 3000+ individual DB connections and is far more reliable
-    let added = 0; let skipped = 0;
+    // This avoids 3000+ individual DB connections and is far more reliable.
+    // v7.143: full row accounting so a silent drop is impossible to miss —
+    // we report saved vs file rows, plus dup/blank/failed breakdown.
+    let added = 0; let skipped = 0; let failed = 0;
+    const fileRows      = dataLines.length;            // data rows in the CSV (excl. header)
+    const parsedDropped = fileRows - parsed.length;    // rows with no keyword (couldn't parse)
     const CHUNK = 500;
     setCsvProgress({ current: 0, total: parsed.length });
     for (let i = 0; i < parsed.length; i += CHUNK) {
@@ -808,12 +812,12 @@ export default function KeywordsPanel({
         if (res.ok) {
           const d = await res.json();
           added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
-          skipped += d.skipped  ?? 0;
+          skipped += d.skipped  ?? 0;                          // duplicate keywords within the file
         } else {
-          skipped += chunk.length;
+          failed += chunk.length;                              // server error — these rows did NOT save
         }
       } catch {
-        skipped += chunk.length;
+        failed += chunk.length;                                // network/parse error — did NOT save
       }
       setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
     }
@@ -823,13 +827,19 @@ export default function KeywordsPanel({
     await fetchDb();
       onKeywordsChanged?.();   // v7.108: refresh dependent panels
 
-    if (added === 0) {
-      setCsvStatus({ type: 'error', msg: `All ${skipped} keyword${skipped !== 1 ? 's' : ''} already exist — duplicates skipped.` });
-    } else {
-      const skipNote = skipped > 0 ? ` · ${skipped} skipped (duplicates)` : '';
-      setCsvStatus({ type: 'success', msg: `${added} keyword${added !== 1 ? 's' : ''} uploaded${skipNote}.` });
-    }
-    setTimeout(() => setCsvStatus(null), 6000);
+    // v7.143: always report "saved X of N rows" + a breakdown of everything that
+    // didn't save, so a partial upload (the cause of the 731→171 footprint gap)
+    // shows up immediately instead of looking like a clean success.
+    const parts: string[] = [];
+    if (skipped > 0)        parts.push(`${skipped.toLocaleString()} duplicate keyword${skipped !== 1 ? 's' : ''} in file`);
+    if (parsedDropped > 0)  parts.push(`${parsedDropped.toLocaleString()} blank/unparseable row${parsedDropped !== 1 ? 's' : ''}`);
+    if (failed > 0)         parts.push(`${failed.toLocaleString()} failed to save — re-upload to retry`);
+    const detail = parts.length ? ` (${parts.join(' · ')})` : '';
+    setCsvStatus({
+      type: failed > 0 ? 'error' : 'success',
+      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.`,
+    });
+    setTimeout(() => setCsvStatus(null), 10000);
   }
 
   // ── Clear all custom/CSV/blocked keywords ──
