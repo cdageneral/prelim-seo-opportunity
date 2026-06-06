@@ -531,24 +531,29 @@ export default function KeywordsPanel({
   const ranked = visibleRows.filter(r => r.type === 'ranked').length;
   const gap    = visibleRows.filter(r => r.type === 'gap').length;
 
-  // ── Summary card stats — v7.139: full footprint basis (summaryRows, no floors),
-  //    annualised × 12. allCount = client footprint + competitor gap. ──────────
+  // ── Summary card stats (v7.140) — exact definitions Wayne specified ─────────
+  //   Branded      = CLIENT footprint terms that are branded        (gap excluded)
+  //   Non-branded  = CLIENT footprint terms that are non-branded    (gap excluded)
+  //   Competitor Gap = competitor terms the client does NOT rank for
+  //   All Keywords = Branded + Non-branded + Gap   (literally the sum of the three)
+  // All on the full-footprint basis (summaryRows = no volume floors). The table
+  // below stays volume-filtered, so cards can read higher than the visible rows.
   const kwSummary = useMemo(() => {
-    const brandedRows  = summaryRows.filter(r =>  r.branded);
-    const nonBrandRows = summaryRows.filter(r => !r.branded);
-    const gapRows      = summaryRows.filter(r => r.type === 'gap' && !!r.competitor);
-    const clientRows   = summaryRows.filter(r => r.type !== 'gap');
+    const clientRows   = summaryRows.filter(r => r.type !== 'gap');               // client footprint
+    const gapRows      = summaryRows.filter(r => r.type === 'gap' && !!r.competitor); // competitor gap
+    const brandedRows  = clientRows.filter(r =>  r.branded);                      // client branded only
+    const nonBrandRows = clientRows.filter(r => !r.branded);                      // client non-branded only
     const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
+    const brandedCount  = brandedRows.length,  brandedVol  = ann(brandedRows);
+    const nonBrandCount = nonBrandRows.length, nonBrandVol = ann(nonBrandRows);
+    const gapCount      = gapRows.length,      gapVol      = ann(gapRows);
     return {
-      allCount:      summaryRows.length,
-      allVol:        ann(summaryRows),
-      brandedCount:  brandedRows.length,
-      brandedVol:    ann(brandedRows),
-      nonBrandCount: nonBrandRows.length,
-      nonBrandVol:   ann(nonBrandRows),
-      gapCount:      gapRows.length,
-      gapVol:        ann(gapRows),
-      clientCount:   clientRows.length,          // non-gap (client footprint) — for the breakdown sub-line
+      allCount:      brandedCount + nonBrandCount + gapCount,  // = client + gap, by construction
+      allVol:        brandedVol + nonBrandVol + gapVol,
+      brandedCount,  brandedVol,
+      nonBrandCount, nonBrandVol,
+      gapCount,      gapVol,
+      clientCount:   brandedCount + nonBrandCount,             // client footprint — for the "N client + M gap" sub-line
     };
   }, [summaryRows]);
 

@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.140 — 2026-06-06 · Keywords summary cards: Branded & Non-branded are now CLIENT-only; All = Branded + Non-branded + Gap
+
+**Request (Wayne, after v7.139):** make each summary card mean exactly one thing — "All keywords = branded from client + non-branded from client + competitor gap; Branded = only branded client terms; Non-branded = only non-branded client terms; Gap = only terms not in the client's footprint."
+
+**Bug fixed (1 file, `components/brief/KeywordsPanel.tsx`, `kwSummary` only):** the **Non-branded** card was counting *every* non-branded keyword in the pool — which includes the competitor-gap terms (gap rows are non-branded by construction). On Wayne's data that read **720** (≈ 33 client non-branded + 687 gap) instead of the ~33 client non-branded terms. Branded already excluded gap (gap is never branded), so it was already client-only.
+
+**Change:** `kwSummary` now derives a `clientRows` slice (`type !== 'gap'`) and computes **Branded = clientRows ∩ branded** and **Non-branded = clientRows ∩ non-branded** — both client-footprint only. **Competitor Gap** = gap rows (competitor terms the client doesn't rank for). **All Keywords** is now computed as the literal **sum of the three** (`brandedCount + nonBrandCount + gapCount`, and the same for annual volume), so the headline always equals what the three cards show. The "N client + M gap" sub-line uses `clientCount = branded + non-branded`. Still on the full-footprint (no volume floor) basis from v7.139; the table below stays volume-filtered, so cards can read higher than visible rows — by design.
+
+**Net effect on Wayne's screenshot numbers:** All Keywords **823** unchanged (136 client + 687 gap); Branded **103** unchanged; **Non-branded 720 → ~33** (client non-branded only); Competitor Gap **687** unchanged. The three cards now sum exactly to All.
+
+**Verification (machine):** isolated `tsc --noEmit` over `KeywordsPanel.tsx` + `kwVolume` → **exit 0**. jsdom harness on the **real** component (esbuild `--jsx=automatic`, fixture with 1 branded + 5 non-branded client terms + 5 gap) → **14/14**, including the decisive check that **Non-branded excludes gap** (no card shows the would-be-buggy 10) and All = 11 = 1 + 5 + 5 with sub-line "6 client + 5 gap". v7.139 checks (scroll, competitor-distribution fallback vs snapshot) all still green.
+
 ## v7.139 — 2026-06-06 · Keywords panel: scroll fix + competitor Rank Distribution populates from data on file + "All Keywords" = full footprint + gap
 
 Three Keywords-panel items from Wayne, all **client-side only** (no API/route/data-pull changes — single file `components/brief/KeywordsPanel.tsx`):
