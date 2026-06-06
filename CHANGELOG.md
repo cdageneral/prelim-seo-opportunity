@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.137 — 2026-06-06 · Rank Distribution hardening: gap-refresh keeps client volume in sync + uploaded (CSV) footprints now populate the cards
+
+**Request (Wayne):** two follow-ups to v7.136's Rank Distribution, approved after review: (1) in Gap & rank refresh mode, keep client volume-per-band in sync with the refreshed counts; (2) populate the competitor distribution for projects running on an uploaded CSV footprint (which skip the Semrush pull), so they get the cards too.
+
+**Why:** v7.136 only computed the new `positionVol` / `competitorPositionDist` / `competitorPositionVol` on a FULL Semrush re-analysis. Gap-refresh recomputed `positionDist` (counts) but not `positionVol`, leaving client volume stale after an incremental refresh; and the uploaded-footprint path (`buildSnapshotFromUploads`) never produced any of the new fields, so CSV-based projects showed count-only client bars + the competitor "re-run" hint forever.
+
+**Changes (3 files, additive — no existing metric/classification logic changed):**
+- `lib/apis/semrush.ts` — `export` the three v7.136 bucketing helpers (`buildVolumeDistribution`, `buildCompetitorPositionDistribution`, `buildCompetitorVolumeDistribution`) so the uploaded-footprint builder reuses the *exact* same bucket definition (single source of truth). No logic change.
+- `lib/apis/uploadedFootprint.ts` — compute `positionVol` from the uploaded client `topKeywords`, and `competitorPositionDist` / `competitorPositionVol` by grouping the uploaded `gapKeywords` by competitor domain (blank/unknown domains skipped). Added all three to the returned snapshot. For CSV projects the uploaded rows *are* the footprint, so this is the full available data — defensible, nothing modeled.
+- `app/api/analyze/route.ts` (gaps mode merge) — recompute `newPositionVol` alongside the existing `newPositionDist` from `mergedTopKeywords` and add it to `mergedSnapshot`. **Competitor dists are deliberately NOT recomputed here** — gap mode only pulls net-new gap keywords (not each competitor's full footprint), so the accurate full-footprint dists from the last FULL run are preserved untouched via the `...existingSnapshot` spread (avoids overwriting good data with a gap-subset approximation).
+
+**Unchanged:** `components/brief/KeywordsPanel.tsx` (the v7.136 `RankDistributionSplit` UI) is byte-identical — these changes only feed it more-populated data. Data-only refresh mode is untouched (it never rebuilds the footprint).
+
+**Verification (machine):**
+- Isolated `tsc --noEmit` (TS 5.5.4, strict/bundler, node types) over the changed library files + a synthetic mirror of the route's `mergedSnapshot` shape (with stubbed `@/db` / `@/db/schema` / `drizzle-orm`): **exit 0, no type errors**.
+- Pure-logic checks on the real exported helpers + the exact new code paths: **14/14** — uploaded `positionVol` buckets exact; per-competitor grouping yields correct counts+volume for compA/compB and skips blank-domain rows (no 999-vol leak); gaps-mode `positionVol` sums correctly incl. null-position → 21+, counts unchanged.
+- v7.136 component harness (19/19) still applies — UI file unchanged.
+
 ## v7.136 — 2026-06-06 · Keywords: split-screen Rank Distribution (client vs selectable competitor) — kw + volume + share per rank band
 
 **Request (Wayne):** On the Keywords panel, under the summary cards, add a split-screen horizontal bar chart — client volume/rank distribution (1–3, 4–10, Page 2, Page 3+) on the left, the same for competitors on the right. Then: add search volume to each band alongside the keyword count and the share %. Rendered in-chat and approved before build. Rebased onto v7.135 (the v7.134/v7.135 numbers were taken by a parallel session's Exec-LLM and Clusters-layout changes; this work is orthogonal — it touches only `KeywordsPanel.tsx` and `semrush.ts`, which those releases did not).

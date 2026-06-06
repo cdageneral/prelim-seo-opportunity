@@ -275,7 +275,7 @@ function buildPositionDistribution(keywords: SemrushKeyword[]): Record<string, n
 // v7.136: same buckets, but SUM the monthly searchVolume per band instead of
 // counting. Mirrors buildPositionDistribution exactly so counts and volume share
 // one bucket definition.
-function buildVolumeDistribution(keywords: SemrushKeyword[]): Record<string, number> {
+export function buildVolumeDistribution(keywords: SemrushKeyword[]): Record<string, number> {
   const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
   for (const kw of keywords) {
     const v = kw.searchVolume ?? 0;
@@ -290,7 +290,7 @@ function buildVolumeDistribution(keywords: SemrushKeyword[]): Record<string, num
 // v7.136: competitor-side equivalents over the gap-pull rows (full footprint,
 // keyed on competitorPosition). Rows with no/zero rank are skipped so we never
 // invent a bucket.
-function buildCompetitorPositionDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
+export function buildCompetitorPositionDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
   const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
   for (const r of rows) {
     const p = r.competitorPosition;
@@ -303,7 +303,7 @@ function buildCompetitorPositionDistribution(rows: SemrushKeywordGap[]): Record<
   return dist;
 }
 
-function buildCompetitorVolumeDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
+export function buildCompetitorVolumeDistribution(rows: SemrushKeywordGap[]): Record<string, number> {
   const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
   for (const r of rows) {
     const p = r.competitorPosition;

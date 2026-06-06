@@ -17,6 +17,9 @@ import { db }              from '@/db';
 import { projectKeywords } from '@/db/schema';
 import { and, eq }         from 'drizzle-orm';
 import type { SemrushSnapshot, SemrushKeyword, SemrushKeywordGap, SemrushCompetitor } from './semrush';
+// v7.137: reuse the canonical bucketing helpers so uploaded (CSV) footprints
+// produce the same rank-distribution fields as a Semrush pull.
+import { buildVolumeDistribution, buildCompetitorPositionDistribution, buildCompetitorVolumeDistribution } from './semrush';
 
 export async function buildSnapshotFromUploads(
   projectId:          string,
@@ -76,6 +79,25 @@ export async function buildSnapshotFromUploads(
     else                        positionDist['21+']++;
   }
 
+  // ── positionVol + per-competitor distribution (v7.137) ──────────────────────
+  // Same fields a Semrush pull produces, so CSV-based projects get the rank
+  // distribution cards too. Competitor dists are grouped by the uploaded
+  // competitor domain (the uploaded rows ARE the footprint we have).
+  const positionVol = buildVolumeDistribution(topKeywords);
+  const competitorPositionDist: Record<string, Record<string, number>> = {};
+  const competitorPositionVol:  Record<string, Record<string, number>> = {};
+  for (const gk of gapKeywords) {
+    const dom = gk.competitor;
+    if (!dom) continue;
+    (competitorPositionDist[dom] ??= { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 });
+    (competitorPositionVol[dom]  ??= { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 });
+  }
+  for (const dom of Object.keys(competitorPositionDist)) {
+    const rows = gapKeywords.filter(g => g.competitor === dom);
+    competitorPositionDist[dom] = buildCompetitorPositionDistribution(rows);
+    competitorPositionVol[dom]  = buildCompetitorVolumeDistribution(rows);
+  }
+
   // ── competitors list ───────────────────────────────────────────────────────
   const uploadedCompetitorDomains = Array.from(
     new Set(competitorRows.map(r => r.domain).filter(Boolean) as string[])
@@ -109,6 +131,9 @@ export async function buildSnapshotFromUploads(
     competitors,
     gapKeywords,
     positionDist,
+    positionVol,
+    competitorPositionDist,
+    competitorPositionVol,
     fetchedAt: new Date().toISOString(),
   };
 }

@@ -349,14 +349,21 @@ export async function POST(req: NextRequest) {
         ].sort((a: any, b: any) => b.searchVolume - a.searchVolume);
 
         const newPositionDist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+        // v7.137: keep client volume-per-band in sync with the refreshed counts.
+        const newPositionVol:  Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
         for (const kw of mergedTopKeywords) {
           const pos = (kw as any).position ?? 999;
-          if (pos <= 3)       newPositionDist['1-3']++;
-          else if (pos <= 10) newPositionDist['4-10']++;
-          else if (pos <= 20) newPositionDist['11-20']++;
-          else                newPositionDist['21+']++;
+          const vol = (kw as any).searchVolume ?? 0;
+          if (pos <= 3)       { newPositionDist['1-3']++;   newPositionVol['1-3']   += vol; }
+          else if (pos <= 10) { newPositionDist['4-10']++;  newPositionVol['4-10']  += vol; }
+          else if (pos <= 20) { newPositionDist['11-20']++; newPositionVol['11-20'] += vol; }
+          else                { newPositionDist['21+']++;   newPositionVol['21+']   += vol; }
         }
 
+        // v7.137: competitorPositionDist/Vol are intentionally NOT recomputed here
+        // — gap mode only pulls net-new gap keywords, not each competitor's full
+        // footprint, so the accurate full-footprint dists from the last FULL run
+        // are preserved untouched via the `...existingSnapshot` spread.
         const mergedSnapshot: SemrushSnapshot = {
           ...existingSnapshot,
           topKeywords: mergedTopKeywords,
@@ -365,6 +372,7 @@ export async function POST(req: NextRequest) {
             ...newGapKeywords,
           ].sort((a, b) => b.searchVolume - a.searchVolume),
           positionDist: newPositionDist,
+          positionVol:  newPositionVol,
           fetchedAt: new Date().toISOString(),
         };
 
