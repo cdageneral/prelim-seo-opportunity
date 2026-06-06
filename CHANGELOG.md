@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.135 — 2026-06-06 · Clusters: top cards rearranged into 2-column layout (total hero left, group cards stacked right) + total card now clickable
+
+**Request (Wayne):** On the Clusters panel, rearrange the top card panels — put the overall total clusters / volume on the left, and stack all three group cards (Leading, Trailing, Low Competition) on the right. Make every card clickable to filter the cluster grid by that grouping. Rendered an in-chat preview first; approved, then built.
+
+**Changes (1 file, display/layout-only — no metric or classification logic changed):**
+- `components/brief/ThemeClustersPanel.tsx` (`ClustersTab`) — replaced the full-width centered hero + the `repeat(3, 1fr)` summary-card row with a single 2-column grid (`minmax(0, 1.05fr) minmax(0, 1fr)`).
+  - **Left:** the Total-clusters / annual-vol / monthly-vol hero is now a `<button>` that sets `filter='all'` and shows the active highlight (purple `#9B96FF` ring) when `filter === 'all'`. Hero font sizes trimmed slightly (count 72→60, annual 28→26, monthly 20→19) to fit the side-by-side height.
+  - **Right:** the existing `SUMMARY_CARDS` (Leading / Trailing / Low Competition) now render in a vertical flex stack (`flex: 1` each) with a horizontal internal layout — label + subtitle on the left, count + annual vol right-aligned. Same toggle-to-filter behavior (click again to clear), same accent colors, same `ACTIVE` pill.
+  - All counts, volumes (`ann()`, `totalAnnualVol`, `totalMonthlyVol`), and the `clusterStats` classification (`isLeading`, `compGapPct`, opportunity rule) are UNCHANGED — only markup/styling moved. The grid-filter logic (`filtered`) and downstream cluster grid are untouched.
+
+**Verification:** full-project `tsc --noEmit` (see build log). Layout previewed in-chat before build per project workflow.
+
 ## v7.134 — 2026-06-05 · Exec: SOV card renamed "Share of Voice on Google" + head-to-head replaced with LLM visibility (platform bars + sentiment)
 
 **Request (Wayne):** on the Executive Summary, rename the Share-of-Voice card to "Share of Voice on Google", and replace the right-side head-to-head scorecard with an LLM-visibility view.

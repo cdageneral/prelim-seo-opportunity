@@ -588,116 +588,142 @@ function ClustersTab({
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
-      {/* ── Hero: total clusters + search volumes ────────────────────────── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 32,
-        padding: '20px 32px', background: '#0A0A16', border: '1px solid #1A1A30',
-        borderRadius: 12, marginBottom: 16,
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#585878', marginBottom: 4 }}>
-            Total clusters
-          </div>
-          <div style={{ fontSize: 72, fontWeight: 700, lineHeight: 1, letterSpacing: -4, color: '#E8E8FF' }}>
-            {clusters.length}
-          </div>
-          <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>categories identified</div>
-        </div>
-        <div style={{ width: 1, height: 72, background: '#1E1E34', flexShrink: 0 }} />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total annual search volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: '#9B96FF' }}>
-                {fmtHero(totalAnnualVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#484868' }}>searches / yr</span>
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
-              Total monthly volume
-            </div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 20, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: '#6A6A90' }}>
-                {fmtHero(totalMonthlyVol)}
-              </span>
-              <span style={{ fontSize: 11, color: '#383858' }}>searches / mo</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* ── Top cards: total hero (left) + group cards stacked (right) ────── */}
+      {/* v7.135: 2-col layout — clickable total hero filters to 'all'; the */}
+      {/* three group cards stack on the right, each filtering its grouping.  */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.05fr) minmax(0, 1fr)', gap: 12, marginBottom: 14 }}>
 
-      {/* ── Summary filter cards ─────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
-
-        {SUMMARY_CARDS.map(card => {
-          const active = filter === card.key;
+        {/* Left: Total clusters + search volumes (clickable → all) */}
+        {(() => {
+          const allActive = filter === 'all';
           return (
             <button
-              key={card.key}
-              onClick={() => setFilter(f => (f === card.key ? 'all' : card.key))}
+              onClick={() => setFilter('all')}
               style={{
-                background:   active ? card.activeBg : card.dimBg,
-                border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
-                borderRadius: 10,
-                padding:      '12px 14px',
+                display: 'flex', alignItems: 'center', gap: 28,
+                padding: '20px 24px',
+                background:   allActive ? 'rgba(155,150,255,0.10)' : 'rgba(155,150,255,0.04)',
+                border:       `1px solid ${allActive ? 'rgba(155,150,255,0.45)' : 'rgba(155,150,255,0.18)'}`,
+                borderRadius: 12,
                 cursor:       'pointer',
                 textAlign:    'left',
                 transition:   'all 0.15s',
                 outline:      'none',
-                boxShadow:    active ? `0 0 0 1px ${card.activeBdr}` : 'none',
+                boxShadow:    allActive ? '0 0 0 1px rgba(155,150,255,0.45)' : 'none',
               }}
-              onMouseEnter={e => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
-              }}
-              onMouseLeave={e => {
-                if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
-              }}
+              onMouseEnter={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(155,150,255,0.40)'; }}
+              onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(155,150,255,0.18)'; }}
             >
-              {/* Icon + label row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                <i className={`ti ${card.icon}`} style={{ fontSize: 13, color: card.accent }} aria-hidden="true" />
-                <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: card.accent }}>
-                  {card.label}
-                </span>
-                {active && (
-                  <span style={{
-                    marginLeft: 'auto', fontSize: 8, fontWeight: 700,
-                    background: card.activeBg, border: `1px solid ${card.activeBdr}`,
-                    color: card.accent, borderRadius: 20, padding: '2px 7px',
-                  }}>
-                    ACTIVE
-                  </span>
-                )}
+              <div style={{ textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#585878', marginBottom: 4 }}>
+                  Total clusters
+                </div>
+                <div style={{ fontSize: 60, fontWeight: 700, lineHeight: 1, letterSpacing: -3, color: '#E8E8FF' }}>
+                  {clusters.length}
+                </div>
+                <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>categories identified</div>
               </div>
-
-              {/* Big count */}
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
-                <span style={{
-                  fontSize: 34, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
-                  color: active ? card.accent : '#E8E8FF',
-                }}>
-                  {card.count}
-                </span>
-                <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
-              </div>
-
-              {/* Annualized volume */}
-              <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
-                {fmtVol(card.vol)}
-                <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
-              </div>
-
-              {/* Subtitle */}
-              <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
-                {card.subtitle}
+              <div style={{ width: 1, height: 64, background: '#1E1E34', flexShrink: 0 }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
+                    Total annual search volume
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: '#9B96FF' }}>
+                      {fmtHero(totalAnnualVol)}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#484868' }}>searches / yr</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
+                    Total monthly volume
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span style={{ fontSize: 19, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: '#6A6A90' }}>
+                      {fmtHero(totalMonthlyVol)}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#383858' }}>searches / mo</span>
+                  </div>
+                </div>
               </div>
             </button>
           );
-        })}
+        })()}
+
+        {/* Right: Leading / Trailing / Low Competition stacked */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {SUMMARY_CARDS.map(card => {
+            const active = filter === card.key;
+            return (
+              <button
+                key={card.key}
+                onClick={() => setFilter(f => (f === card.key ? 'all' : card.key))}
+                style={{
+                  flex:         1,
+                  background:   active ? card.activeBg : card.dimBg,
+                  border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
+                  borderRadius: 10,
+                  padding:      '11px 16px',
+                  cursor:       'pointer',
+                  textAlign:    'left',
+                  transition:   'all 0.15s',
+                  outline:      'none',
+                  boxShadow:    active ? `0 0 0 1px ${card.activeBdr}` : 'none',
+                  display:      'flex',
+                  alignItems:   'center',
+                  gap:          16,
+                }}
+                onMouseEnter={e => {
+                  if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
+                }}
+                onMouseLeave={e => {
+                  if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
+                }}
+              >
+                {/* Label + subtitle (left) */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <i className={`ti ${card.icon}`} style={{ fontSize: 13, color: card.accent }} aria-hidden="true" />
+                    <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: card.accent }}>
+                      {card.label}
+                    </span>
+                    {active && (
+                      <span style={{
+                        marginLeft: 6, fontSize: 8, fontWeight: 700,
+                        background: card.activeBg, border: `1px solid ${card.activeBdr}`,
+                        color: card.accent, borderRadius: 20, padding: '2px 7px',
+                      }}>
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#7070A0' }}>
+                    {card.subtitle}
+                  </div>
+                </div>
+
+                {/* Count + annual vol (right) */}
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, justifyContent: 'flex-end' }}>
+                    <span style={{
+                      fontSize: 30, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
+                      color: active ? card.accent : '#E8E8FF',
+                    }}>
+                      {card.count}
+                    </span>
+                    <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: card.accent, marginTop: 3 }}>
+                    {fmtVol(card.vol)}
+                    <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Divider ──────────────────────────────────────────────────────── */}
