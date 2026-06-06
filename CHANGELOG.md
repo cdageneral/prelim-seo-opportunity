@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.132 — 2026-06-05 · SERP scan: one-click auto-batch + runs in the background across panels
+
+**Request (Wayne):** the SERP scan made him click "Scan next 75" over and over. He asked for (1) a single button that batches automatically to completion, and (2) the scan to keep running in the background while he navigates to other panels. Chose (via prompt): full background scan + a credit-cost confirmation before auto-running.
+
+**What changed — the scan is lifted out of the Keywords panel into the always-mounted project shell**, so the loop survives navigation between panels.
+
+- `app/api/projects/[id]/serp-scan/route.ts`: new `{ dryRun: true }` flag → returns the unscanned `remaining` count with **0 SerpAPI credits and no DB write**. Powers the cost-confirm modal. (filter='all'/'aio' path only; rescan unaffected.)
+- `app/projects/[id]/page.tsx`: page-level auto-batch runner (`requestSerpScan` dry-run → confirm modal → `runSerpScan` loops 75-keyword batches until the server reports 0 remaining). Each batch is its own request (Vercel ~300s cap = one batch/request); the server saves every batch and excludes already-scanned keywords, so the loop just keeps going and an error can be **resumed** from where it stopped. A **global progress bar** sits below the header and is visible on *every* panel (running / paused+Resume / complete+Dismiss). A **cost-confirm modal** ("Scan all N · ~N credits") gates the run. `serpScanRef` guards double-start.
+- `components/brief/KeywordsPanel.tsx`: the in-panel button now delegates to the page runner (`onStartSerpScan`), shows live page-level progress ("Scanning… N of M"), and its label became "Scan all N remaining · ~N credits". Page-level results merge into the table + coverage count live (new `mergedScanned`, fresh-wins). Falls back to the legacy single-batch button if the props aren't supplied.
+- `components/brief/SerpFeaturesSection.tsx`: new `externalScanned` prop merges the background-scan results into `scannedKws` live, so the SERP Features panel updates as the scan progresses.
+
+**Honest limit (stated to Wayne):** "background" = keeps running while you browse other panels **as long as the browser tab stays open**. It is browser-driven, not server-side, so closing the tab or sleeping the laptop pauses it — completed batches are saved and it resumes on return. The AIO citation scan and the per-card "Refresh required" rescans already auto-batch and were left as-is.
+
+**Verified (machine):** full-project `tsc --noEmit` exit 0 in clean `/tmp` env, 0 errors. Route harness 10/10 (real route bundled via esbuild + stubbed db/serp/pool): dryRun returns remaining=3 with **0 scan calls + 0 persists**, real batch scans 3 + persists once. Component harness 8/8 (real KeywordsPanel + SerpFeaturesSection mounted in jsdom): external results merge into coverage ("4 of 5"), button reads "Scan all 1 remaining", legacy label gone, click delegates to `onStartSerpScan`, running shows "Scanning… 75 of 300", SerpFeatures output changes live with `externalScanned`. UI states (button / confirm modal / running bar / paused+resume) rendered in chat. No data/logic touched in metrics — display + orchestration only.
+
 ## v7.131 — 2026-06-05 · Fix: Content Map panel would not scroll
 
 **Request (Wayne):** "In the content panel from the left side nav, it does not seem to be allowing me to scroll up and down."

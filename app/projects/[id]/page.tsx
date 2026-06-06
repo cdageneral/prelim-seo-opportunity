@@ -180,6 +180,19 @@ export default function ProjectBriefPage() {
   const [showCompetitors,   setShowCompetitors]   = useState(false);   // v7.101: global Competitors manager
   const [kwVersion,         setKwVersion]         = useState(0);      // v7.107: bumped when Competitors modal closes -> all panels refetch /keywords
 
+  // ── v7.132: background SERP scan runner (lifted out of KeywordsPanel) ──────
+  // The loop lives HERE, in the always-mounted project shell, so it keeps
+  // running while Wayne navigates to other panels (tab open). Each batch is a
+  // separate request because Vercel caps one function at ~300s; the server
+  // saves every batch and excludes already-scanned keywords, so the loop just
+  // keeps firing 75-keyword batches until coverage is full (or an error stops
+  // it, after which Resume continues from where it left off).
+  const [serpScan, setSerpScan] = useState<{
+    running: boolean; done: number; total: number; error: string | null;
+    results: any[]; confirm: { remaining: number } | null; checking: boolean; complete: boolean;
+  }>({ running: false, done: 0, total: 0, error: null, results: [], confirm: null, checking: false, complete: false });
+  const serpScanRef = useRef(false);   // guards against double-start across renders
+
   // v7.86: Semrush cost-estimate confirm + API warning alerts
   const [estimating,       setEstimating]       = useState(false);
   const [costEstimate,     setCostEstimate]     = useState<any | null>(null);
@@ -315,6 +328,78 @@ export default function ProjectBriefPage() {
       setAnalysisError('Analysis failed due to a network error. Progress is saved — click Refresh Analysis to resume from where it stopped.');
     } finally {
       setTriggering(false);
+    }
+  }
+
+  // ── v7.132: background SERP scan — request (cost check) + auto-batch loop ──
+  const SERP_SCAN_BATCH = 75;
+
+  // Step 1: dry-run to learn how many keywords remain, then show the cost
+  // confirm modal. 0 SerpAPI credits spent here.
+  async function requestSerpScan() {
+    if (serpScan.running || serpScan.checking) return;
+    setSerpScan(s => ({ ...s, checking: true, error: null, complete: false }));
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/serp-scan`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body:   JSON.stringify({ dryRun: true }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        setSerpScan(s => ({ ...s, checking: false, error: data?.error ?? `Could not check remaining keywords (status ${res.status}).` }));
+        return;
+      }
+      const remaining = Number(data.remaining) || 0;
+      if (remaining === 0) {
+        setSerpScan(s => ({ ...s, checking: false, confirm: null, complete: true, total: 0, done: 0 }));
+        return;
+      }
+      setSerpScan(s => ({ ...s, checking: false, confirm: { remaining } }));
+    } catch {
+      setSerpScan(s => ({ ...s, checking: false, error: 'Could not check remaining keywords — network error.' }));
+    }
+  }
+
+  // Step 2: the auto-batch loop. Confirms the modal, then fires 75-keyword
+  // batches back-to-back until the server reports 0 remaining (or an error).
+  // Accumulated results flow to the panels live; no reload needed.
+  async function runSerpScan(knownTotal?: number) {
+    if (serpScanRef.current) return;       // already looping
+    serpScanRef.current = true;
+    const total = knownTotal ?? serpScan.confirm?.remaining ?? 0;
+    setSerpScan(s => ({ ...s, running: true, error: null, confirm: null, complete: false, done: 0, total }));
+    let done = 0;
+    try {
+      for (;;) {
+        const res  = await fetch(`/api/projects/${projectId}/serp-scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body:   JSON.stringify({ batchSize: SERP_SCAN_BATCH }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data) {
+          setSerpScan(s => ({ ...s, running: false, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout). Every completed batch is saved — click Resume to continue from where it stopped.` }));
+          return;
+        }
+        const batch: any[] = data.results ?? [];
+        done += data.scanned ?? 0;
+        if (batch.length) {
+          setSerpScan(s => {
+            const lo = new Set(batch.map(r => (r.keyword ?? '').toLowerCase()));
+            return { ...s, results: [...s.results.filter(k => !lo.has((k.keyword ?? '').toLowerCase())), ...batch], done };
+          });
+        } else {
+          setSerpScan(s => ({ ...s, done }));
+        }
+        // Other panels read scanned data from the analysis snapshot or their own
+        // /keywords fetch; bump kwVersion so they pick up the server-saved batch.
+        setKwVersion(v => v + 1);
+        if (!data.remaining || !data.scanned) break;
+      }
+      setSerpScan(s => ({ ...s, running: false, complete: true }));
+    } catch (e: any) {
+      setSerpScan(s => ({ ...s, running: false, error: `${String(e?.message ?? e)} — every completed batch is saved; click Resume to continue.` }));
+    } finally {
+      serpScanRef.current = false;
     }
   }
 
@@ -716,6 +801,127 @@ export default function ProjectBriefPage() {
         </div>
       </header>
 
+      {/* ── v7.132: GLOBAL SERP SCAN BAR — visible on every panel ──────────────
+          Lives in the always-mounted shell, so the auto-batch loop keeps running
+          and stays visible while Wayne navigates between panels (tab open). */}
+      {(serpScan.running || serpScan.error || serpScan.complete) && (
+        <div
+          className="flex-shrink-0 flex items-center gap-3 px-5 py-2 border-b"
+          style={{
+            borderColor: '#1A1A30',
+            background:  serpScan.error ? 'rgba(239,68,68,0.06)' : serpScan.complete ? 'rgba(52,211,153,0.06)' : '#0A0A16',
+          }}
+        >
+          {serpScan.running ? (
+            <svg className="animate-spin shrink-0" style={{ width: 13, height: 13, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+              <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+          ) : serpScan.error ? (
+            <span style={{ color: '#f87171', fontSize: 13 }}>⚠</span>
+          ) : (
+            <span style={{ color: '#34D399', fontSize: 13 }}>✓</span>
+          )}
+
+          <span className="text-[11px] font-medium" style={{ color: serpScan.error ? '#f87171' : serpScan.complete ? '#34D399' : '#C4C0FF' }}>
+            {serpScan.error
+              ? 'SERP scan paused'
+              : serpScan.complete
+                ? `SERP scan complete — ${serpScan.done.toLocaleString()} keyword${serpScan.done !== 1 ? 's' : ''} scanned`
+                : `Scanning SERP features… ${serpScan.done.toLocaleString()} of ${serpScan.total.toLocaleString()}`}
+          </span>
+
+          {serpScan.running && (
+            <>
+              <div style={{ width: 140, height: 4, borderRadius: 2, background: '#14142A', overflow: 'hidden' }}>
+                <div style={{
+                  width: serpScan.total > 0 ? `${Math.min((serpScan.done / serpScan.total) * 100, 100)}%` : '0%',
+                  height: '100%', background: '#6C63FF', borderRadius: 2, transition: 'width 0.4s ease',
+                }} />
+              </div>
+              <span className="text-[10px]" style={{ color: '#55557A' }}>
+                ~{Math.max(serpScan.total - serpScan.done, 0).toLocaleString()} credits left · keeps running while you browse — keep this tab open
+              </span>
+            </>
+          )}
+
+          {serpScan.error && (
+            <>
+              <span className="text-[10px]" style={{ color: '#A36A6A' }}>{serpScan.error}</span>
+              <button
+                onClick={() => runSerpScan(Math.max(serpScan.total - serpScan.done, 0) || undefined)}
+                className="text-[10px] px-3 py-0.5 rounded-full border ml-1 transition-colors"
+                style={{ borderColor: 'rgba(108,99,255,0.5)', color: '#9B96FF', background: 'rgba(108,99,255,0.08)' }}
+              >
+                Resume
+              </button>
+            </>
+          )}
+
+          {(serpScan.error || serpScan.complete) && (
+            <button
+              onClick={() => setSerpScan(s => ({ ...s, error: null, complete: false }))}
+              className="ml-auto text-[10px] transition-colors"
+              style={{ color: '#55557A' }}
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── v7.132: SERP scan cost-confirm modal ── */}
+      {(serpScan.confirm || serpScan.checking) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.65)' }}>
+          <div className="rounded-xl p-6" style={{ background: '#0D0D18', border: '1px solid #2A2A45', width: 420, maxWidth: '90vw' }}>
+            {serpScan.checking ? (
+              <div className="flex items-center gap-3">
+                <svg className="animate-spin" style={{ width: 16, height: 16, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+                  <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                <span className="text-sm" style={{ color: '#A0A0C8' }}>Checking how many keywords remain…</span>
+              </div>
+            ) : serpScan.confirm && (
+              <>
+                <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>Scan all remaining SERP features</p>
+                <p className="text-xs mb-3" style={{ color: '#7070A0' }}>
+                  This will scan every unscanned keyword automatically, in batches of {SERP_SCAN_BATCH}, until coverage is full. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.
+                </p>
+                <div className="rounded-lg p-3 mb-3" style={{ background: '#0A0A14', border: '1px solid #1E1E30' }}>
+                  <div className="flex justify-between text-xs py-0.5">
+                    <span style={{ color: '#A0A0C8' }}>Keywords remaining</span>
+                    <span style={{ color: '#D0D0F0' }}>{serpScan.confirm.remaining.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid #1E1E30' }}>
+                    <span className="font-medium" style={{ color: '#E8E8FF' }}>Maximum cost</span>
+                    <span className="font-medium" style={{ color: '#F59E0B' }}>up to {serpScan.confirm.remaining.toLocaleString()} SerpAPI credits</span>
+                  </div>
+                </div>
+                <p className="text-[11px] mb-4" style={{ color: '#55557A' }}>
+                  The scan keeps running while you browse other panels — just keep this tab open. If it stops early, every completed batch is saved and you can resume.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setSerpScan(s => ({ ...s, confirm: null }))}
+                    className="text-xs px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => runSerpScan(serpScan.confirm?.remaining)}
+                    className="text-xs font-medium px-4 py-2 rounded-lg text-white transition-colors"
+                    style={{ background: '#6C63FF' }}
+                  >
+                    Scan all {serpScan.confirm.remaining.toLocaleString()} · ~{serpScan.confirm.remaining.toLocaleString()} credits
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ════ BODY ════ */}
       <div className="flex flex-1 overflow-hidden">
 
@@ -980,6 +1186,10 @@ export default function ProjectBriefPage() {
               domain={domainDisplay}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
+              serpScanResults={serpScan.results}                 // v7.132: live results from the global background scan
+              serpScanRunning={serpScan.running || serpScan.checking}
+              serpScanProgress={serpScan.running ? { done: serpScan.done, total: serpScan.total } : null}
+              onStartSerpScan={requestSerpScan}                  // v7.132: button delegates to the page-level auto-batch loop
             />
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
@@ -1040,6 +1250,7 @@ export default function ProjectBriefPage() {
               clientName={project.clientName}
               websiteUrl={project.websiteUrl}
               projectId={project.id}
+              externalScanned={serpScan.results}                 // v7.132: global background scan results merge in live
             />
           )}
 

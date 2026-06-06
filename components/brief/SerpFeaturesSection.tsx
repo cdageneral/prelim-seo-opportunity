@@ -44,6 +44,7 @@ interface Props {
   websiteUrl?:  string;
   projectId?:   string;   // v7.103: enables uploaded SERP-feature availability
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
+  externalScanned?: SerpKw[];   // v7.132: live results from the page-level background SERP scan — merged into the scanned set, fresh-wins
 }
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
@@ -857,7 +858,7 @@ const ADD_FEATURES = [
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion }: Props) {
+export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
 
   const serpSnap    = analysis.serpApiSnapshot ?? {};
@@ -866,13 +867,16 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
 
   // v7.121: AIO-targeted scans merge results live into the panel without a
   // reload — extraScanned holds fresh batches; fresh wins on keyword overlap.
+  // v7.132: the page-level background SERP scan feeds the same merge via
+  // externalScanned, so this panel updates live as the global scan progresses.
   const [extraScanned, setExtraScanned] = useState<SerpKw[]>([]);
   const scannedKws: SerpKw[] = useMemo(() => {
     const base: SerpKw[] = serpSnap.keywords ?? [];
-    if (extraScanned.length === 0) return base;
-    const freshLow = new Set(extraScanned.map(k => (k.keyword ?? '').toLowerCase()));
-    return [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...extraScanned];
-  }, [serpSnap.keywords, extraScanned]);
+    const fresh: SerpKw[] = [...extraScanned, ...(externalScanned ?? [])];
+    if (fresh.length === 0) return base;
+    const freshLow = new Set(fresh.map(k => (k.keyword ?? '').toLowerCase()));
+    return [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...fresh];
+  }, [serpSnap.keywords, extraScanned, externalScanned]);
   const scanned  = scannedKws.length;
   const scanDate = serpSnap.fetchedAt ? new Date(serpSnap.fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 

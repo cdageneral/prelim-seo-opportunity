@@ -47,6 +47,11 @@ export async function POST(
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const batchSize = Math.min(Math.max(parseInt(body?.batchSize, 10) || DEFAULT_BATCH, 1), MAX_BATCH);
+  // v7.132: dryRun=true returns how many keywords remain unscanned WITHOUT
+  // scanning anything — 0 SerpAPI credits, no persistence. Powers the
+  // "Scan all N remaining · ~N credits" cost-confirm modal before the
+  // background auto-batch loop starts.
+  const dryRun = body?.dryRun === true;
   // v7.121: filter='aio' scans ONLY uploaded keywords whose Semrush
   // "SERP Features by Keyword" cell includes an AI Overview — used to make the
   // Citation Rate denominator cover the full footprint with verified data.
@@ -147,6 +152,19 @@ export async function POST(
       .filter(p => !scannedSet.has(p.keyword.toLowerCase()))
       .sort((a, b) => b.searchVolume - a.searchVolume);
     unscannedCount = unscanned.length;
+
+    // v7.132: dryRun — report remaining without scanning (0 credits, no save).
+    if (dryRun) {
+      return NextResponse.json({
+        dryRun:       true,
+        scanned:      0,
+        results:      [],
+        totalScanned: existing.length,
+        poolTotal:    candidates.length,
+        remaining:    unscannedCount,
+        filter:       scanFilter,
+      });
+    }
 
     if (unscanned.length === 0) {
       return NextResponse.json({

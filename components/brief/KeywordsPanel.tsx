@@ -75,6 +75,13 @@ interface Props {
   domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
   defaultClientThreshold?:     number;  // project-level min vol for client ranked keywords
   defaultCompetitorThreshold?: number;  // project-level min vol for competitor gap keywords
+  // v7.132: the SERP scan now runs at the page level (survives navigation). When
+  // these are supplied the in-panel button delegates to the global runner and
+  // reflects its progress; results merge into the table live.
+  serpScanResults?:  any[];
+  serpScanRunning?:  boolean;
+  serpScanProgress?: { done: number; total: number } | null;
+  onStartSerpScan?:  () => void;
 }
 
 // ─── Category breakdown types ─────────────────────────────────────────────────
@@ -370,6 +377,7 @@ export default function KeywordsPanel({
   projectId, kwVersion, onKeywordsChanged, analysis, competitors, domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
+  serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
 }: Props) {
   const clientDomain      = (analysis?.semrushSnapshot?.domain as string) || domain || '';
   const competitorDomains = competitors;
@@ -416,10 +424,20 @@ export default function KeywordsPanel({
 
   useEffect(() => { fetchDb(); }, [fetchDb]);
 
+  // v7.132: combine this panel's own freshly-scanned batches (legacy local
+  // state, still used as a fallback) with the page-level background scan
+  // results. Fresh-wins on keyword overlap.
+  const mergedScanned = useMemo(() => {
+    const ext = serpScanResults ?? [];
+    if (ext.length === 0) return serpExtra;
+    const lo = new Set(ext.map(k => (k?.keyword ?? '').toLowerCase()));
+    return [...serpExtra.filter(k => !lo.has((k?.keyword ?? '').toLowerCase())), ...ext];
+  }, [serpExtra, serpScanResults]);
+
   // ── Build merged rows (project-level thresholds applied at build time) ──
   const allRows = useMemo(
-    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, serpExtra),
-    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, serpExtra],
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned),
+    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned],
   );
 
   // ── SERP feature coverage (v7.81) — scanned keywords vs canonical pool ──
@@ -428,12 +446,12 @@ export default function KeywordsPanel({
     for (const k of (analysis?.serpApiSnapshot?.keywords ?? [])) {
       if (k?.keyword) set.add(k.keyword.toLowerCase());
     }
-    for (const k of serpExtra) {
+    for (const k of mergedScanned) {
       if (k?.keyword) set.add(k.keyword.toLowerCase());
     }
     const scanned = allRows.filter(r => set.has(r.keyword.toLowerCase())).length;
     return { scanned, total: allRows.length, remaining: allRows.length - scanned };
-  }, [analysis, serpExtra, allRows]);
+  }, [analysis, mergedScanned, allRows]);
 
   // ── Scan next batch of unscanned keywords via SerpAPI ──
   async function handleSerpScan() {
@@ -1147,30 +1165,46 @@ export default function KeywordsPanel({
           }} />
         </div>
         {serpCoverage.remaining > 0 ? (
-          <button
-            onClick={handleSerpScan}
-            disabled={scanLoading}
-            className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
-            style={{
-              borderColor: scanLoading ? '#3A3A5C' : 'rgba(108,99,255,0.5)',
-              color:       scanLoading ? '#55557A' : '#9B96FF',
-              background:  scanLoading ? 'transparent' : 'rgba(108,99,255,0.08)',
-              cursor:      scanLoading ? 'default' : 'pointer',
-            }}
-            title={`Scans the ${Math.min(75, serpCoverage.remaining)} highest-volume unscanned keywords. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.`}
-          >
-            {scanLoading ? (
-              <>
-                <svg className="animate-spin" style={{ width: 10, height: 10 }} fill="none" viewBox="0 0 24 24">
-                  <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                </svg>
-                Scanning… (~2–3 min)
-              </>
-            ) : (
-              <>Scan next {Math.min(75, serpCoverage.remaining)} keywords · ~{Math.min(75, serpCoverage.remaining)} credits</>
-            )}
-          </button>
+          // v7.132: when the parent supplies onStartSerpScan, this button kicks
+          // off the page-level auto-batch loop (scans ALL remaining, keeps
+          // running across navigation) and mirrors its progress. Without the
+          // prop it falls back to the legacy single-batch behavior.
+          (() => {
+            const useGlobal = typeof onStartSerpScan === 'function';
+            const busy      = useGlobal ? !!serpScanRunning : scanLoading;
+            return (
+              <button
+                onClick={useGlobal ? onStartSerpScan : handleSerpScan}
+                disabled={busy}
+                className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
+                style={{
+                  borderColor: busy ? '#3A3A5C' : 'rgba(108,99,255,0.5)',
+                  color:       busy ? '#55557A' : '#9B96FF',
+                  background:  busy ? 'transparent' : 'rgba(108,99,255,0.08)',
+                  cursor:      busy ? 'default' : 'pointer',
+                }}
+                title={useGlobal
+                  ? `Scans every unscanned keyword automatically, 75 at a time, until coverage is full. 1 SerpAPI credit each. Already-scanned keywords are never re-scanned. The scan keeps running while you browse other panels.`
+                  : `Scans the ${Math.min(75, serpCoverage.remaining)} highest-volume unscanned keywords. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.`}
+              >
+                {busy ? (
+                  <>
+                    <svg className="animate-spin" style={{ width: 10, height: 10 }} fill="none" viewBox="0 0 24 24">
+                      <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                    </svg>
+                    {useGlobal && serpScanProgress
+                      ? `Scanning… ${serpScanProgress.done.toLocaleString()} of ${serpScanProgress.total.toLocaleString()}`
+                      : 'Scanning… (~2–3 min)'}
+                  </>
+                ) : useGlobal ? (
+                  <>Scan all {serpCoverage.remaining.toLocaleString()} remaining · ~{serpCoverage.remaining.toLocaleString()} credits</>
+                ) : (
+                  <>Scan next {Math.min(75, serpCoverage.remaining)} keywords · ~{Math.min(75, serpCoverage.remaining)} credits</>
+                )}
+              </button>
+            );
+          })()
         ) : (
           <span className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'rgba(52,211,153,0.3)', background: 'rgba(52,211,153,0.08)', color: '#34D399' }}>
             ✓ full coverage
