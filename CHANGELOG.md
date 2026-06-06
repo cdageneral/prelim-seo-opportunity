@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.142 — 2026-06-06 · FIX: uploaded client CSV footprint was being swallowed by the auto-crawl gap set (client showed 136 instead of the full 731)
+
+**Symptom (Wayne):** uploaded the client footprint CSV (`sonobello-high volume.csv`, 731 keyword rows) but the panel showed only **136** client keywords.
+
+**Verified against the live database** (read-only, via the production API): the 731 client CSV rows ARE stored correctly — `source:'csv'`, `type:'ranked'`, empty domain (client). So the upload worked; the **pool builder** was miscounting them.
+
+**Root cause (`lib/utils/kwVolume.ts` `buildKwPool`, the shared pool used by the cards, exec summary, and clusters):** the build order was (1) crawl client `topKeywords` → (2) crawl `gapKeywords` → (3) uploaded rows, deduping by keyword with **first-seen wins**. This project runs `dataSource: auto` with a **client volume floor of 500**, so the auto-crawl only knew the client ranked for vol≥500 terms (≈136). Every *lower-volume* client keyword that a competitor also ranks for landed in the crawl `gapKeywords`. When the client then uploaded their full CSV, those keywords were already "seen" as gap, so the uploaded client rows were **skipped** — ~600 of the 731 were silently reclassified as competitor gap, leaving client stuck at the crawl's 136.
+
+**Fix:** reordered `buildKwPool` so the client's OWN uploaded footprint is authoritative. New order: (1) crawl client `topKeywords` → (2) **uploaded CLIENT rows (non-gap)** → (3) crawl `gapKeywords` (only those not already claimed as client) → (4) uploaded GAP rows (competitor CSVs). A keyword the client uploaded as ranked now wins the dedup and counts as **client**, and is correctly **excluded from gap** (gap = competitor terms genuinely not in the client footprint — crawl *or* CSV). Same total pool, correct client/gap split. No other logic changed; competitor uploads and volume floors behave as before.
+
+**Effect on Wayne's data:** client footprint jumps from 136 to the full uploaded CSV footprint; the keywords that were wrongly inflating Competitor Gap move back to client. Every number stays backed by real DB rows. (The v7.141 chart reconciliation means the Rank Distribution client side moves in lockstep.)
+
+**Verification (machine):** isolated `tsc --noEmit` (`kwVolume.ts` + `KeywordsPanel.tsx`) → **exit 0**. jsdom harness on the **real** component → **18/18**, including the decisive case: a keyword present in BOTH the crawl gap set AND an uploaded client row is counted as **client, not gap** (client 9 / gap 4, vs the pre-fix 8 / 5), plus the chart client side ("sonobello · 9 kw") tracking it. All v7.139–v7.141 checks still green.
+
 ## v7.141 — 2026-06-06 · Rank Distribution: client side reconciled to the real keyword pool (one client footprint number everywhere)
 
 **Request (Wayne):** "It should be client data (whether from CSV upload or crawl) plus competitor gap (also from CSV or crawled)" — i.e. one consistent client number, not the chart's 2,329 sitting next to the cards' 136.

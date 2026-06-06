@@ -171,7 +171,32 @@ export function buildKwPool({
     });
   }
 
-  // ── 2. Gap keywords ────────────────────────────────────────────────────────
+  // ── 2. Uploaded CLIENT keywords (non-gap CSV/manual rows) ──────────────────
+  // v7.142: the client's OWN uploaded footprint is authoritative and is added
+  // BEFORE the crawl gap set. Reason: an auto-crawl can list a keyword as a
+  // competitor "gap" (the crawl only knew the client ranked for the vol≥floor
+  // terms, so lower-volume client terms a competitor also ranks for slipped into
+  // gapKeywords). If the client then uploads a CSV saying "we rank for X", X must
+  // count as CLIENT, not gap. Processing client uploads here (before §3) makes the
+  // client footprint win the dedup, so the uploaded CSV is no longer swallowed by
+  // the gap set. (This is why ~600 of Wayne's 731-row client CSV were missing.)
+  for (const k of uploaded) {
+    if ((k.source ?? '') === 'blocked') continue;
+    if (k.type === 'gap') continue;                 // gap uploads handled in §4
+    const kwLow = (k.keyword ?? '').toLowerCase().trim();
+    if (!kwLow || seen.has(kwLow)) continue;
+    seen.add(kwLow);
+    pool.push({
+      keyword:      k.keyword,
+      searchVolume: k.search_volume ?? k.searchVolume ?? 0,
+      position:     k.position ?? null,
+      isGap:        false,
+      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
+      competitor:   null,
+    });
+  }
+
+  // ── 3. Crawl gap keywords — only those NOT already claimed as client ───────
   for (const k of (snap?.gapKeywords ?? [])) {
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
@@ -188,23 +213,23 @@ export function buildKwPool({
     });
   }
 
-  // ── 3. Uploaded / CSV keywords — no threshold ──────────────────────────────
+  // ── 4. Uploaded GAP keywords (competitor CSV rows) — no threshold ──────────
   for (const k of uploaded) {
     if ((k.source ?? '') === 'blocked') continue;
+    if (k.type !== 'gap') continue;                 // client uploads handled in §2
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
     seen.add(kwLow);
-    const isGap = k.type === 'gap';
     pool.push({
       keyword:      k.keyword,
       searchVolume: k.search_volume ?? k.searchVolume ?? 0,
-      // v7.100: pool position means the CLIENT's rank. Gap rows (competitor
-      // uploads) store the COMPETITOR's rank in position — kept in the DB for
-      // Share of Voice — so it must not leak into the pool as a client ranking.
-      position:     isGap ? null : (k.position ?? null),
-      isGap,
+      // v7.100: gap rows (competitor uploads) store the COMPETITOR's rank in
+      // position — kept in the DB for Share of Voice — so it must not leak into
+      // the pool as a client ranking.
+      position:     null,
+      isGap:        true,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
-      competitor:   k.domain       ?? null,
+      competitor:   k.domain ?? null,
     });
   }
 
