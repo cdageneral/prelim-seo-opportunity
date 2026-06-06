@@ -198,7 +198,12 @@ function classifyJourneyType(cluster: { type: string; subClusters: IntentCluster
 
 // ─── Build clusters ───────────────────────────────────────────────────────────
 
-function buildClusters(
+// v7.128 — exported so the Executive Summary can derive its "Journeys" signal
+// (stages with client coverage) from the SAME cluster build this panel renders,
+// instead of a page1Pct heuristic. Pure function; `claudeAssignments` only
+// refines keywords whose intent is 'unmatched', so passing {} yields the
+// deterministic default mapping the panel shows before any AI refinement.
+export function buildClusters(
   analysis: any,
   claudeAssignments: Record<string, IntentType>,
   clientDomain: string,

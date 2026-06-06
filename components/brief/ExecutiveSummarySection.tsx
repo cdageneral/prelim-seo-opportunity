@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
 import { SovPanel } from '@/components/brief/GoogleSerpSection';
+import { buildClusters } from '@/components/brief/JourneySection';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -237,6 +238,24 @@ export default function ExecutiveSummarySection({
   const clientShare  = totalPool > 0 ? clientTraffic / totalPool : captureRate;
   const gapVsTop     = topCompShare - clientShare;
 
+  // ── Journey stage coverage (nav 04) ───────────────────────────────────────
+  // v7.128 — Replaces the old `page1Pct > 30 ? '2 of 4' : '1 of 4'` heuristic,
+  // which was fabricated and had NO link to the Journeys panel. We now run the
+  // SAME buildClusters() the panel renders and count how many of the 4 journey
+  // stages (awareness / consideration / decision / retention) have client
+  // page-1 volume (subCluster.clientVolume > 0). claudeAssignments is {} so the
+  // intent mapping is the deterministic default (AI refinement of 'unmatched'
+  // keywords is UI-cached state not available here, and only shifts unmatched
+  // terms into the awareness stage).
+  const journeyStagesCovered = useMemo(() => {
+    const clusters = buildClusters(analysis, {}, clientDomain, manualDomains, dbKeywords);
+    const stages = new Set<string>();
+    clusters.forEach(c => c.subClusters.forEach(sc => {
+      if (sc.clientVolume > 0) stages.add(sc.stage);
+    }));
+    return stages.size;
+  }, [analysis, clientDomain, manualDomains, dbKeywords]);
+
   // ── LLM visibility ────────────────────────────────────────────────────────
   // v7.80: supports both probe shapes. v2 (llm_probe_v2) reports the UNBRANDED
   // mention rate — prompts that never named the brand — per platform; v1 keeps
@@ -283,12 +302,22 @@ export default function ExecutiveSummarySection({
   const overallLlmRate = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
 
   // ── Content inventory ─────────────────────────────────────────────────────
-  const gapKeywords: any[]  = semSnap.gapKeywords ?? [];
-  const gapKwCount          = gapKeywords.length;
+  // v7.128 — Gap stats now derive from the canonical kwPool (buildKwPool), so
+  // the gap COUNT and VOLUME match Keyword Landscape (02) and Content Map (05)
+  // exactly. Previously this read raw `semSnap.gapKeywords`, which bypasses
+  // buildKwPool's branded-exclusion, project competitor-volume threshold, and
+  // dedupe — so the exec gap figures could exceed what those panels display.
+  // KeywordsPanel's canonical "competitor gap keywords" count is
+  // gapRows = pool items that are gaps AND have a competitor, filtered by the
+  // project volume threshold (already applied inside buildKwPool via
+  // competitorVolMin / volThreshold = defaultCompetitorThreshold) — i.e.
+  // exactly kwPool.filter(isGap && competitor). Matches by construction.
+  const gapItems            = kwPool.filter(i => i.isGap && !!i.competitor);
+  const gapKwCount          = gapItems.length;
+  const gapVolume           = gapItems.reduce((s, i) => s + (i.searchVolume ?? 0), 0);
   const categories: any[]   = cb.categories ?? [];
   const clusterCount        = categories.filter((c: any) => c.type === 'procedure').length;
   const contentGapsFromDb   = (analysis.contentGaps ?? []) as string[];
-  const gapVolume           = gapKeywords.reduce((s: number, k: any) => s + (k.searchVolume ?? 0), 0);
 
   // ── Opportunities ─────────────────────────────────────────────────────────
   const opps: Opportunity[] = (analysis.opportunities ?? [])
@@ -556,8 +585,13 @@ export default function ExecutiveSummarySection({
                   { label: 'Procedure clusters',
                     value: String(clusterCount > 0 ? clusterCount : categories.length) },
                   { label: 'Annual gap volume',  value: gapVolume > 0 ? fmtAnnual(gapVolume) : '—' },
+                  // v7.128 — label said "ranked" but showed totalKws (which
+                  // includes non-ranked gap keywords). Now shows the actual
+                  // ranked count (posKws.length) = keywords with a real
+                  // position, matching Google Ranks (06). Total-keyword count
+                  // (incl. gaps) still lives in the hero "Total keywords" tile.
                   { label: 'Total ranked kws',
-                    value: dbLoaded ? totalKws.toLocaleString() : '—' },
+                    value: dbLoaded ? posKws.length.toLocaleString() : '—' },
                 ].map(s => (
                   <div key={s.label} className="rounded-md px-2.5 py-1.5 bg-orbit-surface">
                     <p className="text-[9px] mb-0.5 text-orbit-tertiary">{s.label}</p>
@@ -646,9 +680,9 @@ export default function ExecutiveSummarySection({
           />
           <SignalCard
             source="Journeys"
-            value={page1Pct > 30 ? '2 of 4' : '1 of 4'}
-            desc="Journey stages with meaningful coverage"
-            accentColor={page1Pct > 30 ? '#F59E0B' : '#EF4444'}
+            value={`${journeyStagesCovered} of 4`}
+            desc="Journey stages with client page-1 coverage"
+            accentColor={journeyStagesCovered >= 3 ? '#22C55E' : journeyStagesCovered === 2 ? '#F59E0B' : '#EF4444'}
           />
         </div>
       </div>

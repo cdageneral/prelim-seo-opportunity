@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.128 — 2026-06-05 · Exec Summary sourcing audit (pass 1 of 3): gap stats, Journeys signal, ranked-count label now pull from their owning panels
+
+**Request (Wayne):** "Go through the exec summary and make sure all data points and mentions are pulling from the individual panels from the left nav. The left nav should hold the entire detail; bits and pieces are pulled forward to the exec summary."
+
+**Audit result:** most hero/volume metrics already pull from the canonical `buildKwPool` (so they match Keyword Landscape 02 and Google Ranks 06) and the Share-of-Voice card literally imports `SovPanel`. Three items were recomputed from raw snapshot fields or fabricated; this release fixes the clean, self-contained ones. (Competitor-share basis and SERP-feature coverage need careful extraction from their owning panels and ship next, as passes 2 and 3, to avoid regressing those panels.)
+
+**Changes (`components/brief/ExecutiveSummarySection.tsx`, `components/brief/JourneySection.tsx`):**
+- **#1 Gap count + gap volume now derive from the canonical `kwPool`.** Previously read raw `semSnap.gapKeywords`, which skips `buildKwPool`'s branded-exclusion, project competitor-volume threshold, and dedupe — so the exec gap figures could exceed what Keyword Landscape (02) and Content Map (05) display. Now `gapItems = kwPool.filter(i => i.isGap && !!i.competitor)`, which equals KeywordsPanel's canonical `gapFiltered` count by construction (its `volThreshold = defaultCompetitorThreshold` is the same threshold `buildKwPool` already applied via `competitorVolMin`). Feeds the hero text, content tiles, the "Competitor gap" / "Content map" signal cards, and the fallback priorities.
+- **#4 "Journeys" signal now reflects real stage coverage.** It was hardcoded as `page1Pct > 30 ? '2 of 4' : '1 of 4'` — a fabricated heuristic with no link to the Journeys panel (04). `buildClusters()` is now `export`ed from `JourneySection.tsx`; the exec runs the same cluster build and counts how many of the 4 stages (awareness / consideration / decision / retention) have client page-1 volume (`subCluster.clientVolume > 0`). `claudeAssignments` is passed as `{}`, giving the deterministic default intent mapping the panel shows before any AI refinement (cached AI intents live in UI state and only reassign 'unmatched' keywords).
+- **#7 "Total ranked kws" tile was mislabeled.** It showed `totalKws`, which includes non-ranked gap keywords (and duplicated the hero's "Total keywords"). Now shows `posKws.length` — keywords with an actual rank position — matching Google Ranks (06). The full pool count (incl. gaps) still lives in the hero "Total keywords" tile.
+
+**Still to come (explicitly NOT changed here):**
+- **#2 Hero competitor share** ("topComp holds X% of total demand") is computed from organic-traffic shares truncated to the top 4 competitors, so it won't match the Share-of-Voice donut beside it (which uses all competitors, and a traffic-or-page-1-volume basis). Fix = extract SovPanel's share computation into a shared helper both consume. (Pass 2.)
+- **#3 SERP feature coverage** reads the stale snapshot summary (`analysis.aioAvailable`, `serpFeatureSummary`); SERP Features (07) computes from the LIVE scanned set (`useAIOData` + `scannedKws` + uploaded-feature counts) and clamps to 100. Fix = consume the same live computation. (Pass 3.)
+- LLM mention rate (#5) and Theme-clusters count (#6) are recomputed but currently consistent — lower priority follow-ups.
+
+**Verification:** isolated `tsc --noEmit --strict` on all three new expressions against the real `KwPoolItem` and `buildClusters` return shapes — exit 0. Confirmed `buildClusters` export, no circular import (JourneySection does not import the exec or GoogleSerp), and that `subCluster` carries `stage` + `clientVolume`. No stale references to the removed `gapKeywords` variable. Full-project `tsc` not runnable in the packaging sandbox (copied `node_modules` missing `@types/node` — same environmental limitation noted in v7.127; clean-install builds remain green). Changes are localized to the exec read-model plus a one-word `export`.
+
 ## v7.127 — 2026-06-05 · Fix: Executive Summary "Volume Opportunity" (99%) disagreed with the Google Rank panel (83%)
 
 **Symptom (Wayne):** "On the exec summary it says there is a 99% volume opportunity, however on the Google Rank panel (which is where the exec summary should be pulling from) it says 83%. Why is it wrong?" Both screenshots agreed on Positions 1–3 (1.4M) and Positions 4–10 (518K) but diverged wildly on Page 2+ (exec 217.2M vs rank panel 6.2M) and on the total (exec 219.2M vs 8.1M).
