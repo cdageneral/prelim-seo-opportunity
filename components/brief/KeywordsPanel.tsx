@@ -557,6 +557,28 @@ export default function KeywordsPanel({
     };
   }, [summaryRows]);
 
+  // ── Client rank distribution from the REAL keyword pool (v7.141) ───────────
+  // Reconciles the chart with the cards. The client side is now built from the
+  // SAME keyword ROWS the summary cards use (crawl topKeywords + CSV uploads),
+  // not the stand-alone `positionDist` aggregate — which on legacy analyses can
+  // be a stale band COUNT (e.g. 2,329) not backed by stored keyword rows, and so
+  // isn't defensible. One client footprint number everywhere; every bar maps to
+  // real keywords on file. (A Full re-analysis re-pulls the complete footprint,
+  // uncapped, so this number rises and stays real.)
+  const clientDist = useMemo(() => {
+    const band = (p: number) => p <= 3 ? '1-3' : p <= 10 ? '4-10' : p <= 20 ? '11-20' : '21+';
+    const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+    const vol:  Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
+    for (const r of summaryRows) {
+      if (r.type === 'gap') continue;             // client footprint only
+      if (r.position == null || r.position <= 0) continue;  // unranked → no rank band
+      const k = band(r.position);
+      dist[k]++;
+      vol[k] += r.searchVolume;
+    }
+    return { dist, vol };
+  }, [summaryRows]);
+
   // ── Competitor rank distribution source (v7.139) ───────────────────────────
   // Prefer the full-footprint dists computed at analysis time. When they're
   // absent (older snapshot, or a refresh mode that doesn't rebuild them — the
@@ -1096,17 +1118,20 @@ export default function KeywordsPanel({
         );
       })()}
 
-      {/* ── Rank distribution split (v7.136) ── */}
+      {/* ── Rank distribution split (v7.136; client side reconciled v7.141) ── */}
       {/* Client vs a selectable competitor: keyword count + search volume + volume
-          share across the same four rank bands. Client counts = positionDist,
-          client volume = positionVol; competitor counts/volume =
-          competitorPositionDist / competitorPositionVol (full footprint, computed
-          at analysis time, zero extra Semrush units). Bars + % are volume-driven.
-          Older snapshots lack the competitor fields → graceful re-run hint. */}
+          share across the same four rank bands. v7.141: the CLIENT side is built
+          from clientDist — the same real keyword pool (summaryRows) that feeds the
+          summary cards — so the chart's client count equals the cards' client
+          count (one footprint number everywhere), instead of the older stand-alone
+          positionDist aggregate which on legacy analyses could be an unbacked
+          count. Competitor counts/volume = competitorDist (snapshot full-footprint
+          dists, or a 0-unit fallback bucketed from gap keywords / uploaded rows
+          already on the page). Bars + % are volume-driven. */}
       <RankDistributionSplit
         clientDomain={clientDomain}
-        positionDist={(analysis?.semrushSnapshot?.positionDist ?? null) as Record<string, number> | null}
-        positionVol={(analysis?.semrushSnapshot?.positionVol ?? null) as Record<string, number> | null}
+        positionDist={clientDist.dist}
+        positionVol={clientDist.vol}
         competitorPositionDist={competitorDist.dist}
         competitorPositionVol={competitorDist.vol}
         competitorFromFallback={competitorDist.fromFallback}

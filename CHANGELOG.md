@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.141 — 2026-06-06 · Rank Distribution: client side reconciled to the real keyword pool (one client footprint number everywhere)
+
+**Request (Wayne):** "It should be client data (whether from CSV upload or crawl) plus competitor gap (also from CSV or crawled)" — i.e. one consistent client number, not the chart's 2,329 sitting next to the cards' 136.
+
+**Root cause:** the Rank Distribution client side read `semrushSnapshot.positionDist` — a stand-alone band-COUNT aggregate. On Wayne's (legacy) analysis that aggregate held the full ranked-footprint count (2,329) while only ~136 individual client keyword ROWS were persisted, so the chart and the cards (which build from the real keyword pool) disagreed. The aggregate count isn't backed by stored keyword rows → not defensible.
+
+**Fix (1 file, `components/brief/KeywordsPanel.tsx`, additive):** new `clientDist` memo buckets the **same real pool** the cards use (`summaryRows` = crawl `topKeywords` + CSV uploads, no volume floor) into the four rank bands (counts + volume), skipping unranked rows (no rank band). `RankDistributionSplit` now receives `clientDist.dist`/`clientDist.vol` instead of the snapshot `positionDist`/`positionVol`. Result: the chart's "Client · N kw" equals the cards' client count — **client footprint + competitor gap is now consistent across the header, the cards, and the chart**, every bar backed by real keywords on file. Competitor side unchanged (already real: snapshot full-footprint dists, or the v7.139 0-unit fallback). No API/data-pull changes.
+
+**Note for Wayne (on screen + here):** this makes the client number *smaller but real* (the 2,329 was an unbacked legacy count). To make the real number *larger*, run a Full "Refresh Analysis" — the old keyword cap is gone, so it now pulls and stores the complete client footprint, and every number rises together while staying defensible.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom harness on the **real** component → **16/16**, incl. new checks that the chart client side uses the real pool ("sonobello · 6 kw", matching the cards' 6 client rows) and does **not** use the stale standalone aggregate (the fixture's `positionDist` total of 5). All v7.139/v7.140 checks (scroll, competitor fallback, client-only Branded/Non-branded, All = sum) still green.
+
 ## v7.140 — 2026-06-06 · Keywords summary cards: Branded & Non-branded are now CLIENT-only; All = Branded + Non-branded + Gap
 
 **Request (Wayne, after v7.139):** make each summary card mean exactly one thing — "All keywords = branded from client + non-branded from client + competitor gap; Branded = only branded client terms; Non-branded = only non-branded client terms; Gap = only terms not in the client's footprint."
