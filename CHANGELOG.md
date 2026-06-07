@@ -1,5 +1,13 @@
 # OrbitIQ Changelog
 
+## v7.151 — 2026-06-07 · Audience Segments: larger hero portrait, caption + AI badge removed
+
+**What Wayne asked for:** after the persona portraits started generating (Blob now configured), make the hero card's portrait larger so it fills more of the card's vertical height, remove the small "AI-generated" caption under it, and remove the "AI" badge on the portraits.
+
+**UI (`components/brief/AudienceSegmentsSection.tsx`, display-only):** the hero `PersonaAvatar` grew from 64px to **104px** and the hero header row switched from `items-start` to `items-center gap-5` so the bigger circular portrait sits centered against the badge/name/tagline block and fills more of the card height. The `flex-col` wrapper that held the portrait + caption is gone — the avatar now renders directly, and the **"AI-generated" caption text was removed**. The **"AI" corner badge was also removed from `PersonaAvatar`** (so it's gone from both the hero and the 3-up summary cards). Disclosure is preserved non-visually: the portrait keeps `alt="AI-generated portrait representing {name}"` and the wrapper keeps the hover `title` "AI-generated persona portrait — illustrative, not a real customer." The 44px summary-card portrait sizing and the initials fallback are otherwise unchanged, as are the v7.150 diagnostic line and the panel scroll root.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom/SSR harness on the **real** `AudienceSegmentsSection` → hero portrait renders at 104px, the "AI-generated" caption text node is **gone**, the visible "AI" badge is **gone** (no `>AI</span>` chip), the portrait `<img>` (with its AI-generated `alt`) is still present, and the 44px summary portraits still render. Rendered in chat before delivery.
+
 ## v7.150 — 2026-06-07 · Audience Segments: persona-image diagnostic status (why portraits are/aren't generating)
 
 **What Wayne asked for:** after deploying v7.149, the persona portraits still showed the initials fallback. Vercel's log view collapses to one line per request, so the exact reason wasn't visible. This version makes the image step report *why* it produced no portraits, surfaced both in logs and on the panel.

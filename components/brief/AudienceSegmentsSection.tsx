@@ -146,14 +146,6 @@ function PersonaAvatar({ segment, accent, size = 48 }: {
           {initialsFromName(segment.name)}
         </div>
       )}
-      {segment.personaImageUrl && (
-        <span
-          className={`absolute -bottom-1 -right-1 text-[7px] leading-none font-bold px-1 py-0.5 rounded-full border ${accent.badge}`}
-          style={{ backgroundColor: '#0b0f1a' }}
-        >
-          AI
-        </span>
-      )}
     </div>
   );
 }
@@ -196,15 +188,10 @@ function SegmentDetail({ segment, accent, label }: {
 
       {/* ── Hero header ── */}
       <div className="orbit-card p-5">
-        <div className="flex items-start gap-4">
+        <div className="flex items-center gap-5">
 
-          {/* v7.149: AI-generated persona portrait (Option A) */}
-          <div className="flex flex-col items-center gap-1 shrink-0">
-            <PersonaAvatar segment={segment} accent={accent} size={64} />
-            {segment.personaImageUrl && (
-              <span className="text-orbit-tertiary text-[8px] uppercase tracking-widest">AI-generated</span>
-            )}
-          </div>
+          {/* v7.149: AI-generated persona portrait (Option A) — v7.151: enlarged, caption removed */}
+          <PersonaAvatar segment={segment} accent={accent} size={104} />
 
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-4 flex-wrap">
