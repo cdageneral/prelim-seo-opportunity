@@ -468,6 +468,7 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
 type ClusterFilter =
   | 'all' | 'leading' | 'trailing' | 'opportunity'
+  | 'client' | 'competitor'   // v7.146: filter by cluster ownership (majority keyword)
   | JourneyStage;  // v7.145: filter the grid by dominant funnel stage
 
 interface ClusterStat {
@@ -570,6 +571,19 @@ function ClustersTab({
   const isStageFilter = (f: ClusterFilter): f is JourneyStage =>
     (STAGE_KEYS as string[]).includes(f);
 
+  // ── Ownership counts (v7.146) — client footprint vs competitor gap ──────────
+  const clientOwnedCount = clusterStats.filter(s =>  s.isClientFootprint).length;
+  const gapOwnedCount    = clusterStats.filter(s => !s.isClientFootprint).length;
+
+  // ── Filter nav model (v7.146): ownership group + funnel-stage group ─────────
+  const navOwnership: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
+    { key: 'all',        label: 'All clusters',    count: clusters.length,   cColor: '#8080A8' },
+    { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: '#4ADE80' },
+    { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: '#F59E0B' },
+  ];
+  const navStages: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> =
+    stageRollups.map(r => ({ key: r.stage, label: STAGE_META[r.stage].label, count: r.total, cColor: '#585878' }));
+
   // Annualise monthly volume × 12
   const ann = (stats: ClusterStat[]) =>
     stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
@@ -588,6 +602,8 @@ function ClustersTab({
     filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
     filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
     filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
+    filter === 'client'      ? clusterStats.filter(s =>  s.isClientFootprint).map(s => s.cluster) :
+    filter === 'competitor'  ? clusterStats.filter(s => !s.isClientFootprint).map(s => s.cluster) :
     isStageFilter(filter)    ? clusterStats.filter(s => s.stage === filter).map(s => s.cluster) :
     clusters;
 
@@ -883,39 +899,59 @@ function ClustersTab({
         </div>
       </div>
 
-      {/* ── Divider ──────────────────────────────────────────────────────── */}
-      <div style={{ height: 1, background: '#181828', marginBottom: 14 }} />
-
-      {/* ── Status / filter bar ──────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        {filter !== 'all' && (
-          <button
-            onClick={() => setFilter('all')}
-            style={{
-              fontSize: 10, color: '#6C63FF', background: 'none',
-              border: 'none', cursor: 'pointer', padding: 0,
-              display: 'flex', alignItems: 'center', gap: 3,
-            }}
-          >
-            <i className="ti ti-x" style={{ fontSize: 10 }} aria-hidden="true" />
-            Clear filter
-          </button>
-        )}
-        <span style={{ fontSize: 10, color: '#484868' }}>
-          {filter === 'all'
-            ? `${clusters.length} clusters`
-            : `Showing ${filtered.length} of ${clusters.length} clusters`}
-        </span>
-        {loadingClaude && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF' }}>
-            <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refining intent classification…
+      {/* ── Filter nav (v7.146) — sits between the summary cards and the grid, */}
+      {/* doubling as the section separator. Two groups: ownership · funnel     */}
+      {/* stage. Shares filter state with the summary + funnel-stage cards.     */}
+      {(() => {
+        const Pill = ({ item }: { item: { key: ClusterFilter; label: string; count: number; cColor: string } }) => {
+          const on = filter === item.key;
+          return (
+            <button
+              onClick={() => setFilter(f => (f === item.key && item.key !== 'all' ? 'all' : item.key))}
+              style={{
+                fontSize: 12, fontWeight: 600, lineHeight: 1,
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 13px', borderRadius: 20, cursor: 'pointer',
+                transition: 'all 0.15s', outline: 'none', whiteSpace: 'nowrap',
+                background: on ? '#6C63FF' : '#13131F',
+                border:     `1px solid ${on ? '#6C63FF' : '#23233A'}`,
+                color:      on ? '#0A0A14' : '#9090B8',
+              }}
+              onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = '#34345A'; }}
+              onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = '#23233A'; }}
+            >
+              {item.label}
+              <span style={{ fontSize: 11, fontWeight: 600, color: on ? 'rgba(10,10,20,0.65)' : item.cColor }}>
+                {item.count}
+              </span>
+            </button>
+          );
+        };
+        return (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+            padding: '11px 12px', marginBottom: 14,
+            borderTop: '1px solid #1C1C30', borderBottom: '1px solid #1C1C30',
+          }}>
+            {navOwnership.map(item => <Pill key={item.key} item={item} />)}
+            <span style={{ width: 1, height: 18, background: '#23233A', margin: '0 4px' }} />
+            {navStages.map(item => <Pill key={item.key} item={item} />)}
+            {loadingClaude && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF', marginLeft: 6 }}>
+                <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refining…
+              </div>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3A3A5A', whiteSpace: 'nowrap' }}>
+              {filter === 'all'
+                ? `${clusters.length} clusters · click a card to expand`
+                : `Showing ${filtered.length} of ${clusters.length}`}
+            </span>
           </div>
-        )}
-        <span style={{ marginLeft: 'auto', fontSize: 10, color: '#2E2E50' }}>Click any card to expand keywords</span>
-      </div>
+        );
+      })()}
 
       {/* ── 4-column cluster grid ────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
@@ -926,9 +962,11 @@ function ClustersTab({
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: '#404060', fontSize: 13 }}>
-          {filter === 'opportunity' && clusters.length > 0
+          {clusters.length === 0
+            ? 'No cluster data — run an analysis first.'
+            : filter === 'opportunity'
             ? 'No clusters with competitor coverage below 25% — competition is active across all clusters.'
-            : 'No cluster data — run an analysis first.'}
+            : 'No clusters match this filter.'}
         </div>
       )}
 
