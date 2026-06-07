@@ -1,7 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // serverExternalPackages replaces experimental.serverComponentsExternalPackages in Next.js 14.1+
-  serverExternalPackages: ['puppeteer-core', '@sparticuz/chromium'],
+  // Next.js 14.2.x uses experimental.serverComponentsExternalPackages.
+  // (The top-level `serverExternalPackages` is a Next.js 15 rename and is
+  // rejected as an unrecognized key on 14.2.15.)
+  experimental: {
+    serverComponentsExternalPackages: ['puppeteer-core', '@sparticuz/chromium'],
+  },
   webpack: (config, { isServer }) => {
     if (isServer) {
       config.externals.push('puppeteer-core', '@sparticuz/chromium');

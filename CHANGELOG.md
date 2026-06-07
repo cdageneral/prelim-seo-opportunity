@@ -1,5 +1,13 @@
 # OrbitIQ Changelog
 
+## v7.153 — 2026-06-07 · Fix invalid next.config.js key (build warning)
+
+**What Wayne saw:** the build logged `Invalid next.config.js options detected: Unrecognized key(s) in object: 'serverExternalPackages'`. The build still compiled and deployed (warning only), but the key was wrong for this Next.js version.
+
+**Fix (`next.config.js` only):** `serverExternalPackages` is the Next.js **15** top-level key; on Next.js **14.2.15** (the version this app runs) it is rejected as unrecognized. Moved the setting back to its Next 14 home: `experimental.serverComponentsExternalPackages: ['puppeteer-core', '@sparticuz/chromium']`. The webpack `externals` block is unchanged. No application/runtime/data behavior changes — this only removes the build warning.
+
+**Verification:** `node --check next.config.js` → valid JS; key now nests under `experimental`. (No tsc/jsdom impact — config-only change; the v7.152 journey mind map is carried forward unchanged.)
+
 ## v7.152 — 2026-06-07 · Audience Journeys: topic-cluster mind map (pre-product vs product)
 
 **What Wayne asked for:** rebuild the Journey panel into a visual mind map of the full user journey per audience segment. Each topic cluster is a node; the panel should show how many topics a complete journey needs and, of those, how many the client already has content for vs. how many are missing vs. owned only by a competitor. Nodes are color-coded for existing / missing / competitor, enlarge on hover with their connecting paths highlighted, and open a cluster detail on click. Topic-to-topic relationships are established so multiple paths can run from one cluster to another. The pre-product journey (has a problem, doesn't know the product exists) is kept separate from the product journey (knows the category). The persona portrait from Audience Segments is carried into the segment tabs here.
