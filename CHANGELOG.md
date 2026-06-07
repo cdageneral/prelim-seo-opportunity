@@ -1,5 +1,13 @@
 # OrbitIQ Changelog
 
+## v7.148 — 2026-06-07 · Theme Clusters: funnel-stage roll-up moved into the top row as a half inverted-pyramid
+
+**What Wayne asked for:** change the cluster-summary card layout — move the funnel-stage summary up into the top row as a third column, and instead of boxes, render it as an inverted pyramid cut in half with the flat edge on the right so the stage words/info sit beside it. Layout approved from an in-chat render before build; funnel bands stay clickable to filter.
+
+**UI (`components/brief/ThemeClustersPanel.tsx`, display/layout only — ZERO change to any metric, classification, ownership, or volume math):** the top region went from a 2-column grid (total-clusters hero · Leading/Trailing/Low-Competition stack) to a 3-column grid `minmax(0,1.15fr) minmax(0,1fr) minmax(0,1.2fr)`. Column 3 now holds the funnel-stage roll-up — previously a separate full-width 4-box row below the cards, now **removed** from there. It renders as a half inverted pyramid: four horizontal bands (Awareness → Retention) whose right edge is flat (vertical) and whose left edge steps in 18% per stage, drawn with `clip-path: polygon(...)` so the four bands read as one continuous funnel narrowing downward. Band colors deepen down the funnel (`#8B85FF → #6C63FF → #574DD6 → #443AA8`). Each band's stage label, cluster count, and `N client · M gap · annualVol` split sit immediately to the right of the flat edge. Every band is a `<button>` that filters the grid to that dominant stage (re-click → back to all), with an active highlight + ACTIVE pill, exactly as the old funnel cards did. Data source is the unchanged `stageRollups` derivation (`dominantStage`, client-footprint vs competitor-gap, annual = monthly × 12) — same numbers, new shape. Panel root scroll container unchanged (`flex:1, overflowY:auto`).
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom on the **real** `ThemeClustersPanel` (9-kw fixture → 3 clusters) → top-row + funnel harness: 3-column grid present, four funnel bands render with correct per-stage counts and `clip-path` flat-right geometry, clicking a band filters the grid ("Showing X of N") and toggles back to all on re-click, the old standalone funnel-card row is gone, and the panel still scrolls. Built layout rendered in chat before delivery.
+
 ## v7.147 — 2026-06-06 · Theme Clusters filter nav: added a performance group (Winning / Trailing / Low Competition) + glowing-line framing
 
 **What Wayne asked for:** add Winning, Trailing, and Low Competition to the pill nav; give the bar more padding and space above and below; frame it with a couple of glowing horizontal lines.
