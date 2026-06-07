@@ -12,6 +12,7 @@ import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
+import { generatePersonaImages } from '@/lib/apis/personaImage';
 
 export const maxDuration = 300;
 
@@ -142,6 +143,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // v7.149: generate a photoreal portrait per audience segment (Option A
+    // circular avatar in the panel). Non-fatal — on missing keys or any failure
+    // the segments are returned unchanged and the analysis still completes.
+    const personasWithImages = await generatePersonaImages(synthesis.personas, {
+      industry,
+      clientName,
+      idPrefix: `${domain.replace(/[^a-z0-9]+/gi, '-')}-${analysisId.slice(0, 8)}`,
+    }).catch(() => synthesis.personas);
+
     const hm = synthesis.heroMetrics;
     await db.update(analyses)
       .set({
@@ -159,7 +169,7 @@ export async function POST(req: NextRequest) {
           _narrative:          synthesis.narrative,
           _pptPrompt:          synthesis.pptPrompt,
           _categoryBreakdown:  synthesis.categoryBreakdown,
-          _audienceSegments:   synthesis.personas,
+          _audienceSegments:   personasWithImages,
           _synthCheckpoint:    undefined,   // v7.83: clear resume checkpoint on completion
         } as any,
         // v7.80: LLM probe now runs in Phase 2 (needs categories) — persist it here

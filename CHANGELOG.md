@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.149 — 2026-06-07 · Audience Segments: AI-generated persona portrait per segment
+
+**What Wayne asked for:** add a persona image to each audience-segment card — a photoreal portrait representative of that segment, with a different image generated per segment. Direction approved from an in-chat render first: Option A (circular portrait on the left), photoreal style with an "AI-generated" label, generated during the analysis run and stored in Vercel Blob, via OpenAI gpt-image-1.
+
+**New utility (`lib/apis/personaImage.ts`):** `generatePersonaImages(segments, { industry, clientName, idPrefix })` builds a respectful editorial head-and-shoulders prompt from each segment's own `whoTheyAre.demographics` + `creativeDirection`, calls OpenAI `gpt-image-1` (1024×1024, `n:1`, fetch-based — no new SDK dependency), decodes the returned `b64_json`, and uploads the PNG to Vercel Blob with `put(..., { access: 'public' })`. The public URL is attached to the segment as `personaImageUrl`. The prompt explicitly excludes text/logos, before/after, clinical or body-exposure framing, and multi-person collages so it stays defensible for health/cosmetic clients. **Data-integrity:** the portrait is an *illustration* derived only from the segment's text — never a real customer — and the panel labels every portrait "AI-generated" (corner "AI" badge + title, plus an "AI-generated" caption under the hero portrait).
+
+**Fully fault-tolerant (matches the app's `.catch`-returns-data pattern):** `personaImagesEnabled()` requires both `OPENAI_API_KEY` and a Blob token; if either is missing it is a silent no-op and segments are returned unchanged. Each image is generated in its own try/catch (one failure never affects the others), generation runs in parallel across the 3-4 segments to stay inside the synthesis time budget, and segments that already carry a `personaImageUrl` (e.g. a resumed run) are skipped so retries never re-spend. The whole step is wrapped so the analysis always completes even with no images.
+
+**Pipeline (`app/api/synthesize/route.ts`):** after Phase-2 synthesis and before the final DB write, `synthesis.personas` is passed through `generatePersonaImages(...)` and the result is stored into `semrushSnapshot._audienceSegments` (no schema change — additive field on the existing JSONB). The call is `.catch`-guarded to fall back to the original personas.
+
+**UI (`components/brief/AudienceSegmentsSection.tsx`, display only):** new `PersonaAvatar` component renders the photo as a circular, accent-ringed portrait when present, else a graceful initials fallback (so the panel looks right before/without images). Placed Option-A style — a 64px portrait to the left of the hero header (badge/name/tagline shift into a `flex-1` column beside it, with an "AI-generated" caption under the portrait) and a 44px portrait to the left of each 3-up summary card's badge. `AudienceSegment` gains optional `personaImageUrl`. Panel scroll root unchanged (`overflow-y-auto flex-1`).
+
+**Config:** `.env.example` documents the new optional `OPENAI_API_KEY` and notes Blob is now used for portraits as well as PDF export. **Wayne action to light it up:** add `OPENAI_API_KEY` in Vercel → Settings → Environment Variables and ensure Blob is enabled; until then the panel shows initials-fallback avatars and everything else works.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom on the **real** `AudienceSegmentsSection` (fixtures with and without `personaImageUrl`) → renders the `<img>` portrait with the "AI" badge + "AI-generated" caption when a URL is present, the initials-fallback circle when absent, in both the summary cards and the hero, and the panel still scrolls. Built card rendered in chat before delivery.
+
 ## v7.148 — 2026-06-07 · Theme Clusters: funnel-stage roll-up moved into the top row as a half inverted-pyramid
 
 **What Wayne asked for:** change the cluster-summary card layout — move the funnel-stage summary up into the top row as a third column, and instead of boxes, render it as an inverted pyramid cut in half with the flat edge on the right so the stage words/info sit beside it. Layout approved from an in-chat render before build; funnel bands stay clickable to filter.

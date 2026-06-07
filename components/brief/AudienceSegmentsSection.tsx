@@ -15,6 +15,7 @@ export interface AudienceSegment {
   tagline: string;           // "I can't afford my mortgage renewal. I need options — fast."
   volumePct: number;         // 42
   yoyGrowth?: string;        // "+32% YoY"
+  personaImageUrl?: string;  // v7.149: AI-generated photoreal portrait (Vercel Blob URL)
 
   whoTheyAre: {
     demographics: string;    // Age range, employment status, financial profile
@@ -105,6 +106,58 @@ function BulletList({ items, accent }: { items: string[]; accent: typeof SEGMENT
   );
 }
 
+// ── Persona portrait (Option A — circular) ────────────────────────────────────
+// v7.149: shows the AI-generated photoreal portrait when present, else a
+// graceful initials fallback. Every real portrait carries an "AI" corner badge
+// (and title) so it is never mistaken for a real customer photo.
+
+function initialsFromName(name: string): string {
+  const words = (name || '')
+    .replace(/[^a-zA-Z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w && !/^(the|a|an|of|and)$/i.test(w));
+  const picks = words.slice(0, 2).map(w => w[0]?.toUpperCase() ?? '');
+  return picks.join('') || (name?.[0]?.toUpperCase() ?? '?');
+}
+
+function PersonaAvatar({ segment, accent, size = 48 }: {
+  segment: AudienceSegment;
+  accent: typeof SEGMENT_ACCENTS[0];
+  size?: number;
+}) {
+  const px = { width: size, height: size };
+
+  return (
+    <div className="relative shrink-0" style={px} title={segment.personaImageUrl ? 'AI-generated persona portrait — illustrative, not a real customer' : undefined}>
+      {segment.personaImageUrl ? (
+        <img
+          src={segment.personaImageUrl}
+          alt={`AI-generated portrait representing ${segment.name}`}
+          className={`w-full h-full rounded-full object-cover border-2 ${accent.tab.split(' ')[0]}`}
+          style={px}
+          loading="lazy"
+        />
+      ) : (
+        <div
+          className={`w-full h-full rounded-full border-2 flex items-center justify-center font-semibold ${accent.badge}`}
+          style={{ ...px, fontSize: Math.round(size * 0.34) }}
+          aria-label={`${segment.name} (no portrait yet)`}
+        >
+          {initialsFromName(segment.name)}
+        </div>
+      )}
+      {segment.personaImageUrl && (
+        <span
+          className={`absolute -bottom-1 -right-1 text-[7px] leading-none font-bold px-1 py-0.5 rounded-full border ${accent.badge}`}
+          style={{ backgroundColor: '#0b0f1a' }}
+        >
+          AI
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── Empty / coming-soon state ─────────────────────────────────────────────────
 
 function EmptyState() {
@@ -143,28 +196,41 @@ function SegmentDetail({ segment, accent, label }: {
 
       {/* ── Hero header ── */}
       <div className="orbit-card p-5">
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
-              {label}
-            </span>
-            {segment.yoyGrowth && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
-                {segment.yoyGrowth}
-              </span>
+        <div className="flex items-start gap-4">
+
+          {/* v7.149: AI-generated persona portrait (Option A) */}
+          <div className="flex flex-col items-center gap-1 shrink-0">
+            <PersonaAvatar segment={segment} accent={accent} size={64} />
+            {segment.personaImageUrl && (
+              <span className="text-orbit-tertiary text-[8px] uppercase tracking-widest">AI-generated</span>
             )}
           </div>
-          <div className="text-right">
-            <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
-            <p className={`text-xl font-bold ${accent.heading}`}>{segment.volumePct}%</p>
-          </div>
-        </div>
 
-        <div className="mt-3">
-          <h2 className={`text-lg font-bold ${accent.heading}`}>{segment.name}</h2>
-          <p className="text-orbit-secondary text-sm mt-1 italic leading-relaxed">
-            &ldquo;{segment.tagline}&rdquo;
-          </p>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
+                  {label}
+                </span>
+                {segment.yoyGrowth && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
+                    {segment.yoyGrowth}
+                  </span>
+                )}
+              </div>
+              <div className="text-right">
+                <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
+                <p className={`text-xl font-bold ${accent.heading}`}>{segment.volumePct}%</p>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <h2 className={`text-lg font-bold ${accent.heading}`}>{segment.name}</h2>
+              <p className="text-orbit-secondary text-sm mt-1 italic leading-relaxed">
+                &ldquo;{segment.tagline}&rdquo;
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -333,12 +399,15 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                   }`}
                   style={isAct ? { borderTopWidth: '2px', borderTopColor: 'currentColor' } : {}}
                 >
-                  {/* Card header */}
-                  <div className="flex items-start justify-between gap-2">
-                    <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${acc.badge}`}>
-                      {segmentLabels[i]}
-                    </span>
-                    <div className="text-right">
+                  {/* Card header — v7.149: AI-generated persona portrait (Option A) left */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <PersonaAvatar segment={seg} accent={acc} size={44} />
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold shrink-0 ${acc.badge}`}>
+                        {segmentLabels[i]}
+                      </span>
+                    </div>
+                    <div className="text-right shrink-0">
                       <p className={`text-xl font-bold leading-none ${acc.heading}`}>{seg.volumePct}%</p>
                       <p className="text-orbit-tertiary text-[9px] uppercase tracking-widest mt-0.5">of volume</p>
                     </div>
