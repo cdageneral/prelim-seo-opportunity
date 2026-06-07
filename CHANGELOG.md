@@ -1,5 +1,13 @@
 # OrbitIQ Changelog
 
+## v7.147 — 2026-06-06 · Theme Clusters filter nav: added a performance group (Winning / Trailing / Low Competition) + glowing-line framing
+
+**What Wayne asked for:** add Winning, Trailing, and Low Competition to the pill nav; give the bar more padding and space above and below; frame it with a couple of glowing horizontal lines.
+
+**UI (`components/brief/ThemeClustersPanel.tsx`, display only):** the nav now carries three groups, divider-separated — ownership (All clusters · Client only · Competitor only) · performance (Winning · Trailing · Low Competition) · funnel stage (the four stages). The performance pills reuse the existing `leading` / `trailing` / `opportunity` filters that already drive the top summary cards, with matching accent colors on their counts (Winning green, Trailing pink, Low Competition blue). "Winning" is Wayne's label for the Leading filter — note the top summary card still reads "Leading" for the same filter (same state, two labels). The bar gained more internal padding (16×14) and outer margin (22px above / 20px below), and is framed top and bottom by a 1px purple gradient line with a soft glow (`box-shadow 0 0 6px rgba(108,99,255,0.45)`) instead of the flat hairline borders. No new filters or metrics — the three performance pills are entry points to filters that already existed.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom on the **real** `ThemeClustersPanel` (9-kw fixture → 3 clusters) → **nav harness 20/20** (15 prior + 5 new) + **funnel harness 20/20 (40 total)**: performance pills render exact counts (Winning 2 = the two leading clusters, Trailing 1, Low Competition 0); Winning → "Showing 2 of 3", Trailing → "Showing 1 of 3"; All clusters resets. All ownership + stage checks still green. Built nav rendered in chat before delivery.
+
 ## v7.146 — 2026-06-06 · Theme Clusters: filter nav between the summary cards and the grid (ownership + funnel stage)
 
 **What Wayne asked for:** a small navigation inserted between the summary cards and the cluster grid that both separates the two zones and filters/sorts the clusters by — All clusters, Client only, Competitor only, and the four funnel stages (Awareness, Consideration, Decision, Retention). Style chosen: pill segments. "Client only / Competitor only" defined as majority ownership (same client-footprint vs gap split the funnel cards use).

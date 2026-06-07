@@ -581,6 +581,11 @@ function ClustersTab({
     { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: '#4ADE80' },
     { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: '#F59E0B' },
   ];
+  const navPerformance: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
+    { key: 'leading',     label: 'Winning',         count: leadingStats.length,  cColor: '#4ADE80' },
+    { key: 'trailing',    label: 'Trailing',        count: trailingStats.length, cColor: '#F472B6' },
+    { key: 'opportunity', label: 'Low Competition', count: oppStats.length,      cColor: '#38BDF8' },
+  ];
   const navStages: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> =
     stageRollups.map(r => ({ key: r.stage, label: STAGE_META[r.stage].label, count: r.total, cColor: '#585878' }));
 
@@ -927,28 +932,43 @@ function ClustersTab({
             </button>
           );
         };
-        return (
+        const GlowLine = () => (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-            padding: '11px 12px', marginBottom: 14,
-            borderTop: '1px solid #1C1C30', borderBottom: '1px solid #1C1C30',
-          }}>
-            {navOwnership.map(item => <Pill key={item.key} item={item} />)}
-            <span style={{ width: 1, height: 18, background: '#23233A', margin: '0 4px' }} />
-            {navStages.map(item => <Pill key={item.key} item={item} />)}
-            {loadingClaude && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF', marginLeft: 6 }}>
-                <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Refining…
-              </div>
-            )}
-            <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3A3A5A', whiteSpace: 'nowrap' }}>
-              {filter === 'all'
-                ? `${clusters.length} clusters · click a card to expand`
-                : `Showing ${filtered.length} of ${clusters.length}`}
-            </span>
+            height: 1,
+            background: 'linear-gradient(to right, rgba(108,99,255,0) 0%, rgba(108,99,255,0.55) 50%, rgba(108,99,255,0) 100%)',
+            boxShadow: '0 0 6px rgba(108,99,255,0.45)',
+          }} />
+        );
+        const GroupDivider = () => (
+          <span style={{ width: 1, height: 18, background: '#23233A', margin: '0 4px' }} />
+        );
+        return (
+          <div style={{ margin: '22px 0 20px' }}>
+            <GlowLine />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px 6px', flexWrap: 'wrap',
+              padding: '16px 14px',
+            }}>
+              {navOwnership.map(item => <Pill key={item.key} item={item} />)}
+              <GroupDivider />
+              {navPerformance.map(item => <Pill key={item.key} item={item} />)}
+              <GroupDivider />
+              {navStages.map(item => <Pill key={item.key} item={item} />)}
+              {loadingClaude && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF', marginLeft: 6 }}>
+                  <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Refining…
+                </div>
+              )}
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3A3A5A', whiteSpace: 'nowrap' }}>
+                {filter === 'all'
+                  ? `${clusters.length} clusters · click a card to expand`
+                  : `Showing ${filtered.length} of ${clusters.length}`}
+              </span>
+            </div>
+            <GlowLine />
           </div>
         );
       })()}
