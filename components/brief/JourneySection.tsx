@@ -36,13 +36,14 @@ interface ThemeCluster {
 }
 
 interface AudienceSegment {
-  id:             string;
-  name:           string;
-  tagline:        string;
-  volumePct:      number;
-  whoTheyAre:     { demographics: string; trigger: string; influencerRole?: string };
-  preLLMPrompts:  string[];
-  productPrompts: string[];
+  id:              string;
+  name:            string;
+  tagline:         string;
+  volumePct:       number;
+  personaImageUrl?: string;   // v7.149 portrait — carried into Journeys (v7.152)
+  whoTheyAre:      { demographics: string; trigger: string; influencerRole?: string };
+  preLLMPrompts:   string[];
+  productPrompts:  string[];
 }
 
 interface Props {
@@ -335,208 +336,318 @@ function inferStageFromPrompt(text: string): JourneyStage {
   return 'awareness';
 }
 
-// ─── ClusterPill ──────────────────────────────────────────────────────────────
+// ─── Mind-map node model (v7.152) ───────────────────────────────────────────────
 
-function ClusterPill({ cluster, stage }: { cluster: ThemeCluster; stage: JourneyStage }) {
-  const colors = STAGE_COLORS[stage];
-  const stageSubs = cluster.subClusters.filter((sc: IntentCluster) => sc.stage === stage);
-  const totalVol = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.totalVolume, 0);
-  const clientVol = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.clientVolume, 0);
-  const compVol = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.competitorVolume, 0);
-  const clientPct = pctOf(clientVol, totalVol || cluster.totalVolume);
-  const isGap = compVol > 0 && clientVol === 0;
-  const isPartial = compVol > 0 && clientVol > 0 && clientPct < 50;
-  const kwCount = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.keywords.length, 0) || cluster.keywords.length;
-  const displayVol = totalVol || cluster.totalVolume;
+type NodeState = 'existing' | 'missing' | 'competitor';
+
+const STATE_COLOR: Record<NodeState, string> = {
+  existing:   '#34d399',
+  missing:    '#f87171',
+  competitor: '#a78bfa',
+};
+const STATE_LABEL: Record<NodeState, string> = {
+  existing:   'Existing content',
+  missing:    'Missing',
+  competitor: 'Competitor only',
+};
+
+interface JourneyNode {
+  id:        string;
+  name:      string;
+  lane:      JourneyType;
+  stage:     JourneyStage;
+  col:       number;
+  state:     NodeState;
+  totalVol:  number;
+  clientVol: number;
+  compVol:   number;
+  kwCount:   number;
+  sampleKws: string[];
+}
+
+function clusterDominantStage(c: ThemeCluster): JourneyStage {
+  const volByStage: Record<JourneyStage, number> = { awareness: 0, consideration: 0, decision: 0, retention: 0 };
+  for (const sc of c.subClusters) volByStage[sc.stage] += sc.totalVolume;
+  let best: JourneyStage = 'awareness'; let bv = -1;
+  for (const s of JOURNEY_STAGE_ORDER) { if (volByStage[s] > bv) { bv = volByStage[s]; best = s; } }
+  return best;
+}
+
+function clusterToNode(c: ThemeCluster): JourneyNode {
+  const clientVol = c.subClusters.reduce((s: number, sc: IntentCluster) => s + sc.clientVolume, 0);
+  const compVol   = c.subClusters.reduce((s: number, sc: IntentCluster) => s + sc.competitorVolume, 0);
+  const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+  const stage = clusterDominantStage(c);
+  const sampleKws = c.keywords.slice()
+    .sort((a: KwItem, b: KwItem) => b.searchVolume - a.searchVolume)
+    .slice(0, 6)
+    .map((k: KwItem) => k.keyword);
+  return {
+    id: c.id, name: c.name, lane: c.journeyType, stage,
+    col: JOURNEY_STAGE_ORDER.indexOf(stage), state,
+    totalVol: c.totalVolume, clientVol, compVol,
+    kwCount: c.keywords.length, sampleKws,
+  };
+}
+
+// Deterministic fallback when AI edge inference is unavailable: link every node
+// to all nodes in the next OCCUPIED funnel column (awareness → … → retention).
+function stageOrderEdges(nodes: JourneyNode[]): [string, string][] {
+  const byCol: Record<number, JourneyNode[]> = {};
+  nodes.forEach((n: JourneyNode) => { (byCol[n.col] = byCol[n.col] || []).push(n); });
+  const cols = Object.keys(byCol).map(Number).sort((a: number, b: number) => a - b);
+  const edges: [string, string][] = [];
+  for (let i = 0; i < cols.length - 1; i++) {
+    for (const a of byCol[cols[i]]) for (const b of byCol[cols[i + 1]]) edges.push([a.id, b.id]);
+  }
+  return edges;
+}
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// ─── MindMap (v7.152) ───────────────────────────────────────────────────────────
+
+function MindMap({ nodes, edges, onSelect, selectedId }: {
+  nodes:      JourneyNode[];
+  edges:      [string, string][];
+  onSelect:   (n: JourneyNode) => void;
+  selectedId: string | null;
+}) {
+  const [hover, setHover] = useState<string | null>(null);
+
+  const W = 700, NODE_W = 150, NODE_H = 46, PAD = 18, ROW_GAP = 16;
+
+  const { pos, H } = useMemo(() => {
+    const byCol: Record<number, JourneyNode[]> = {};
+    nodes.forEach((n: JourneyNode) => { (byCol[n.col] = byCol[n.col] || []).push(n); });
+    const counts = Object.values(byCol).map((a: JourneyNode[]) => a.length);
+    const maxRows = counts.length ? Math.max(...counts) : 1;
+    const H = PAD * 2 + maxRows * NODE_H + Math.max(0, maxRows - 1) * ROW_GAP;
+    const colW = W / 4;
+    const map: Record<string, { x: number; y: number; n: JourneyNode }> = {};
+    Object.entries(byCol).forEach(([col, arr]: [string, JourneyNode[]]) => {
+      const cx = colW * Number(col) + colW / 2;
+      const blockH = arr.length * NODE_H + (arr.length - 1) * ROW_GAP;
+      const startY = (H - blockH) / 2 + NODE_H / 2;
+      arr.forEach((n: JourneyNode, i: number) => { map[n.id] = { x: cx, y: startY + i * (NODE_H + ROW_GAP), n }; });
+    });
+    return { pos: map, H };
+  }, [nodes]);
+
+  const header = (
+    <div style={{ display: 'flex', borderBottom: '1px solid #1A1A30', marginBottom: 4 }}>
+      {JOURNEY_STAGE_ORDER.map((s: JourneyStage, i: number) => (
+        <div key={s} style={{
+          flex: 1, padding: '7px 6px', textAlign: 'center', fontSize: 9.5, fontWeight: 700,
+          letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[s].text,
+          opacity: 0.7, borderRight: i < 3 ? '1px solid #1A1A30' : 'none',
+        }}>
+          {JOURNEY_STAGE_LABELS[s]}
+        </div>
+      ))}
+    </div>
+  );
+
+  if (!nodes.length) {
+    return (
+      <div>
+        {header}
+        <p style={{ fontSize: 11, color: '#3A3A5A', fontStyle: 'italic', padding: '18px 4px' }}>
+          No topic clusters mapped to this journey yet.
+        </p>
+      </div>
+    );
+  }
+
+  function edgePath(a: { x: number; y: number }, b: { x: number; y: number }): string {
+    if (Math.abs(a.x - b.x) < 1) {
+      const bow = 70;
+      return `M${a.x} ${a.y} C ${a.x + bow} ${a.y} ${b.x + bow} ${b.y} ${b.x} ${b.y}`;
+    }
+    const mx = (a.x + b.x) / 2;
+    return `M${a.x} ${a.y} C ${mx} ${a.y} ${mx} ${b.y} ${b.x} ${b.y}`;
+  }
+
+  const validEdges = edges.filter(([f, t]: [string, string]) => pos[f] && pos[t]);
+  const ordered = nodes.slice().sort((a: JourneyNode, b: JourneyNode) => {
+    const pri = (n: JourneyNode) => (n.id === hover ? 2 : n.id === selectedId ? 1 : 0);
+    return pri(a) - pri(b);
+  });
 
   return (
-    <div style={{
-      background: '#0D0D1C',
-      border: `1px solid ${isGap ? '#3a1c1c' : '#1A1A30'}`,
-      borderRadius: 8, padding: '10px 12px',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#C8C8E8', lineHeight: 1.3 }}>{cluster.name}</span>
-        <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
-          {isGap && (
-            <span style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)', fontWeight: 700 }}>
-              GAP
-            </span>
-          )}
-          {isPartial && !isGap && (
-            <span style={{ fontSize: 9, padding: '2px 5px', borderRadius: 3, background: 'rgba(245,158,11,0.12)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)', fontWeight: 700 }}>
-              PARTIAL
-            </span>
-          )}
+    <div>
+      {header}
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img"
+        aria-label="Mind map of topic clusters across the funnel, color-coded by content coverage">
+        {validEdges.map(([f, t]: [string, string], i: number) => {
+          const inc = hover === f || hover === t;
+          const stroke = inc ? STATE_COLOR[pos[f].n.state] : '#33335c';
+          return (
+            <path key={i} d={edgePath(pos[f], pos[t])} fill="none"
+              stroke={stroke} strokeWidth={inc ? 2.2 : 1.3}
+              opacity={hover ? (inc ? 0.95 : 0.07) : 0.5} />
+          );
+        })}
+        {ordered.map((n: JourneyNode) => {
+          const p = pos[n.id];
+          const col = STATE_COLOR[n.state];
+          const scale = n.id === hover ? 1.15 : 1;
+          const sel = n.id === selectedId;
+          const label = n.name.length > 22 ? n.name.slice(0, 21) + '…' : n.name;
+          return (
+            <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`}
+              style={{ cursor: 'pointer' }}
+              onMouseEnter={() => setHover(n.id)}
+              onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))}
+              onClick={() => onSelect(n)}>
+              <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
+                <rect width={NODE_W} height={NODE_H} rx={9} fill="#0D0D22" stroke={col} strokeWidth={sel ? 2.4 : 1.6} />
+                <rect width={4} height={NODE_H} rx={2} fill={col} />
+                <text x={13} y={19} fill="#D8D8F0" fontSize={11} fontWeight={500} fontFamily="inherit">{label}</text>
+                <text x={13} y={34} fill="#6a6a90" fontSize={9.5} fontFamily="monospace">
+                  {fmtVol(n.totalVol)}/mo · {n.kwCount} kw
+                </text>
+                <circle cx={NODE_W - 13} cy={14} r={4} fill={col} />
+              </g>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ─── Prompt strip · legend · completeness · detail (v7.152) ─────────────────────
+
+function PromptStrip({ prompts, accent }: { prompts: string[]; accent: string }) {
+  const shown = prompts.slice(0, 10);
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+      {shown.map((p: string, i: number) => (
+        <span key={i} style={{
+          fontSize: 10.5, padding: '4px 9px', borderRadius: 6,
+          background: `${accent}0d`, border: `1px solid ${accent}30`,
+          color: accent, fontFamily: 'monospace', lineHeight: 1.4,
+        }}>
+          &ldquo;{p}&rdquo;
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function Legend() {
+  const item = (c: string, l: string) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8080a0' }}>
+      <span style={{ width: 11, height: 11, borderRadius: 3, background: c }} />{l}
+    </span>
+  );
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
+      {item(STATE_COLOR.existing, 'Existing content')}
+      {item(STATE_COLOR.missing, 'Missing')}
+      {item(STATE_COLOR.competitor, 'Competitor only')}
+      <span style={{ marginLeft: 'auto', fontSize: 10, color: '#4A4A6A' }}>
+        Hover to enlarge · click for detail · topic links are AI-inferred
+      </span>
+    </div>
+  );
+}
+
+function CompletenessRow({ nodes }: { nodes: JourneyNode[] }) {
+  const ex  = nodes.filter((n: JourneyNode) => n.state === 'existing').length;
+  const mi  = nodes.filter((n: JourneyNode) => n.state === 'missing').length;
+  const co  = nodes.filter((n: JourneyNode) => n.state === 'competitor').length;
+  const tot = nodes.length;
+  const pct = tot ? Math.round((ex / tot) * 100) : 0;
+  const cell = (label: string, val: number | string, color: string) => (
+    <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 10.5, color: '#6a6a90' }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color, marginTop: 2 }}>{val}</div>
+    </div>
+  );
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
+      {cell('Topics in journey', tot, '#C8C8E8')}
+      {cell('Existing', ex, STATE_COLOR.existing)}
+      {cell('Missing', mi, STATE_COLOR.missing)}
+      {cell('Competitor only', co, STATE_COLOR.competitor)}
+      <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '10px 12px' }}>
+        <div style={{ fontSize: 10.5, color: '#6a6a90' }}>Completeness</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: '#C8C8E8', marginTop: 2 }}>{pct}%</div>
+        <div style={{ height: 4, background: '#1A1A30', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${pct}%`, background: STATE_COLOR.existing }} />
         </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-        <div style={{ flex: 1, height: 3, borderRadius: 2, background: '#1A1A30', overflow: 'hidden' }}>
-          <div style={{ height: '100%', width: `${clientPct}%`, background: colors.border, borderRadius: 2 }} />
-        </div>
-        <span style={{ fontSize: 10, color: '#6060A0', minWidth: 28, textAlign: 'right' }}>{clientPct}%</span>
-      </div>
-      <div style={{ fontSize: 10, color: '#505070' }}>
-        {fmtVol(displayVol)}/mo · {kwCount} kw{kwCount !== 1 ? 's' : ''}
       </div>
     </div>
   );
 }
 
-// ─── Pre-product lane ─────────────────────────────────────────────────────────
-
-function PreProductLane({ prompts, clusters }: { prompts: string[]; clusters: ThemeCluster[] }) {
-  const ppClusters = clusters.filter((c: ThemeCluster) => c.journeyType === 'pre-product');
-
+function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () => void }) {
+  if (!node) {
+    return (
+      <div style={{
+        marginTop: 14, border: '1px solid #1A1A30', borderRadius: 12, background: '#0D0D1E',
+        padding: 16, fontSize: 12, color: '#5A5A80', textAlign: 'center',
+      }}>
+        Select a topic node to see its cluster detail.
+      </div>
+    );
+  }
+  const col = STATE_COLOR[node.state];
+  const clientPct = node.totalVol ? Math.round((node.clientVol / node.totalVol) * 100) : 0;
+  const rec = node.state === 'existing'
+    ? 'You already have content here — keep it linked into the journey paths above.'
+    : node.state === 'competitor'
+      ? 'A competitor ranks here and you do not — build comparable depth to capture this step.'
+      : 'No coverage from you or tracked competitors — a net-new content opportunity.';
   return (
-    <div style={{
-      background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)',
-      borderRadius: 12, padding: '20px 24px', marginBottom: 20,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <i className="ti ti-bulb" style={{ color: '#22d3ee', fontSize: 15 }} />
-        </div>
+    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: '#0D0D1E', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>Pre-Product Journey</span>
-            <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,211,238,0.1)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.2)', textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>
-              Awareness Only
-            </span>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#DCDCF4' }}>{node.name}</div>
+          <div style={{ fontSize: 11, color: '#6a6a90', marginTop: 3, fontFamily: 'monospace' }}>
+            {fmtVol(node.totalVol)} searches/mo · {node.kwCount} keywords · {JOURNEY_STAGE_LABELS[node.stage]} · {node.lane === 'pre-product' ? 'Pre-product' : 'Product'}
           </div>
-          <p style={{ fontSize: 11, color: '#4A7A80', marginTop: 2 }}>
-            These searchers don&apos;t know your product exists &mdash; they&apos;re solving a life problem
-          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 6, padding: '4px 9px', whiteSpace: 'nowrap' }}>
+            {STATE_LABEL[node.state]}
+          </span>
+          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: '#5A5A80', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>
+            <i className="ti ti-x" />
+          </button>
         </div>
       </div>
 
-      {prompts.length > 0 && (
-        <div style={{ marginBottom: ppClusters.length > 0 ? 18 : 0 }}>
-          <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: '#3A6A70', marginBottom: 8 }}>
-            How They Search Before Knowing You Exist
-          </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {prompts.map((p: string, i: number) => (
-              <span key={i} style={{
-                display: 'inline-flex', alignItems: 'flex-start', gap: 4,
-                fontSize: 11, padding: '5px 10px', borderRadius: 6,
-                background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.18)',
-                color: '#7AD8E0', fontFamily: 'monospace', lineHeight: 1.4,
-              }}>
-                <span style={{ opacity: 0.45, flexShrink: 0 }}>&ldquo;</span>
-                {p}
-                <span style={{ opacity: 0.45, flexShrink: 0 }}>&rdquo;</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+        <div style={{ flex: 1, height: 5, borderRadius: 3, background: '#1A1A30', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${clientPct}%`, background: col }} />
+        </div>
+        <span style={{ fontSize: 11, color: '#8080a0', minWidth: 96, textAlign: 'right' }}>{clientPct}% client coverage</span>
+      </div>
+
+      {node.sampleKws.length > 0 && (
+        <>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {node.sampleKws.map((k: string, i: number) => (
+              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: '#9a9ac0', background: 'rgba(120,120,160,0.08)', border: '1px solid #1f1f3a', borderRadius: 5, padding: '3px 7px' }}>
+                &ldquo;{k}&rdquo;
               </span>
             ))}
           </div>
-        </div>
+        </>
       )}
 
-      {ppClusters.length > 0 && (
-        <div>
-          <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: '#3A6A70', marginBottom: 8 }}>
-            Keyword Clusters &middot; Client vs Competitor Coverage
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-            {ppClusters.map((c: ThemeCluster) => (
-              <ClusterPill key={c.id} cluster={c} stage="awareness" />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!prompts.length && !ppClusters.length && (
-        <p style={{ fontSize: 12, color: '#3A5A60', fontStyle: 'italic' }}>
-          No pre-product data yet &mdash; run a full analysis to populate this lane.
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ─── Product journey lane ─────────────────────────────────────────────────────
-
-function ProductJourneyLane({ prompts, clusters }: { prompts: string[]; clusters: ThemeCluster[] }) {
-  const productClusters = clusters.filter((c: ThemeCluster) => c.journeyType === 'product');
-
-  const promptsByStage: Record<JourneyStage, string[]> = { awareness: [], consideration: [], decision: [], retention: [] };
-  for (const p of prompts) promptsByStage[inferStageFromPrompt(p)].push(p);
-
-  const clustersByStage: Record<JourneyStage, ThemeCluster[]> = { awareness: [], consideration: [], decision: [], retention: [] };
-  for (const cluster of productClusters) {
-    const volByStage: Record<JourneyStage, number> = { awareness: 0, consideration: 0, decision: 0, retention: 0 };
-    for (const sc of cluster.subClusters) {
-      volByStage[sc.stage] = (volByStage[sc.stage] ?? 0) + sc.totalVolume;
-    }
-    const best = (Object.entries(volByStage) as [JourneyStage, number][]).sort((a, b) => b[1] - a[1])[0];
-    const dominantStage: JourneyStage = best ? best[0] : 'awareness';
-    clustersByStage[dominantStage].push(cluster);
-  }
-
-  return (
-    <div style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #1A1A30' }}>
-      <div style={{ background: '#0A0A18', padding: '14px 20px', borderBottom: '1px solid #1A1A30', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 7, background: 'rgba(167,139,250,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <i className="ti ti-route" style={{ color: '#a78bfa', fontSize: 14 }} />
-        </div>
-        <div>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>Product Journey</span>
-          <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
-            Full funnel &mdash; searchers who are aware of the category and evaluating options
-          </p>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        {JOURNEY_STAGE_ORDER.map((stage: JourneyStage, idx: number) => {
-          const colors = STAGE_COLORS[stage];
-          const stagePrompts  = promptsByStage[stage];
-          const stageClusters = clustersByStage[stage];
-          const isLast = idx === 3;
-
-          return (
-            <div key={stage} style={{ borderRight: isLast ? 'none' : '1px solid #1A1A30', background: '#0D0D1E', minHeight: 180 }}>
-              <div style={{ padding: '11px 13px', borderBottom: '1px solid #1A1A30', borderTop: `3px solid ${colors.border}`, background: colors.bg }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: colors.text, textTransform: 'uppercase' as const, letterSpacing: '0.07em' }}>
-                  {JOURNEY_STAGE_LABELS[stage]}
-                </span>
-              </div>
-              <div style={{ padding: '13px 11px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {stagePrompts.length > 0 && (
-                  <div>
-                    <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: '#3A3A5A', marginBottom: 5 }}>
-                      Search Queries
-                    </p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {stagePrompts.map((p: string, i: number) => (
-                        <span key={i} style={{
-                          fontSize: 10, padding: '4px 8px', borderRadius: 5,
-                          background: colors.bg, border: `1px solid ${colors.border}28`,
-                          color: colors.text, fontFamily: 'monospace', lineHeight: 1.4, display: 'block',
-                        }}>
-                          &ldquo;{p}&rdquo;
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {stageClusters.length > 0 && (
-                  <div>
-                    <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: '#3A3A5A', marginBottom: 5 }}>
-                      Keyword Clusters
-                    </p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                      {stageClusters.map((c: ThemeCluster) => <ClusterPill key={c.id} cluster={c} stage={stage} />)}
-                    </div>
-                  </div>
-                )}
-                {!stagePrompts.length && !stageClusters.length && (
-                  <p style={{ fontSize: 10, color: '#2A2A40', fontStyle: 'italic' }}>No data mapped here</p>
-                )}
-              </div>
-            </div>
-          );
-        })}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'rgba(120,120,160,0.05)', border: '1px solid #1f1f3a', borderRadius: 8, padding: '9px 11px' }}>
+        <i className="ti ti-bulb" style={{ color: col, fontSize: 15 }} />
+        <span style={{ fontSize: 11.5, color: '#9090b8' }}>{rec}</span>
       </div>
     </div>
   );
@@ -545,11 +656,14 @@ function ProductJourneyLane({ prompts, clusters }: { prompts: string[]; clusters
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
-  const [claudeAssignments,  setClaudeAssignments]  = useState<Record<string, IntentType>>({});
-  const [uploadedKeywords,   setUploadedKeywords]   = useState<any[]>([]);
+  const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
+  const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
+  const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
+  const [selected, setSelected] = useState<JourneyNode | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
+  const industry     = (analysis as any)?._industry ?? 'General';
   const segments: AudienceSegment[] = useMemo(
     () => (analysis?.semrushSnapshot as any)?._audienceSegments ?? [],
     [analysis],
@@ -581,6 +695,44 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords],
   );
 
+  const allNodes  = useMemo(() => clusters.map(clusterToNode), [clusters]);
+  const preNodes  = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'pre-product'), [allNodes]);
+  const prodNodes = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'product'), [allNodes]);
+
+  // v7.152: AI-inferred topic relationships (cached client-side, like cluster intents).
+  // Fault-tolerant: on failure or no key, the stage-order fallback below is used.
+  useEffect(() => {
+    if (!analysis?.id || allNodes.length === 0) return;
+    const cacheKey = `orbitiq-journey-edges-${analysis.id}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { version?: number; edges?: { preProduct: [string, string][]; product: [string, string][] } };
+        if (parsed.version === 1 && parsed.edges) { setEdges(parsed.edges); return; }
+      }
+    } catch {}
+    const payload = {
+      clusters: allNodes.map((n: JourneyNode) => ({ name: n.name, stage: n.stage, lane: n.lane })),
+      industry, domain: clientDomain,
+    };
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/journey-edges`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    })
+      .then((r: Response) => r.ok ? r.json() : null)
+      .then((d: any) => {
+        if (cancelled || !d?.edges) return;
+        setEdges(d.edges);
+        try { localStorage.setItem(cacheKey, JSON.stringify({ version: 1, edges: d.edges })); } catch {}
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysis?.id, projectId, industry, clientDomain, allNodes]);
+
+  const preEdges  = edges.preProduct.length ? edges.preProduct : stageOrderEdges(preNodes);
+  const prodEdges = edges.product.length    ? edges.product    : stageOrderEdges(prodNodes);
+
   const tabs = useMemo(() => [
     { id: 'combined', label: 'All Segments' },
     ...segments.map((s: AudienceSegment) => ({ id: s.id, label: s.name })),
@@ -593,7 +745,6 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const preLLMPrompts = activeSegment
     ? (activeSegment.preLLMPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.preLLMPrompts ?? []);
-
   const productPrompts = activeSegment
     ? (activeSegment.productPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.productPrompts ?? []);
@@ -614,43 +765,48 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* Header */}
-      <div style={{ marginBottom: 22 }}>
+      <div style={{ marginBottom: 18 }}>
         <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>
           Foundation · 04
         </p>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Audience Journeys</h2>
         <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
-          How each segment moves from life-problem search to product decision &mdash; mapped against keyword clusters and content gaps.
+          How each segment moves from life-problem search to product decision &mdash; a topic-cluster mind map color-coded by content coverage.
         </p>
       </div>
 
-      {/* Segment tabs */}
+      {/* Segment tabs — persona portraits carried over from Audience Segments */}
       {tabs.length > 1 && (
-        <div style={{ display: 'flex', gap: 2, marginBottom: 22, borderBottom: '1px solid #1A1A30', paddingBottom: 0 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
           {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
             const isActive = activeTab === tab.id;
             const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
             const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
-            const activeColor = tAccent ? tAccent.text : '#8080A0';
+            const ac = tAccent ? tAccent.text : '#8080A0';
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                 style={{
-                  padding: '9px 15px', fontSize: 12, fontWeight: isActive ? 700 : 500,
-                  color: isActive ? activeColor : '#4A4A6A',
-                  background: 'transparent', border: 'none',
-                  borderBottom: isActive ? `2px solid ${activeColor}` : '2px solid transparent',
-                  cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap', marginBottom: -1,
-                }}
-              >
+                  display: 'inline-flex', alignItems: 'center', gap: 8,
+                  padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
+                  fontSize: 12, fontWeight: isActive ? 700 : 500,
+                  color: isActive ? ac : '#6A6A90',
+                  background: isActive ? `${ac}14` : 'transparent',
+                  border: `1px solid ${isActive ? ac + '55' : '#1A1A30'}`,
+                  borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
+                }}>
+                {tSeg && (
+                  tSeg.personaImageUrl ? (
+                    <img src={tSeg.personaImageUrl} alt={`Portrait representing ${tSeg.name}`} loading="lazy"
+                      style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${ac}` }} />
+                  ) : (
+                    <span style={{ width: 24, height: 24, borderRadius: '50%', border: `1.5px solid ${ac}`, color: ac, background: `${ac}10`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 600 }}>
+                      {initialsOf(tSeg.name)}
+                    </span>
+                  )
+                )}
                 {tab.label}
                 {tSeg && (
-                  <span style={{
-                    marginLeft: 5, fontSize: 9, padding: '1px 5px', borderRadius: 3,
-                    background: isActive ? tAccent!.bg : 'rgba(50,50,60,0.3)',
-                    color: isActive ? tAccent!.text : '#4A4A6A', fontWeight: 600,
-                  }}>
+                  <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'rgba(50,50,70,0.4)', color: isActive ? ac : '#4A4A6A', fontWeight: 600 }}>
                     {tSeg.volumePct}%
                   </span>
                 )}
@@ -660,20 +816,17 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         </div>
       )}
 
-      {/* Segment tagline */}
+      {/* Segment tagline + portrait */}
       {activeSegment && segAccent && (
-        <div style={{
-          background: 'rgba(60,60,80,0.06)', border: '1px solid #1A1A30',
-          borderRadius: 10, padding: '13px 16px', marginBottom: 20,
-          display: 'flex', alignItems: 'flex-start', gap: 12,
-        }}>
-          <div style={{
-            width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-            background: segAccent.bg, border: `1px solid ${segAccent.border}25`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <i className="ti ti-user" style={{ color: segAccent.text, fontSize: 15 }} />
-          </div>
+        <div style={{ background: 'rgba(60,60,80,0.06)', border: '1px solid #1A1A30', borderRadius: 10, padding: '13px 16px', marginBottom: 18, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          {activeSegment.personaImageUrl ? (
+            <img src={activeSegment.personaImageUrl} alt={`Portrait representing ${activeSegment.name}`} loading="lazy"
+              style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${segAccent.border}`, flexShrink: 0 }} />
+          ) : (
+            <div style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0, background: segAccent.bg, border: `1px solid ${segAccent.border}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: segAccent.text, fontSize: 13, fontWeight: 600 }}>
+              {initialsOf(activeSegment.name)}
+            </div>
+          )}
           <div>
             <p style={{ fontSize: 11, color: '#6A6A88', marginBottom: 4 }}>{activeSegment.whoTheyAre.trigger}</p>
             <p style={{ fontSize: 12, color: '#9090B0', fontStyle: 'italic' }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
@@ -681,9 +834,51 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         </div>
       )}
 
-      {/* Lanes */}
-      <PreProductLane prompts={preLLMPrompts} clusters={clusters} />
-      <ProductJourneyLane prompts={productPrompts} clusters={clusters} />
+      <Legend />
+
+      {/* Pre-product lane */}
+      <div style={{ background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <i className="ti ti-bulb" style={{ color: '#22d3ee', fontSize: 14 }} />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>Pre-Product Journey</span>
+              <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,211,238,0.1)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                Problem-aware
+              </span>
+            </div>
+            <p style={{ fontSize: 11, color: '#4A7A80', marginTop: 2 }}>
+              They have a life problem but don&apos;t know your product exists yet.
+            </p>
+          </div>
+        </div>
+        {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
+        <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+        <CompletenessRow nodes={preNodes} />
+      </div>
+
+      {/* Product lane */}
+      <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(167,139,250,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <i className="ti ti-route" style={{ color: '#a78bfa', fontSize: 14 }} />
+          </div>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>Product Journey</span>
+            <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
+              Full funnel &mdash; searchers aware of the category and evaluating options.
+            </p>
+          </div>
+        </div>
+        {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
+        <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+        <CompletenessRow nodes={prodNodes} />
+      </div>
+
+      {/* Shared cluster detail */}
+      <DetailPanel node={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }
