@@ -6,6 +6,12 @@
  * store it in Vercel Blob. The resulting public URL is attached to the segment
  * as `personaImageUrl`; the UI renders it as the Option-A circular portrait.
  *
+ * v7.150: the run now also returns a short DIAGNOSTIC `status` string so the
+ * panel can show exactly why portraits are (or aren't) present — e.g.
+ * "skipped: OPENAI_API_KEY not set", "openai HTTP 403 (org likely not verified
+ * for gpt-image-1)", "blob error: ...", or "3/3 generated". This makes the
+ * common failure modes visible instead of silently falling back to initials.
+ *
  * IMPORTANT — this is an ILLUSTRATIVE representation, not a real customer.
  * The image is derived only from the segment's own `whoTheyAre.demographics`
  * and `creativeDirection` text. The panel labels every portrait
@@ -31,12 +37,23 @@ interface GenerateOpts {
   idPrefix: string;
 }
 
+export interface PersonaImageResult {
+  segments: any[];
+  /** Human-readable diagnostic shown on the panel + in logs. */
+  status: string;
+}
+
+/** Returns the list of missing prerequisites (empty list = enabled). */
+function missingPrereqs(): string[] {
+  const missing: string[] = [];
+  if (!process.env.OPENAI_API_KEY) missing.push('OPENAI_API_KEY');
+  if (!process.env.BLOB_READ_WRITE_TOKEN && !process.env.VERCEL) missing.push('BLOB_READ_WRITE_TOKEN');
+  return missing;
+}
+
 /** True only when both an image provider key and a Blob write token exist. */
 export function personaImagesEnabled(): boolean {
-  return Boolean(
-    process.env.OPENAI_API_KEY &&
-    (process.env.BLOB_READ_WRITE_TOKEN || process.env.VERCEL),
-  );
+  return missingPrereqs().length === 0;
 }
 
 /**
@@ -62,12 +79,14 @@ function buildPrompt(segment: any, opts: GenerateOpts): string {
   ].filter(Boolean).join(' ');
 }
 
-/** Generate + store one portrait. Returns the Blob URL, or null on any failure. */
+interface OneResult { url: string | null; error: string | null }
+
+/** Generate + store one portrait. Returns { url } or { error } (never throws). */
 async function generateOne(
   segment: any,
   index: number,
   opts: GenerateOpts,
-): Promise<string | null> {
+): Promise<OneResult> {
   try {
     const res = await fetch(OPENAI_IMAGE_URL, {
       method: 'POST',
@@ -84,64 +103,87 @@ async function generateOne(
     });
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      console.error(`[OrbitIQ] persona image ${index} failed: HTTP ${res.status} ${detail.slice(0, 200)}`);
-      return null;
+      const detail = (await res.text().catch(() => '')).slice(0, 300);
+      // gpt-image-1 returns 403 when the OpenAI org is not verified for the model.
+      const hint = res.status === 403 ? ' (org likely not verified for gpt-image-1)'
+                 : res.status === 401 ? ' (bad/blocked OPENAI_API_KEY)'
+                 : '';
+      const error = `openai HTTP ${res.status}${hint}: ${detail}`;
+      console.error(`[OrbitIQ] persona image ${index} failed: ${error}`);
+      return { url: null, error };
     }
 
     const json: any = await res.json();
     const b64: string | undefined = json?.data?.[0]?.b64_json;
     if (!b64) {
-      console.error(`[OrbitIQ] persona image ${index}: no image data returned`);
-      return null;
+      const error = 'openai returned no image data';
+      console.error(`[OrbitIQ] persona image ${index}: ${error}`);
+      return { url: null, error };
     }
 
     const buffer = Buffer.from(b64, 'base64');
     const filename = `personas/${opts.idPrefix}-seg${index}-${Date.now()}.png`;
-    const { url } = await put(filename, buffer, {
-      access: 'public',
-      contentType: 'image/png',
-    });
-    console.log(`[OrbitIQ] persona image ${index} stored: ${url}`);
-    return url;
+    try {
+      const { url } = await put(filename, buffer, {
+        access: 'public',
+        contentType: 'image/png',
+      });
+      console.log(`[OrbitIQ] persona image ${index} stored: ${url}`);
+      return { url, error: null };
+    } catch (blobErr) {
+      const error = `blob error: ${(blobErr as any)?.message ?? blobErr}`;
+      console.error(`[OrbitIQ] persona image ${index} ${error}`);
+      return { url: null, error };
+    }
   } catch (err) {
-    console.error(`[OrbitIQ] persona image ${index} error (non-fatal):`, (err as any)?.message ?? err);
-    return null;
+    const error = `network error: ${(err as any)?.message ?? err}`;
+    console.error(`[OrbitIQ] persona image ${index} ${error} (non-fatal)`);
+    return { url: null, error };
   }
 }
 
 /**
- * Attach `personaImageUrl` to each segment. Never throws — on any problem the
- * affected segment is returned unchanged. Generation runs in parallel across
- * segments (typically 3-4) to stay inside the synthesis time budget.
+ * Attach `personaImageUrl` to each segment and report a diagnostic `status`.
+ * Never throws — on any problem the affected segment is returned unchanged.
+ * Generation runs in parallel across segments (typically 3-4) to stay inside
+ * the synthesis time budget.
  */
 export async function generatePersonaImages(
   segments: any[],
   opts: GenerateOpts,
-): Promise<any[]> {
-  if (!Array.isArray(segments) || segments.length === 0) return segments;
+): Promise<PersonaImageResult> {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return { segments, status: 'no segments' };
+  }
 
-  if (!personaImagesEnabled()) {
-    console.log('[OrbitIQ] persona images skipped — OPENAI_API_KEY and/or Blob token not configured.');
-    return segments;
+  const missing = missingPrereqs();
+  if (missing.length > 0) {
+    const status = `skipped: ${missing.join(' + ')} not set`;
+    console.log(`[OrbitIQ] persona images ${status}`);
+    return { segments, status };
   }
 
   try {
-    const results = await Promise.all(
+    let firstError: string | null = null;
+    const out = await Promise.all(
       segments.map(async (seg, i) => {
         // Skip if a prior (resumed) run already produced an image.
         if (seg && typeof seg.personaImageUrl === 'string' && seg.personaImageUrl) {
           return seg;
         }
-        const url = await generateOne(seg, i, opts);
+        const { url, error } = await generateOne(seg, i, opts);
+        if (!url && error && !firstError) firstError = error;
         return url ? { ...seg, personaImageUrl: url } : seg;
       }),
     );
-    const made = results.filter((s: any) => s?.personaImageUrl).length;
-    console.log(`[OrbitIQ] persona images: ${made}/${segments.length} generated.`);
-    return results;
+    const made = out.filter((s: any) => s?.personaImageUrl).length;
+    let status = `${made}/${segments.length} generated`;
+    if (made < segments.length && firstError) status += ` · first error: ${firstError}`;
+    console.log(`[OrbitIQ] persona images: ${status}`);
+    return { segments: out, status };
   } catch (err) {
-    console.error('[OrbitIQ] generatePersonaImages failed (non-fatal):', (err as any)?.message ?? err);
-    return segments;
+    const status = `failed: ${(err as any)?.message ?? err}`;
+    console.error(`[OrbitIQ] generatePersonaImages ${status} (non-fatal)`);
+    return { segments, status };
   }
 }

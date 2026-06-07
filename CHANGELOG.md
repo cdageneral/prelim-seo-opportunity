@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.150 — 2026-06-07 · Audience Segments: persona-image diagnostic status (why portraits are/aren't generating)
+
+**What Wayne asked for:** after deploying v7.149, the persona portraits still showed the initials fallback. Vercel's log view collapses to one line per request, so the exact reason wasn't visible. This version makes the image step report *why* it produced no portraits, surfaced both in logs and on the panel.
+
+**Utility (`lib/apis/personaImage.ts`):** `generatePersonaImages` now returns `{ segments, status }` (new `PersonaImageResult`) instead of just the segments. `status` is a short human-readable diagnostic: `"skipped: OPENAI_API_KEY not set"` (lists every missing prerequisite via a new `missingPrereqs()`), or after a real attempt `"N/M generated"` — and when N < M it appends `· first error: …`. `generateOne` now returns `{ url, error }` and classifies failures: OpenAI **HTTP 403 → "(org likely not verified for gpt-image-1)"**, 401 → "(bad/blocked OPENAI_API_KEY)", non-OK bodies, "openai returned no image data", and Blob `put()` failures as `"blob error: …"`. All still fully non-fatal — the analysis always completes and segments without a portrait keep the initials fallback.
+
+**Pipeline (`app/api/synthesize/route.ts`):** stores the diagnostic into `semrushSnapshot._audienceSegmentsImageStatus` alongside `_audienceSegments` (additive JSONB field, no schema change). The `.catch` fallback now also yields a `failed: …` status instead of swallowing the reason.
+
+**UI (`components/brief/AudienceSegmentsSection.tsx`, display only):** reads `_audienceSegmentsImageStatus` and shows a small amber line under the panel subtitle — `"Persona images — {status}"` — but **only when a status exists and at least one segment still has no portrait**, so it disappears once images work. The portraits, AI badge, and initials fallback from v7.149 are unchanged.
+
+**How to use it:** redeploy this build, run one fresh analysis, then open Audience Segments. The amber line will read exactly why — e.g. `skipped: OPENAI_API_KEY not set` (key not in the deployed env → confirm Production scope + redeploy), `openai HTTP 403 (org likely not verified for gpt-image-1)` (verify your OpenAI org), or `blob error: …` (Blob store not provisioned). When it works it reads `3/3 generated` and the line vanishes.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. jsdom/SSR harness on the **real** `AudienceSegmentsSection` → the amber diagnostic line renders with the status text when `_audienceSegmentsImageStatus` is set and a segment lacks a portrait, and is **absent** when all segments have portraits; v7.149 portrait/badge/fallback checks still green. Rendered in chat before delivery.
+
 ## v7.149 — 2026-06-07 · Audience Segments: AI-generated persona portrait per segment
 
 **What Wayne asked for:** add a persona image to each audience-segment card — a photoreal portrait representative of that segment, with a different image generated per segment. Direction approved from an in-chat render first: Option A (circular portrait on the left), photoreal style with an "AI-generated" label, generated during the analysis run and stored in Vercel Blob, via OpenAI gpt-image-1.

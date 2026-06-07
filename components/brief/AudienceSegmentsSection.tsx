@@ -359,6 +359,13 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
 
   const segmentLabels = ['Segment A', 'Segment B', 'Segment C', 'Segment D'];
 
+  // v7.150: portrait-generation diagnostic. Shown only when something is off
+  // (a status exists and at least one segment has no portrait) so it stays out
+  // of the way once images are working.
+  const imageStatus: string | undefined = analysis?.semrushSnapshot?._audienceSegmentsImageStatus;
+  const imagedCount = segments.filter(s => !!s.personaImageUrl).length;
+  const showImageDiag = !!imageStatus && imagedCount < segments.length;
+
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
@@ -370,6 +377,12 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
           <p className="text-orbit-secondary text-[11px] mt-0.5">
             Segment deep-dives — journey, prompts, experience planning
           </p>
+          {showImageDiag && (
+            <p className="text-amber-400/80 text-[10px] mt-1 flex items-center gap-1.5" title="Persona-portrait generation status from the last analysis run">
+              <i className="ti ti-photo-exclamation text-[11px]" />
+              <span>Persona images — {imageStatus}</span>
+            </p>
+          )}
         </div>
         {segments.length > 0 && (
           <div className="text-right">
