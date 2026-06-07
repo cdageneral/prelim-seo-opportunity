@@ -466,12 +466,43 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
 // ─── Clusters Tab ─────────────────────────────────────────────────────────────
 
-type ClusterFilter = 'all' | 'leading' | 'trailing' | 'opportunity';
+type ClusterFilter =
+  | 'all' | 'leading' | 'trailing' | 'opportunity'
+  | JourneyStage;  // v7.145: filter the grid by dominant funnel stage
 
 interface ClusterStat {
   cluster:     ThemeCluster;
   isLeading:   boolean;
   compGapPct:  number; // fraction of cluster total vol owned by gap keywords
+  stage:       JourneyStage; // v7.145: cluster's dominant funnel stage (most keywords)
+  isClientFootprint: boolean; // v7.145: client ranks for ≥ half the cluster's keywords
+}
+
+// ─── Funnel-stage display metadata (v7.145) ───────────────────────────────────
+const STAGE_META: Record<JourneyStage, { label: string; icon: string }> = {
+  awareness:     { label: 'Awareness',     icon: 'ti-eye'    },
+  consideration: { label: 'Consideration', icon: 'ti-scale'  },
+  decision:      { label: 'Decision',      icon: 'ti-target' },
+  retention:     { label: 'Retention',     icon: 'ti-refresh' },
+};
+
+/**
+ * v7.145: assign a cluster to exactly ONE funnel stage = the stage holding the
+ * most of its keywords (keywords → intent → INTENT_META.stage). Ties resolve to
+ * the earliest stage in JOURNEY_ORDER for determinism. Each cluster is counted
+ * once, so the four stage buckets sum to the total cluster count.
+ */
+function dominantStage(c: ThemeCluster): JourneyStage {
+  const counts: Record<JourneyStage, number> = {
+    awareness: 0, consideration: 0, decision: 0, retention: 0,
+  };
+  for (const sc of c.subClusters) counts[sc.stage] += sc.keywords.length;
+  let best: JourneyStage = 'awareness';
+  let bestN = -1;
+  for (const st of JOURNEY_ORDER) {       // earliest stage wins on a tie
+    if (counts[st] > bestN) { bestN = counts[st]; best = st; }
+  }
+  return best;
 }
 
 function ClustersTab({
@@ -501,7 +532,19 @@ function ClustersTab({
     const gapVol   = c.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
     const compGapPct = c.totalVolume > 0 ? gapVol / c.totalVolume : 0;
 
-    return { cluster: c, isLeading: rankedVol >= topComp, compGapPct };
+    // v7.145: dominant funnel stage + client-footprint vs competitor-gap ownership.
+    // Ownership is decided by majority keyword count (each keyword is cleanly
+    // client-ranked [!isGap] or a competitor gap [isGap]); a tie counts as client.
+    const clientKwCount = c.keywords.filter(k => !k.isGap).length;
+    const gapKwCount    = c.keywords.length - clientKwCount;
+
+    return {
+      cluster: c,
+      isLeading: rankedVol >= topComp,
+      compGapPct,
+      stage: dominantStage(c),
+      isClientFootprint: clientKwCount >= gapKwCount,
+    };
   });
 
   const leadingStats  = clusterStats.filter(s =>  s.isLeading);
@@ -509,6 +552,23 @@ function ClustersTab({
   // Opportunity = competitor gap vol < 25% of cluster total AND client not already leading
   // (fully-won clusters score compGapPct=0 which would falsely pass < 0.25)
   const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25 && !s.isLeading);
+
+  // ── Funnel-stage roll-up (v7.145) ──────────────────────────────────────────
+  // Each cluster sits in exactly one stage (its dominant intent), split into
+  // client-footprint vs competitor-gap clusters. Annual vol = cluster monthly × 12.
+  const stageRollups = JOURNEY_ORDER.map(stage => {
+    const inStage = clusterStats.filter(s => s.stage === stage);
+    return {
+      stage,
+      total:          inStage.length,
+      clientClusters: inStage.filter(s =>  s.isClientFootprint).length,
+      gapClusters:    inStage.filter(s => !s.isClientFootprint).length,
+      annualVol:      inStage.reduce((sum, s) => sum + s.cluster.totalVolume, 0) * 12,
+    };
+  });
+  const STAGE_KEYS = JOURNEY_ORDER as JourneyStage[];
+  const isStageFilter = (f: ClusterFilter): f is JourneyStage =>
+    (STAGE_KEYS as string[]).includes(f);
 
   // Annualise monthly volume × 12
   const ann = (stats: ClusterStat[]) =>
@@ -528,6 +588,7 @@ function ClustersTab({
     filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
     filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
     filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
+    isStageFilter(filter)    ? clusterStats.filter(s => s.stage === filter).map(s => s.cluster) :
     clusters;
 
   // ── Summary card definitions ───────────────────────────────────────────────
@@ -719,6 +780,102 @@ function ClustersTab({
                     {fmtVol(card.vol)}
                     <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Funnel-stage cards (v7.145) ──────────────────────────────────── */}
+      {/* Each cluster assigned to ONE stage (its dominant intent) and counted  */}
+      {/* once; split into client footprint vs competitor gap. Click → filter.  */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: '#585878' }}>
+            Clusters by funnel stage
+          </span>
+          <span style={{ fontSize: 9, color: '#3A3A5A' }}>
+            Each cluster counted once · stage = its dominant intent ·&nbsp;
+            <span style={{ color: '#4ADE80' }}>client footprint</span> = client ranks for most of its keywords,&nbsp;
+            <span style={{ color: '#F59E0B' }}>competitor gap</span> = competitors own most · click to filter
+          </span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+          {stageRollups.map(r => {
+            const meta      = STAGE_META[r.stage];
+            const active    = filter === r.stage;
+            const clientPct = pct(r.clientClusters, r.total);
+            const gapPct    = pct(r.gapClusters, r.total);
+            return (
+              <button
+                key={r.stage}
+                onClick={() => setFilter(f => (f === r.stage ? 'all' : r.stage))}
+                style={{
+                  background:   active ? 'rgba(155,150,255,0.10)' : '#0F0F1E',
+                  border:       `1px solid ${active ? 'rgba(155,150,255,0.45)' : '#1E1E34'}`,
+                  borderRadius: 10,
+                  padding:      '12px 14px',
+                  cursor:       'pointer',
+                  textAlign:    'left',
+                  transition:   'all 0.15s',
+                  outline:      'none',
+                  boxShadow:    active ? '0 0 0 1px rgba(155,150,255,0.45)' : 'none',
+                  display:      'flex',
+                  flexDirection:'column',
+                }}
+                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(155,150,255,0.35)'; }}
+                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = '#1E1E34'; }}
+              >
+                {/* Stage label */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <i className={`ti ${meta.icon}`} style={{ fontSize: 13, color: '#8B85FF' }} aria-hidden="true" />
+                  <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', color: '#C8C8E8' }}>
+                    {meta.label}
+                  </span>
+                  {active && (
+                    <span style={{
+                      marginLeft: 'auto', fontSize: 8, fontWeight: 700,
+                      background: 'rgba(155,150,255,0.10)', border: '1px solid rgba(155,150,255,0.45)',
+                      color: '#9B96FF', borderRadius: 20, padding: '2px 7px',
+                    }}>
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+
+                {/* Big cluster count */}
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 8 }}>
+                  <span style={{
+                    fontSize: 30, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
+                    color: active ? '#9B96FF' : '#E8E8FF',
+                  }}>
+                    {r.total}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#8080A8' }}>clusters</span>
+                </div>
+
+                {/* Client / gap split bar */}
+                <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: '#1A1A30', marginBottom: 6 }}>
+                  {r.clientClusters > 0 && (
+                    <div style={{ width: `${clientPct}%`, background: '#4ADE80' }} title={`Client footprint: ${r.clientClusters}`} />
+                  )}
+                  {r.gapClusters > 0 && (
+                    <div style={{ width: `${gapPct}%`, background: '#F59E0B' }} title={`Competitor gap: ${r.gapClusters}`} />
+                  )}
+                </div>
+
+                {/* Split readout */}
+                <div style={{ fontSize: 10, color: '#6A6A90', marginBottom: 8 }}>
+                  <span style={{ color: '#4ADE80', fontWeight: 600 }}>{r.clientClusters}</span> client
+                  &nbsp;·&nbsp;
+                  <span style={{ color: '#F59E0B', fontWeight: 600 }}>{r.gapClusters}</span> gap
+                </div>
+
+                {/* Annual volume */}
+                <div style={{ marginTop: 'auto', fontSize: 12, fontWeight: 600, color: '#8B85FF' }}>
+                  {fmtVol(r.annualVol)}
+                  <span style={{ fontSize: 10, color: '#585878', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                 </div>
               </button>
             );

@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.145 — 2026-06-06 · Theme Clusters: new "Clusters by funnel stage" card row (client footprint vs competitor gap)
+
+**What Wayne asked for:** on the Theme Clusters panel, a row of summary cards below the main cards and above the cluster grid, showing how many clusters fall in each funnel stage, split by how many come from the **client footprint** vs the **competitor gap**. His framing: "keywords drive the intent which get grouped to a cluster, then that cluster is the output and identified per funnel stage — so 5 clusters in awareness, 10 in consideration, etc."
+
+**How the numbers are derived (defendable, no new data):** every metric reuses the existing keyword pool (`buildKwPool`, shared with Keyword Landscape and Executive Summary) and the panel's existing intent classification — nothing new is fetched or estimated.
+- **Stage assignment.** Keyword → intent (signal detection + Claude pass) → `INTENT_META.stage`: informational→Awareness, commercial→Consideration, transactional→Decision, navigational→Retention. Each cluster is assigned to exactly **one** stage — the stage holding the most of its keywords (ties resolve to the earliest stage in journey order). So the four stage buckets sum exactly to the total cluster count; no cluster is double-counted.
+- **Client footprint vs competitor gap.** Each keyword is cleanly either client-ranked (`!isGap`) or a competitor gap (`isGap`). A cluster is counted as **client footprint** when the client ranks for at least half of its keywords, otherwise **competitor gap**. The on-screen sub-line states this rule.
+- Annual volume per stage = the stage's clusters' monthly search volume × 12 (same annualisation the other cards use).
+
+**UI (`components/brief/ThemeClustersPanel.tsx`, display + derivation only — zero change to existing metrics):** a new "Clusters by funnel stage" row sits between the top cards and the divider. Four cards (Awareness, Consideration, Decision, Retention), each showing the stage's total cluster count, a green/amber split bar + readout (`N client · M gap`, using the same green=client / amber=gap legend as the panel header), and the stage's annual search volume. Each card is clickable and filters the cluster grid to that stage (click again to clear), consistent with the existing Leading/Trailing/Low-Competition cards. `ClusterStat` gained `stage` + `isClientFootprint`; `ClusterFilter` gained the four stage keys. No change to the Leading/Trailing/Low-Competition logic, the cluster grid, or any volume math.
+
+**Verification (machine):** isolated `tsc --noEmit` on the changed component + `kwVolume` → **exit 0**. jsdom harness mounting the **real** `ThemeClustersPanel` (esbuild bundle, mocked `/keywords` + `/clusters` fetch) with a controlled fixture (9 keywords → intents → 3 clusters) → **20/20**: Awareness 1 cluster (1 client · 0 gap), Consideration 1 (0 client · 1 gap), Decision 1 (1 client · 0 gap), Retention 0; stage buckets sum to the 3-cluster total; clicking the Awareness card filters the grid to "Showing 1 of 3 clusters" (Liposuction only). Panel still scrolls (`ClustersTab` root `overflowY:auto` unchanged).
+
 ## v7.144 — 2026-06-06 · FIX (recurring): Keywords panel wouldn't scroll after a large CSV reload — root made a plain block scroller
 
 **Symptom (Wayne):** reloaded the CSV files, and the Keywords panel stopped scrolling again.
