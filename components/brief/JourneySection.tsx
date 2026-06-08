@@ -1,6 +1,9 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef, useLayoutEffect } from 'react';
+
+// SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -977,6 +980,29 @@ function DemandProgress({ progress }: { progress: { done: number; total: number;
   );
 }
 
+// ─── Segment→persona connector (v7.159) ─────────────────────────────────────────
+// Pure geometry: a faint line from the ACTIVE pill's middle to a curly brace that
+// embraces the persona card's left edge. Coordinates are relative to the left-zone
+// container, measured from the live DOM so the line always lands on the pill center.
+interface ConnGeom { pillRightX: number; pillMidY: number; perLeft: number; perTop: number; perBottom: number; }
+export function buildConnector(g: ConnGeom): { line: string; brace: string; tipX: number; perMid: number } {
+  const perMid = (g.perTop + g.perBottom) / 2;
+  const spineX = g.perLeft - 4;     // brace spine just left of the persona card
+  const tipX   = g.perLeft - 15;    // brace tip — points left, toward the pill
+  const top    = g.perTop + 4;
+  const bot    = g.perBottom - 4;
+  const brace = [
+    `M ${spineX} ${top}`,
+    `Q ${spineX - 6} ${top} ${spineX - 6} ${(top + perMid) / 2}`,
+    `Q ${spineX - 6} ${perMid} ${tipX} ${perMid}`,
+    `Q ${spineX - 6} ${perMid} ${spineX - 6} ${(perMid + bot) / 2}`,
+    `Q ${spineX - 6} ${bot} ${spineX} ${bot}`,
+  ].join(' ');
+  const midX = (g.pillRightX + tipX) / 2;
+  const line = `M ${g.pillRightX} ${g.pillMidY} C ${midX} ${g.pillMidY} ${midX} ${perMid} ${tipX} ${perMid}`;
+  return { line, brace, tipX, perMid };
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
@@ -994,6 +1020,11 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [buildError, setBuildError] = useState<string | null>(null);
   // v7.156: live build progress for the determinate bar + ETA.
   const [progress, setProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
+  // v7.159: measured connector geometry (active pill middle → persona bracket).
+  const leftZoneRef   = useRef<HTMLDivElement | null>(null);
+  const activePillRef = useRef<HTMLButtonElement | null>(null);
+  const personaRef    = useRef<HTMLDivElement | null>(null);
+  const [conn, setConn] = useState<{ line: string; brace: string; w: number; h: number } | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const industry     = (analysis as any)?._industry ?? 'General';
@@ -1195,6 +1226,33 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const segIdx = activeSegment ? segments.indexOf(activeSegment) : -1;
   const segAccent = segIdx >= 0 ? SEGMENT_ACCENTS[segIdx % SEGMENT_ACCENTS.length] : null;
 
+  // v7.159: measure the active pill + persona card and draw the connector so the
+  // line always lands on the MIDDLE of the active pill. Recompute on tab change,
+  // segment data change, and container resize (responsive wrap).
+  useIsoLayoutEffect(() => {
+    if (!activeSegment) { setConn(null); return; }
+    const measure = () => {
+      const zone = leftZoneRef.current, pill = activePillRef.current, per = personaRef.current;
+      if (!zone || !pill || !per) { setConn(null); return; }
+      const c = zone.getBoundingClientRect();
+      const p = pill.getBoundingClientRect();
+      const r = per.getBoundingClientRect();
+      const paths = buildConnector({
+        pillRightX: p.right - c.left,
+        pillMidY:   p.top + p.height / 2 - c.top,
+        perLeft:    r.left - c.left,
+        perTop:     r.top - c.top,
+        perBottom:  r.bottom - c.top,
+      });
+      setConn({ line: paths.line, brace: paths.brace, w: c.width, h: c.height });
+    };
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro && leftZoneRef.current) ro.observe(leftZoneRef.current);
+    window.addEventListener('resize', measure);
+    return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', measure); };
+  }, [activeTab, activeSegment, segIdx, demandMode, segments]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   const preLLMPrompts = activeSegment
     ? (activeSegment.preLLMPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.preLLMPrompts ?? []);
@@ -1228,50 +1286,85 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         </p>
       </div>
 
-      {/* v7.158: segment tabs STACKED on the left · build-deep-journey control on the right */}
+      {/* v7.159: segment pills stacked left + persona card (bracket-connected) · build control right */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24, marginBottom: 18, flexWrap: 'wrap' }}>
 
-        {/* Left — segment tabs, stacked vertically */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', minWidth: 220 }}>
-          {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
-            const isActive = activeTab === tab.id;
-            const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
-            const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
-            const ac = tAccent ? tAccent.text : '#8080A0';
-            return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 8,
-                  padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
-                  fontSize: 12, fontWeight: isActive ? 700 : 500,
-                  color: isActive ? ac : '#6A6A90',
-                  background: isActive ? `${ac}14` : 'transparent',
-                  border: `1px solid ${isActive ? ac + '55' : '#1A1A30'}`,
-                  borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
-                }}>
-                {tSeg && (
-                  tSeg.personaImageUrl ? (
-                    <img src={tSeg.personaImageUrl} alt={`Portrait representing ${tSeg.name}`} loading="lazy"
-                      style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${ac}` }} />
-                  ) : (
-                    <span style={{ width: 24, height: 24, borderRadius: '50%', border: `1.5px solid ${ac}`, color: ac, background: `${ac}10`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 600 }}>
-                      {initialsOf(tSeg.name)}
+        {/* Left zone — pills + (when a segment is active) bracket connector + persona */}
+        <div ref={leftZoneRef} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 0, flex: '1 1 560px', minWidth: 320 }}>
+
+          {/* stacked pills */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', flex: '0 0 auto' }}>
+            {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
+              const isActive = activeTab === tab.id;
+              const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
+              const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
+              const ac = tAccent ? tAccent.text : '#8080A0';
+              return (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  ref={isActive ? activePillRef : undefined}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
+                    padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
+                    fontSize: 12, fontWeight: isActive ? 700 : 500,
+                    color: isActive ? ac : '#6A6A90',
+                    background: isActive ? `${ac}14` : 'transparent',
+                    border: `1px solid ${isActive ? ac + '55' : '#1A1A30'}`,
+                    borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
+                  }}>
+                  {tSeg && (
+                    tSeg.personaImageUrl ? (
+                      <img src={tSeg.personaImageUrl} alt={`Portrait representing ${tSeg.name}`} loading="lazy"
+                        style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${ac}` }} />
+                    ) : (
+                      <span style={{ width: 24, height: 24, borderRadius: '50%', border: `1.5px solid ${ac}`, color: ac, background: `${ac}10`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 600 }}>
+                        {initialsOf(tSeg.name)}
+                      </span>
+                    )
+                  )}
+                  {tab.label}
+                  {tSeg && (
+                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'rgba(50,50,70,0.4)', color: isActive ? ac : '#4A4A6A', fontWeight: 600 }}>
+                      {tSeg.volumePct}%
                     </span>
-                  )
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* bracket gutter + persona card (only when a single segment is active) */}
+          {activeSegment && segAccent && (
+            <>
+              <div style={{ flex: '0 0 58px' }} aria-hidden="true" />
+              <div ref={personaRef} style={{ alignSelf: 'center', flex: '1 1 auto', display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${segAccent.border}44`, borderRadius: 12, background: segAccent.bg, padding: '14px 16px' }}>
+                {activeSegment.personaImageUrl ? (
+                  <img src={activeSegment.personaImageUrl} alt={`Portrait representing ${activeSegment.name}`} loading="lazy"
+                    style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${segAccent.border}`, flexShrink: 0 }} />
+                ) : (
+                  <div style={{ width: 64, height: 64, borderRadius: '50%', flexShrink: 0, background: segAccent.bg, border: `2px solid ${segAccent.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: segAccent.text, fontSize: 18, fontWeight: 600 }}>
+                    {initialsOf(activeSegment.name)}
+                  </div>
                 )}
-                {tab.label}
-                {tSeg && (
-                  <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'rgba(50,50,70,0.4)', color: isActive ? ac : '#4A4A6A', fontWeight: 600 }}>
-                    {tSeg.volumePct}%
-                  </span>
-                )}
-              </button>
-            );
-          })}
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#DCDCF4', marginBottom: 3 }}>{activeSegment.name}</div>
+                  <p style={{ fontSize: 11.5, color: '#8A8AB0', margin: '0 0 5px', lineHeight: 1.5 }}>{activeSegment.whoTheyAre.trigger}</p>
+                  <p style={{ fontSize: 12, color: '#9090B0', fontStyle: 'italic', margin: 0 }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
+                </div>
+              </div>
+
+              {/* measured connector: faint line from the active pill's MIDDLE + curly brace embracing the persona */}
+              {conn && (
+                <svg width={conn.w} height={conn.h} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' }} aria-hidden="true">
+                  <path d={conn.line}  fill="none" stroke={segAccent.border} strokeWidth={1}   opacity={0.5} />
+                  <path d={conn.brace} fill="none" stroke={segAccent.border} strokeWidth={1.4} opacity={0.65} strokeLinecap="round" />
+                </svg>
+              )}
+            </>
+          )}
         </div>
 
-        {/* Right — build control + provenance + progress + error */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 7, minWidth: 240, flex: '1 1 280px', maxWidth: 520 }}>
+        {/* Right — build control + status badge + provenance + progress + error */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, minWidth: 220, flex: '0 0 auto', maxWidth: 280 }}>
           <button onClick={buildDeepJourney} disabled={building}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
@@ -1281,11 +1374,26 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
             {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
           </button>
+
+          {/* run-status badge: never run · building · last run [date] */}
+          {building ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#22d3ee', background: 'rgba(34,211,238,0.12)', border: '1px solid #22d3ee55', borderRadius: 8, padding: '3px 9px' }}>
+              <i className="ti ti-loader-2" /> Building…
+            </span>
+          ) : demandMode ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#34d399', background: 'rgba(52,211,153,0.12)', border: '1px solid #34d39955', borderRadius: 8, padding: '3px 9px' }}>
+              <i className="ti ti-circle-check" /> {demandUniverse?.builtAt ? `Last run ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : 'Built'}
+            </span>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#8A8AA8', background: 'rgba(120,120,150,0.12)', border: '1px solid #2A2A40', borderRadius: 8, padding: '3px 9px' }}>
+              <i className="ti ti-circle-dashed" /> Never run
+            </span>
+          )}
+
           {!building && (demandMode ? (
             <span style={{ fontSize: 11, color: '#6A6A90', textAlign: 'right' }}>
               <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
               {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
-              {demandUniverse?.builtAt ? ` · built ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : ''}
               {' '}(Semrush)
             </span>
           ) : (
@@ -1301,24 +1409,6 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           )}
         </div>
       </div>
-
-      {/* Segment tagline + portrait */}
-      {activeSegment && segAccent && (
-        <div style={{ background: 'rgba(60,60,80,0.06)', border: '1px solid #1A1A30', borderRadius: 10, padding: '13px 16px', marginBottom: 18, display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          {activeSegment.personaImageUrl ? (
-            <img src={activeSegment.personaImageUrl} alt={`Portrait representing ${activeSegment.name}`} loading="lazy"
-              style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${segAccent.border}`, flexShrink: 0 }} />
-          ) : (
-            <div style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0, background: segAccent.bg, border: `1px solid ${segAccent.border}40`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: segAccent.text, fontSize: 13, fontWeight: 600 }}>
-              {initialsOf(activeSegment.name)}
-            </div>
-          )}
-          <div>
-            <p style={{ fontSize: 11, color: '#6A6A88', marginBottom: 4 }}>{activeSegment.whoTheyAre.trigger}</p>
-            <p style={{ fontSize: 12, color: '#9090B0', fontStyle: 'italic' }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
-          </div>
-        </div>
-      )}
 
       <Legend />
 

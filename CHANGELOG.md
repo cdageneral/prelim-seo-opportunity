@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.159 — 2026-06-08 · Audience Journeys header redesign: persona-up, bracket connector, run-status badge
+
+**What Wayne asked for (design approved from an in-chat render first):** move the persona sentence + a larger portrait UP next to the stacked segment pills; draw a light connector with a containing bracket from the active segment pill to that persona (so the link is obvious), with the bracket pointing to the MIDDLE of the pill it's on; and on the right, wrap the build-universe text and add a badge showing whether the demand universe has ever been run / when it was last run.
+
+**Layout (`components/brief/JourneySection.tsx`, display only):** the old below-the-tabs tagline block is gone. The header row is now: left zone = stacked segment pills + (when one segment is active) a 58px bracket gutter + a persona card (64px portrait, segment name, trigger sentence, italic quote); right column = Build/Rebuild button, the run-status badge, wrapped provenance, progress, and errors. On **"All Segments"** the persona card + connector collapse (pills + build control only).
+
+**Bracket connector (measured, points to the pill middle):** new pure `buildConnector()` returns the SVG `line` + curly-`brace` path strings from container-relative coordinates. A layout effect (`useIsoLayoutEffect`, SSR-safe) measures the active pill, persona card, and zone via `getBoundingClientRect`, computes the geometry, and draws an absolutely-positioned overlay `<svg>` in the active segment's accent color: a faint line from the active pill's vertical center to a curly brace embracing the persona card's left edge. It recomputes on tab change, segment-data change, and container resize (`ResizeObserver` + window resize), so the line always lands on the selected pill's middle even as pills wrap.
+
+**Run-status badge:** gray "Never run" (no universe yet), cyan "Building…" (during the stream), or green "Last run [date]" (from `_demandUniverse.builtAt`) once built. The "built [date]" text moved out of the provenance line into this badge.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. Pure `buildConnector` geometry unit test → **6/6**: the line STARTS at the active pill's middle Y, ENDS at the brace tip `(perLeft-15, perMid)`, the brace passes through the tip, and the line re-origins to a different pill's middle when the active pill changes (the "point to the middle of the pill" requirement). jsdom/SSR render harness → **9/9**: green "Last run" badge in demand mode, gray "Never run" in footprint mode, "All Segments" hides the persona card (trigger sentence absent), Rebuild/Build buttons + provenance correct, and Liposuction/Breast Lift still land in the product lane (no regression). Design rendered + approved in chat before build.
+
+**Built on v7.158-src→v7.159-src, package.json 7.159.0, inner folder `orbitiq-v7.159/`, 77 files, zip in /tmp → cp to GEO `orbitiq-v7.159.zip`.** The connector's live geometry runs in the browser (refs + layout effect); the geometry function itself is unit-tested.
+
 ## v7.158 — 2026-06-08 · Audience Journeys: per-segment filtering + header rearrange
 
 **What Wayne flagged:** (1) switching the audience-segment tab didn't change the journey — only the persona portrait + prompt chips changed, the mind-map nodes stayed the same; (2) rearrange the header so the three segment tabs stack on the left and the "Build deep journey" button moves to the right.
