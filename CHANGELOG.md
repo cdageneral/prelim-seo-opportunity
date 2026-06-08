@@ -1,5 +1,25 @@
 # OrbitIQ Changelog
 
+## v7.165 — 2026-06-08 · Page-map stores UNIQUE pages (no per-keyword URL duplication)
+
+**What Wayne asked for:** don't store a URL on every keyword — that's a lot of data and duplication (many keywords share one page). Instead pull the unique URLs and map each to its keywords → cluster → content plan.
+
+**Change (data model).** `app/api/projects/[id]/page-map/route.ts` — instead of persisting `byKeyword` (the URL string repeated on every keyword), it now resolves each keyword's best-position ranking page, then groups keywords under their unique page and stores `_pageMap.pages = [{ url, keywords[], bestPosition, volume }]` (sorted by volume). The URL string is stored once per page with its keyword list, so the payload scales with the number of pages, not keywords. `components/brief/ContentMapSection.tsx` — `PageMap` now carries `pages[]` (with `byKeyword` kept optional for backward-compat with any older cached pull); the `urlByKeyword` memo inverts `pages` (url → its keywords) into keyword→url at load, so every downstream behaviour (cluster mapping, optimise/net-new, the Pages view) is unchanged. The keyword→cluster→content-plan flow is identical — only the stored shape is leaner.
+
+**Verification:** isolated `tsc --noEmit` (component + route + semrush) → exit 0. Route integration test (bundled real route with stubbed db/semrush/next-server, drove `POST`, read the streamed `done`) 12/12: unique-pages shape with NO `byKeyword`, 2 unique pages from 5 rows, the two `liposuction` keywords grouped under one `/liposuction/` page with summed volume 1600 and bestPosition 5, a non-client keyword filtered out, a duplicate keyword's worse-position page dropped, persisted to `snapshot._pageMap.pages`. Render harness 24/24 unchanged, plus a new 8/8 test confirming a `pages`-shaped `_pageMap` (CSV-mode, no inline URLs on topKeywords) inverts correctly and lights up the Liposuction cluster as Optimise with its real page link while Tummy Tuck stays net-new.
+
+**Built on v7.164-src→v7.165-src, package.json 7.165.0, inner folder `orbitiq-v7.165/`, 78 files, zip in /tmp → cp to GEO `orbitiq-v7.165.zip`.**
+
+## v7.164 — 2026-06-08 · Hotfix: Semrush ERROR 605 on the page-map pull (display_offset=0)
+
+**What Wayne hit:** clicking "Map ranking pages" failed with `Semrush API error 400: ERROR 605 :: Invalid display_offset parameter, must be a positive integer number and less than display_limit or it should be skipped`.
+
+**Root cause:** `getOrganicKeywords` (`lib/apis/semrush.ts`) sent `display_offset=0` on the first page. Semrush rejects `0` — the parameter must be a positive integer below `display_limit`, or omitted entirely. FIX: only include `display_offset` for pages after the first (`offset > 0`); the first page omits it. One-line, type-safe, and it also hardens the analyze pipeline's footprint pull (same function).
+
+**Verification:** isolated `tsc --noEmit` (component + route + semrush) → exit 0. Focused unit test bundling the real `semrush.ts` with a mocked fetch, 6/6: two pages fetched, page 1 has NO `display_offset` and `display_limit=10000`, page 2 has `display_offset=10000`, 10,005 rows accumulated across the short final page, ranking URL parsed. v7.163 Content Plan render/behaviour unchanged.
+
+**Built on v7.163-src→v7.164-src, package.json 7.164.0, inner folder `orbitiq-v7.164/`, 78 files, zip in /tmp → cp to GEO `orbitiq-v7.164.zip`.**
+
 ## v7.163 — 2026-06-08 · Content Plan: map clusters to existing pages (optimise vs build net-new)
 
 **What Wayne asked for:** (1) the Content Plan flashed a number on open — ~181 — then settled to ~45; he thought it was a hardcoded value hanging in the code. (2) Map the content clusters to the pages that already exist on the site versus the articles that are missing — count how many URLs match the existing clusters and which don't, so we can see how much existing content needs **optimising** versus how much must be **built net-new**, and surface that on the panel.

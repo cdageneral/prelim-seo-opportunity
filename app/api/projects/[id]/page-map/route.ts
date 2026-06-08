@@ -108,24 +108,38 @@ export async function POST(
           return;
         }
 
-        // Build keyword → best ranking page. Keep the best (lowest) position when a
-        // keyword appears more than once; trim to the client keyword set.
-        const byKeyword: Record<string, { url: string; position: number; searchVolume: number }> = {};
-        let matched = 0;
+        // v7.165: store UNIQUE pages, each carrying its mapped keywords — instead
+        // of repeating the URL string on every keyword. A keyword maps to exactly
+        // one page (its best-position ranking page); the panel inverts pages →
+        // keyword→url at load. Trim to the client keyword set, and keep the best
+        // (lowest) position per keyword so a keyword isn't double-assigned across
+        // pages. Far less data + no duplication.
+        const bestByKw = new Map<string, { url: string; position: number; searchVolume: number }>();
         for (const r of rows) {
           const kw = String(r.keyword ?? '').toLowerCase().trim();
           if (!kw || !r.url) continue;
           if (clientKwSet.size > 0 && !clientKwSet.has(kw)) continue;
-          const prev = byKeyword[kw];
+          const prev = bestByKw.get(kw);
           if (!prev || (r.position > 0 && r.position < prev.position)) {
-            if (!prev) matched++;
-            byKeyword[kw] = { url: r.url, position: r.position ?? 0, searchVolume: r.searchVolume ?? 0 };
+            bestByKw.set(kw, { url: r.url, position: r.position ?? 0, searchVolume: r.searchVolume ?? 0 });
           }
         }
-        const urlCount = new Set(Object.values(byKeyword).map((v) => v.url)).size;
+
+        // Group the resolved keywords under their unique page.
+        const pageGroups = new Map<string, { url: string; keywords: string[]; bestPosition: number; volume: number }>();
+        for (const [kw, v] of Array.from(bestByKw.entries())) {
+          let pg = pageGroups.get(v.url);
+          if (!pg) { pg = { url: v.url, keywords: [], bestPosition: v.position || 999, volume: 0 }; pageGroups.set(v.url, pg); }
+          pg.keywords.push(kw);
+          pg.volume += v.searchVolume;
+          if (v.position > 0 && v.position < pg.bestPosition) pg.bestPosition = v.position;
+        }
+        const pages = Array.from(pageGroups.values()).sort((a, b) => b.volume - a.volume);
+        const matched = bestByKw.size;
+        const urlCount = pages.length;
 
         const pageMap = {
-          byKeyword,
+          pages,
           urlCount,
           rowCount: rows.length,
           matchedKeywords: matched,

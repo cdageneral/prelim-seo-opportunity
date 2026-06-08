@@ -157,12 +157,14 @@ export async function getOrganicKeywords(
   for (;;) {
     const want = limit > 0 ? Math.min(SEMRUSH_PAGE, limit - all.length) : SEMRUSH_PAGE;
     if (want <= 0) break;
+    // v7.164: Semrush rejects display_offset=0 (ERROR 605 — must be a positive
+    // integer < display_limit, or omitted). Only send it for pages after the first.
     const raw = await semrushGet({
       type:    'domain_organic',
       domain,
       database,
       display_limit:  String(want),
-      display_offset: String(offset),
+      ...(offset > 0 ? { display_offset: String(offset) } : {}),
       display_sort: 'tr_desc',
       export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
       ...volumeFilter(volMin),

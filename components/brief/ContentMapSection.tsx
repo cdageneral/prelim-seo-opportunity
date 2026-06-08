@@ -556,8 +556,16 @@ function gapLabel(g: GapType): { text: string; bg: string; color: string; border
 // session, an in-session pull is also cached in localStorage and hydrated
 // snapshot-first (mirrors the demand-universe pattern in JourneySection).
 
+interface PageMapPage {
+  url: string;
+  keywords: string[];      // client keywords (lowercased) that rank with this page as their best
+  bestPosition?: number;
+  volume?: number;
+}
 interface PageMap {
-  byKeyword: Record<string, { url: string; position: number; searchVolume: number }>;
+  pages?: PageMapPage[];   // v7.165: unique pages, each carrying its keywords (canonical, no duplication)
+  // legacy (v7.163/164): keyword → page. Still read if an older pull is cached.
+  byKeyword?: Record<string, { url: string; position: number; searchVolume: number }>;
   urlCount: number;
   rowCount: number;
   matchedKeywords?: number;
@@ -782,8 +790,14 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       const kw = (k.keyword ?? '').toLowerCase().trim();
       if (kw && k.url) m[kw] = k.url;
     }
-    const pm = pageMap?.byKeyword ?? {};
-    for (const kw of Object.keys(pm)) { if (pm[kw]?.url) m[kw] = pm[kw].url; }
+    // v7.165: invert the unique-pages store (url → its keywords) into keyword→url.
+    for (const pg of (pageMap?.pages ?? [])) {
+      if (!pg?.url) continue;
+      for (const kw of (pg.keywords ?? [])) { const k = String(kw).toLowerCase().trim(); if (k) m[k] = pg.url; }
+    }
+    // Backward-compat: an older cached pull stored keyword→url directly.
+    const legacy = pageMap?.byKeyword ?? {};
+    for (const kw of Object.keys(legacy)) { if (legacy[kw]?.url) m[kw] = legacy[kw].url; }
     return m;
   }, [analysis, pageMap]);
 
