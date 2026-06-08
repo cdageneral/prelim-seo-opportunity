@@ -874,6 +874,68 @@ function CompletenessRow({ nodes }: { nodes: JourneyNode[] }) {
   );
 }
 
+// v7.161: combined journey summary — one row of cards, each showing the overall
+// total across both lanes plus a pre-product (cyan) / product (purple) split.
+const PRE_COLOR = '#22d3ee';
+const PROD_COLOR = '#a78bfa';
+
+function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; prodNodes: JourneyNode[] }) {
+  const cnt = (nodes: JourneyNode[], st: NodeState) => nodes.filter((n: JourneyNode) => n.state === st).length;
+  const preTot = preNodes.length, prodTot = prodNodes.length, tot = preTot + prodTot;
+  const preEx = cnt(preNodes, 'existing'),   prodEx = cnt(prodNodes, 'existing');
+  const preMi = cnt(preNodes, 'missing'),     prodMi = cnt(prodNodes, 'missing');
+  const preCo = cnt(preNodes, 'competitor'),  prodCo = cnt(prodNodes, 'competitor');
+  const pct     = tot ? Math.round(((preEx + prodEx) / tot) * 100) : 0;
+  const prePct  = preTot ? Math.round((preEx / preTot) * 100) : 0;
+  const prodPct = prodTot ? Math.round((prodEx / prodTot) * 100) : 0;
+
+  const splitCard = (label: string, color: string, pre: number, prod: number) => {
+    const denom = pre + prod;
+    const preW = denom ? Math.round((pre / denom) * 100) : 0;
+    return (
+      <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
+        <div style={{ fontSize: 11, color: '#6a6a90' }}>{label}</div>
+        <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 8px' }}>{denom}</div>
+        <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', background: '#1A1A30' }}>
+          <div style={{ width: `${preW}%`, background: PRE_COLOR }} />
+          <div style={{ width: `${100 - preW}%`, background: PROD_COLOR }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, marginTop: 5 }}>
+          <span style={{ color: PRE_COLOR }}>Pre {pre}</span>
+          <span style={{ color: PROD_COLOR }}>Prod {prod}</span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6a6a90' }}>Journey coverage — combined</span>
+        <span style={{ fontSize: 10.5, color: '#8080a0' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PRE_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Pre-product</span>
+        <span style={{ fontSize: 10.5, color: '#8080a0' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PROD_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Product</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        {splitCard('Topics in journey', '#C8C8E8', preTot, prodTot)}
+        {splitCard('Existing', STATE_COLOR.existing, preEx, prodEx)}
+        {splitCard('Missing', STATE_COLOR.missing, preMi, prodMi)}
+        {splitCard('Competitor only', STATE_COLOR.competitor, preCo, prodCo)}
+        <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, color: '#6a6a90' }}>Completeness</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: '#C8C8E8', margin: '2px 0 8px' }}>{pct}%</div>
+          <div style={{ height: 5, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, background: STATE_COLOR.existing }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, marginTop: 5 }}>
+            <span style={{ color: PRE_COLOR }}>Pre {prePct}%</span>
+            <span style={{ color: PROD_COLOR }}>Prod {prodPct}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () => void }) {
   if (!node) {
     return (
@@ -1009,6 +1071,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
+  const [hoveredTab, setHoveredTab] = useState<string | null>(null);   // v7.160: pill hover glow
   const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
   const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
@@ -1296,19 +1359,24 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', flex: '0 0 auto' }}>
             {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
               const isActive = activeTab === tab.id;
+              const isHovered = hoveredTab === tab.id;
               const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
               const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
               const ac = tAccent ? tAccent.text : '#8080A0';
+              const lit = isActive || isHovered;   // v7.160: active OR hovered → accent + glow
               return (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                   ref={isActive ? activePillRef : undefined}
+                  onMouseEnter={() => setHoveredTab(tab.id)}
+                  onMouseLeave={() => setHoveredTab((h: string | null) => (h === tab.id ? null : h))}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 8,
                     padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
                     fontSize: 12, fontWeight: isActive ? 700 : 500,
-                    color: isActive ? ac : '#6A6A90',
-                    background: isActive ? `${ac}14` : 'transparent',
-                    border: `1px solid ${isActive ? ac + '55' : '#1A1A30'}`,
+                    color: lit ? ac : '#6A6A90',
+                    background: isActive ? `${ac}14` : (isHovered ? `${ac}0d` : 'transparent'),
+                    border: `1px solid ${lit ? ac + '55' : '#1A1A30'}`,
+                    boxShadow: lit ? `0 0 0 1px ${ac}22, 0 0 14px ${ac}40` : 'none',
                     borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
                   }}>
                   {tSeg && (
@@ -1411,6 +1479,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
       </div>
 
       <Legend />
+
+      {/* v7.161: combined summary — overall totals with pre/product split, between legend and lanes */}
+      <CombinedSummary preNodes={preNodes} prodNodes={prodNodes} />
 
       {/* Pre-product lane */}
       <div style={{ background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
