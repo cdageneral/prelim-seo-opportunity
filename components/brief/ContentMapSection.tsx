@@ -29,7 +29,7 @@ interface IntentCluster {
 interface ThemeCluster {
   id:          string;
   name:        string;
-  type:        'procedure' | 'brand' | 'location';
+  type:        'procedure' | 'brand' | 'location' | 'problem';   // v7.154: 'problem' = pre-product life-problem theme
   journeyType: JourneyType;
   keywords:    KwItem[];
   totalVolume: number;
@@ -190,12 +190,76 @@ function matchKeywordToCategory(
   return null;
 }
 
-function classifyJourneyType(cluster: { type: string; subClusters: IntentCluster[] }): JourneyType {
-  if (cluster.type === 'brand' || cluster.type === 'location') return 'product';
-  const volByIntent: Record<string, number> = {};
-  for (const sc of cluster.subClusters) volByIntent[sc.intent] = (volByIntent[sc.intent] ?? 0) + sc.totalVolume;
-  const dominant = Object.entries(volByIntent).sort((a, b) => b[1] - a[1])[0]?.[0];
-  return dominant === 'informational' ? 'pre-product' : 'product';
+// ─── Solution-awareness classification (v7.154) ─────────────────────────────────
+// Mirrors JourneySection: the pre-product/product split is decided by SOLUTION
+// AWARENESS, not search intent. A procedure/brand/location cluster is ALWAYS
+// product; only keywords that name no solution (problem/symptom/desire) are
+// pre-product, grouped into life-problem themes. Kept as a local copy so this
+// panel stays self-contained, consistent with the Journey panel's definition.
+const ANATOMY_WORDS = new Set<string>([
+  'breast','breasts','boob','boobs','chest','nipple','nipples',
+  'stomach','belly','tummy','abdomen','abdominal','waist','waistline','midsection','flank','flanks',
+  'chin','neck','jaw','jawline','face','facial','cheek','cheeks','eye','eyes','eyelid','brow',
+  'arm','arms','thigh','thighs','leg','legs','knee','calf','calves','ankle',
+  'hip','hips','butt','buttock','buttocks','back','bra','love','handle','handles',
+  'skin','fat','cellulite','body','double','area','areas','muffin','top','bulge','bulges',
+]);
+const PROC_NAME_NOISE = new Set<string>([
+  'with','from','that','this','your','near','best','top',
+  'cost','costs','price','prices','pricing','reviews','review',
+  'services','service','treatment','treatments','procedure','procedures',
+  'clinic','center','centre','before','after','results','recovery','specials','financing',
+]);
+function procedureWords(name: string): string[] {
+  return name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter((w: string) => w.length >= 4 && !ANATOMY_WORDS.has(w) && !PROC_NAME_NOISE.has(w));
+}
+function brandTokensOf(clientDomain: string, competitorDomains: string[]): string[] {
+  const baseBrands = [clientDomain, ...competitorDomains].map(extractBrand).filter((b: string) => b.length >= 4);
+  const set = new Set<string>(baseBrands);
+  for (const brand of baseBrands) {
+    const half = Math.floor(brand.length / 2);
+    if (half >= 4) set.add(brand.slice(0, half));
+    if (brand.length - half >= 4) set.add(brand.slice(half));
+  }
+  return Array.from(set);
+}
+function brandedStrict(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
+  const kwNorm = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!kwNorm) return false;
+  return brandTokensOf(clientDomain, competitorDomains).some((t: string) => kwNorm.includes(t));
+}
+function namesSolutionFor(
+  keyword: string, catType: string, procWords: string[],
+  clientDomain: string, competitorDomains: string[],
+): boolean {
+  const kwLow = keyword.toLowerCase();
+  if (catType === 'brand') return brandedStrict(keyword, clientDomain, competitorDomains);
+  if (catType === 'location') {
+    const locSigs = ['near me','near ',' in ','location','clinic','center','centre'];
+    return brandedStrict(keyword, clientDomain, competitorDomains) || locSigs.some((s: string) => kwLow.includes(s));
+  }
+  return procWords.some((w: string) => kwLow.includes(w));
+}
+const PROBLEM_ANCHORS: Array<[string, string]> = [
+  ['love handle', 'Love Handles'], ['muffin top', 'Muffin Top'], ['double chin', 'Double Chin'],
+  ['loose skin', 'Loose / Sagging Skin'], ['saggy', 'Loose / Sagging Skin'], ['sagging', 'Loose / Sagging Skin'],
+  ['belly', 'Belly / Midsection'], ['stomach', 'Belly / Midsection'], ['tummy', 'Belly / Midsection'], ['midsection', 'Belly / Midsection'],
+  ['breast', 'Breast Concerns'], ['boob', 'Breast Concerns'], ['chest', 'Breast Concerns'],
+  ['chin', 'Chin / Neck'], ['neck', 'Chin / Neck'], ['jowl', 'Chin / Neck'],
+  ['thigh', 'Legs / Thighs'], ['leg', 'Legs / Thighs'], ['calf', 'Legs / Thighs'], ['knee', 'Legs / Thighs'],
+  ['arm', 'Arm Concerns'],
+  ['weight', 'Weight Loss'], ['obese', 'Weight Loss'], ['bmi', 'Weight Loss'],
+  ['cellulite', 'Cellulite'], ['wrinkle', 'Aging / Wrinkles'], ['aging', 'Aging / Wrinkles'],
+  ['fat', 'Stubborn Fat'], ['bulge', 'Stubborn Fat'],
+];
+function deterministicProblemTheme(keyword: string): string {
+  const k = keyword.toLowerCase();
+  for (const [needle, theme] of PROBLEM_ANCHORS) { if (k.includes(needle)) return theme; }
+  return 'General Problem Searches';
+}
+function classifyJourneyType(type: string): JourneyType {
+  return type === 'problem' ? 'pre-product' : 'product';
 }
 
 function buildClusters(
@@ -248,31 +312,44 @@ function buildClusters(
     });
   }
 
-  const catMap = new Map<string, KwItem[]>();
-  categories.forEach((c: { name: string }) => catMap.set(c.name, []));
-  const unassigned: KwItem[] = [];
-  for (const kw of pool) {
-    const key = kw.keyword.toLowerCase();
-    const stored = storedMap[key];
-    if (stored && catMap.has(stored)) { catMap.get(stored)!.push(kw); continue; }
-    const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
-    if (matched && catMap.has(matched)) catMap.get(matched)!.push(kw);
-    else unassigned.push(kw);
-  }
-  if (unassigned.length > 0) {
-    const firstProc = categories.find((c: { type: string }) => c.type === 'procedure')?.name ?? categories[0]?.name;
-    if (firstProc) catMap.get(firstProc)!.push(...unassigned);
+  // v7.154: route keywords by solution awareness (mirrors JourneySection).
+  const procWordsByCat = new Map<string, string[]>();
+  for (const c of categories) {
+    if (c.type === 'procedure') procWordsByCat.set(c.name, procedureWords(c.name));
   }
 
-  const result: ThemeCluster[] = [];
-  for (const cat of categories) {
-    const kws = catMap.get(cat.name) ?? [];
-    if (!kws.length) continue;
-    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+  const catMap = new Map<string, KwItem[]>();
+  categories.forEach((c: { name: string }) => catMap.set(c.name, []));
+  const problemPool: KwItem[] = [];
+  for (const kw of pool) {
+    const key = kw.keyword.toLowerCase();
+    let cand: string | null = null;
+    const stored = storedMap[key];
+    if (stored && catMap.has(stored)) cand = stored;
+    else {
+      const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
+      if (matched && catMap.has(matched)) cand = matched;
+    }
+    if (cand) {
+      const catType = categories.find((c: { name: string }) => c.name === cand)!.type;
+      const procWords = procWordsByCat.get(cand) ?? [];
+      if (namesSolutionFor(kw.keyword, catType, procWords, clientDomain, competitorDomains)) { catMap.get(cand)!.push(kw); continue; }
+    }
+    problemPool.push(kw);
+  }
+
+  const problemGroups = new Map<string, KwItem[]>();
+  for (const kw of problemPool) {
+    const theme = deterministicProblemTheme(kw.keyword);
+    if (!problemGroups.has(theme)) problemGroups.set(theme, []);
+    problemGroups.get(theme)!.push(kw);
+  }
+
+  function buildSub(kws: KwItem[], isBrandCat: boolean): IntentCluster[] {
     const intentBuckets = new Map<IntentType, KwItem[]>();
     (['informational','commercial','transactional','navigational','unmatched'] as IntentType[]).forEach((i: IntentType) => intentBuckets.set(i, []));
     for (const kw of kws) {
-      if (isBranded(kw.keyword, clientDomain, competitorDomains) && cat.type === 'brand') {
+      if (isBrandCat && isBranded(kw.keyword, clientDomain, competitorDomains)) {
         intentBuckets.get('navigational')!.push(kw); continue;
       }
       const sig = detectIntent(kw.keyword);
@@ -289,11 +366,25 @@ function buildClusters(
         competitorVolume: items.filter((k: KwItem) => k.isGap).reduce((s: number, k: KwItem) => s + k.searchVolume, 0),
       });
     });
-    const journeyType = classifyJourneyType({ type: cat.type, subClusters });
-    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType, keywords: kws, totalVolume, subClusters });
+    return subClusters;
+  }
+
+  const result: ThemeCluster[] = [];
+  for (const cat of categories) {
+    const kws = catMap.get(cat.name) ?? [];
+    if (!kws.length) continue;
+    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+    const subClusters = buildSub(kws, cat.type === 'brand');
+    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType: classifyJourneyType(cat.type), keywords: kws, totalVolume, subClusters });
+  }
+  for (const [theme, kws] of Array.from(problemGroups.entries())) {
+    if (!kws.length) continue;
+    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+    const subClusters = buildSub(kws, false);
+    result.push({ id: theme, name: theme, type: 'problem', journeyType: 'pre-product', keywords: kws, totalVolume, subClusters });
   }
   result.sort((a, b) => {
-    const order: Record<string, number> = { procedure: 0, brand: 1, location: 2 };
+    const order: Record<string, number> = { problem: 0, procedure: 1, brand: 2, location: 3 };
     return (order[a.type] - order[b.type]) || (b.totalVolume - a.totalVolume);
   });
   return result;

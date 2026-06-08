@@ -28,7 +28,7 @@ interface IntentCluster {
 interface ThemeCluster {
   id:          string;
   name:        string;
-  type:        'procedure' | 'brand' | 'location';
+  type:        'procedure' | 'brand' | 'location' | 'problem';   // v7.154: 'problem' = pre-product life-problem theme
   journeyType: JourneyType;
   keywords:    KwItem[];
   totalVolume: number;
@@ -185,16 +185,107 @@ function matchKeywordToCategory(
   return null;
 }
 
-// ─── JourneyType classification ───────────────────────────────────────────────
+// ─── Solution-awareness classification (v7.154) ─────────────────────────────────
+//
+// The journey split is decided by SOLUTION AWARENESS, not search intent. If a
+// keyword names a solution — a procedure, the brand, or a location — the searcher
+// already knows the product exists, so it is PRODUCT journey (at whatever funnel
+// stage). Only keywords that describe a life-problem/symptom/desire with NO named
+// solution are PRE-PRODUCT. This replaces the old intent-dominance rule, which
+// wrongly sent informational procedure queries ("what is a breast lift") to
+// pre-product even though naming the procedure proves solution awareness.
+//
+// The hard rule (confirmed with Wayne): a procedure/brand/location cluster is
+// ALWAYS product. Anatomy words alone ("breast", "belly", "fat") never signal
+// solution awareness — they live in both procedure names and problem searches —
+// so cluster membership keys off the distinctive PROCEDURE word ("lift",
+// "liposuction", "removal"), never the body part.
 
-function classifyJourneyType(cluster: { type: string; subClusters: IntentCluster[] }): JourneyType {
-  if (cluster.type === 'brand' || cluster.type === 'location') return 'product';
-  const volByIntent: Record<string, number> = {};
-  for (const sc of cluster.subClusters) {
-    volByIntent[sc.intent] = (volByIntent[sc.intent] ?? 0) + sc.totalVolume;
+// Body-part words that appear in BOTH procedure names and problem searches.
+const ANATOMY_WORDS = new Set<string>([
+  'breast','breasts','boob','boobs','chest','nipple','nipples',
+  'stomach','belly','tummy','abdomen','abdominal','waist','waistline','midsection','flank','flanks',
+  'chin','neck','jaw','jawline','face','facial','cheek','cheeks','eye','eyes','eyelid','brow',
+  'arm','arms','thigh','thighs','leg','legs','knee','calf','calves','ankle',
+  'hip','hips','butt','buttock','buttocks','back','bra','love','handle','handles',
+  'skin','fat','cellulite','body','double','area','areas','muffin','top','bulge','bulges',
+]);
+
+// Commerce/format modifiers that sit inside category names but are not the
+// procedure itself (so they are stripped when deriving the distinctive word).
+const PROC_NAME_NOISE = new Set<string>([
+  'with','from','that','this','your','near','best','top',
+  'cost','costs','price','prices','pricing','reviews','review',
+  'services','service','treatment','treatments','procedure','procedures',
+  'clinic','center','centre','before','after','results','recovery','specials','financing',
+]);
+
+// Distinctive procedure words from a category name (drop anatomy + noise).
+function procedureWords(name: string): string[] {
+  return name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter((w: string) => w.length >= 4 && !ANATOMY_WORDS.has(w) && !PROC_NAME_NOISE.has(w));
+}
+
+// Strict (substring-only) brand match for the solution gate. Reuses the brand
+// token derivation from isBranded() but DROPS the fuzzy edit-distance path, which
+// otherwise matches anatomy words to brands (e.g. "belly" ~ "bello" in "Sono
+// Bello") and would leak problem searches into the product lane.
+function brandTokensOf(clientDomain: string, competitorDomains: string[]): string[] {
+  const baseBrands = [clientDomain, ...competitorDomains].map(extractBrand).filter((b: string) => b.length >= 4);
+  const set = new Set<string>(baseBrands);
+  for (const brand of baseBrands) {
+    const half = Math.floor(brand.length / 2);
+    if (half >= 4) set.add(brand.slice(0, half));
+    if (brand.length - half >= 4) set.add(brand.slice(half));
   }
-  const dominant = Object.entries(volByIntent).sort((a, b) => b[1] - a[1])[0]?.[0];
-  return dominant === 'informational' ? 'pre-product' : 'product';
+  return Array.from(set);
+}
+function brandedStrict(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
+  const kwNorm = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!kwNorm) return false;
+  return brandTokensOf(clientDomain, competitorDomains).some((t: string) => kwNorm.includes(t));
+}
+
+// Does this keyword actually NAME the solution for its candidate category?
+// brand   -> requires a real brand token (strict substring, no fuzzy match);
+// location-> brand token OR an explicit place signal;
+// procedure-> requires a distinctive procedure word from the category name.
+function namesSolutionFor(
+  keyword: string, catType: string, procWords: string[],
+  clientDomain: string, competitorDomains: string[],
+): boolean {
+  const kwLow = keyword.toLowerCase();
+  if (catType === 'brand') return brandedStrict(keyword, clientDomain, competitorDomains);
+  if (catType === 'location') {
+    const locSigs = ['near me','near ',' in ','location','clinic','center','centre'];
+    return brandedStrict(keyword, clientDomain, competitorDomains) || locSigs.some((s: string) => kwLow.includes(s));
+  }
+  return procWords.some((w: string) => kwLow.includes(w));
+}
+
+// Deterministic pre-product theme (fallback when the AI naming pass is
+// unavailable). Anchors on the most salient body-part/problem token so themes
+// are domain-agnostic; the AI route replaces these with cleaner names.
+const PROBLEM_ANCHORS: Array<[string, string]> = [
+  ['love handle', 'Love Handles'], ['muffin top', 'Muffin Top'], ['double chin', 'Double Chin'],
+  ['loose skin', 'Loose / Sagging Skin'], ['saggy', 'Loose / Sagging Skin'], ['sagging', 'Loose / Sagging Skin'],
+  ['belly', 'Belly / Midsection'], ['stomach', 'Belly / Midsection'], ['tummy', 'Belly / Midsection'], ['midsection', 'Belly / Midsection'],
+  ['breast', 'Breast Concerns'], ['boob', 'Breast Concerns'], ['chest', 'Breast Concerns'],
+  ['chin', 'Chin / Neck'], ['neck', 'Chin / Neck'], ['jowl', 'Chin / Neck'],
+  ['thigh', 'Legs / Thighs'], ['leg', 'Legs / Thighs'], ['calf', 'Legs / Thighs'], ['knee', 'Legs / Thighs'],
+  ['arm', 'Arm Concerns'],
+  ['weight', 'Weight Loss'], ['obese', 'Weight Loss'], ['bmi', 'Weight Loss'],
+  ['cellulite', 'Cellulite'], ['wrinkle', 'Aging / Wrinkles'], ['aging', 'Aging / Wrinkles'],
+  ['fat', 'Stubborn Fat'], ['bulge', 'Stubborn Fat'],
+];
+function deterministicProblemTheme(keyword: string): string {
+  const k = keyword.toLowerCase();
+  for (const [needle, theme] of PROBLEM_ANCHORS) { if (k.includes(needle)) return theme; }
+  return 'General Problem Searches';
+}
+
+function classifyJourneyType(type: string): JourneyType {
+  return type === 'problem' ? 'pre-product' : 'product';
 }
 
 // ─── Build clusters ───────────────────────────────────────────────────────────
@@ -210,6 +301,7 @@ export function buildClusters(
   clientDomain: string,
   competitorDomains: string[],
   uploadedKeywords: any[] = [],
+  problemAssignments: Record<string, string> = {},   // v7.154: kw -> pre-product theme name (AI-named; {} = deterministic)
 ): ThemeCluster[] {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
@@ -256,42 +348,60 @@ export function buildClusters(
     });
   }
 
+  // ── Assign keywords by SOLUTION AWARENESS (v7.154) ────────────────────────────
+  // Distinctive procedure word(s) per procedure category, used to decide whether
+  // a keyword actually names the procedure (product) or only the problem.
+  const procWordsByCat = new Map<string, string[]>();
+  for (const c of categories) {
+    if (c.type === 'procedure') procWordsByCat.set(c.name, procedureWords(c.name));
+  }
+
   const catMap = new Map<string, KwItem[]>();
   categories.forEach((c: { name: string; type: string }) => catMap.set(c.name, []));
-  const unassigned: KwItem[] = [];
+  const problemPool: KwItem[] = [];   // keywords that name NO solution -> pre-product
 
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
+    // Candidate solution category: trust the server map first, then the name heuristic.
+    let cand: string | null = null;
     const stored = storedMap[key];
-    if (stored && catMap.has(stored)) { catMap.get(stored)!.push(kw); continue; }
-    const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
-    if (matched && catMap.has(matched)) catMap.get(matched)!.push(kw);
-    else unassigned.push(kw);
+    if (stored && catMap.has(stored)) cand = stored;
+    else {
+      const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
+      if (matched && catMap.has(matched)) cand = matched;
+    }
+    if (cand) {
+      const catType = categories.find((c: { name: string }) => c.name === cand)!.type;
+      const procWords = procWordsByCat.get(cand) ?? [];
+      if (namesSolutionFor(kw.keyword, catType, procWords, clientDomain, competitorDomains)) { catMap.get(cand)!.push(kw); continue; }
+    }
+    // No named solution — including keywords the server filed under a procedure
+    // that only describe the life-problem ("my breasts are small") — go pre-product.
+    problemPool.push(kw);
   }
 
-  if (unassigned.length > 0) {
-    const firstProc = categories.find((c: { type: string }) => c.type === 'procedure')?.name ?? categories[0]?.name;
-    if (firstProc) catMap.get(firstProc)!.push(...unassigned);
+  // Group the pre-product keywords into life-problem themes. AI names them when
+  // problemAssignments is supplied; otherwise a deterministic anchor is used.
+  const problemGroups = new Map<string, KwItem[]>();
+  for (const kw of problemPool) {
+    const theme = problemAssignments[kw.keyword.toLowerCase()] ?? deterministicProblemTheme(kw.keyword);
+    if (!problemGroups.has(theme)) problemGroups.set(theme, []);
+    problemGroups.get(theme)!.push(kw);
   }
 
-  const result: ThemeCluster[] = [];
-  for (const cat of categories) {
-    const kws = catMap.get(cat.name) ?? [];
-    if (!kws.length) continue;
-    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
-
+  // Shared intent -> stage sub-cluster builder (volume math unchanged from prior
+  // versions; reused for both product categories and pre-product problem themes).
+  function buildSub(kws: KwItem[], isBrandCat: boolean): IntentCluster[] {
     const intentBuckets = new Map<IntentType, KwItem[]>();
     (['informational','commercial','transactional','navigational','unmatched'] as IntentType[]).forEach((i: IntentType) => intentBuckets.set(i, []));
-
     for (const kw of kws) {
-      if (isBranded(kw.keyword, clientDomain, competitorDomains) && cat.type === 'brand') {
+      if (isBrandCat && isBranded(kw.keyword, clientDomain, competitorDomains)) {
         intentBuckets.get('navigational')!.push(kw); continue;
       }
       const sig = detectIntent(kw.keyword);
       const intent: IntentType = sig !== 'unmatched' ? sig : (claudeAssignments[kw.keyword.toLowerCase()] ?? 'unmatched');
       intentBuckets.get(intent)!.push(kw);
     }
-
     const subClusters: IntentCluster[] = [];
     Array.from(intentBuckets.entries()).forEach(([intent, items]: [IntentType, KwItem[]]) => {
       if (!items.length) return;
@@ -304,13 +414,30 @@ export function buildClusters(
         competitorVolume: items.filter((k: KwItem) => k.isGap).reduce((s: number, k: KwItem) => s + k.searchVolume, 0),
       });
     });
+    return subClusters;
+  }
 
-    const journeyType = classifyJourneyType({ type: cat.type, subClusters });
-    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType, keywords: kws, totalVolume, subClusters });
+  const result: ThemeCluster[] = [];
+
+  // Product clusters (procedure / brand / location) — always product journey.
+  for (const cat of categories) {
+    const kws = catMap.get(cat.name) ?? [];
+    if (!kws.length) continue;
+    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+    const subClusters = buildSub(kws, cat.type === 'brand');
+    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType: classifyJourneyType(cat.type), keywords: kws, totalVolume, subClusters });
+  }
+
+  // Pre-product clusters (life-problem themes) — always pre-product journey.
+  for (const [theme, kws] of Array.from(problemGroups.entries())) {
+    if (!kws.length) continue;
+    const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+    const subClusters = buildSub(kws, false);
+    result.push({ id: theme, name: theme, type: 'problem', journeyType: 'pre-product', keywords: kws, totalVolume, subClusters });
   }
 
   result.sort((a, b) => {
-    const order: Record<string, number> = { procedure: 0, brand: 1, location: 2 };
+    const order: Record<string, number> = { problem: 0, procedure: 1, brand: 2, location: 3 };
     return (order[a.type] - order[b.type]) || (b.totalVolume - a.totalVolume);
   });
   return result;
@@ -660,6 +787,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
   const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
+  const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
@@ -690,9 +818,18 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
       .catch(() => {});
   }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
+  // v7.154: deterministic pass (no AI names) — stable source for the pre-product
+  // keyword set we send to the naming route. Independent of problemAssignments so
+  // it can't loop with the fetch effect below.
+  const problemKwList = useMemo(() => {
+    const det = buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords, {});
+    return det.filter((c: ThemeCluster) => c.type === 'problem')
+              .flatMap((c: ThemeCluster) => c.keywords.map((k: KwItem) => k.keyword));
+  }, [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords]);
+
   const clusters = useMemo(
-    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords),
-    [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords],
+    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords, problemAssignments),
+    [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords, problemAssignments],
   );
 
   const allNodes  = useMemo(() => clusters.map(clusterToNode), [clusters]);
@@ -729,6 +866,36 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis?.id, projectId, industry, clientDomain, allNodes]);
+
+  // v7.154: AI-named pre-product problem themes (cached client-side, fault-tolerant).
+  // On no key / failure, problemAssignments stays {} and buildClusters uses the
+  // deterministic anchor names — the pre-product lane always renders.
+  useEffect(() => {
+    if (!analysis?.id || problemKwList.length === 0) return;
+    const sig = problemKwList.length + ':' + problemKwList.slice(0, 40).join('|');
+    const cacheKey = `orbitiq-journey-problems-${analysis.id}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { version?: number; sig?: string; assignments?: Record<string, string> };
+        if (parsed.version === 1 && parsed.sig === sig && parsed.assignments) { setProblemAssignments(parsed.assignments); return; }
+      }
+    } catch {}
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/journey-problem-clusters`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: problemKwList, industry, domain: clientDomain }),
+    })
+      .then((r: Response) => r.ok ? r.json() : null)
+      .then((d: any) => {
+        if (cancelled || !d?.assignments || Object.keys(d.assignments).length === 0) return;
+        setProblemAssignments(d.assignments);
+        try { localStorage.setItem(cacheKey, JSON.stringify({ version: 1, sig, assignments: d.assignments })); } catch {}
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysis?.id, projectId, industry, clientDomain, problemKwList]);
 
   const preEdges  = edges.preProduct.length ? edges.preProduct : stageOrderEdges(preNodes);
   const prodEdges = edges.product.length    ? edges.product    : stageOrderEdges(prodNodes);
