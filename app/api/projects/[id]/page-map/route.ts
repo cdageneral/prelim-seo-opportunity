@@ -101,7 +101,9 @@ export async function POST(
         // 2) Real keywords per page (bounded concurrency) with live progress.
         const out: Array<{ url: string; keywords: string[]; keywordCount: number; traffic: number; bestPosition: number }> = new Array(pages.length);
         let next = 0, done = 0;
-        async function worker() {
+        // Arrow const (not a block-scoped `function` declaration) — the project
+        // tsconfig targets ES5, which disallows function declarations inside blocks.
+        const worker = async (): Promise<void> => {
           while (next < pages.length) {
             const i = next++;
             const p = pages[i];
@@ -119,8 +121,8 @@ export async function POST(
             done++;
             send({ type: 'progress', done, total: pages.length, url: p.url });
           }
-        }
-        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pages.length) }, worker));
+        };
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pages.length) }, () => worker()));
 
         const pageEntries = out.filter(Boolean);
         const pageMap = {

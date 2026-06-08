@@ -1,5 +1,15 @@
 # OrbitIQ Changelog
 
+## v7.167 — 2026-06-08 · Hotfix: ES5 build error in the page-map route (nested function declaration)
+
+**What Wayne hit:** Vercel build failed type-checking — `Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'` at `app/api/projects/[id]/page-map/route.ts` (the concurrency `worker`).
+
+**Root cause:** the project's `tsconfig.json` sets no `target`, so TypeScript defaults to ES5, which forbids a `function` declaration nested inside a block. The v7.166 page-map route declared `async function worker()` inside the stream's `start()` body. (My isolated `tsc` check had used target ES2020, so it didn't catch this — fixed below.)
+
+**Fix:** `app/api/projects/[id]/page-map/route.ts` — `worker` is now an arrow const (`const worker = async (): Promise<void> => { … }`), which is legal in a block at ES5. No logic change. **Verification hardened:** the isolated `tsc` harness now targets ES5 with the project's `lib` (no `downlevelIteration`), which reproduces the exact build error on the v7.166 route and confirms v7.167 compiles clean; the component also passes ES5 (no raw Set/Map `for…of`). Route integration test 11/11 and render harness 24/24 + 10/10 still green (unchanged behaviour).
+
+**Built on v7.166-src→v7.167-src, package.json 7.167.0, inner folder `orbitiq-v7.167/`, 78 files, zip in /tmp → cp to GEO `orbitiq-v7.167.zip`.**
+
 ## v7.166 — 2026-06-08 · Page-map rebuilt on unique pages + per-page keywords (fixes 605 + the 98k-keyword pull)
 
 **What Wayne hit:** the pull still failed with `ERROR 605 :: Invalid display_offset` and the progress bar said it was "mapping 98k keywords." Both stem from the same wrong approach — pulling the entire `domain_organic` keyword footprint (98k rows ≈ 980k Semrush units) and paginating it (page 2's offset of 10,000 equals the page limit, which Semrush rejects). Wayne: we don't want to map every keyword — get the unique URLs in the footprint, then map those to the clusters.
