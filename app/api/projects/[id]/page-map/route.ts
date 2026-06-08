@@ -1,35 +1,39 @@
 /**
- * POST /api/projects/[id]/page-map — on-demand "Map existing pages" (v7.163)
+ * POST /api/projects/[id]/page-map — on-demand "Map ranking pages" (v7.166)
  *
- * Pulls the client's real organic ranking URLs from Semrush
- * (`domain_organic`, the Ur column) and stores a keyword→page map on the latest
- * analysis as `semrushSnapshot._pageMap` (additive JSONB — no schema change).
+ * Builds on UNIQUE PAGES, not the full keyword footprint:
+ *   1. `domain_organic_unique` → the client's unique ranking URLs (each with its
+ *      organic keyword count + traffic), sorted by traffic. One cheap request,
+ *      no deep pagination (so no display_offset ERROR 605).
+ *   2. `url_organic` per page → the real keywords each page ranks for, so the
+ *      page can be mapped to a keyword cluster by what it actually ranks for.
  *
- * The Content Plan panel uses this to map each keyword cluster to the actual
- * page(s) on the client's site that already rank for it — so a cluster with at
- * least one ranking page is an "optimise existing" target, and a cluster with no
- * ranking page is a "build net-new" target. Every URL is a real Semrush
- * ranking URL; nothing is invented.
+ * Persists `semrushSnapshot._pageMap.pages = [{ url, keywords[], keywordCount,
+ * traffic, bestPosition }]` (additive JSONB). Each URL is stored once with its
+ * keywords — no per-keyword duplication, and we never pull the whole 98k-keyword
+ * footprint.
  *
- * Why this exists: when a client footprint was loaded via CSV upload, Semrush is
- * skipped during analysis so the stored keywords carry no URL. This pull fills
- * in the ranking URLs without re-running the whole analysis.
+ * COST: Semrush bills 10 API units/row for both reports. Pull ≈ maxPages (pages
+ * report) + maxPages × kwPerPage (per-page keywords). Opt-in (button) only.
  *
- * COST: Semrush bills 10 API units per returned row (domain_organic). This pulls
- * the client's full ranking footprint, so cost scales with how many keywords the
- * site ranks for. Triggered explicitly by the user (button), never automatically.
- *
- * Returns (NDJSON stream): {type:'start',total} · {type:'progress',done,total}
- *                          · {type:'done', pageMap} | {type:'error', error}
+ * Body:    { maxPages?: number (default 100, cap 300), kwPerPage?: number (default 25, cap 100) }
+ * Returns (NDJSON): {type:'start',total} · {type:'progress',done,total,url}
+ *                   · {type:'done', pageMap} | {type:'error', error}
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { getOrganicKeywords, getDomainOverview } from '@/lib/apis/semrush';
+import { getOrganicPages, getUrlKeywords } from '@/lib/apis/semrush';
 
 export const maxDuration = 300;
+
+const DEFAULT_MAX_PAGES   = 100;
+const MAX_MAX_PAGES       = 300;
+const DEFAULT_KW_PER_PAGE = 25;
+const MAX_KW_PER_PAGE     = 100;
+const CONCURRENCY = 5;
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -41,10 +45,15 @@ function normalizeDomain(url: string): string {
 }
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const projectId = params.id;
+
+  let body: any = {};
+  try { body = await req.json(); } catch { /* empty body is fine */ }
+  const maxPages  = Math.min(Math.max(parseInt(body?.maxPages, 10)  || DEFAULT_MAX_PAGES,   1), MAX_MAX_PAGES);
+  const kwPerPage = Math.min(Math.max(parseInt(body?.kwPerPage, 10) || DEFAULT_KW_PER_PAGE, 1), MAX_KW_PER_PAGE);
 
   if (!process.env.SEMRUSH_API_KEY) {
     return NextResponse.json(
@@ -73,77 +82,51 @@ export async function POST(
   }
   const database = String((project as any).semrushDatabase ?? 'us');
 
-  // Only the keywords the client actually ranks for can have a ranking page, so
-  // we trim the stored map to the client keyword set on the snapshot (this is the
-  // same set the Content Plan clusters are built from — topKeywords). Keeps the
-  // persisted object small and reconciles with the panel by construction.
-  const clientKwSet = new Set<string>(
-    ((snap?.topKeywords ?? []) as any[])
-      .map((k: any) => String(k?.keyword ?? '').toLowerCase().trim())
-      .filter(Boolean)
-  );
-
-  console.log(`[OrbitIQ] Page-map pull: domain=${clientDomain}, db=${database}, clientKwSet=${clientKwSet.size}`);
+  console.log(`[OrbitIQ] Page-map pull: domain=${clientDomain}, db=${database}, maxPages=${maxPages}, kwPerPage=${kwPerPage}`);
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        // Best-effort total for a determinate bar (organic keyword count).
-        let total = 0;
-        try {
-          const ov = await getDomainOverview(clientDomain, database);
-          total = ov?.organicKeywords ?? 0;
-        } catch { /* total stays 0 → indeterminate bar */ }
-        send({ type: 'start', total });
-
-        const rows = await getOrganicKeywords(clientDomain, 0, 0, database, (fetched: number) => {
-          send({ type: 'progress', done: fetched, total: Math.max(total, fetched) });
-        });
-
-        if (rows.length === 0) {
-          send({ type: 'error', error: 'Semrush returned no ranking URLs for this domain — likely out of API units or the domain has no organic rankings in this database.' });
+        // 1) Unique ranking pages (cheap, single request).
+        const pages = await getOrganicPages(clientDomain, maxPages, database);
+        if (pages.length === 0) {
+          send({ type: 'error', error: 'Semrush returned no ranking pages for this domain — likely out of API units or the domain has no organic rankings in this database.' });
           controller.close();
           return;
         }
+        send({ type: 'start', total: pages.length });
 
-        // v7.165: store UNIQUE pages, each carrying its mapped keywords — instead
-        // of repeating the URL string on every keyword. A keyword maps to exactly
-        // one page (its best-position ranking page); the panel inverts pages →
-        // keyword→url at load. Trim to the client keyword set, and keep the best
-        // (lowest) position per keyword so a keyword isn't double-assigned across
-        // pages. Far less data + no duplication.
-        const bestByKw = new Map<string, { url: string; position: number; searchVolume: number }>();
-        for (const r of rows) {
-          const kw = String(r.keyword ?? '').toLowerCase().trim();
-          if (!kw || !r.url) continue;
-          if (clientKwSet.size > 0 && !clientKwSet.has(kw)) continue;
-          const prev = bestByKw.get(kw);
-          if (!prev || (r.position > 0 && r.position < prev.position)) {
-            bestByKw.set(kw, { url: r.url, position: r.position ?? 0, searchVolume: r.searchVolume ?? 0 });
+        // 2) Real keywords per page (bounded concurrency) with live progress.
+        const out: Array<{ url: string; keywords: string[]; keywordCount: number; traffic: number; bestPosition: number }> = new Array(pages.length);
+        let next = 0, done = 0;
+        async function worker() {
+          while (next < pages.length) {
+            const i = next++;
+            const p = pages[i];
+            let kws: any[] = [];
+            try { kws = await getUrlKeywords(p.url, kwPerPage, database); } catch { kws = []; }
+            const keywords  = kws.map((k: any) => String(k.keyword ?? '').toLowerCase().trim()).filter(Boolean);
+            const positions = kws.map((k: any) => k.position).filter((n: number) => n > 0);
+            out[i] = {
+              url:          p.url,
+              keywords,
+              keywordCount: p.keywordCount,
+              traffic:      p.traffic,
+              bestPosition: positions.length ? Math.min(...positions) : 0,
+            };
+            done++;
+            send({ type: 'progress', done, total: pages.length, url: p.url });
           }
         }
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pages.length) }, worker));
 
-        // Group the resolved keywords under their unique page.
-        const pageGroups = new Map<string, { url: string; keywords: string[]; bestPosition: number; volume: number }>();
-        for (const [kw, v] of Array.from(bestByKw.entries())) {
-          let pg = pageGroups.get(v.url);
-          if (!pg) { pg = { url: v.url, keywords: [], bestPosition: v.position || 999, volume: 0 }; pageGroups.set(v.url, pg); }
-          pg.keywords.push(kw);
-          pg.volume += v.searchVolume;
-          if (v.position > 0 && v.position < pg.bestPosition) pg.bestPosition = v.position;
-        }
-        const pages = Array.from(pageGroups.values()).sort((a, b) => b.volume - a.volume);
-        const matched = bestByKw.size;
-        const urlCount = pages.length;
-
+        const pageEntries = out.filter(Boolean);
         const pageMap = {
-          pages,
-          urlCount,
-          rowCount: rows.length,
-          matchedKeywords: matched,
-          clientKeywordCount: clientKwSet.size,
+          pages: pageEntries,
+          urlCount: pageEntries.length,
+          keywordsPerPage: kwPerPage,
           builtAt: new Date().toISOString(),
           database,
           domain: clientDomain,
@@ -153,7 +136,7 @@ export async function POST(
           .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _pageMap: pageMap } as any })
           .where(eq(analyses.id, analysis.id));
 
-        console.log(`[OrbitIQ] Page-map stored: ${urlCount} unique pages across ${matched} client keywords (from ${rows.length} ranking rows)`);
+        console.log(`[OrbitIQ] Page-map stored: ${pageEntries.length} unique pages, ${kwPerPage} kw/page sampled`);
         send({ type: 'done', pageMap });
         controller.close();
       } catch (err) {

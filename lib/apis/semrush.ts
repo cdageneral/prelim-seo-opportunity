@@ -185,6 +185,61 @@ export async function getOrganicKeywords(
   return all;
 }
 
+// ─── Ranking pages + per-page keywords (v7.166) ─────────────────────────────────
+//
+// The Content-Plan page-map builds on UNIQUE PAGES, not the full keyword
+// footprint: `domain_organic_unique` returns each ranking URL with its keyword
+// count + traffic (one cheap request, no deep pagination → no display_offset
+// 605), then `url_organic` returns the real keywords each page ranks for so the
+// page can be mapped to a keyword cluster. COST: 10 API units/row for both.
+
+export interface SemrushPage {
+  url:          string;
+  keywordCount: number;   // real number of organic keywords the page ranks for
+  traffic:      number;   // estimated monthly organic traffic
+}
+
+// Top ranking pages of a domain (unique URLs), sorted by traffic. Single request.
+export async function getOrganicPages(domain: string, limit = 100, database = 'us'): Promise<SemrushPage[]> {
+  const raw = await semrushGet({
+    type:           'domain_organic_unique',
+    domain,
+    database,
+    display_limit:  String(Math.max(1, limit)),
+    display_sort:   'tr_desc',
+    export_columns: 'Ur,Pc,Tr',
+  });
+  return parseSemrushCSV(raw)
+    .map(row => ({
+      url:          row['Url'] ?? row['URL'] ?? '',
+      keywordCount: parseInt(row['Number of Keywords'] ?? '0'),
+      traffic:      parseInt(row['Traffic'] ?? '0'),
+    }))
+    .filter(p => p.url);
+}
+
+// The organic keywords a single URL ranks for (top `limit` by traffic).
+export async function getUrlKeywords(url: string, limit = 25, database = 'us'): Promise<SemrushKeyword[]> {
+  const raw = await semrushGet({
+    type:           'url_organic',
+    url,
+    database,
+    display_limit:  String(Math.max(1, limit)),
+    display_sort:   'tr_desc',
+    export_columns: 'Ph,Po,Nq',
+  });
+  return parseSemrushCSV(raw)
+    .map(row => ({
+      keyword:      row['Keyword'] ?? '',
+      position:     parseInt(row['Position'] ?? '0'),
+      searchVolume: parseInt(row['Search Volume'] ?? '0'),
+      url,
+      cpc:          0,
+      competition:  0,
+    }))
+    .filter(k => k.keyword);
+}
+
 // ─── Demand-side keyword research (v7.155) ──────────────────────────────────────
 //
 // These pull the DEMAND UNIVERSE around a seed phrase — what people actually

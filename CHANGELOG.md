@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.166 — 2026-06-08 · Page-map rebuilt on unique pages + per-page keywords (fixes 605 + the 98k-keyword pull)
+
+**What Wayne hit:** the pull still failed with `ERROR 605 :: Invalid display_offset` and the progress bar said it was "mapping 98k keywords." Both stem from the same wrong approach — pulling the entire `domain_organic` keyword footprint (98k rows ≈ 980k Semrush units) and paginating it (page 2's offset of 10,000 equals the page limit, which Semrush rejects). Wayne: we don't want to map every keyword — get the unique URLs in the footprint, then map those to the clusters.
+
+**New approach (verified against the live Semrush API).** Decision via AskUserQuestion: map each unique URL to a cluster by its real ranking keywords.
+- `lib/apis/semrush.ts` — two new functions: `getOrganicPages` (`domain_organic_unique` — the client's unique ranking URLs with keyword count + traffic, one request, no pagination → no 605) and `getUrlKeywords` (`url_organic` — the real keywords a single page ranks for).
+- `app/api/projects/[id]/page-map/route.ts` — rewritten: pull unique pages (cap `maxPages`, default 100), then pull each page's top keywords (`kwPerPage`, default 25) with bounded concurrency (5) and live progress, and persist `_pageMap.pages = [{ url, keywords[], keywordCount, traffic, bestPosition }]`. Cost ≈ maxPages + maxPages×kwPerPage rows (≈26k units at defaults) instead of ~980k — and no full-footprint pull.
+- `components/brief/ContentMapSection.tsx` — page-centric mapping: each unique page is assigned to the cluster its real keywords most belong to (`assignPageToCluster`, reusing the existing category/problem matching), independent of whether the analysis keyword set contained those keywords (so a CSV-loaded footprint still maps to its real pages). A cluster with ≥1 assigned page = Optimise, else Build net-new. Pages whose dominant theme isn't a plan cluster are counted as pulled-but-unmapped ("Existing Pages Mapped: N of M ranking pages") rather than forced into a wrong cluster. The Pages-view "Pages" column shows each cluster's mapped-page count. Live-mode analyses with inline ranking URLs still work via the existing keyword-url fallback when no page-pull exists.
+
+**Verification:** isolated `tsc --noEmit` → exit 0. Route integration test (bundled real route, stubbed db/semrush/next-server, drove `POST`, read the stream) 11/11: start total = page count, one progress event per page, `pages[]` with lowercased real keywords + real keywordCount/traffic/bestPosition, no `byKeyword`, persisted to `snapshot._pageMap.pages`. Render harness 24/24 unchanged (live-mode url fallback) + new 10/10 page-centric test (two liposuction pages both assigned to the Liposuction cluster → Optimise, others net-new, correct counts + "of N ranking pages"). Real Semrush data confirmed live for sonobello.com via the Semrush MCP (`domain_organic_unique` returns unique URLs + keyword counts + traffic; `url_organic` returns real per-page keywords). Render shown in chat before delivery.
+
+**Built on v7.165-src→v7.166-src, package.json 7.166.0, inner folder `orbitiq-v7.166/`, 78 files, zip in /tmp → cp to GEO `orbitiq-v7.166.zip`.**
+
 ## v7.165 — 2026-06-08 · Page-map stores UNIQUE pages (no per-keyword URL duplication)
 
 **What Wayne asked for:** don't store a URL on every keyword — that's a lot of data and duplication (many keywords share one page). Instead pull the unique URLs and map each to its keywords → cluster → content plan.

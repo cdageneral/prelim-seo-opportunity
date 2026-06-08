@@ -558,18 +558,43 @@ function gapLabel(g: GapType): { text: string; bg: string; color: string; border
 
 interface PageMapPage {
   url: string;
-  keywords: string[];      // client keywords (lowercased) that rank with this page as their best
+  keywords: string[];      // v7.166: the real keywords this page ranks for (lowercased, top N by traffic)
+  keywordCount?: number;   // real total # of organic keywords the page ranks for
+  traffic?: number;        // estimated monthly organic traffic
   bestPosition?: number;
-  volume?: number;
 }
 interface PageMap {
-  pages?: PageMapPage[];   // v7.165: unique pages, each carrying its keywords (canonical, no duplication)
+  pages?: PageMapPage[];   // v7.166: unique ranking pages, each carrying its real keywords
   // legacy (v7.163/164): keyword → page. Still read if an older pull is cached.
   byKeyword?: Record<string, { url: string; position: number; searchVolume: number }>;
   urlCount: number;
-  rowCount: number;
-  matchedKeywords?: number;
+  keywordsPerPage?: number;
   builtAt: string;
+}
+
+// v7.166: assign a page to the cluster it most belongs to, by running the page's
+// real ranking keywords through the SAME category/problem matching used to build
+// the clusters and taking the majority (by keyword count). Returns a cluster name
+// that exists among the built clusters, or null if none match.
+function assignPageToCluster(
+  pageKeywords: string[],
+  categories: Array<{ name: string; type: string }>,
+  clusterNames: Set<string>,
+  clientDomain: string,
+  competitorDomains: string[],
+): string | null {
+  const tally = new Map<string, number>();
+  for (const kw of pageKeywords) {
+    if (!kw) continue;
+    let name = matchKeywordToCategory(kw, categories, clientDomain, competitorDomains);
+    if (!name) name = deterministicProblemTheme(kw);
+    if (name) tally.set(name, (tally.get(name) ?? 0) + 1);
+  }
+  let best: string | null = null, bestN = 0;
+  for (const [name, n] of Array.from(tally.entries())) {
+    if (clusterNames.has(name) && n > bestN) { best = name; bestN = n; }
+  }
+  return best;
 }
 
 const pageMapCacheKey = (analysis: any): string => `orbitiq-pagemap-${analysis?.id ?? 'none'}`;
@@ -806,6 +831,38 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords, urlByKeyword],
   );
 
+  // v7.166: page-centric mapping. Each unique ranking page (from the on-demand
+  // pull) is assigned to the cluster its real keywords most belong to. This is
+  // independent of whether the analysis keyword set included those keywords, so
+  // a CSV-loaded footprint still maps to its real pages.
+  const categories = useMemo(
+    () => ((analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [])
+      .map((c: any) => ({ name: c.name, type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' })),
+    [analysis],
+  );
+  const pageAssignment = useMemo(() => {
+    const pages = pageMap?.pages ?? [];
+    if (!pages.length) return null;   // no page-pull yet → fall back to keyword-url mapping
+    const clusterNames = new Set(clusters.map((c: ThemeCluster) => c.name));
+    const byCluster = new Map<string, string[]>();
+    for (const pg of pages) {
+      if (!pg?.url) continue;
+      const name = assignPageToCluster(pg.keywords ?? [], categories, clusterNames, clientDomain, competitors ?? []);
+      if (!name) continue;
+      if (!byCluster.has(name)) byCluster.set(name, []);
+      byCluster.get(name)!.push(pg.url);
+    }
+    return byCluster;
+  }, [pageMap, clusters, categories, clientDomain, competitors]);
+
+  // Clusters with their existing pages resolved: page-centric when a pull exists,
+  // else the keyword-url fallback that buildClusters already computed.
+  const clustersWithPages = useMemo(() => clusters.map((c: ThemeCluster) => {
+    if (!pageAssignment) return c;
+    const pages = Array.from(new Set(pageAssignment.get(c.name) ?? []));
+    return { ...c, existingPages: pages, rankedKwCount: pages.length, pageStatus: pages.length > 0 ? 'optimize' as const : 'net-new' as const };
+  }), [clusters, pageAssignment]);
+
   // v7.163: on-demand Semrush page-map pull (streamed NDJSON → determinate bar).
   async function buildPageMap() {
     setBuilding(true); setBuildErr(null);
@@ -878,27 +935,29 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     return seen.size;
   }, [allGaps]);
 
-  // v7.163: existing-page mapping metrics (cluster-level optimize vs net-new).
-  const optimizeClusters = useMemo(() => clusters.filter((c: ThemeCluster) => c.pageStatus === 'optimize'), [clusters]);
-  const netNewClusters   = useMemo(() => clusters.filter((c: ThemeCluster) => c.pageStatus === 'net-new'),   [clusters]);
+  // v7.163/166: existing-page mapping metrics (cluster-level optimize vs net-new),
+  // computed from the page-centric mapping.
+  const optimizeClusters = useMemo(() => clustersWithPages.filter((c: ThemeCluster) => c.pageStatus === 'optimize'), [clustersWithPages]);
+  const netNewClusters   = useMemo(() => clustersWithPages.filter((c: ThemeCluster) => c.pageStatus === 'net-new'),   [clustersWithPages]);
   const pagesMapped = useMemo(() => {
     const s = new Set<string>();
-    for (const c of clusters) for (const p of c.existingPages) s.add(p);
+    for (const c of clustersWithPages) for (const p of c.existingPages) s.add(p);
     return s.size;
-  }, [clusters]);
+  }, [clustersWithPages]);
   const optimizeVol = useMemo(() => optimizeClusters.reduce((s: number, c: ThemeCluster) => s + c.totalVolume, 0), [optimizeClusters]);
   const netNewVol   = useMemo(() => netNewClusters.reduce((s: number, c: ThemeCluster) => s + c.totalVolume, 0),   [netNewClusters]);
-  const hasUrlData  = Object.keys(urlByKeyword).length > 0;
+  const totalPagesPulled = pageMap?.pages?.length ?? 0;
+  const hasUrlData  = totalPagesPulled > 0 || Object.keys(urlByKeyword).length > 0;
   const builtAtLabel = pageMap?.builtAt ? new Date(pageMap.builtAt).toLocaleDateString() : null;
 
   // Clusters sorted for the page-mapping view: net-new (the build backlog) first,
   // then optimize, each by descending market volume.
   const mappedClusters = useMemo(() => {
-    return [...clusters].sort((a: ThemeCluster, b: ThemeCluster) => {
+    return [...clustersWithPages].sort((a: ThemeCluster, b: ThemeCluster) => {
       if (a.pageStatus !== b.pageStatus) return a.pageStatus === 'net-new' ? -1 : 1;
       return b.totalVolume - a.totalVolume;
     });
-  }, [clusters]);
+  }, [clustersWithPages]);
 
   const hasData = clusters.length > 0;
 
@@ -942,7 +1001,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             {building ? 'Pulling pages…' : hasUrlData ? 'Refresh ranking pages' : 'Map ranking pages'}
           </button>
           <p style={{ fontSize: 10, color: '#4A4A6A', marginTop: 6, lineHeight: 1.4 }}>
-            {builtAtLabel ? `Pages mapped ${builtAtLabel} · ` : ''}Pulls real ranking URLs from Semrush (~10 units/keyword)
+            {builtAtLabel ? `Pages mapped ${builtAtLabel} · ` : ''}Pulls your unique ranking pages + their keywords from Semrush
           </p>
           {buildErr && <p style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>{buildErr}</p>}
         </div>
@@ -962,7 +1021,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
         <StatCard label="Optimise Existing" value={String(optimizeClusters.length)} accent="#34d399" sub={`${fmtVol(optimizeVol)}/mo · clusters with a ranking page`} />
         <StatCard label="Build Net-New" value={String(netNewClusters.length)} accent="#fb923c" sub={`${fmtVol(netNewVol)}/mo · clusters with no ranking page`} />
-        <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? 'Distinct ranking URLs (Semrush)' : 'Click “Map ranking pages”'} />
+        <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? (totalPagesPulled > 0 ? `of ${totalPagesPulled} ranking pages` : 'Distinct ranking URLs (Semrush)') : 'Click “Map ranking pages”'} />
         <StatCard label="Monthly Volume at Stake" value={fmtVol(totalVol)} sub={`${fmtVol(totalVol * 12)}/yr uncaptured`} />
       </div>
 
@@ -1128,7 +1187,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #1A1A30' }}>
-                  {['Cluster', 'Action', 'Existing page(s)', 'KW with page', 'Monthly Vol'].map((h: string) => (
+                  {['Cluster', 'Action', 'Existing page(s)', 'Pages', 'Monthly Vol'].map((h: string) => (
                     <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: '#4A4A6A', textAlign: 'left' }}>{h}</th>
                   ))}
                 </tr>
@@ -1169,7 +1228,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{c.rankedKwCount} / {c.keywords.length}</td>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{c.existingPages.length}</td>
                       <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(c.totalVolume)}</td>
                     </tr>
                   );
