@@ -175,6 +175,57 @@ export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0, 
   return all;
 }
 
+// ─── Demand-side keyword research (v7.155) ──────────────────────────────────────
+//
+// These pull the DEMAND UNIVERSE around a seed phrase — what people actually
+// search — independent of who ranks. Used by the on-demand "Build deep journey"
+// expansion so the Audience Journey covers the full topic map with REAL monthly
+// search volumes, not just the client/competitor ranking footprint.
+// COST: Semrush bills ~40 API units per returned row for these reports.
+// Columns: Ph=Phrase, Nq=Search Volume, Cp=CPC, Co=Competition, Kd=Difficulty.
+
+export interface SemrushPhrase {
+  keyword:      string;
+  searchVolume: number;
+  cpc:          number;
+  competition:  number;
+}
+
+function parsePhraseRows(raw: string): SemrushPhrase[] {
+  return parseSemrushCSV(raw).map(row => ({
+    keyword:      row['Keyword']       ?? '',
+    searchVolume: parseInt(row['Search Volume'] ?? '0'),
+    cpc:          parseFloat(row['CPC'] ?? '0'),
+    competition:  parseFloat(row['Competition'] ?? '0'),
+  })).filter(r => r.keyword);
+}
+
+// Question-format keywords for a seed (who/what/why/how …) with real volumes.
+export async function getPhraseQuestions(phrase: string, limit = 50, database = 'us'): Promise<SemrushPhrase[]> {
+  const raw = await semrushGet({
+    type:           'phrase_questions',
+    phrase,
+    database,
+    display_limit:  String(limit),
+    display_sort:   'nq_desc',
+    export_columns: 'Ph,Nq,Cp,Co',
+  });
+  return parsePhraseRows(raw);
+}
+
+// Semantically related / topically adjacent keywords for a seed, with volumes.
+export async function getPhraseRelated(phrase: string, limit = 50, database = 'us'): Promise<SemrushPhrase[]> {
+  const raw = await semrushGet({
+    type:           'phrase_related',
+    phrase,
+    database,
+    display_limit:  String(limit),
+    display_sort:   'nq_desc',
+    export_columns: 'Ph,Nq,Cp,Co',
+  });
+  return parsePhraseRows(raw);
+}
+
 // ─── Competitor Discovery ─────────────────────────────────────────────────────
 
 export async function getCompetitors(domain: string, database = 'us'): Promise<SemrushCompetitor[]> {

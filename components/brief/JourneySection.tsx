@@ -537,6 +537,111 @@ function initialsOf(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+// ─── Demand universe (v7.155) ───────────────────────────────────────────────────
+//
+// When the on-demand "Build deep journey" expansion has run, the journey is built
+// from the DEMAND UNIVERSE (Semrush phrase_questions + phrase_related, every topic
+// carrying a real monthly search volume) instead of only the ranking footprint.
+// Nodes are theme × funnel stage, so each theme shows its full discovery→decision
+// depth. The client/competitor ranking footprint is overlaid as coverage state.
+
+interface DemandTopic {
+  keyword:      string;
+  searchVolume: number;
+  seeds:        string[];
+  reports?:     string[];
+  laneHint?:    'product' | 'problem';
+}
+interface DemandUniverse {
+  topics:       DemandTopic[];
+  productSeeds?: string[];
+  problemSeeds?: string[];
+  builtAt?:     string;
+  topicCount?:  number;
+  seedCount?:   number;
+  database?:    string;
+  status?:      string;
+}
+
+function titleCaseSeed(s: string): string {
+  return s.replace(/\b\w/g, (c: string) => c.toUpperCase());
+}
+
+// Client/competitor ranking sets (lowercased keywords) for the coverage overlay.
+function buildFootprintSets(analysis: any, uploaded: any[]): { client: Set<string>; competitor: Set<string> } {
+  const snap = analysis?.semrushSnapshot ?? {};
+  const client = new Set<string>();
+  const competitor = new Set<string>();
+  for (const k of (snap.topKeywords ?? [])) { const kw = (k.keyword ?? '').toLowerCase(); if (kw) client.add(kw); }
+  for (const k of (snap.gapKeywords ?? [])) { const kw = (k.keyword ?? '').toLowerCase(); if (kw) competitor.add(kw); }
+  for (const k of (uploaded ?? [])) {
+    const kw = (k.keyword ?? '').toLowerCase(); if (!kw) continue;
+    if (k.type === 'gap') competitor.add(kw);
+    else if (k.source !== 'blocked') client.add(kw);
+  }
+  return { client, competitor };
+}
+
+// Within-theme stage progression: connect each theme's nodes across consecutive
+// occupied stages. No cross-theme hub edges (that was the v7.152 funnel artifact).
+function withinThemeEdges(nodes: JourneyNode[]): [string, string][] {
+  const byTheme = new Map<string, JourneyNode[]>();
+  for (const n of nodes) {
+    if (!byTheme.has(n.name)) byTheme.set(n.name, []);
+    byTheme.get(n.name)!.push(n);
+  }
+  const edges: [string, string][] = [];
+  for (const arr of Array.from(byTheme.values())) {
+    const sorted = arr.slice().sort((a: JourneyNode, b: JourneyNode) => a.col - b.col);
+    for (let i = 0; i < sorted.length - 1; i++) edges.push([sorted[i].id, sorted[i + 1].id]);
+  }
+  return edges;
+}
+
+// Build journey nodes (theme × funnel stage) from the demand universe, overlaying
+// the ranking footprint as coverage. Every node's volume = the sum of REAL Semrush
+// search volumes of its topics.
+export function buildDemandNodes(
+  universe: DemandUniverse,
+  clientRanked: Set<string>,
+  competitorRanked: Set<string>,
+): { preNodes: JourneyNode[]; prodNodes: JourneyNode[]; preEdges: [string, string][]; prodEdges: [string, string][] } {
+  const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
+
+  interface Bucket { lane: JourneyType; theme: string; stage: JourneyStage; topics: DemandTopic[] }
+  const buckets = new Map<string, Bucket>();
+
+  for (const t of (universe.topics ?? [])) {
+    const isProduct = t.laneHint === 'product' || t.seeds.some((s: string) => productSet.has(s.toLowerCase()));
+    const lane: JourneyType = isProduct ? 'product' : 'pre-product';
+    const themeSeed = t.seeds.find((s: string) => productSet.has(s.toLowerCase()) === isProduct) ?? t.seeds[0] ?? 'Other';
+    const theme = titleCaseSeed(themeSeed);
+    const sig = detectIntent(t.keyword);
+    const stage = INTENT_META[sig === 'unmatched' ? 'informational' : sig].stage;
+    const key = `${lane}::${theme}::${stage}`;
+    if (!buckets.has(key)) buckets.set(key, { lane, theme, stage, topics: [] });
+    buckets.get(key)!.topics.push(t);
+  }
+
+  const nodes: JourneyNode[] = [];
+  for (const b of Array.from(buckets.values())) {
+    const totalVol  = b.topics.reduce((s: number, t: DemandTopic) => s + t.searchVolume, 0);
+    const clientVol = b.topics.filter((t: DemandTopic) => clientRanked.has(t.keyword.toLowerCase())).reduce((s: number, t: DemandTopic) => s + t.searchVolume, 0);
+    const compVol   = b.topics.filter((t: DemandTopic) => !clientRanked.has(t.keyword.toLowerCase()) && competitorRanked.has(t.keyword.toLowerCase())).reduce((s: number, t: DemandTopic) => s + t.searchVolume, 0);
+    const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+    const sampleKws = b.topics.slice().sort((a: DemandTopic, x: DemandTopic) => x.searchVolume - a.searchVolume).slice(0, 8).map((t: DemandTopic) => t.keyword);
+    nodes.push({
+      id: `${b.lane}::${b.theme}::${b.stage}`, name: b.theme, lane: b.lane, stage: b.stage,
+      col: JOURNEY_STAGE_ORDER.indexOf(b.stage), state,
+      totalVol, clientVol, compVol, kwCount: b.topics.length, sampleKws,
+    });
+  }
+
+  const preNodes  = nodes.filter((n: JourneyNode) => n.lane === 'pre-product');
+  const prodNodes = nodes.filter((n: JourneyNode) => n.lane === 'product');
+  return { preNodes, prodNodes, preEdges: withinThemeEdges(preNodes), prodEdges: withinThemeEdges(prodNodes) };
+}
+
 // ─── MindMap (v7.152) ───────────────────────────────────────────────────────────
 
 function MindMap({ nodes, edges, onSelect, selectedId }: {
@@ -789,6 +894,12 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
   const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
+  // v7.155: demand universe (persisted on the snapshot once the on-demand build runs)
+  const [demandUniverse, setDemandUniverse] = useState<DemandUniverse | null>(
+    () => ((analysis?.semrushSnapshot as any)?._demandUniverse ?? null),
+  );
+  const [building, setBuilding]     = useState(false);
+  const [buildError, setBuildError] = useState<string | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const industry     = (analysis as any)?._industry ?? 'General';
@@ -832,9 +943,43 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords, problemAssignments],
   );
 
-  const allNodes  = useMemo(() => clusters.map(clusterToNode), [clusters]);
-  const preNodes  = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'pre-product'), [allNodes]);
-  const prodNodes = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'product'), [allNodes]);
+  const allNodes   = useMemo(() => clusters.map(clusterToNode), [clusters]);
+  const fpPreNodes  = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'pre-product'), [allNodes]);
+  const fpProdNodes = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'product'), [allNodes]);
+
+  // v7.155: keep demandUniverse in sync when the loaded analysis changes.
+  useEffect(() => {
+    setDemandUniverse((analysis?.semrushSnapshot as any)?._demandUniverse ?? null);
+    setBuildError(null);
+  }, [analysis?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v7.155: when the demand universe exists, build the journey from it (theme ×
+  // funnel stage, every node volume-backed) overlaid with the ranking footprint.
+  const demandMode = !!(demandUniverse && (demandUniverse.topics?.length ?? 0) > 0);
+  const footprint  = useMemo(() => buildFootprintSets(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
+  const demand = useMemo(
+    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor) : null,
+    [demandMode, demandUniverse, footprint],
+  );
+
+  const preNodes  = demand ? demand.preNodes  : fpPreNodes;
+  const prodNodes = demand ? demand.prodNodes : fpProdNodes;
+
+  async function buildDeepJourney() {
+    setBuilding(true); setBuildError(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ linesPerSeed: 50 }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setBuildError(d?.error ?? `Build failed (${r.status})`); return; }
+      if (d?.demandUniverse) { setDemandUniverse(d.demandUniverse); setSelected(null); }
+    } catch (e) {
+      setBuildError(String((e as any)?.message ?? e));
+    } finally {
+      setBuilding(false);
+    }
+  }
 
   // v7.152: AI-inferred topic relationships (cached client-side, like cluster intents).
   // Fault-tolerant: on failure or no key, the stage-order fallback below is used.
@@ -897,8 +1042,10 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis?.id, projectId, industry, clientDomain, problemKwList]);
 
-  const preEdges  = edges.preProduct.length ? edges.preProduct : stageOrderEdges(preNodes);
-  const prodEdges = edges.product.length    ? edges.product    : stageOrderEdges(prodNodes);
+  // Demand mode: within-theme stage edges (no cross-theme hub). Footprint mode:
+  // AI-inferred edges with the stage-order fallback (v7.152 behavior).
+  const preEdges  = demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : stageOrderEdges(fpPreNodes));
+  const prodEdges = demand ? demand.prodEdges : (edges.product.length    ? edges.product    : stageOrderEdges(fpProdNodes));
 
   const tabs = useMemo(() => [
     { id: 'combined', label: 'All Segments' },
@@ -916,7 +1063,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     ? (activeSegment.productPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.productPrompts ?? []);
 
-  const hasData = segments.length > 0 || clusters.length > 0;
+  const hasData = segments.length > 0 || clusters.length > 0 || demandMode;
 
   if (!hasData) {
     return (
@@ -938,8 +1085,38 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         </p>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Audience Journeys</h2>
         <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
-          How each segment moves from life-problem search to product decision &mdash; a topic-cluster mind map color-coded by content coverage.
+          How each segment moves from life-problem search to product decision &mdash; a topic mind map color-coded by content coverage.
         </p>
+
+        {/* v7.155: demand-universe build control + provenance */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+          <button onClick={buildDeepJourney} disabled={building}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
+              color: building ? '#6A6A90' : '#0D0D22', background: building ? 'transparent' : '#22d3ee',
+              border: `1px solid ${building ? '#1A1A30' : '#22d3ee'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
+            }}>
+            <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
+            {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
+          </button>
+          {demandMode ? (
+            <span style={{ fontSize: 11, color: '#6A6A90' }}>
+              <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
+              {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
+              {demandUniverse?.builtAt ? ` · built ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : ''}
+              {' '}(Semrush)
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, color: '#6A6A90' }}>
+              Showing your <span style={{ color: '#a78bfa' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
+            </span>
+          )}
+        </div>
+        {buildError && (
+          <p style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>
+            <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}
+          </p>
+        )}
       </div>
 
       {/* Segment tabs — persona portraits carried over from Audience Segments */}
