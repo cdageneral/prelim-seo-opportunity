@@ -144,7 +144,14 @@ function volumeFilter(volMin: number): Record<string, string> {
   return volMin > 0 ? { display_filter: `+|Nq|Gt|${volMin - 1}` } : {};
 }
 
-export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0, database = 'us'): Promise<SemrushKeyword[]> {
+// v7.163: optional `onPage` callback fires after each 10k-row page with the
+// running total fetched, so an on-demand caller (the Content-Plan page-map pull)
+// can stream a determinate progress bar. Default undefined → existing callers
+// (analyze pipeline) are byte-for-byte unchanged.
+export async function getOrganicKeywords(
+  domain: string, limit = 0, volMin = 0, database = 'us',
+  onPage?: (fetched: number) => void,
+): Promise<SemrushKeyword[]> {
   const all: SemrushKeyword[] = [];
   let offset = 0;
   for (;;) {
@@ -170,6 +177,7 @@ export async function getOrganicKeywords(domain: string, limit = 0, volMin = 0, 
     }));
     all.push(...rows);
     offset += rows.length;
+    onPage?.(all.length);
     if (rows.length < want) break;   // footprint exhausted (or API units ran out)
   }
   return all;

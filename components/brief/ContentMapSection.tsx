@@ -15,6 +15,7 @@ interface KwItem {
   position:     number | null;
   isGap:        boolean;
   competitor:   string | null;
+  url:          string;   // v7.163: real Semrush ranking URL for this keyword ('' = none)
 }
 
 interface IntentCluster {
@@ -34,6 +35,12 @@ interface ThemeCluster {
   keywords:    KwItem[];
   totalVolume: number;
   subClusters: IntentCluster[];
+  // v7.163: existing-page mapping (real Semrush ranking URLs for this cluster's
+  // client-ranked keywords). pageStatus 'optimize' = at least one ranking page
+  // already exists; 'net-new' = no ranking page → content must be built.
+  existingPages:    string[];
+  rankedKwCount:    number;   // # of this cluster's keywords with a ranking page
+  pageStatus:       'optimize' | 'net-new';
 }
 
 interface AudienceSegment {
@@ -262,12 +269,26 @@ function classifyJourneyType(type: string): JourneyType {
   return type === 'problem' ? 'pre-product' : 'product';
 }
 
+// v7.163: distinct ranking pages for a set of keywords (client-ranked only —
+// gap/competitor keywords carry no client URL). Drives the optimize vs net-new
+// classification: a cluster with ≥1 ranking page is an "optimise existing"
+// target; a cluster with none is "build net-new".
+function pagesForKws(kws: KwItem[]): { pages: string[]; rankedCount: number } {
+  const pages = new Set<string>();
+  let rankedCount = 0;
+  for (const k of kws) {
+    if (k.url) { pages.add(k.url); rankedCount++; }
+  }
+  return { pages: Array.from(pages), rankedCount };
+}
+
 function buildClusters(
   analysis: any,
   claudeAssignments: Record<string, IntentType>,
   clientDomain: string,
   competitorDomains: string[],
   uploadedKeywords: any[] = [],
+  urlByKeyword: Record<string, string> = {},   // v7.163: keyword(lower) → real ranking URL
 ): ThemeCluster[] {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
@@ -285,18 +306,22 @@ function buildClusters(
       .map((k: any) => (k.keyword ?? '').toLowerCase())
   );
 
+  // v7.163: prefer the per-keyword URL already on the snapshot row, fall back to
+  // the merged urlByKeyword map (snapshot.topKeywords[].url + on-demand _pageMap).
+  const urlFor = (kwLow: string, rowUrl?: string): string => (rowUrl || urlByKeyword[kwLow] || '');
+
   const pool: KwItem[] = [];
   for (const kw of (semSnap.topKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow)) continue;
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null });
+    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null, url: urlFor(kwLow, (kw as any).url) });
   }
   const seen = new Set(pool.map((k: KwItem) => k.keyword.toLowerCase()));
   for (const kw of (semSnap.gapKeywords ?? [])) {
     const kwLow = (kw.keyword ?? '').toLowerCase();
     if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     seen.add(kwLow);
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null });
+    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null, url: '' });
   }
   // Uploaded/CSV keywords from DB — no cap, full set
   for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
@@ -309,6 +334,7 @@ function buildClusters(
       position:     kw.position ?? null,
       isGap:        kw.type === 'gap',
       competitor:   null,
+      url:          kw.type === 'gap' ? '' : urlFor(kwLow, kw.url),
     });
   }
 
@@ -375,13 +401,15 @@ function buildClusters(
     if (!kws.length) continue;
     const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
     const subClusters = buildSub(kws, cat.type === 'brand');
-    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType: classifyJourneyType(cat.type), keywords: kws, totalVolume, subClusters });
+    const { pages, rankedCount } = pagesForKws(kws);
+    result.push({ id: cat.name, name: cat.name, type: cat.type, journeyType: classifyJourneyType(cat.type), keywords: kws, totalVolume, subClusters, existingPages: pages, rankedKwCount: rankedCount, pageStatus: pages.length > 0 ? 'optimize' : 'net-new' });
   }
   for (const [theme, kws] of Array.from(problemGroups.entries())) {
     if (!kws.length) continue;
     const totalVolume = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
     const subClusters = buildSub(kws, false);
-    result.push({ id: theme, name: theme, type: 'problem', journeyType: 'pre-product', keywords: kws, totalVolume, subClusters });
+    const { pages, rankedCount } = pagesForKws(kws);
+    result.push({ id: theme, name: theme, type: 'problem', journeyType: 'pre-product', keywords: kws, totalVolume, subClusters, existingPages: pages, rankedKwCount: rankedCount, pageStatus: pages.length > 0 ? 'optimize' : 'net-new' });
   }
   result.sort((a, b) => {
     const order: Record<string, number> = { problem: 0, procedure: 1, brand: 2, location: 3 };
@@ -522,13 +550,90 @@ function gapLabel(g: GapType): { text: string; bg: string; color: string; border
   }
 }
 
+// ─── Page-map helpers (v7.163) ──────────────────────────────────────────────────
+// The on-demand Semrush page-map is persisted on the analysis snapshot
+// (_pageMap). Because the parent page's `analysis` prop is not refetched in
+// session, an in-session pull is also cached in localStorage and hydrated
+// snapshot-first (mirrors the demand-universe pattern in JourneySection).
+
+interface PageMap {
+  byKeyword: Record<string, { url: string; position: number; searchVolume: number }>;
+  urlCount: number;
+  rowCount: number;
+  matchedKeywords?: number;
+  builtAt: string;
+}
+
+const pageMapCacheKey = (analysis: any): string => `orbitiq-pagemap-${analysis?.id ?? 'none'}`;
+
+function readPageMapCache(analysis: any): PageMap | null {
+  const fromSnap = (analysis?.semrushSnapshot as any)?._pageMap ?? null;
+  if (fromSnap) return fromSnap;
+  if (typeof window === 'undefined' || !analysis?.id) return null;
+  try {
+    const c = window.localStorage.getItem(pageMapCacheKey(analysis));
+    return c ? (JSON.parse(c) as PageMap) : null;
+  } catch { return null; }
+}
+
+// Pretty short label for a ranking URL — drops scheme/host, keeps the path.
+function prettyUrl(u: string): string {
+  if (!u) return '';
+  try {
+    const url = new URL(u.startsWith('http') ? u : `https://${u}`);
+    const path = (url.pathname + url.search).replace(/\/$/, '');
+    return path && path !== '' ? path : '/';
+  } catch {
+    return u.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+  }
+}
+
+function fmtEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '';
+  if (seconds < 60) return `~${Math.round(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `~${m}m ${s.toString().padStart(2, '0')}s left`;
+}
+
+function PageMapProgress({ progress }: { progress: { done: number; total: number; startedAt: number } | null }) {
+  const total = progress?.total ?? 0;
+  const done  = progress?.done ?? 0;
+  const pct   = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const elapsed = progress ? (Date.now() - progress.startedAt) / 1000 : 0;
+  const eta = (total > 0 && done > 0 && done < total) ? fmtEta((total - done) * (elapsed / done)) : '';
+  const label = total === 0
+    ? 'Starting — querying Semrush…'
+    : `Pulling ranking pages · ${done.toLocaleString()} of ${total.toLocaleString()} keywords`;
+  return (
+    <div style={{ marginTop: 12, maxWidth: 460 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
+        <span style={{ fontSize: 11, color: '#9090b8' }}>
+          <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />{label}
+        </span>
+        <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+          {total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}
+        </span>
+      </div>
+      <div style={{ height: 6, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+        {total > 0 ? (
+          <div style={{ height: '100%', width: `${pct}%`, background: '#22d3ee', transition: 'width 0.3s ease' }} />
+        ) : (
+          <div style={{ height: '100%', width: '35%', background: '#22d3ee', opacity: 0.6, animation: 'orbitiq-pm-indet 1.1s ease-in-out infinite' }} />
+        )}
+      </div>
+      <style>{`@keyframes orbitiq-pm-indet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
+    </div>
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
   return (
     <div style={{ background: '#0D0D1E', border: '1px solid #1A1A30', borderRadius: 10, padding: '16px 20px' }}>
       <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: '#4A4A6A', marginBottom: 6 }}>{label}</p>
-      <p style={{ fontSize: 24, fontWeight: 700, color: '#DCDCF4', margin: 0, lineHeight: 1 }}>{value}</p>
+      <p style={{ fontSize: 24, fontWeight: 700, color: accent ?? '#DCDCF4', margin: 0, lineHeight: 1 }}>{value}</p>
       {sub && <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 4 }}>{sub}</p>}
     </div>
   );
@@ -621,7 +726,19 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   const [filterStage,   setFilterStage]   = useState<JourneyStage | 'all'>('all');
   const [filterSegment, setFilterSegment] = useState<string>('all');
   const [filterGap,     setFilterGap]     = useState<GapType | 'all'>('all');
-  const [view,          setView]          = useState<'table' | 'briefs'>('briefs');
+  const [view,          setView]          = useState<'pages' | 'briefs' | 'table'>('pages');
+
+  // v7.163: flash fix — gate the cards/views until the uploaded keywords have
+  // loaded, so the snapshot-only intermediate count (e.g. 181) never paints
+  // before the real count (e.g. 45) once the client footprint is folded in.
+  const [kwLoaded, setKwLoaded] = useState(false);
+
+  // v7.163: on-demand page-map (real Semrush ranking URLs). Hydrate snapshot-first
+  // then localStorage (survives leaving/re-entering the panel in-session).
+  const [pageMap,  setPageMap]  = useState<PageMap | null>(() => readPageMapCache(analysis));
+  const [building, setBuilding] = useState(false);
+  const [buildErr, setBuildErr] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number; startedAt: number } | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const segments: AudienceSegment[] = useMemo(
@@ -641,19 +758,81 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     } catch {}
   }, [analysis?.id]);
 
+  // v7.163: re-hydrate the page-map when the analysis changes (snapshot → cache).
+  useEffect(() => { setPageMap(readPageMapCache(analysis)); }, [analysis?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch uploaded/CSV keywords from DB — re-runs when projectId changes
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) { setKwLoaded(true); return; }
+    let cancelled = false;
+    setKwLoaded(false);
     fetch(`/api/projects/${projectId}/keywords`)
       .then((r: Response) => r.ok ? r.json() : { keywords: [] })
-      .then((d: any) => setUploadedKeywords(d.keywords ?? []))
-      .catch(() => {});
+      .then((d: any) => { if (!cancelled) { setUploadedKeywords(d.keywords ?? []); setKwLoaded(true); } })
+      .catch(() => { if (!cancelled) setKwLoaded(true); });
+    return () => { cancelled = true; };
   }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
+  // v7.163: merged keyword → real ranking URL (snapshot rows first, on-demand
+  // _pageMap/cache overrides with a fresher pull).
+  const urlByKeyword = useMemo(() => {
+    const m: Record<string, string> = {};
+    const snap = (analysis?.semrushSnapshot as any) ?? {};
+    for (const k of (snap.topKeywords ?? [])) {
+      const kw = (k.keyword ?? '').toLowerCase().trim();
+      if (kw && k.url) m[kw] = k.url;
+    }
+    const pm = pageMap?.byKeyword ?? {};
+    for (const kw of Object.keys(pm)) { if (pm[kw]?.url) m[kw] = pm[kw].url; }
+    return m;
+  }, [analysis, pageMap]);
+
   const clusters = useMemo(
-    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords),
-    [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords],
+    () => buildClusters(analysis, claudeAssignments, clientDomain, competitors ?? [], uploadedKeywords, urlByKeyword),
+    [analysis, claudeAssignments, clientDomain, competitors, uploadedKeywords, urlByKeyword],
   );
+
+  // v7.163: on-demand Semrush page-map pull (streamed NDJSON → determinate bar).
+  async function buildPageMap() {
+    setBuilding(true); setBuildErr(null);
+    setProgress({ done: 0, total: 0, startedAt: Date.now() });
+    try {
+      const r = await fetch(`/api/projects/${projectId}/page-map`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      if (!r.ok || !r.body) {
+        let msg = `Pull failed (${r.status})`;
+        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+        setBuildErr(msg); return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'start')          setProgress((p) => ({ done: 0, total: ev.total ?? 0, startedAt: p?.startedAt ?? Date.now() }));
+          else if (ev.type === 'progress')  setProgress((p) => ({ done: ev.done ?? 0, total: ev.total ?? 0, startedAt: p?.startedAt ?? Date.now() }));
+          else if (ev.type === 'error')     setBuildErr(ev.error ?? 'Pull failed');
+          else if (ev.type === 'done' && ev.pageMap) {
+            setPageMap(ev.pageMap);
+            try { window.localStorage.setItem(pageMapCacheKey(analysis), JSON.stringify(ev.pageMap)); } catch {}
+          }
+        }
+      }
+    } catch (e) {
+      setBuildErr(String((e as any)?.message ?? e));
+    } finally {
+      setBuilding(false);
+      setProgress(null);
+    }
+  }
 
   const allGaps = useMemo(() => buildContentGaps(clusters, segments), [clusters, segments]);
 
@@ -685,6 +864,28 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     return seen.size;
   }, [allGaps]);
 
+  // v7.163: existing-page mapping metrics (cluster-level optimize vs net-new).
+  const optimizeClusters = useMemo(() => clusters.filter((c: ThemeCluster) => c.pageStatus === 'optimize'), [clusters]);
+  const netNewClusters   = useMemo(() => clusters.filter((c: ThemeCluster) => c.pageStatus === 'net-new'),   [clusters]);
+  const pagesMapped = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of clusters) for (const p of c.existingPages) s.add(p);
+    return s.size;
+  }, [clusters]);
+  const optimizeVol = useMemo(() => optimizeClusters.reduce((s: number, c: ThemeCluster) => s + c.totalVolume, 0), [optimizeClusters]);
+  const netNewVol   = useMemo(() => netNewClusters.reduce((s: number, c: ThemeCluster) => s + c.totalVolume, 0),   [netNewClusters]);
+  const hasUrlData  = Object.keys(urlByKeyword).length > 0;
+  const builtAtLabel = pageMap?.builtAt ? new Date(pageMap.builtAt).toLocaleDateString() : null;
+
+  // Clusters sorted for the page-mapping view: net-new (the build backlog) first,
+  // then optimize, each by descending market volume.
+  const mappedClusters = useMemo(() => {
+    return [...clusters].sort((a: ThemeCluster, b: ThemeCluster) => {
+      if (a.pageStatus !== b.pageStatus) return a.pageStatus === 'net-new' ? -1 : 1;
+      return b.totalVolume - a.totalVolume;
+    });
+  }, [clusters]);
+
   const hasData = clusters.length > 0;
 
   if (!hasData) {
@@ -701,21 +902,53 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0, padding: '12px 16px' }}>
       {/* Header */}
-      <div style={{ marginBottom: 22 }}>
-        <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>
-          Foundation · 05
-        </p>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Content Plan</h2>
-        <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
-          Every content gap identified across segments, journey stages, and keyword clusters &mdash; with prioritised article briefs.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
+        <div>
+          <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>
+            Foundation · 05
+          </p>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Content Plan</h2>
+          <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
+            Each keyword cluster mapped to the page that already ranks for it &mdash; so you can see what to <span style={{ color: '#34d399' }}>optimise</span> versus what to <span style={{ color: '#fb923c' }}>build net&#8209;new</span>.
+          </p>
+        </div>
+
+        {/* v7.163: on-demand ranking-page pull */}
+        <div style={{ textAlign: 'right' as const, minWidth: 220 }}>
+          <button
+            onClick={buildPageMap}
+            disabled={building}
+            style={{
+              padding: '7px 14px', fontSize: 11, fontWeight: 700, borderRadius: 7,
+              background: building ? '#14142a' : 'rgba(34,211,238,0.1)', color: building ? '#5A5A80' : '#22d3ee',
+              border: '1px solid rgba(34,211,238,0.3)', cursor: building ? 'default' : 'pointer', whiteSpace: 'nowrap' as const,
+            }}
+          >
+            <i className={`ti ${building ? 'ti-loader-2' : 'ti-map-pin-search'}`} style={{ marginRight: 6 }} />
+            {building ? 'Pulling pages…' : hasUrlData ? 'Refresh ranking pages' : 'Map ranking pages'}
+          </button>
+          <p style={{ fontSize: 10, color: '#4A4A6A', marginTop: 6, lineHeight: 1.4 }}>
+            {builtAtLabel ? `Pages mapped ${builtAtLabel} · ` : ''}Pulls real ranking URLs from Semrush (~10 units/keyword)
+          </p>
+          {buildErr && <p style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>{buildErr}</p>}
+        </div>
       </div>
 
+      {building && <div style={{ marginBottom: 18 }}><PageMapProgress progress={progress} /></div>}
+
+      {/* v7.163: flash fix — hold the cards/views until the client footprint loads */}
+      {!kwLoaded ? (
+        <div style={{ padding: '48px 24px', textAlign: 'center' as const }}>
+          <i className="ti ti-loader-2" style={{ color: '#22d3ee', fontSize: 18 }} />
+          <p style={{ color: '#5A5A80', fontSize: 12, marginTop: 10 }}>Loading content plan&hellip;</p>
+        </div>
+      ) : (
+      <>
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-        <StatCard label="Articles Needed" value={String(uniqueArticleCount)} sub="Unique cluster × stage gaps" />
-        <StatCard label="Competitor Gaps" value={String(compGaps)} sub="Competitor ranks, client doesn't" />
-        <StatCard label="Missing Content" value={String(missingGaps)} sub="No ranking by anyone yet" />
+        <StatCard label="Optimise Existing" value={String(optimizeClusters.length)} accent="#34d399" sub={`${fmtVol(optimizeVol)}/mo · clusters with a ranking page`} />
+        <StatCard label="Build Net-New" value={String(netNewClusters.length)} accent="#fb923c" sub={`${fmtVol(netNewVol)}/mo · clusters with no ranking page`} />
+        <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? 'Distinct ranking URLs (Semrush)' : 'Click “Map ranking pages”'} />
         <StatCard label="Monthly Volume at Stake" value={fmtVol(totalVol)} sub={`${fmtVol(totalVol * 12)}/yr uncaptured`} />
       </div>
 
@@ -723,17 +956,19 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {/* View toggle */}
         <div style={{ display: 'flex', background: '#0A0A18', border: '1px solid #1A1A30', borderRadius: 7, overflow: 'hidden', marginRight: 8 }}>
-          {(['briefs', 'table'] as const).map((v: 'briefs' | 'table') => (
+          {(['pages', 'briefs', 'table'] as const).map((v: 'pages' | 'briefs' | 'table') => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: '6px 14px', fontSize: 11, fontWeight: view === v ? 700 : 500,
               color: view === v ? '#DCDCF4' : '#4A4A6A', background: view === v ? '#1A1A30' : 'transparent',
               border: 'none', cursor: 'pointer', textTransform: 'capitalize' as const,
             }}>
-              {v === 'briefs' ? '📄 Briefs' : '📊 Table'}
+              {v === 'pages' ? '🗺 Pages' : v === 'briefs' ? '📄 Briefs' : '📊 Table'}
             </button>
           ))}
         </div>
 
+        {view !== 'pages' && (
+        <>
         {/* Stage filter */}
         <div style={{ display: 'flex', gap: 4 }}>
           {(['all', ...JOURNEY_STAGE_ORDER] as const).map((s: JourneyStage | 'all') => {
@@ -790,6 +1025,8 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         <span style={{ marginLeft: 'auto', fontSize: 11, color: '#4A4A6A' }}>
           {filteredGaps.length} gap{filteredGaps.length !== 1 ? 's' : ''}
         </span>
+        </>
+        )}
       </div>
 
       {/* Table view */}
@@ -855,6 +1092,83 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             })}
           </div>
         </div>
+      )}
+
+      {/* Pages view — cluster → existing ranking page mapping (v7.163) */}
+      {view === 'pages' && (
+        <div>
+          {!hasUrlData && (
+            <div style={{ background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.2)', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <p style={{ fontSize: 12, color: '#9090b8', lineHeight: 1.5, margin: 0 }}>
+                <i className="ti ti-info-circle" style={{ marginRight: 6, color: '#22d3ee' }} />
+                No ranking-URL data is stored on this analysis yet (this footprint was loaded from a CSV, so Semrush page URLs weren&rsquo;t captured). Click <strong style={{ color: '#22d3ee' }}>Map ranking pages</strong> above to pull the real ranking URL for each keyword from Semrush, then every cluster will show the page that already ranks for it.
+              </p>
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, fontSize: 11, color: '#5A5A80' }}>
+            <span><span style={{ color: '#34d399', fontWeight: 700 }}>{optimizeClusters.length}</span> to optimise</span>
+            <span><span style={{ color: '#fb923c', fontWeight: 700 }}>{netNewClusters.length}</span> net-new</span>
+            {hasUrlData && <span><span style={{ color: '#C0C0E0', fontWeight: 700 }}>{pagesMapped}</span> pages mapped</span>}
+          </div>
+          <div style={{ background: '#0A0A18', border: '1px solid #1A1A30', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #1A1A30' }}>
+                  {['Cluster', 'Action', 'Existing page(s)', 'KW with page', 'Monthly Vol'].map((h: string) => (
+                    <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: '#4A4A6A', textAlign: 'left' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {mappedClusters.map((c: ThemeCluster, i: number) => {
+                  const optimize = c.pageStatus === 'optimize';
+                  return (
+                    <tr key={c.id} style={{ borderBottom: '1px solid #0D0D1A', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#C0C0E0', fontWeight: 500 }}>
+                        {c.name}
+                        <span style={{ fontSize: 9, marginLeft: 7, color: '#4A4A6A', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>
+                          {c.journeyType === 'pre-product' ? 'pre-product' : c.type}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' as const, letterSpacing: '0.06em',
+                          background: optimize ? 'rgba(52,211,153,0.1)' : 'rgba(249,115,22,0.1)',
+                          color: optimize ? '#34d399' : '#fb923c',
+                          border: `1px solid ${optimize ? 'rgba(52,211,153,0.3)' : 'rgba(249,115,22,0.3)'}`,
+                        }}>
+                          {optimize ? 'Optimise' : 'Build net-new'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 14px', fontSize: 11 }}>
+                        {c.existingPages.length === 0 ? (
+                          <span style={{ color: '#4A4A6A', fontStyle: 'italic' }}>&mdash; no ranking page</span>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {c.existingPages.slice(0, 3).map((p: string, j: number) => (
+                              <a key={j} href={p} target="_blank" rel="noopener noreferrer" title={p}
+                                 style={{ color: '#7c9cf0', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' as const }}>
+                                {prettyUrl(p)}
+                              </a>
+                            ))}
+                            {c.existingPages.length > 3 && <span style={{ color: '#4A4A6A', fontSize: 10 }}>+{c.existingPages.length - 3} more</span>}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{c.rankedKwCount} / {c.keywords.length}</td>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(c.totalVolume)}</td>
+                    </tr>
+                  );
+                })}
+                {mappedClusters.length === 0 && (
+                  <tr><td colSpan={5} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: '#3A3A5A', fontStyle: 'italic' }}>No clusters yet</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      </>
       )}
     </div>
   );
