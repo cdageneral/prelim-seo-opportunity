@@ -22,6 +22,17 @@ export interface KwPoolItem {
   isGap:        boolean;
   isBranded:    boolean;
   competitor:   string | null;
+  // ── v7.162: provenance — where the keyword entered the pool from ────────────
+  // 'footprint' = ranking data (client crawl + competitor gaps + uploads, §1–4).
+  // 'demand'    = deep-journey demand universe (§5) — "missing demand": real
+  //               Semrush volume for market demand the footprint never captured.
+  // Rank data does NOT override demand and demand does NOT override rank — they are
+  // different lenses. Overall MARKET DEMAND = footprint (rank) ∪ demand. A keyword
+  // is deduped to ONE row (no double-counted volume); if it exists in both layers
+  // the footprint row is kept and flagged `inDemand` (it is also demand-validated).
+  origin:       'footprint' | 'demand';
+  inDemand?:    boolean;     // appears in the deep-journey demand universe
+  demandSeeds?: string[];    // seed phrase(s) that surfaced it in the demand universe
 }
 
 export interface KwPoolOptions {
@@ -31,6 +42,10 @@ export interface KwPoolOptions {
   competitorDomains?: string[];
   clientVolMin?:      number;
   competitorVolMin?:  number;
+  // v7.162: opt-in. When true, §5 unions the deep-journey demand universe
+  // (`semrushSnapshot._demandUniverse.topics`) into the pool as origin:'demand'.
+  // Defaults FALSE so every existing caller is byte-for-byte unchanged.
+  includeDemand?:     boolean;
 }
 
 export interface VolumeMetrics {
@@ -145,6 +160,7 @@ export function buildKwPool({
   competitorDomains              = [],
   clientVolMin                   = 0,
   competitorVolMin               = 0,
+  includeDemand                  = false,
 }: KwPoolOptions): KwPoolItem[] {
   const blockedSet = new Set<string>(
     uploaded
@@ -168,6 +184,7 @@ export function buildKwPool({
       isGap:        false,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
       competitor:   null,
+      origin:       'footprint',
     });
   }
 
@@ -193,6 +210,7 @@ export function buildKwPool({
       isGap:        false,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
       competitor:   null,
+      origin:       'footprint',
     });
   }
 
@@ -210,6 +228,7 @@ export function buildKwPool({
       isGap:        true,
       isBranded:    false,  // guaranteed by the check above
       competitor:   (k as any).competitor ?? null,
+      origin:       'footprint',
     });
   }
 
@@ -230,7 +249,55 @@ export function buildKwPool({
       isGap:        true,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
       competitor:   k.domain ?? null,
+      origin:       'footprint',
     });
+  }
+
+  // ── 5. Deep-journey DEMAND universe (v7.162, opt-in) ───────────────────────
+  // The footprint (§1–4) is the RANKING lens. The demand universe is the upstream
+  // discovery lens — real Semrush volume (phrase_questions/phrase_related) for the
+  // market demand that exists between a problem and a procedure, which the ranking
+  // footprint never captures. Union them to see OVERALL MARKET DEMAND.
+  //
+  // Defensibility rules:
+  //  - Opt-in only (`includeDemand`); off → §1–4 pool is byte-for-byte unchanged.
+  //  - Dedupe by keyword. A demand keyword already in the footprint is NOT added
+  //    again (no double-counted volume) — the footprint row is kept and flagged
+  //    `inDemand` (rank does not "win", it is simply also demand-validated).
+  //  - A demand keyword NOT in the footprint becomes a `origin:'demand'` row =
+  //    "missing demand": it carries its real Semrush volume, no rank/competitor.
+  if (includeDemand) {
+    const byKw = new Map<string, KwPoolItem>(
+      pool.map(p => [p.keyword.toLowerCase().trim(), p]),
+    );
+    const demandTopics: any[] = snap?._demandUniverse?.topics ?? [];
+    for (const t of demandTopics) {
+      const kwLow = (t.keyword ?? '').toLowerCase().trim();
+      if (!kwLow || blockedSet.has(kwLow)) continue;
+      const seeds: string[] = Array.isArray(t.seeds) ? t.seeds : [];
+      const existing = byKw.get(kwLow);
+      if (existing) {
+        // Same keyword already in the footprint → flag as demand-validated, merge
+        // seeds, keep the (larger) market volume. No new row, no double count.
+        existing.inDemand = true;
+        existing.searchVolume = Math.max(existing.searchVolume, t.searchVolume ?? 0);
+        existing.demandSeeds = Array.from(new Set([...(existing.demandSeeds ?? []), ...seeds]));
+        continue;
+      }
+      const item: KwPoolItem = {
+        keyword:      t.keyword,
+        searchVolume: t.searchVolume ?? 0,
+        position:     null,
+        isGap:        false,   // NOT a competitor gap — it is "missing demand"
+        isBranded:    isBrandedKeyword(t.keyword, clientDomain, competitorDomains),
+        competitor:   null,
+        origin:       'demand',
+        inDemand:     true,
+        demandSeeds:  seeds,
+      };
+      pool.push(item);
+      byKw.set(kwLow, item);
+    }
   }
 
   return pool;

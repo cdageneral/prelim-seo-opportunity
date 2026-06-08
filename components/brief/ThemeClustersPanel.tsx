@@ -14,6 +14,8 @@ interface KwItem {
   position:     number | null;   // null = client not ranking
   isGap:        boolean;         // competitor ranks, client doesn't
   competitor:   string | null;   // domain that ranks for gap keywords
+  origin?:      'footprint' | 'demand';  // v7.162: provenance (demand = deep-journey "missing demand")
+  demandSeeds?: string[];        // v7.162: seed(s) that surfaced a demand keyword
 }
 
 interface IntentCluster {
@@ -30,7 +32,7 @@ interface IntentCluster {
 interface ThemeCluster {
   id:          string;
   name:        string;
-  type:        'procedure' | 'brand' | 'location';
+  type:        'procedure' | 'brand' | 'location' | 'demand';  // v7.162: 'demand' = missing-demand cluster
   keywords:    KwItem[];
   totalVolume: number;
   subClusters: IntentCluster[];
@@ -167,6 +169,10 @@ function buildThemeClusters(
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
 
   // ── Build keyword pool via shared utility — identical filtering to Keyword Landscape ──
+  // v7.162: includeDemand unions the deep-journey demand universe into the pool
+  // as origin:'demand' ("missing demand"). When no deep journey has been built
+  // (`_demandUniverse` absent) this returns the identical footprint pool, so this
+  // panel is byte-for-byte unchanged for existing analyses.
   const rawPool = buildKwPool({
     semrushSnapshot:  semSnap,
     uploadedKeywords,
@@ -174,22 +180,32 @@ function buildThemeClusters(
     competitorDomains,
     clientVolMin,
     competitorVolMin,
+    includeDemand:    true,
   });
 
-  // Map to KwItem (ThemeClusters internal type)
+  // Map to KwItem (ThemeClusters internal type), carrying provenance.
   const pool: KwItem[] = rawPool.map(item => ({
     keyword:      item.keyword,
     searchVolume: item.searchVolume,
     position:     item.position,
     isGap:        item.isGap,
     competitor:   item.competitor,
+    origin:       item.origin,
+    demandSeeds:  item.demandSeeds,
   }));
+
+  // The RANKING footprint flows through the existing category logic UNCHANGED.
+  // The deep-journey demand keywords are peeled off and grouped into their own
+  // "missing demand" clusters (by seed) below — they never inflate or alter the
+  // footprint cluster numbers.
+  const footprintPool = pool.filter(k => k.origin !== 'demand');
+  const demandPool    = pool.filter(k => k.origin === 'demand');
 
   const catMap = new Map<string, KwItem[]>();
   categories.forEach(c => catMap.set(c.name, []));
   const unassigned: KwItem[] = [];
 
-  for (const kw of pool) {
+  for (const kw of footprintPool) {
     const key = kw.keyword.toLowerCase();
     const storedCat = storedMap[key];
     if (storedCat && catMap.has(storedCat)) { catMap.get(storedCat)!.push(kw); continue; }
@@ -240,8 +256,49 @@ function buildThemeClusters(
     result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters });
   }
 
+  // ── v7.162: Missing-demand clusters from the deep-journey universe ──────────
+  // Demand keywords are grouped by the SEED that surfaced them (the journey
+  // anchor), so each "missing demand" cluster is a real, volume-backed theme the
+  // ranking footprint never had. Intent → funnel stage is detected the same way
+  // as footprint clusters, so they roll into the funnel exactly like the rest.
+  if (demandPool.length > 0) {
+    const seedGroups = new Map<string, KwItem[]>();
+    for (const kw of demandPool) {
+      const seed = (kw.demandSeeds && kw.demandSeeds[0]) ? kw.demandSeeds[0] : 'General demand';
+      const label = seed.replace(/\b\w/g, c => c.toUpperCase());
+      if (!seedGroups.has(label)) seedGroups.set(label, []);
+      seedGroups.get(label)!.push(kw);
+    }
+
+    for (const [seedLabel, kws] of Array.from(seedGroups.entries())) {
+      const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);
+      const intentBuckets = new Map<IntentType, KwItem[]>();
+      (['informational', 'commercial', 'transactional', 'navigational', 'unmatched'] as IntentType[])
+        .forEach(i => intentBuckets.set(i, []));
+      for (const kw of kws) {
+        const key = kw.keyword.toLowerCase();
+        let intent = detectIntentSignal(kw.keyword);
+        if (!intent && claudeAssignments[key]) intent = claudeAssignments[key];
+        intentBuckets.get(intent ?? 'unmatched')!.push(kw);
+      }
+      const subClusters: IntentCluster[] = [];
+      Array.from(intentBuckets.entries()).forEach(([intent, items]: [IntentType, KwItem[]]) => {
+        if (items.length === 0) return;
+        const meta = INTENT_META[intent];
+        subClusters.push({
+          intent, stage: meta.stage, contentType: meta.contentType, contentIcon: meta.contentIcon,
+          keywords:         items,
+          totalVolume:      items.reduce((s: number, k: KwItem) => s + k.searchVolume, 0),
+          clientVolume:     0,   // demand = not yet ranked / not yet owned
+          competitorVolume: 0,   // demand ≠ competitor gap (different lens)
+        });
+      });
+      result.push({ id: `demand:${seedLabel}`, name: seedLabel, type: 'demand', keywords: kws, totalVolume, subClusters });
+    }
+  }
+
   result.sort((a, b) => {
-    const order = { procedure: 0, brand: 1, location: 2 };
+    const order = { procedure: 0, brand: 1, location: 2, demand: 3 };
     const d = order[a.type] - order[b.type];
     return d !== 0 ? d : b.totalVolume - a.totalVolume;
   });
@@ -270,6 +327,11 @@ interface ClusterCardProps {
 
 function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // v7.162: missing-demand cluster (deep-journey) — a different lens. It is not
+  // "leading" or "trailing" (no rank data); render it as demand the client does
+  // not yet own rather than mislabelling it as a won/lost ranking cluster.
+  const isDemand   = cluster.type === 'demand';
 
   const totalVol   = cluster.totalVolume;
 
@@ -314,7 +376,7 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
   const cardStyle: React.CSSProperties = {
     background:   '#0F0F1E',
-    border:       `1px solid ${isLeading ? '#1C2C1C' : '#2C1C1C'}`,
+    border:       `1px solid ${isDemand ? '#0E3038' : isLeading ? '#1C2C1C' : '#2C1C1C'}`,
     borderRadius: 12,
     padding:      '16px',
     cursor:       'pointer',
@@ -325,8 +387,8 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
     <div
       style={cardStyle}
       onClick={() => setExpanded(v => !v)}
-      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isLeading ? '#2A4A2A' : '#4A2A2A'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isLeading ? '#1C2C1C' : '#2C1C1C'; }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#155E6B' : isLeading ? '#2A4A2A' : '#4A2A2A'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#0E3038' : isLeading ? '#1C2C1C' : '#2C1C1C'; }}
     >
       {/* ── Header: name + badge ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
@@ -340,11 +402,13 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
         <span style={{
           fontSize: 9, fontWeight: 700, letterSpacing: '.06em', flexShrink: 0,
           padding: '3px 8px', borderRadius: 20, textTransform: 'uppercase',
-          ...(isLeading
+          ...(isDemand
+            ? { background: '#062A32', border: '1px solid #0E4753', color: '#22D3EE' }
+            : isLeading
             ? { background: '#0D2010', border: '1px solid #1A4020', color: '#4ADE80' }
             : { background: '#2A0D18', border: '1px solid #4A1A28', color: '#F472B6' }),
         }}>
-          {isLeading ? 'Leading' : 'Trailing'}
+          {isDemand ? 'Missing demand' : isLeading ? 'Leading' : 'Trailing'}
         </span>
       </div>
 
@@ -366,8 +430,12 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
           </span>
         </div>
         <div style={{ fontSize: 11, color: '#404060', marginTop: 6 }}>
-          Leader: <strong style={{ color: isLeading ? '#4ADE80' : '#F472B6' }}>{leaderName}</strong>
-          <span style={{ color: '#484868' }}> ({leaderPct}%)</span>
+          {isDemand ? (
+            <>Deep-journey demand · <strong style={{ color: '#22D3EE' }}>not yet owned</strong></>
+          ) : (
+            <>Leader: <strong style={{ color: isLeading ? '#4ADE80' : '#F472B6' }}>{leaderName}</strong>
+            <span style={{ color: '#484868' }}> ({leaderPct}%)</span></>
+          )}
         </div>
       </div>
 
@@ -469,6 +537,7 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 type ClusterFilter =
   | 'all' | 'leading' | 'trailing' | 'opportunity'
   | 'client' | 'competitor'   // v7.146: filter by cluster ownership (majority keyword)
+  | 'demand'   // v7.162: filter to missing-demand (deep-journey) clusters
   | JourneyStage;  // v7.145: filter the grid by dominant funnel stage
 
 interface ClusterStat {
@@ -477,6 +546,7 @@ interface ClusterStat {
   compGapPct:  number; // fraction of cluster total vol owned by gap keywords
   stage:       JourneyStage; // v7.145: cluster's dominant funnel stage (most keywords)
   isClientFootprint: boolean; // v7.145: client ranks for ≥ half the cluster's keywords
+  isDemand:    boolean; // v7.162: missing-demand cluster (deep-journey) — neither client nor competitor gap
 }
 
 // ─── Funnel-stage display metadata (v7.145) ───────────────────────────────────
@@ -539,20 +609,26 @@ function ClustersTab({
     const clientKwCount = c.keywords.filter(k => !k.isGap).length;
     const gapKwCount    = c.keywords.length - clientKwCount;
 
+    // v7.162: a missing-demand cluster is a THIRD class — not client footprint,
+    // not competitor gap. Exclude it from ownership/performance so it never
+    // inflates the client or competitor counts.
+    const isDemand = c.type === 'demand';
+
     return {
       cluster: c,
-      isLeading: rankedVol >= topComp,
+      isLeading: !isDemand && rankedVol >= topComp,
       compGapPct,
       stage: dominantStage(c),
-      isClientFootprint: clientKwCount >= gapKwCount,
+      isClientFootprint: !isDemand && clientKwCount >= gapKwCount,
+      isDemand,
     };
   });
 
-  const leadingStats  = clusterStats.filter(s =>  s.isLeading);
-  const trailingStats = clusterStats.filter(s => !s.isLeading);
+  const leadingStats  = clusterStats.filter(s => !s.isDemand &&  s.isLeading);
+  const trailingStats = clusterStats.filter(s => !s.isDemand && !s.isLeading);
   // Opportunity = competitor gap vol < 25% of cluster total AND client not already leading
   // (fully-won clusters score compGapPct=0 which would falsely pass < 0.25)
-  const oppStats      = clusterStats.filter(s => s.compGapPct < 0.25 && !s.isLeading);
+  const oppStats      = clusterStats.filter(s => !s.isDemand && s.compGapPct < 0.25 && !s.isLeading);
 
   // ── Funnel-stage roll-up (v7.145) ──────────────────────────────────────────
   // Each cluster sits in exactly one stage (its dominant intent), split into
@@ -563,7 +639,10 @@ function ClustersTab({
       stage,
       total:          inStage.length,
       clientClusters: inStage.filter(s =>  s.isClientFootprint).length,
-      gapClusters:    inStage.filter(s => !s.isClientFootprint).length,
+      // v7.162: gap excludes demand; demand counted separately so the band reads
+      // client · gap · demand and reflects overall market demand by stage.
+      gapClusters:    inStage.filter(s => !s.isClientFootprint && !s.isDemand).length,
+      demandClusters: inStage.filter(s =>  s.isDemand).length,
       annualVol:      inStage.reduce((sum, s) => sum + s.cluster.totalVolume, 0) * 12,
     };
   });
@@ -572,8 +651,10 @@ function ClustersTab({
     (STAGE_KEYS as string[]).includes(f);
 
   // ── Ownership counts (v7.146) — client footprint vs competitor gap ──────────
+  // v7.162: demand is a third class — excluded from both client and competitor.
   const clientOwnedCount = clusterStats.filter(s =>  s.isClientFootprint).length;
-  const gapOwnedCount    = clusterStats.filter(s => !s.isClientFootprint).length;
+  const gapOwnedCount    = clusterStats.filter(s => !s.isClientFootprint && !s.isDemand).length;
+  const demandOwnedCount = clusterStats.filter(s =>  s.isDemand).length;
 
   // ── Filter nav model (v7.146): ownership group + funnel-stage group ─────────
   const navOwnership: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
@@ -581,6 +662,10 @@ function ClustersTab({
     { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: '#4ADE80' },
     { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: '#F59E0B' },
   ];
+  // v7.162: only show the missing-demand pill once a deep journey has surfaced any.
+  if (demandOwnedCount > 0) {
+    navOwnership.push({ key: 'demand', label: 'Missing demand', count: demandOwnedCount, cColor: '#22D3EE' });
+  }
   const navPerformance: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
     { key: 'leading',     label: 'Winning',         count: leadingStats.length,  cColor: '#4ADE80' },
     { key: 'trailing',    label: 'Trailing',        count: trailingStats.length, cColor: '#F472B6' },
@@ -608,7 +693,8 @@ function ClustersTab({
     filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
     filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
     filter === 'client'      ? clusterStats.filter(s =>  s.isClientFootprint).map(s => s.cluster) :
-    filter === 'competitor'  ? clusterStats.filter(s => !s.isClientFootprint).map(s => s.cluster) :
+    filter === 'competitor'  ? clusterStats.filter(s => !s.isClientFootprint && !s.isDemand).map(s => s.cluster) :
+    filter === 'demand'      ? clusterStats.filter(s =>  s.isDemand).map(s => s.cluster) :
     isStageFilter(filter)    ? clusterStats.filter(s => s.stage === filter).map(s => s.cluster) :
     clusters;
 
@@ -895,6 +981,12 @@ function ClustersTab({
                       <span style={{ color: '#4ADE80', fontWeight: 600 }}>{r.clientClusters}</span> client
                       &nbsp;·&nbsp;
                       <span style={{ color: '#F59E0B', fontWeight: 600 }}>{r.gapClusters}</span> gap
+                      {r.demandClusters > 0 && (
+                        <>
+                          &nbsp;·&nbsp;
+                          <span style={{ color: '#22D3EE', fontWeight: 600 }}>{r.demandClusters}</span> demand
+                        </>
+                      )}
                       &nbsp;·&nbsp;
                       <span style={{ color: '#8B85FF', fontWeight: 600 }}>{fmtVol(r.annualVol)}</span>
                     </div>
