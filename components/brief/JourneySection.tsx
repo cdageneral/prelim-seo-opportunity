@@ -616,13 +616,37 @@ function withinThemeEdges(nodes: JourneyNode[]): [string, string][] {
   return edges;
 }
 
+// v7.158: map each pre-product SEED to the audience segment(s) whose own language
+// (trigger + pre-LLM prompts) contains it. Lets us attribute demand topics to
+// segments WITHOUT a rebuild — the topic carries its seeds, the segments carry
+// their language, and the link is "this segment talks about this problem". Product
+// (procedure) seeds aren't segment-specific, so they don't appear here.
+export function buildSeedSegmentMap(universe: DemandUniverse, segments: AudienceSegment[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const problemSeeds = (universe.problemSeeds ?? []).map((s: string) => s.toLowerCase());
+  for (const seg of segments) {
+    const text = [seg.whoTheyAre?.trigger ?? '', ...(seg.preLLMPrompts ?? [])].join(' ').toLowerCase();
+    for (const seed of problemSeeds) {
+      if (seed && text.includes(seed)) {
+        if (!map.has(seed)) map.set(seed, new Set<string>());
+        map.get(seed)!.add(seg.id);
+      }
+    }
+  }
+  return map;
+}
+
 // Build journey nodes (theme × funnel stage) from the demand universe, overlaying
 // the ranking footprint as coverage. Every node's volume = the sum of REAL Semrush
-// search volumes of its topics.
+// search volumes of its topics. When activeSegmentId is set, the PRE-PRODUCT lane
+// is filtered to topics whose seed belongs to that segment (plus unattributed
+// topics, which are generic); the PRODUCT lane (procedures) is cross-segment.
 export function buildDemandNodes(
   universe: DemandUniverse,
   clientRanked: Set<string>,
   competitorRanked: Set<string>,
+  activeSegmentId: string | null = null,
+  seedToSegments: Map<string, Set<string>> = new Map(),
 ): { preNodes: JourneyNode[]; prodNodes: JourneyNode[]; preEdges: [string, string][]; prodEdges: [string, string][] } {
   const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
 
@@ -632,6 +656,15 @@ export function buildDemandNodes(
   for (const t of (universe.topics ?? [])) {
     const isProduct = t.laneHint === 'product' || t.seeds.some((s: string) => productSet.has(s.toLowerCase()));
     const lane: JourneyType = isProduct ? 'product' : 'pre-product';
+
+    // Per-segment filter (pre-product only): a topic shows for the active segment
+    // if any of its seeds belongs to that segment, OR it's unattributed (generic).
+    if (activeSegmentId && !isProduct) {
+      const segIds = new Set<string>();
+      for (const s of t.seeds) { const set = seedToSegments.get(s.toLowerCase()); if (set) for (const id of Array.from(set)) segIds.add(id); }
+      if (segIds.size > 0 && !segIds.has(activeSegmentId)) continue;
+    }
+
     const themeSeed = t.seeds.find((s: string) => productSet.has(s.toLowerCase()) === isProduct) ?? t.seeds[0] ?? 'Other';
     const theme = titleCaseSeed(themeSeed);
     const sig = detectIntent(t.keyword);
@@ -1018,11 +1051,17 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
   // v7.155: when the demand universe exists, build the journey from it (theme ×
   // funnel stage, every node volume-backed) overlaid with the ranking footprint.
+  // v7.158: filtered per active segment via seed→segment provenance.
   const demandMode = !!(demandUniverse && (demandUniverse.topics?.length ?? 0) > 0);
   const footprint  = useMemo(() => buildFootprintSets(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
+  const seedToSegments = useMemo(
+    () => demandMode ? buildSeedSegmentMap(demandUniverse as DemandUniverse, segments) : new Map<string, Set<string>>(),
+    [demandMode, demandUniverse, segments],
+  );
+  const activeSegmentId = activeTab === 'combined' ? null : activeTab;   // v7.158
   const demand = useMemo(
-    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor) : null,
-    [demandMode, demandUniverse, footprint],
+    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeSegmentId, seedToSegments) : null,
+    [demandMode, demandUniverse, footprint, activeSegmentId, seedToSegments],
   );
 
   const preNodes  = demand ? demand.preNodes  : fpPreNodes;
@@ -1187,47 +1226,13 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
           How each segment moves from life-problem search to product decision &mdash; a topic mind map color-coded by content coverage.
         </p>
-
-        {/* v7.155: demand-universe build control + provenance */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
-          <button onClick={buildDeepJourney} disabled={building}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
-              color: building ? '#6A6A90' : '#0D0D22', background: building ? 'transparent' : '#22d3ee',
-              border: `1px solid ${building ? '#1A1A30' : '#22d3ee'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
-            }}>
-            <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
-            {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
-          </button>
-          {!building && (demandMode ? (
-            <span style={{ fontSize: 11, color: '#6A6A90' }}>
-              <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
-              {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
-              {demandUniverse?.builtAt ? ` · built ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : ''}
-              {' '}(Semrush)
-            </span>
-          ) : (
-            <span style={{ fontSize: 11, color: '#6A6A90' }}>
-              Showing your <span style={{ color: '#a78bfa' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
-            </span>
-          ))}
-        </div>
-
-        {/* v7.156: determinate build progress — what's left + ETA, never a bare spinner */}
-        {building && (
-          <DemandProgress progress={progress} />
-        )}
-
-        {buildError && (
-          <p style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>
-            <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}
-          </p>
-        )}
       </div>
 
-      {/* Segment tabs — persona portraits carried over from Audience Segments */}
-      {tabs.length > 1 && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap' }}>
+      {/* v7.158: segment tabs STACKED on the left · build-deep-journey control on the right */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24, marginBottom: 18, flexWrap: 'wrap' }}>
+
+        {/* Left — segment tabs, stacked vertically */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', minWidth: 220 }}>
           {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
             const isActive = activeTab === tab.id;
             const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
@@ -1264,7 +1269,38 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             );
           })}
         </div>
-      )}
+
+        {/* Right — build control + provenance + progress + error */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 7, minWidth: 240, flex: '1 1 280px', maxWidth: 520 }}>
+          <button onClick={buildDeepJourney} disabled={building}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
+              color: building ? '#6A6A90' : '#0D0D22', background: building ? 'transparent' : '#22d3ee',
+              border: `1px solid ${building ? '#1A1A30' : '#22d3ee'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
+            }}>
+            <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
+            {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
+          </button>
+          {!building && (demandMode ? (
+            <span style={{ fontSize: 11, color: '#6A6A90', textAlign: 'right' }}>
+              <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
+              {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
+              {demandUniverse?.builtAt ? ` · built ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : ''}
+              {' '}(Semrush)
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, color: '#6A6A90', textAlign: 'right' }}>
+              Showing your <span style={{ color: '#a78bfa' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
+            </span>
+          ))}
+          {building && <DemandProgress progress={progress} />}
+          {buildError && (
+            <p style={{ fontSize: 11, color: '#f87171', margin: 0, textAlign: 'right' }}>
+              <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}
+            </p>
+          )}
+        </div>
+      </div>
 
       {/* Segment tagline + portrait */}
       {activeSegment && segAccent && (

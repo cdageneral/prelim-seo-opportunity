@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.158 — 2026-06-08 · Audience Journeys: per-segment filtering + header rearrange
+
+**What Wayne flagged:** (1) switching the audience-segment tab didn't change the journey — only the persona portrait + prompt chips changed, the mind-map nodes stayed the same; (2) rearrange the header so the three segment tabs stack on the left and the "Build deep journey" button moves to the right.
+
+**(1) Per-segment journey (defensible, no rebuild) — `components/brief/JourneySection.tsx`:**
+- New exported `buildSeedSegmentMap(universe, segments)` maps each pre-product **seed** to the segment(s) whose own language (`whoTheyAre.trigger` + `preLLMPrompts`) contains it. Demand topics already store their seeds and segments already store their language, so the attribution — "this segment talks about this problem" — is derived client-side from existing data; **no rebuild and no extra Semrush spend.**
+- `buildDemandNodes` gained `activeSegmentId` + `seedToSegments`. With a segment active, the **pre-product lane** keeps only topics whose seed belongs to that segment (plus unattributed/generic topics); the **product lane** (procedures) stays cross-segment (procedures aren't segment-specific and there's no defensible per-segment product signal). "All Segments" shows the union (prior behavior). The component computes the map + `activeSegmentId` (`activeTab` → `null` for combined) and feeds them in; the demand memo now re-runs on tab change, so the lanes, completeness, and edges all update per segment.
+- Footprint mode (no demand universe) is unchanged — clusters aren't segment-tagged, so it stays shared as before.
+
+**(2) Header rearrange — same file, layout only:** the build control moved out of the title block. New row is `justify-between`: **left** = segment tabs stacked vertically (All Segments + each segment, full pills with portrait + volume %); **right** = the Build/Rebuild button with its provenance line, progress bar, and any error, right-aligned. No logic change to the build flow.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. Deterministic per-segment unit test on the exported `buildSeedSegmentMap` + `buildDemandNodes` → **7/7**: seed→segment map correct; All Segments shows both themes; Segment A shows only its theme (other filtered out); Segment B the inverse; product theme shown for both; and `preThemes(A) !== preThemes(B)` (the journey demonstrably changes between segments — the reported bug). Full demand/footprint render harness → **15/15** unchanged (no regression; combined view filters nothing). New layout rendered in chat before delivery.
+
+**Built on v7.157-src→v7.158-src, package.json 7.158.0, inner folder `orbitiq-v7.158/`, 77 files, zip in /tmp → cp to GEO `orbitiq-v7.158.zip`.** Note: works on the already-built demand universe (no rebuild needed); product lane is intentionally shared across segments.
+
 ## v7.157 — 2026-06-08 · Fix: deep journey lost when leaving and re-entering the panel
 
 **What Wayne saw:** built the deep journey, the data populated, then navigated to another panel and back — and it was gone (dropped back to "Build deep journey" / footprint mode).
