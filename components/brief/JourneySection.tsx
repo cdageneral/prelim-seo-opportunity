@@ -567,6 +567,24 @@ function titleCaseSeed(s: string): string {
   return s.replace(/\b\w/g, (c: string) => c.toUpperCase());
 }
 
+// v7.157: the built demand universe is persisted server-side on the analysis
+// snapshot, but the Journey panel is conditionally mounted (unmounts on tab
+// change) and the parent's `analysis` prop isn't refetched in-session — so on
+// remount the freshly-built universe was lost. Resolve from the server snapshot
+// first (source of truth on a fresh page load), then fall back to a localStorage
+// cache written at build time, mirroring the journey-edges / problem caches.
+const demandCacheKey = (analysis: any): string => `orbitiq-demand-${analysis?.id ?? 'none'}`;
+
+function readDemandCache(analysis: any): DemandUniverse | null {
+  const fromSnap = (analysis?.semrushSnapshot as any)?._demandUniverse ?? null;
+  if (fromSnap) return fromSnap;
+  if (typeof window === 'undefined' || !analysis?.id) return null;
+  try {
+    const c = window.localStorage.getItem(demandCacheKey(analysis));
+    return c ? (JSON.parse(c) as DemandUniverse) : null;
+  } catch { return null; }
+}
+
 // Client/competitor ranking sets (lowercased keywords) for the coverage overlay.
 function buildFootprintSets(analysis: any, uploaded: any[]): { client: Set<string>; competitor: Set<string> } {
   const snap = analysis?.semrushSnapshot ?? {};
@@ -885,6 +903,47 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
   );
 }
 
+// ─── Demand build progress (v7.156) ─────────────────────────────────────────────
+
+function fmtEta(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '';
+  if (seconds < 60) return `~${Math.round(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `~${m}m ${s.toString().padStart(2, '0')}s left`;
+}
+
+function DemandProgress({ progress }: { progress: { done: number; total: number; seed: string; startedAt: number } | null }) {
+  const total = progress?.total ?? 0;
+  const done  = progress?.done ?? 0;
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+  const elapsed = progress ? (Date.now() - progress.startedAt) / 1000 : 0;
+  const eta = (total > 0 && done > 0 && done < total) ? fmtEta((total - done) * (elapsed / done)) : '';
+  const label = total === 0
+    ? 'Starting — gathering seeds…'
+    : `Seed ${done} of ${total}${progress?.seed ? ` · ${progress.seed}` : ''}`;
+  return (
+    <div style={{ marginTop: 12, maxWidth: 460 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
+        <span style={{ fontSize: 11, color: '#9090b8' }}>
+          <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />{label}
+        </span>
+        <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+          {total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}
+        </span>
+      </div>
+      <div style={{ height: 6, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+        {total > 0 ? (
+          <div style={{ height: '100%', width: `${pct}%`, background: '#22d3ee', transition: 'width 0.3s ease' }} />
+        ) : (
+          <div style={{ height: '100%', width: '35%', background: '#22d3ee', opacity: 0.6, animation: 'orbitiq-indet 1.1s ease-in-out infinite' }} />
+        )}
+      </div>
+      <style>{`@keyframes orbitiq-indet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
@@ -896,10 +955,12 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [selected, setSelected] = useState<JourneyNode | null>(null);
   // v7.155: demand universe (persisted on the snapshot once the on-demand build runs)
   const [demandUniverse, setDemandUniverse] = useState<DemandUniverse | null>(
-    () => ((analysis?.semrushSnapshot as any)?._demandUniverse ?? null),
+    () => readDemandCache(analysis),   // v7.157: snapshot → localStorage fallback (survives tab remount)
   );
   const [building, setBuilding]     = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
+  // v7.156: live build progress for the determinate bar + ETA.
+  const [progress, setProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const industry     = (analysis as any)?._industry ?? 'General';
@@ -947,9 +1008,11 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const fpPreNodes  = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'pre-product'), [allNodes]);
   const fpProdNodes = useMemo(() => allNodes.filter((n: JourneyNode) => n.lane === 'product'), [allNodes]);
 
-  // v7.155: keep demandUniverse in sync when the loaded analysis changes.
+  // v7.155/v7.157: keep demandUniverse in sync when the loaded analysis changes —
+  // server snapshot first, then the localStorage cache (so an in-session rebuild
+  // survives leaving and re-entering this panel; the panel unmounts on tab change).
   useEffect(() => {
-    setDemandUniverse((analysis?.semrushSnapshot as any)?._demandUniverse ?? null);
+    setDemandUniverse(readDemandCache(analysis));
     setBuildError(null);
   }, [analysis?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -965,19 +1028,56 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const preNodes  = demand ? demand.preNodes  : fpPreNodes;
   const prodNodes = demand ? demand.prodNodes : fpProdNodes;
 
+  // v7.156: consume the route's NDJSON progress stream so the UI shows a
+  // determinate bar + ETA ("seed X of N") instead of an indefinite spinner.
   async function buildDeepJourney() {
     setBuilding(true); setBuildError(null);
+    setProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
     try {
       const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ linesPerSeed: 50 }),
       });
-      const d = await r.json();
-      if (!r.ok) { setBuildError(d?.error ?? `Build failed (${r.status})`); return; }
-      if (d?.demandUniverse) { setDemandUniverse(d.demandUniverse); setSelected(null); }
+      // Pre-stream validation failures come back as a normal JSON error.
+      if (!r.ok || !r.body) {
+        let msg = `Build failed (${r.status})`;
+        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+        setBuildError(msg);
+        return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'start') {
+            setProgress((p) => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'progress') {
+            setProgress((p) => ({ done: ev.done, total: ev.total, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'error') {
+            setBuildError(ev.error ?? 'Build failed');
+          } else if (ev.type === 'done' && ev.demandUniverse) {
+            setDemandUniverse(ev.demandUniverse);
+            setSelected(null);
+            // v7.157: cache so it survives leaving/re-entering this panel in-session
+            // (the parent's analysis prop isn't refetched until a full reload).
+            try { window.localStorage.setItem(demandCacheKey(analysis), JSON.stringify(ev.demandUniverse)); } catch {}
+          }
+        }
+      }
     } catch (e) {
       setBuildError(String((e as any)?.message ?? e));
     } finally {
       setBuilding(false);
+      setProgress(null);
     }
   }
 
@@ -1099,7 +1199,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
             {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
           </button>
-          {demandMode ? (
+          {!building && (demandMode ? (
             <span style={{ fontSize: 11, color: '#6A6A90' }}>
               <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
               {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
@@ -1110,8 +1210,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             <span style={{ fontSize: 11, color: '#6A6A90' }}>
               Showing your <span style={{ color: '#a78bfa' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
             </span>
-          )}
+          ))}
         </div>
+
+        {/* v7.156: determinate build progress — what's left + ETA, never a bare spinner */}
+        {building && (
+          <DemandProgress progress={progress} />
+        )}
+
         {buildError && (
           <p style={{ fontSize: 11, color: '#f87171', marginTop: 8 }}>
             <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}

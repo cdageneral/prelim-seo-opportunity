@@ -1,5 +1,30 @@
 # OrbitIQ Changelog
 
+## v7.157 — 2026-06-08 · Fix: deep journey lost when leaving and re-entering the panel
+
+**What Wayne saw:** built the deep journey, the data populated, then navigated to another panel and back — and it was gone (dropped back to "Build deep journey" / footprint mode).
+
+**Root cause:** the Journey panel is conditionally mounted (`activeSection === 'journeys'` in `app/projects/[id]/page.tsx`), so leaving the tab **unmounts** it and returning **remounts** it fresh. The built universe was persisted server-side (`semrushSnapshot._demandUniverse`), but the parent page's `analysis` prop isn't refetched in-session, so on remount the panel re-initialized from the stale prop (no `_demandUniverse`) and showed footprint mode. The data was never lost in the database — it just wasn't read back in-session.
+
+**Fix (`components/brief/JourneySection.tsx` only):** the built universe is now also cached in `localStorage` (`orbitiq-demand-{analysis.id}`) at build time, mirroring the existing journey-edges / problem-cluster caches. A new `readDemandCache(analysis)` resolves the universe **server snapshot first** (source of truth on a fresh page load) **then the localStorage cache** — used by both the `useState` initializer (instant, no footprint flash on remount) and the analysis-id sync effect. The `done` handler of the build stream writes the cache. No route/DB/data changes; the volume math and journey logic are untouched.
+
+**Verification (machine):** isolated `tsc --noEmit` → **exit 0**. Render harness reproducing the bug → **6/6**: stale footprint-only prop + empty cache renders footprint mode (the bug state); after the cache is populated (as a successful build would), a remount with the same stale prop **restores demand mode** (provenance + "Rebuild" + product node back); and a present server snapshot still wins on the fresh-load path. Full demand/footprint render harness → **15/15** unchanged (no regression). Rendered/verified before delivery.
+
+**Built on v7.156-src→v7.157-src, package.json 7.157.0, inner folder `orbitiq-v7.157/`, 77 files, zip in /tmp → cp to GEO `orbitiq-v7.157.zip`.** NOTE: localStorage cache is per-browser; a fresh page load on any device still hydrates from the persisted DB snapshot, so nothing is browser-locked.
+
+## v7.156 — 2026-06-08 · Deep-journey build: streamed progress bar + ETA (no more bare spinner)
+
+**What Wayne flagged:** the v7.155 "Building deep journey…" button showed only an indefinite spinner — no sense of how far along, how long left, or whether it was stuck. He set this as a **standing rule**: any build/data-pull that makes the user wait must show live progress (what's left + ETA + still-working), for everything we build going forward. (Saved to long-term memory.)
+
+**The fix — real streamed progress (not a fake timer):**
+- `lib/apis/demandExpansion.ts` — `buildDemandUniverse` gained an `onProgress(done, total, seed)` callback, invoked after each seed completes. Total is the seed count, known up front.
+- `app/api/projects/[id]/demand-universe/route.ts` — now returns a **streamed NDJSON `ReadableStream`** instead of one blocking JSON response. Emits `{type:'start', total}`, one `{type:'progress', done, total, seed}` per finished seed, then `{type:'done', demandUniverse}` (after persisting `_demandUniverse`), or `{type:'error', error}`. Pre-stream validation errors (missing key, no seeds) still return a normal JSON error with the right status code. Headers disable buffering so progress flushes live.
+- `components/brief/JourneySection.tsx` — `buildDeepJourney` now reads the stream with a `ReadableStreamDefaultReader`, parses NDJSON line-by-line, and drives a new `DemandProgress` component: a **determinate bar** with "Seed X of N · <seed>", a percent, and a **live ETA** (`elapsed ÷ done × remaining`, formatted `~Ns`/`~Mm SSs`). Before the first seed finishes it shows an indeterminate "Starting — gathering seeds…" sweep so it never looks frozen. The footprint/demand journey logic is unchanged.
+
+**Verification (machine):** isolated `tsc --noEmit` (both panels + both routes + module, ambient stubs incl. `@/db`/`drizzle-orm`, run in a fresh dir to dodge stale locked copies) → **exit 0**. Deterministic `onProgress` unit test (Semrush stubbed via esbuild alias, no network) → **6/6**: progress fires once per seed, every event carries `total=3`, `done` increments 1→2→3, the final event has `done===total` (bar hits 100%), the seed label is reported per step, deduped topic count correct. jsdom/SSR render harness on the **real** JourneySection → **15/15** unchanged (demand depth + overlay + within-theme edges; footprint fallback intact). Progress UI rendered in chat before delivery.
+
+**Built on v7.155-src→v7.156-src, package.json 7.156.0, inner folder `orbitiq-v7.156/`, 77 files, zip in /tmp → cp to GEO `orbitiq-v7.156.zip`.**
+
 ## v7.155 — 2026-06-08 · Audience Journeys: demand-universe expansion (depth + defensible volume)
 
 **What Wayne flagged:** the journey was too thin — a problem doesn't jump straight to a procedure; there are many discovery questions in between (how many ways people ask about "stubborn fat" or a "double chin"). Root concern, correctly diagnosed: the keyword corpus is the client/competitor *ranking footprint*, which is biased to mid/bottom-funnel and barely contains the upstream discovery layer — and since keywords → clusters → journey, a thin corpus caps the whole journey. He wants every topic defensible by real search (and/or conversation) volume.

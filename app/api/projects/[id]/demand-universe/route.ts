@@ -112,39 +112,58 @@ export async function POST(
 
   console.log(`[OrbitIQ] Demand-universe build: ${seeds.length} seeds (${product.length} product + ${problem.length} problem), ${linesPerSeed} lines/seed, db=${database}`);
 
-  let universe;
-  try {
-    universe = await buildDemandUniverse(seeds, linesPerSeed, database);
-  } catch (err) {
-    console.error('[OrbitIQ] Demand-universe build failed:', err);
-    return NextResponse.json({ error: `Demand expansion failed: ${String((err as any)?.message ?? err)}` }, { status: 502 });
-  }
-
-  if (universe.topicCount === 0) {
-    return NextResponse.json(
-      { error: `Semrush returned no topics — likely out of API units or an invalid database. (${universe.status})` },
-      { status: 502 }
-    );
-  }
-
-  // Tag each seed as product vs problem so the panel can lane topics without
-  // re-deriving (a topic inherits 'product' if any of its seeds is a procedure).
+  // v7.156: stream progress as NDJSON so the panel shows a determinate bar + ETA
+  // ("seed X of N") instead of an indefinite spinner. One event per finished seed;
+  // a final {type:'done', demandUniverse} carries the result (also persisted).
   const productSet = new Set(product.map(s => s.toLowerCase()));
-  const demandUniverse = {
-    ...universe,
-    productSeeds: product,
-    problemSeeds: problem,
-    topics: universe.topics.map(t => ({
-      ...t,
-      laneHint: t.seeds.some(s => productSet.has(s.toLowerCase())) ? 'product' : 'problem',
-    })),
-  };
+  const encoder = new TextEncoder();
 
-  await db.update(analyses)
-    .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _demandUniverse: demandUniverse } as any })
-    .where(eq(analyses.id, analysis.id));
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      try {
+        send({ type: 'start', total: seeds.length, productCount: product.length, problemCount: problem.length });
 
-  console.log(`[OrbitIQ] Demand-universe stored: ${demandUniverse.topicCount} topics (${universe.status})`);
+        const universe = await buildDemandUniverse(seeds, linesPerSeed, database, (done, total, seed) => {
+          send({ type: 'progress', done, total, seed });
+        });
 
-  return NextResponse.json({ demandUniverse });
+        if (universe.topicCount === 0) {
+          send({ type: 'error', error: `Semrush returned no topics — likely out of API units or an invalid database. (${universe.status})` });
+          controller.close();
+          return;
+        }
+
+        const demandUniverse = {
+          ...universe,
+          productSeeds: product,
+          problemSeeds: problem,
+          topics: universe.topics.map(t => ({
+            ...t,
+            laneHint: t.seeds.some(s => productSet.has(s.toLowerCase())) ? 'product' : 'problem',
+          })),
+        };
+
+        await db.update(analyses)
+          .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _demandUniverse: demandUniverse } as any })
+          .where(eq(analyses.id, analysis.id));
+
+        console.log(`[OrbitIQ] Demand-universe stored: ${demandUniverse.topicCount} topics (${universe.status})`);
+        send({ type: 'done', demandUniverse });
+        controller.close();
+      } catch (err) {
+        console.error('[OrbitIQ] Demand-universe build failed:', err);
+        send({ type: 'error', error: `Demand expansion failed: ${String((err as any)?.message ?? err)}` });
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type':     'application/x-ndjson; charset=utf-8',
+      'Cache-Control':    'no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }

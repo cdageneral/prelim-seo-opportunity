@@ -73,6 +73,7 @@ export async function buildDemandUniverse(
   seeds: string[],
   linesPerSeed = 50,
   database = 'us',
+  onProgress?: (done: number, total: number, seed: string) => void | Promise<void>,
 ): Promise<DemandUniverse> {
   // De-dupe seeds (case-insensitive), drop blanks.
   const seen = new Set<string>();
@@ -106,6 +107,9 @@ export async function buildDemandUniverse(
     else { error = (error ? error + ' · ' : '') + `related: ${String(rRes.reason?.message ?? rRes.reason)}`; }
 
     seedResults.push({ seed, questions, related, error });
+    // v7.156: report progress after each seed so the UI can show a determinate
+    // bar + ETA instead of an indefinite spinner.
+    await onProgress?.(seedResults.length, cleanSeeds.length, seed);
   }
 
   const topics = Array.from(map.values()).sort((a, b) => b.searchVolume - a.searchVolume);
