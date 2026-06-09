@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.168 — 2026-06-08 · Deep journey feeds back into Theme Clusters (intent-aware merge)
+
+**What Wayne flagged:** the Journey panel shows 370 topics but Theme Clusters shows only 195 — the deep-journey analysis should feed back into the cluster data and update the cluster panel.
+
+**Two different units (why they never matched 1:1):** the Journey "topics" count is *theme × funnel-stage* nodes (one theme can appear up to 4× — once per stage). Theme Clusters counts *one row per category/seed*. So the panels measure different things; this release makes the deep-journey demand flow into clusters so the cluster panel grows to reflect the journey, using Wayne's intent-aware rule.
+
+**Rule (Wayne):** surface every demand theme as a cluster — *if the search intent matches an existing footprint cluster, merge; if the intent differs, create a modifier in the title name.*
+
+**Change (`components/brief/ThemeClustersPanel.tsx`, `buildThemeClusters` demand section):**
+- A deep-journey demand keyword whose theme matches a footprint cluster **and** whose intent that cluster already covers → **merged** into that cluster's matching sub-cluster (no duplicate row; the cluster's volume grows; a cyan "+N deep-journey demand kws · X/mo" note appears on the card).
+- A demand keyword matching a footprint cluster but at an intent it does **not** cover → surfaced as its **own** cluster titled **"{Category} — {Intent}"** (the modifier).
+- A demand keyword matching **no** footprint category → seed-grouped "Missing demand" cluster (unchanged v7.162 behaviour).
+- Merged demand keeps `origin:'demand'` and is **excluded from client-rank / competitor-gap ownership** counts (it is a third lens — it only adds to overall market demand / `totalVolume`).
+
+**Result:** TOTAL CLUSTERS, "N keywords grouped by category", and annual/monthly volume now all reflect the deep-journey demand. No deep journey built ⇒ no `_demandUniverse` ⇒ identical to v7.167 (existing analyses untouched).
+
+**Next:** roll this same demand-aware cluster count into the Executive Summary / Content Map rollup.
+
 ## v7.167 — 2026-06-08 · Hotfix: ES5 build error in the page-map route (nested function declaration)
 
 **What Wayne hit:** Vercel build failed type-checking — `Function declarations are not allowed inside blocks in strict mode when targeting 'ES5'` at `app/api/projects/[id]/page-map/route.ts` (the concurrency `worker`).

@@ -36,6 +36,11 @@ interface ThemeCluster {
   keywords:    KwItem[];
   totalVolume: number;
   subClusters: IntentCluster[];
+  // v7.168: when a footprint cluster ABSORBS same-intent deep-journey demand
+  // (merge case), record how much so the card can flag it. Demand surfaced at a
+  // NOT-yet-covered intent becomes its own modifier-titled 'demand' cluster instead.
+  demandMergedCount?: number;
+  demandMergedVol?:   number;
 }
 
 interface Props {
@@ -256,31 +261,89 @@ function buildThemeClusters(
     result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters });
   }
 
-  // ── v7.162: Missing-demand clusters from the deep-journey universe ──────────
-  // Demand keywords are grouped by the SEED that surfaced them (the journey
-  // anchor), so each "missing demand" cluster is a real, volume-backed theme the
-  // ranking footprint never had. Intent → funnel stage is detected the same way
-  // as footprint clusters, so they roll into the funnel exactly like the rest.
+  // ── v7.168: Surface every deep-journey demand theme as a cluster ────────────
+  // Wayne's rule (deep journey feeds back into the cluster data):
+  //   • A demand keyword whose THEME matches an existing footprint cluster and
+  //     whose SEARCH INTENT the footprint already covers → MERGE into that
+  //     cluster's matching sub-cluster (same lens at that stage; no duplicate row).
+  //   • A demand keyword matching a footprint cluster but at an intent the
+  //     footprint does NOT cover → surface as its OWN cluster with an intent
+  //     MODIFIER in the title ("{Category} — {Intent}") so the unmet-intent
+  //     demand is visible and distinct.
+  //   • A demand keyword matching NO footprint category → seed-grouped
+  //     "missing demand" cluster (the v7.162 behaviour).
+  // Merged demand keeps origin:'demand' so the ownership math in ClustersTab never
+  // counts it as client rank or competitor gap — demand stays a third lens, it
+  // only adds to overall MARKET DEMAND (totalVolume).
   if (demandPool.length > 0) {
-    const seedGroups = new Map<string, KwItem[]>();
-    for (const kw of demandPool) {
-      const seed = (kw.demandSeeds && kw.demandSeeds[0]) ? kw.demandSeeds[0] : 'General demand';
-      const label = seed.replace(/\b\w/g, c => c.toUpperCase());
-      if (!seedGroups.has(label)) seedGroups.set(label, []);
-      seedGroups.get(label)!.push(kw);
+    const clusterByName = new Map<string, ThemeCluster>();
+    const intentsByName = new Map<string, Set<IntentType>>();
+    for (const c of result) {
+      clusterByName.set(c.name.toLowerCase(), c);
+      intentsByName.set(c.name.toLowerCase(), new Set(c.subClusters.map(s => s.intent)));
     }
 
-    for (const [seedLabel, kws] of Array.from(seedGroups.entries())) {
+    const kwIntent = (kw: KwItem): IntentType => {
+      const key = kw.keyword.toLowerCase();
+      let intent = detectIntentSignal(kw.keyword);
+      if (!intent && claudeAssignments[key]) intent = claudeAssignments[key];
+      return intent ?? 'unmatched';
+    };
+
+    // New demand clusters (modifier + seed cases) accumulated by display name.
+    const demandGroups = new Map<string, { name: string; keywords: KwItem[] }>();
+    const pushDemand = (name: string, kw: KwItem) => {
+      const k = name.toLowerCase();
+      if (!demandGroups.has(k)) demandGroups.set(k, { name, keywords: [] });
+      demandGroups.get(k)!.keywords.push(kw);
+    };
+
+    const mergedInto = new Set<ThemeCluster>();   // footprint clusters that absorbed demand
+
+    for (const kw of demandPool) {
+      const intent  = kwIntent(kw);
+      const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
+      const fp      = matched ? clusterByName.get(matched.toLowerCase()) : undefined;
+
+      if (fp && matched) {
+        const covered = intentsByName.get(matched.toLowerCase())!;
+        if (covered.has(intent)) {
+          // SAME INTENT → merge into the footprint cluster's matching sub-cluster.
+          const sc = fp.subClusters.find(s => s.intent === intent);
+          if (sc) sc.keywords.push(kw);
+          fp.keywords.push(kw);
+          mergedInto.add(fp);
+        } else {
+          // DIFFERENT INTENT → surface with an intent modifier in the title.
+          pushDemand(`${matched} — ${INTENT_META[intent].label}`, kw);
+        }
+      } else {
+        // No footprint theme match → seed-grouped missing-demand cluster.
+        const seed  = (kw.demandSeeds && kw.demandSeeds[0]) ? kw.demandSeeds[0] : 'General demand';
+        const label = seed.replace(/\b\w/g, c => c.toUpperCase());
+        pushDemand(label, kw);
+      }
+    }
+
+    // Recompute volumes on footprint clusters that absorbed demand + flag counts.
+    for (const c of Array.from(mergedInto)) {
+      c.totalVolume = c.keywords.reduce((s, k) => s + k.searchVolume, 0);
+      for (const sc of c.subClusters) {
+        sc.totalVolume = sc.keywords.reduce((s, k) => s + k.searchVolume, 0);
+      }
+      const dk = c.keywords.filter(k => k.origin === 'demand');
+      c.demandMergedCount = dk.length;
+      c.demandMergedVol   = dk.reduce((s, k) => s + k.searchVolume, 0);
+    }
+
+    // Materialise the new demand clusters (modifier + seed) as type 'demand'.
+    for (const g of Array.from(demandGroups.values())) {
+      const kws = g.keywords;
       const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);
       const intentBuckets = new Map<IntentType, KwItem[]>();
       (['informational', 'commercial', 'transactional', 'navigational', 'unmatched'] as IntentType[])
         .forEach(i => intentBuckets.set(i, []));
-      for (const kw of kws) {
-        const key = kw.keyword.toLowerCase();
-        let intent = detectIntentSignal(kw.keyword);
-        if (!intent && claudeAssignments[key]) intent = claudeAssignments[key];
-        intentBuckets.get(intent ?? 'unmatched')!.push(kw);
-      }
+      for (const kw of kws) intentBuckets.get(kwIntent(kw))!.push(kw);
       const subClusters: IntentCluster[] = [];
       Array.from(intentBuckets.entries()).forEach(([intent, items]: [IntentType, KwItem[]]) => {
         if (items.length === 0) return;
@@ -293,7 +356,7 @@ function buildThemeClusters(
           competitorVolume: 0,   // demand ≠ competitor gap (different lens)
         });
       });
-      result.push({ id: `demand:${seedLabel}`, name: seedLabel, type: 'demand', keywords: kws, totalVolume, subClusters });
+      result.push({ id: `demand:${g.name}`, name: g.name, type: 'demand', keywords: kws, totalVolume, subClusters });
     }
   }
 
@@ -417,6 +480,14 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
         {cluster.keywords.length} kws &nbsp;·&nbsp; {rankedKws.length} ranked
         {avgRank !== null && <> &nbsp;·&nbsp; Avg #{avgRank}</>}
       </div>
+
+      {/* ── v7.168: same-intent deep-journey demand merged into this cluster ── */}
+      {!isDemand && (cluster.demandMergedCount ?? 0) > 0 && (
+        <div style={{ fontSize: 10, color: '#22D3EE', marginTop: -8, marginBottom: 14 }}>
+          + {cluster.demandMergedCount} deep-journey demand kw{(cluster.demandMergedCount ?? 0) === 1 ? '' : 's'}
+          &nbsp;·&nbsp; {fmtVol(cluster.demandMergedVol ?? 0)}/mo
+        </div>
+      )}
 
       {/* ── Big metric: content coverage ── */}
       <div style={{ marginBottom: 10 }}>
@@ -606,8 +677,12 @@ function ClustersTab({
     // v7.145: dominant funnel stage + client-footprint vs competitor-gap ownership.
     // Ownership is decided by majority keyword count (each keyword is cleanly
     // client-ranked [!isGap] or a competitor gap [isGap]); a tie counts as client.
-    const clientKwCount = c.keywords.filter(k => !k.isGap).length;
-    const gapKwCount    = c.keywords.length - clientKwCount;
+    // v7.168: merged deep-journey demand (origin:'demand') is a THIRD lens — it
+    // must not count as client rank or competitor gap when classifying a
+    // footprint cluster's ownership. Exclude it from both sides.
+    const footprintKws  = c.keywords.filter(k => k.origin !== 'demand');
+    const clientKwCount = footprintKws.filter(k => !k.isGap).length;
+    const gapKwCount    = footprintKws.filter(k =>  k.isGap).length;
 
     // v7.162: a missing-demand cluster is a THIRD class — not client footprint,
     // not competitor gap. Exclude it from ownership/performance so it never
