@@ -963,7 +963,6 @@ export default function ProjectBriefPage() {
                     </div>
                   )}
                   {items.map(item => {
-                    const score  = navScores[item.id];
                     const styles = navItemStyles(item);
                     const isActiveItem = activeSection === item.id;
                     return (
@@ -980,21 +979,21 @@ export default function ProjectBriefPage() {
                           </span>
                           <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
                           <span style={styles.label}>{item.label}</span>
-                          <span style={styles.score}>{score ?? '—'}</span>
-                          <span style={{ width: '4px', height: '4px', borderRadius: '50%', flexShrink: 0, background: score != null ? '#22C55E' : '#1E1E30' }} />
                         </button>
 
-                        {/* ── Keywords sub-nav ── */}
-                        {item.id === 'keywords' && isActiveItem && hasResults && (
+                        {/* ── Keywords sub-nav (v7.172: always expanded, not gated on active) ── */}
+                        {item.id === 'keywords' && hasResults && (
                           <div style={{ background: '#060610', borderTop: '1px solid #0E0E1E' }}>
                             {(['list', 'clusters'] as const).map(sv => {
-                              const subActive = keywordsSubView === sv;
+                              // v7.172: only highlight a sub-item when the Keyword panel is the
+                              // active section — otherwise the row stays expanded but unhighlighted.
+                              const subActive = isActiveItem && keywordsSubView === sv;
                               const subLabels = { list: 'Keyword list', clusters: 'Theme clusters' };
                               const subIcons  = { list: 'ti-list', clusters: 'ti-hierarchy-2' };
                               return (
                                 <button
                                   key={sv}
-                                  onClick={e => { e.stopPropagation(); setKeywordsSubView(sv); }}
+                                  onClick={e => { e.stopPropagation(); setActiveSection('keywords'); setKeywordsSubView(sv); }}
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
                                     padding: '6px 12px 6px 32px',

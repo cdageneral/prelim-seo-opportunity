@@ -1,5 +1,25 @@
 # OrbitIQ Changelog
 
+## v7.172 — 2026-06-08 · Keyword Landscape sub-nav stays expanded
+
+**What Wayne asked:** keep the Keyword Landscape sub-items (Keyword list / Theme clusters) always visible instead of collapsing when you navigate to another section.
+
+**What changed:** in `app/projects/[id]/page.tsx`, the keywords sub-nav render condition dropped the `isActiveItem` gate — it now shows whenever results exist (`item.id === 'keywords' && hasResults`). Two supporting changes so the always-on row behaves correctly:
+- Clicking a sub-item now also calls `setActiveSection('keywords')`, so selecting Keyword list / Theme clusters from any other panel navigates you to the Keyword panel (previously it only set the sub-view state and would have done nothing visible while another section was active).
+- A sub-item only renders highlighted when the Keyword panel is the active section (`isActiveItem && keywordsSubView === sv`), so the expanded row shows no false highlight while you're viewing a different panel.
+
+**Files touched:** `app/projects/[id]/page.tsx`, `package.json`, `CHANGELOG.md`.
+
+## v7.171 — 2026-06-08 · Removed score number + status dot from left-nav rows
+
+**What Wayne asked:** strip the per-section score values (e.g. 21.6, 12.1, 4.5, 0) and the trailing green/grey status dot from each item in the left navigation panel.
+
+**What changed:** in `app/projects/[id]/page.tsx`, the nav row no longer renders the `score` span or the colored dot span. Each row is now just `number · icon · label`. The per-row `const score = navScores[item.id]` local was removed since it was only feeding those two spans.
+
+**What was kept:** `calcNavScores`/`navScores` remain in place because `navItemStyles` still uses `hasData` (data-presence) to subtly tint each row's icon and label — that styling cue was not part of the removal request. The now-unused `styles.score` style object key was left intact (harmless, no behavior).
+
+**Files touched:** `app/projects/[id]/page.tsx`, `package.json`, `CHANGELOG.md`.
+
 ## v7.170 — 2026-06-08 · Per-segment journeys now PARTITION (personas + Shared sum to the total)
 
 **What Wayne flagged:** clicking a segment in the journey gave numbers that don't add up — All Segments 370, but Body-Change Seeker 370, Post-Journey Loose-Skin 367, Validation Shopper 365. They overlapped instead of summing to 370.
