@@ -639,17 +639,76 @@ export function buildSeedSegmentMap(universe: DemandUniverse, segments: Audience
   return map;
 }
 
+// ─── v7.170: EXCLUSIVE topic→persona partition (so segments sum to the total) ──
+// Wayne: each segment view must be a non-overlapping slice — the three personas
+// plus a "Shared / all personas" bucket sum to the combined topic total. We assign
+// every THEME (seed) to exactly ONE bucket: the single persona whose language best
+// matches it, or 'shared' when no persona matches OR several tie (a topic everyone
+// or no-one searches). Assigning by THEME (not per keyword) keeps each theme×stage
+// node whole, so the node counts partition cleanly and add up. Attribution is a real
+// word-overlap against each persona's actual language — never a modeled split.
+export const SHARED_BUCKET = 'shared';
+const SEG_STOPWORDS = new Set([
+  'with','from','that','this','have','your','what','when','will','they','their',
+  'about','after','before','near','want','need','looking','search','searches',
+  'more','some','very','into','over','than','then','them','also','just','like',
+]);
+function segWords(s: string): string[] {
+  return (s.toLowerCase().match(/[a-z]+/g) ?? []).filter(w => w.length >= 4 && !SEG_STOPWORDS.has(w));
+}
+function segmentLanguage(seg: AudienceSegment): string {
+  return [
+    seg.whoTheyAre?.trigger ?? '',
+    seg.whoTheyAre?.demographics ?? '',
+    seg.whoTheyAre?.influencerRole ?? '',
+    seg.tagline ?? '',
+    ...(seg.preLLMPrompts ?? []),
+    ...(seg.productPrompts ?? []),
+  ].join(' ');
+}
+
+/** Map every demand seed (theme) → a single bucket id: a segment.id or SHARED_BUCKET. */
+export function assignSeedSegments(universe: DemandUniverse, segments: AudienceSegment[]): Map<string, string> {
+  const segTok = segments.map(seg => ({ id: seg.id, toks: new Set(segWords(segmentLanguage(seg))) }));
+
+  const seeds = new Set<string>();
+  for (const s of (universe.productSeeds ?? [])) seeds.add(s.toLowerCase());
+  for (const s of (universe.problemSeeds ?? [])) seeds.add(s.toLowerCase());
+  for (const t of (universe.topics ?? [])) for (const s of (t.seeds ?? [])) seeds.add(s.toLowerCase());
+
+  const map = new Map<string, string>();
+  for (const seed of Array.from(seeds)) {
+    const words = segWords(seed);
+    let bestScore = 0;
+    let bestIds: string[] = [];
+    for (const st of segTok) {
+      let score = 0;
+      for (const w of words) if (st.toks.has(w)) score++;
+      if (score > bestScore) { bestScore = score; bestIds = [st.id]; }
+      else if (score === bestScore && score > 0) bestIds.push(st.id);
+    }
+    // Unique best match (score > 0) → that persona; none or a tie → Shared.
+    map.set(seed, bestScore > 0 && bestIds.length === 1 ? bestIds[0] : SHARED_BUCKET);
+  }
+  return map;
+}
+
 // Build journey nodes (theme × funnel stage) from the demand universe, overlaying
 // the ranking footprint as coverage. Every node's volume = the sum of REAL Semrush
-// search volumes of its topics. When activeSegmentId is set, the PRE-PRODUCT lane
-// is filtered to topics whose seed belongs to that segment (plus unattributed
-// topics, which are generic); the PRODUCT lane (procedures) is cross-segment.
+// search volumes of its topics.
+//
+// v7.170: when `activeBucketId` is set the journey is filtered to ONE persona
+// bucket (a segment.id or SHARED_BUCKET) using the exclusive theme→bucket partition
+// from assignSeedSegments. The filter applies to BOTH lanes by a topic's THEME seed,
+// so every theme×stage node belongs to exactly one bucket — the per-persona node
+// counts therefore PARTITION the combined total (3 personas + Shared = total).
+// `activeBucketId === null` = the combined "All Segments" view (no filter).
 export function buildDemandNodes(
   universe: DemandUniverse,
   clientRanked: Set<string>,
   competitorRanked: Set<string>,
-  activeSegmentId: string | null = null,
-  seedToSegments: Map<string, Set<string>> = new Map(),
+  activeBucketId: string | null = null,
+  seedBucket: Map<string, string> = new Map(),
 ): { preNodes: JourneyNode[]; prodNodes: JourneyNode[]; preEdges: [string, string][]; prodEdges: [string, string][] } {
   const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
 
@@ -660,15 +719,16 @@ export function buildDemandNodes(
     const isProduct = t.laneHint === 'product' || t.seeds.some((s: string) => productSet.has(s.toLowerCase()));
     const lane: JourneyType = isProduct ? 'product' : 'pre-product';
 
-    // Per-segment filter (pre-product only): a topic shows for the active segment
-    // if any of its seeds belongs to that segment, OR it's unattributed (generic).
-    if (activeSegmentId && !isProduct) {
-      const segIds = new Set<string>();
-      for (const s of t.seeds) { const set = seedToSegments.get(s.toLowerCase()); if (set) for (const id of Array.from(set)) segIds.add(id); }
-      if (segIds.size > 0 && !segIds.has(activeSegmentId)) continue;
+    const themeSeed = t.seeds.find((s: string) => productSet.has(s.toLowerCase()) === isProduct) ?? t.seeds[0] ?? 'Other';
+
+    // v7.170 exclusive partition: a topic belongs to exactly one bucket, decided by
+    // its THEME seed (so a whole theme×stage node lands in one bucket). Filter both
+    // lanes when a single bucket is active; combined view (null) shows everything.
+    if (activeBucketId) {
+      const bucket = seedBucket.get(themeSeed.toLowerCase()) ?? SHARED_BUCKET;
+      if (bucket !== activeBucketId) continue;
     }
 
-    const themeSeed = t.seeds.find((s: string) => productSet.has(s.toLowerCase()) === isProduct) ?? t.seeds[0] ?? 'Other';
     const theme = titleCaseSeed(themeSeed);
     const sig = detectIntent(t.keyword);
     const stage = INTENT_META[sig === 'unmatched' ? 'informational' : sig].stage;
@@ -1148,14 +1208,16 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // v7.158: filtered per active segment via seed→segment provenance.
   const demandMode = !!(demandUniverse && (demandUniverse.topics?.length ?? 0) > 0);
   const footprint  = useMemo(() => buildFootprintSets(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
-  const seedToSegments = useMemo(
-    () => demandMode ? buildSeedSegmentMap(demandUniverse as DemandUniverse, segments) : new Map<string, Set<string>>(),
+  // v7.170: exclusive theme→persona partition (segment.id or SHARED_BUCKET).
+  const seedBucket = useMemo(
+    () => demandMode ? assignSeedSegments(demandUniverse as DemandUniverse, segments) : new Map<string, string>(),
     [demandMode, demandUniverse, segments],
   );
-  const activeSegmentId = activeTab === 'combined' ? null : activeTab;   // v7.158
+  // activeTab is 'combined' (→ null, no filter), a segment.id, or SHARED_BUCKET.
+  const activeBucketId = activeTab === 'combined' ? null : activeTab;
   const demand = useMemo(
-    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeSegmentId, seedToSegments) : null,
-    [demandMode, demandUniverse, footprint, activeSegmentId, seedToSegments],
+    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeBucketId, seedBucket) : null,
+    [demandMode, demandUniverse, footprint, activeBucketId, seedBucket],
   );
 
   const preNodes  = demand ? demand.preNodes  : fpPreNodes;
@@ -1280,10 +1342,13 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const preEdges  = demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : stageOrderEdges(fpPreNodes));
   const prodEdges = demand ? demand.prodEdges : (edges.product.length    ? edges.product    : stageOrderEdges(fpProdNodes));
 
+  // v7.170: in demand mode the personas + a "Shared / all personas" bucket are an
+  // exclusive partition of the journey topics, so they sum to the combined total.
   const tabs = useMemo(() => [
     { id: 'combined', label: 'All Segments' },
     ...segments.map((s: AudienceSegment) => ({ id: s.id, label: s.name })),
-  ], [segments]);
+    ...(demandMode && segments.length > 0 ? [{ id: SHARED_BUCKET, label: 'Shared / all personas' }] : []),
+  ], [segments, demandMode]);
 
   const activeSegment = activeTab === 'combined' ? null : segments.find((s: AudienceSegment) => s.id === activeTab) ?? null;
   const segIdx = activeSegment ? segments.indexOf(activeSegment) : -1;

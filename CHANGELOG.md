@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.170 — 2026-06-08 · Per-segment journeys now PARTITION (personas + Shared sum to the total)
+
+**What Wayne flagged:** clicking a segment in the journey gave numbers that don't add up — All Segments 370, but Body-Change Seeker 370, Post-Journey Loose-Skin 367, Validation Shopper 365. They overlapped instead of summing to 370.
+
+**Root cause:** the old per-segment filter (v7.158) showed the entire product lane (358 topics) to *every* segment, and showed pre-product topics with no/multi persona signal to *all* segments. So each segment inherited almost everything — the views overlapped and couldn't sum.
+
+**Change (`components/brief/JourneySection.tsx`):** every theme is now assigned to **exactly one** bucket via `assignSeedSegments` — the single persona whose actual language (trigger, demographics, LLM prompts, tagline) best matches the theme's words, or a **"Shared / all personas"** bucket when no persona matches or several tie. `buildDemandNodes` filters **both** lanes by the theme's bucket, so each theme × stage node belongs to one bucket and the per-persona node counts **partition** the combined total: the three personas + Shared sum to it exactly. A new **"Shared / all personas"** tab surfaces the shared bucket.
+
+**Defensibility:** attribution is real word-overlap against each persona's own language — never a modeled or share-weighted split (a topic everyone or no-one uniquely searches lands in Shared, honestly). The persona pill percentages (45/30/25) are unchanged — they remain the *audience* share, a separate metric from topic counts.
+
+**Result:** All Segments = total; Body-Change Seeker + Post-Journey + Validation Shopper + Shared = the same total. No deep journey built ⇒ unchanged.
+
 ## v7.169 — 2026-06-08 · Theme Clusters re-granularized to TOPICS (theme × intent) so they align with the journey
 
 **What Wayne flagged:** still showing 208 clusters but 370 journey topics — "every topic we write about should be a cluster; a cluster is a small group of similar-intent keywords about a single topic."
