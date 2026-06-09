@@ -326,7 +326,9 @@ function isClientRelevant(keyword: string, relevanceTokens: Set<string>): boolea
     if (w && ANATOMY_WORDS.has(w)) return true;
   }
   // 3) shares a distinctive token with the client's categories or brand
-  for (const t of relevanceTokens) { if (k.includes(t)) return true; }
+  // Array.from: project tsconfig has no `target` -> ES5; iterating a Set directly
+  // needs downlevelIteration. Array.from keeps the build green (v7.174).
+  for (const t of Array.from(relevanceTokens)) { if (k.includes(t)) return true; }
   return false;
 }
 

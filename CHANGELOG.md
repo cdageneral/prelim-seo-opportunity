@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.174 — 2026-06-09 · HOTFIX: v7.173 Vercel build failure (Set iteration at ES5)
+
+**What broke:** the v7.173 deploy failed `npm run build` with `Type error: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher` at `components/brief/ContentMapSection.tsx:310`.
+
+**Root cause:** the project's `tsconfig.json` sets no `target`, so TypeScript defaults to **ES5**, where iterating a `Set` directly with `for…of` is illegal. The new gate's `for (const t of relevanceTokens)` (a `Set`) tripped it. My v7.173 verification used `target es2017`, which silently allowed the construct and missed it — the same ES5-default trap as the v7.166→v7.167 hotfix.
+
+**Fix (1 line in each panel):** `for (const t of relevanceTokens)` → `for (const t of Array.from(relevanceTokens))` in `ContentMapSection.tsx` and `JourneySection.tsx`. No logic change — the relevance gate behaves identically.
+
+**Verification hardened:** the isolated `tsc` check now runs at the project's real config (`--target ES5 --lib dom,dom.iterable,esnext`, no `downlevelIteration`). It reproduces the exact `TS2802` error on the bare-`Set` version and confirms the `Array.from` version compiles clean — for both files.
+
+**Files touched:** `components/brief/ContentMapSection.tsx`, `components/brief/JourneySection.tsx`, `package.json`, `CHANGELOG.md`.
+
 ## v7.173 — 2026-06-09 · Content Plan / Journey: off-topic keywords filtered out of the demand universe
 
 **What Wayne flagged:** in the Content Plan a brief's *content angle* read fine but its *Target Keywords* looked random and unrelated — e.g. a card showed `what is a hurricane`, `what is an ion`, `israel palestine conflict explained`, `what about daca` with 16.5M/mo volume.
