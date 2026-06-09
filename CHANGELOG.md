@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.173 — 2026-06-09 · Content Plan / Journey: off-topic keywords filtered out of the demand universe
+
+**What Wayne flagged:** in the Content Plan a brief's *content angle* read fine but its *Target Keywords* looked random and unrelated — e.g. a card showed `what is a hurricane`, `what is an ion`, `israel palestine conflict explained`, `what about daca` with 16.5M/mo volume.
+
+**Root cause:** those keywords sat in the client's real Semrush/CSV data but named no body area, problem, or solution, so they all fell into the `'General Problem Searches'` catch-all bucket (`deterministicProblemTheme`). That bucket was then surfaced as a content brief whose angle came from the audience **segment trigger** (a polished sentence) while its keywords came from the **catch-all** — two different sources, hence the mismatch. The phantom 16.5M volume also inflated the rollup.
+
+**Change — a deterministic client-relevance gate (`buildRelevanceTokens` + `isClientRelevant`), added identically to `components/brief/ContentMapSection.tsx` and `components/brief/JourneySection.tsx`.** A keyword now only enters the pre-product/problem pool if it is topically relevant to THIS client: it must EITHER hit a curated body-problem anchor (belly, chin, weight, fat, cellulite…), OR name a body area as a whole word (anatomy term), OR share a distinctive token with the client's own category names or brand. A keyword that matches none of these shares zero vocabulary with the client and is **dropped from the demand universe before clustering** — so it can never surface as a brief or roll into the Executive Summary.
+
+**Defensibility:** no AI and no modeling. Every drop is explainable by the keyword having zero overlap with the client's anchors, anatomy, category names, or brand. The relevance vocabulary is the same body/aesthetic domain the panels already use, plus the client's real category and brand tokens. Verified with an isolated harness that extracts the actual shipped functions and asserts against the exact screenshot keywords: all four junk terms drop; legitimate body-problem keywords (`how to lose belly fat`, `double chin exercises`, `loose skin after weight loss`, `stubborn fat…`, `cellulite on thighs`, `arm flab`, `tummy bulge`, `lose weight fast`) all survive. Strict `tsc` clean.
+
+**Why both panels:** `JourneySection.buildClusters` is the SAME function the Executive Summary consumes, so gating there keeps the journey, the content plan, and the rollup consistent.
+
+**Files touched:** `components/brief/ContentMapSection.tsx`, `components/brief/JourneySection.tsx`, `package.json`, `CHANGELOG.md`.
+
 ## v7.172 — 2026-06-08 · Keyword Landscape sub-nav stays expanded
 
 **What Wayne asked:** keep the Keyword Landscape sub-items (Keyword list / Theme clusters) always visible instead of collapsing when you navigate to another section.

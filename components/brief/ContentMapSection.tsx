@@ -265,6 +265,52 @@ function deterministicProblemTheme(keyword: string): string {
   for (const [needle, theme] of PROBLEM_ANCHORS) { if (k.includes(needle)) return theme; }
   return 'General Problem Searches';
 }
+
+// ─── v7.173: client-relevance gate (deterministic, defensible) ──────────────────
+// A keyword only enters the pre-product "problem" pool if it is topically
+// relevant to THIS client's demand domain. It must EITHER hit a curated
+// body-problem anchor, OR name a body area (whole-word anatomy term), OR share a
+// distinctive token with the client's own category names or brand. A keyword
+// that names no solution AND matches none of these (e.g. "what is a hurricane",
+// "israel palestine conflict explained", "what about daca") is off-topic noise:
+// it shares zero vocabulary with the client and is dropped from the demand
+// universe BEFORE clustering, so it can never surface as a content brief or roll
+// into the executive summary. No AI and no modeling — every drop is explainable
+// by the keyword having no overlap with the client's anchors, anatomy, category
+// names, or brand. The relevance vocabulary is the same body/aesthetic domain
+// the rest of this panel already uses (PROBLEM_ANCHORS / ANATOMY_WORDS) plus the
+// client's real category and brand tokens.
+function buildRelevanceTokens(
+  categories: Array<{ name: string; type: string }>,
+  clientDomain: string,
+  competitorDomains: string[],
+): Set<string> {
+  const tokens = new Set<string>();
+  for (const c of categories) {
+    const words = c.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+      .filter((w: string) => w.length >= 4 && !PROC_NAME_NOISE.has(w));
+    for (const w of words) tokens.add(w);
+  }
+  for (const t of brandTokensOf(clientDomain, competitorDomains)) {
+    if (t.length >= 4) tokens.add(t);
+  }
+  return tokens;
+}
+
+function isClientRelevant(keyword: string, relevanceTokens: Set<string>): boolean {
+  const k = keyword.toLowerCase();
+  // 1) curated body-problem anchor (belly, chin, weight, fat, cellulite, …)
+  for (const [needle] of PROBLEM_ANCHORS) { if (k.includes(needle)) return true; }
+  // 2) names a body area — whole-word anatomy term (avoids 'leg' inside 'legal')
+  for (const raw of k.split(/\s+/)) {
+    const w = raw.replace(/[^a-z0-9]/g, '');
+    if (w && ANATOMY_WORDS.has(w)) return true;
+  }
+  // 3) shares a distinctive token with the client's categories or brand
+  for (const t of relevanceTokens) { if (k.includes(t)) return true; }
+  return false;
+}
+
 function classifyJourneyType(type: string): JourneyType {
   return type === 'problem' ? 'pre-product' : 'product';
 }
@@ -347,6 +393,8 @@ function buildClusters(
   const catMap = new Map<string, KwItem[]>();
   categories.forEach((c: { name: string }) => catMap.set(c.name, []));
   const problemPool: KwItem[] = [];
+  // v7.173: vocabulary the client actually owns — drives the relevance gate below.
+  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains);
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
     let cand: string | null = null;
@@ -361,7 +409,11 @@ function buildClusters(
       const procWords = procWordsByCat.get(cand) ?? [];
       if (namesSolutionFor(kw.keyword, catType, procWords, clientDomain, competitorDomains)) { catMap.get(cand)!.push(kw); continue; }
     }
-    problemPool.push(kw);
+    // v7.173: only keep pre-product keywords that are topically relevant to the
+    // client. Off-topic noise (no anchor, no body area, no category/brand token)
+    // is dropped from the demand universe so it can't pollute the catch-all
+    // bucket, surface as a content brief, or roll into the exec summary.
+    if (isClientRelevant(kw.keyword, relevanceTokens)) problemPool.push(kw);
   }
 
   const problemGroups = new Map<string, KwItem[]>();
