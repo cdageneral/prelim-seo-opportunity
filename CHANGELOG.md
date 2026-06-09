@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.169 — 2026-06-08 · Theme Clusters re-granularized to TOPICS (theme × intent) so they align with the journey
+
+**What Wayne flagged:** still showing 208 clusters but 370 journey topics — "every topic we write about should be a cluster; a cluster is a small group of similar-intent keywords about a single topic."
+
+**Root cause:** the panel was counting *broad categories* (≈208), while each category secretly held several topic-level intent groups inside it. The journey already counts *topics* (theme × funnel-stage). So the two panels measured different units and could never line up.
+
+**Change (`components/brief/ThemeClustersPanel.tsx`):** a "cluster" is now a **topic** = one theme at one intent/stage — exactly a category's intent sub-cluster, the same unit the journey uses.
+- The panel **flattens every category into its topics** (`flattenTopics`) and counts/filters/rolls-up on those (`classifyTopic`). The big TOTAL CLUSTERS number, the ownership/performance/funnel pills, and the header all now count topics.
+- Display is **two-level**: each category is a section header, with one small **topic card** per theme × intent inside it. Cards show stage · intent, content type, keyword count, monthly volume, content coverage, and a Winning / Trailing / Missing-demand badge; click to expand the keywords.
+- Deep-journey demand now feeds back at the **topic** level: same-intent demand merges into the matching topic; a demand intent the category doesn't cover becomes a new "missing demand" **topic under that same category** (not a separate row); demand with no category match becomes its own demand category with topic cards.
+- Demand-only topics are classed as a third lens (not client-rank, not competitor-gap); a footprint topic that merely absorbed same-intent demand keeps its footprint ownership.
+
+**Result:** the cluster count rises from category-level (~208) to topic-level — the same granularity as the journey's 370 topics, so the two panels reconcile. (They draw from slightly different keyword sets — footprint+demand vs the demand universe — so the totals are aligned in *unit*, not guaranteed identical.) No deep journey built ⇒ identical behavior to before, just counted/displayed at topic granularity.
+
 ## v7.168 — 2026-06-08 · Deep journey feeds back into Theme Clusters (intent-aware merge)
 
 **What Wayne flagged:** the Journey panel shows 370 topics but Theme Clusters shows only 195 — the deep-journey analysis should feed back into the cluster data and update the cluster panel.

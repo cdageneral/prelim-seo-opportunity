@@ -261,27 +261,22 @@ function buildThemeClusters(
     result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters });
   }
 
-  // ── v7.168: Surface every deep-journey demand theme as a cluster ────────────
-  // Wayne's rule (deep journey feeds back into the cluster data):
-  //   • A demand keyword whose THEME matches an existing footprint cluster and
-  //     whose SEARCH INTENT the footprint already covers → MERGE into that
-  //     cluster's matching sub-cluster (same lens at that stage; no duplicate row).
-  //   • A demand keyword matching a footprint cluster but at an intent the
-  //     footprint does NOT cover → surface as its OWN cluster with an intent
-  //     MODIFIER in the title ("{Category} — {Intent}") so the unmet-intent
-  //     demand is visible and distinct.
-  //   • A demand keyword matching NO footprint category → seed-grouped
-  //     "missing demand" cluster (the v7.162 behaviour).
-  // Merged demand keeps origin:'demand' so the ownership math in ClustersTab never
-  // counts it as client rank or competitor gap — demand stays a third lens, it
-  // only adds to overall MARKET DEMAND (totalVolume).
+  // ── v7.169: Surface every deep-journey demand TOPIC (theme × intent) ─────────
+  // A "cluster" is now a single TOPIC = a small group of same-intent keywords
+  // about one theme (Wayne's definition). Demand feeds back at the topic level:
+  //   • Demand kw matches a footprint category at an intent it ALREADY covers →
+  //     MERGE into that topic (same theme × intent; volume grows, no new row).
+  //   • Demand kw matches a footprint category at an intent it does NOT cover →
+  //     add a NEW demand TOPIC (sub-cluster) under that SAME category, so it
+  //     appears as a "missing demand" topic inside the category's section.
+  //   • Demand kw matches NO category → seed-grouped "missing demand" category,
+  //     whose own intent topics surface as cards.
+  // Demand keeps origin:'demand', so a topic that is PURELY demand is classed as a
+  // third lens (not client rank / not competitor gap) in ClustersTab; a footprint
+  // topic that merely absorbed same-intent demand stays footprint-owned.
   if (demandPool.length > 0) {
     const clusterByName = new Map<string, ThemeCluster>();
-    const intentsByName = new Map<string, Set<IntentType>>();
-    for (const c of result) {
-      clusterByName.set(c.name.toLowerCase(), c);
-      intentsByName.set(c.name.toLowerCase(), new Set(c.subClusters.map(s => s.intent)));
-    }
+    for (const c of result) clusterByName.set(c.name.toLowerCase(), c);
 
     const kwIntent = (kw: KwItem): IntentType => {
       const key = kw.keyword.toLowerCase();
@@ -290,54 +285,46 @@ function buildThemeClusters(
       return intent ?? 'unmatched';
     };
 
-    // New demand clusters (modifier + seed cases) accumulated by display name.
-    const demandGroups = new Map<string, { name: string; keywords: KwItem[] }>();
-    const pushDemand = (name: string, kw: KwItem) => {
-      const k = name.toLowerCase();
-      if (!demandGroups.has(k)) demandGroups.set(k, { name, keywords: [] });
-      demandGroups.get(k)!.keywords.push(kw);
-    };
-
-    const mergedInto = new Set<ThemeCluster>();   // footprint clusters that absorbed demand
+    const touched    = new Set<ThemeCluster>();   // footprint clusters that absorbed demand
+    const seedGroups = new Map<string, { name: string; keywords: KwItem[] }>();
 
     for (const kw of demandPool) {
       const intent  = kwIntent(kw);
       const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
       const fp      = matched ? clusterByName.get(matched.toLowerCase()) : undefined;
 
-      if (fp && matched) {
-        const covered = intentsByName.get(matched.toLowerCase())!;
-        if (covered.has(intent)) {
-          // SAME INTENT → merge into the footprint cluster's matching sub-cluster.
-          const sc = fp.subClusters.find(s => s.intent === intent);
-          if (sc) sc.keywords.push(kw);
-          fp.keywords.push(kw);
-          mergedInto.add(fp);
-        } else {
-          // DIFFERENT INTENT → surface with an intent modifier in the title.
-          pushDemand(`${matched} — ${INTENT_META[intent].label}`, kw);
+      if (fp) {
+        // Matched a footprint category → find or create the topic at this intent.
+        let sc = fp.subClusters.find(s => s.intent === intent);
+        if (!sc) {
+          const meta = INTENT_META[intent];
+          sc = {
+            intent, stage: meta.stage, contentType: meta.contentType, contentIcon: meta.contentIcon,
+            keywords: [], totalVolume: 0, clientVolume: 0, competitorVolume: 0,
+          };
+          fp.subClusters.push(sc);   // a NEW (demand-only) topic under this category
         }
+        sc.keywords.push(kw);
+        fp.keywords.push(kw);
+        touched.add(fp);
       } else {
-        // No footprint theme match → seed-grouped missing-demand cluster.
+        // No category match → seed-grouped missing-demand category.
         const seed  = (kw.demandSeeds && kw.demandSeeds[0]) ? kw.demandSeeds[0] : 'General demand';
         const label = seed.replace(/\b\w/g, c => c.toUpperCase());
-        pushDemand(label, kw);
+        const k = label.toLowerCase();
+        if (!seedGroups.has(k)) seedGroups.set(k, { name: label, keywords: [] });
+        seedGroups.get(k)!.keywords.push(kw);
       }
     }
 
-    // Recompute volumes on footprint clusters that absorbed demand + flag counts.
-    for (const c of Array.from(mergedInto)) {
+    // Recompute volumes on footprint clusters that absorbed demand.
+    for (const c of Array.from(touched)) {
+      for (const sc of c.subClusters) sc.totalVolume = sc.keywords.reduce((s, k) => s + k.searchVolume, 0);
       c.totalVolume = c.keywords.reduce((s, k) => s + k.searchVolume, 0);
-      for (const sc of c.subClusters) {
-        sc.totalVolume = sc.keywords.reduce((s, k) => s + k.searchVolume, 0);
-      }
-      const dk = c.keywords.filter(k => k.origin === 'demand');
-      c.demandMergedCount = dk.length;
-      c.demandMergedVol   = dk.reduce((s, k) => s + k.searchVolume, 0);
     }
 
-    // Materialise the new demand clusters (modifier + seed) as type 'demand'.
-    for (const g of Array.from(demandGroups.values())) {
+    // Seed (no-category-match) demand → its own demand category with intent topics.
+    for (const g of Array.from(seedGroups.values())) {
       const kws = g.keywords;
       const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);
       const intentBuckets = new Map<IntentType, KwItem[]>();
@@ -647,6 +634,200 @@ function dominantStage(c: ThemeCluster): JourneyStage {
   return best;
 }
 
+// ─── Topic model (v7.169) ─────────────────────────────────────────────────────
+// Wayne's definition: a "cluster" is ONE TOPIC = a small group of similar-intent
+// keywords about a single theme. That is exactly a category's intent sub-cluster.
+// So we flatten every category into its theme × intent TOPICS and count/filter on
+// those — the same unit the Audience Journey uses (theme × funnel-stage node), so
+// the two panels finally line up. Categories become section headers; topics are
+// the cards inside them.
+interface Topic {
+  id:            string;
+  parentName:    string;
+  parentType:    'procedure' | 'brand' | 'location' | 'demand';
+  intent:        IntentType;
+  stage:         JourneyStage;
+  contentType:   string;
+  contentIcon:   string;
+  keywords:      KwItem[];
+  totalVolume:   number;
+}
+
+interface TopicStat {
+  topic:             Topic;
+  isLeading:         boolean;
+  compGapPct:        number;
+  stage:             JourneyStage;
+  isClientFootprint: boolean;
+  isDemand:          boolean;
+}
+
+function flattenTopics(clusters: ThemeCluster[]): Topic[] {
+  const topics: Topic[] = [];
+  for (const c of clusters) {
+    for (const sc of c.subClusters) {
+      if (sc.keywords.length === 0) continue;
+      topics.push({
+        id:          `${c.id}::${sc.intent}`,
+        parentName:  c.name,
+        parentType:  c.type,
+        intent:      sc.intent,
+        stage:       sc.stage,
+        contentType: sc.contentType,
+        contentIcon: sc.contentIcon,
+        keywords:    sc.keywords,
+        totalVolume: sc.totalVolume,
+      });
+    }
+  }
+  return topics;
+}
+
+// A topic is "missing demand" (a third lens) when it is a seed demand category OR
+// every one of its keywords came from the deep-journey demand universe. A footprint
+// topic that merely ABSORBED some same-intent demand keeps its footprint ownership.
+function classifyTopic(t: Topic): TopicStat {
+  const isDemand = t.parentType === 'demand'
+    || (t.keywords.length > 0 && t.keywords.every(k => k.origin === 'demand'));
+
+  const footprintKws = t.keywords.filter(k => k.origin !== 'demand');
+  const rankedVol = footprintKws
+    .filter(k => k.position !== null && k.position <= 20)
+    .reduce((s, k) => s + k.searchVolume, 0);
+
+  const compVolByDom: Record<string, number> = {};
+  for (const kw of t.keywords.filter(k => k.isGap)) {
+    const d = kw.competitor ?? 'Unknown';
+    compVolByDom[d] = (compVolByDom[d] ?? 0) + kw.searchVolume;
+  }
+  const compVals = Object.values(compVolByDom);
+  const topComp  = compVals.length > 0 ? Math.max(...compVals) : 0;
+  const gapVol   = t.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
+  const compGapPct = t.totalVolume > 0 ? gapVol / t.totalVolume : 0;
+
+  const clientKwCount = footprintKws.filter(k => !k.isGap).length;
+  const gapKwCount    = footprintKws.filter(k =>  k.isGap).length;
+
+  return {
+    topic: t,
+    isLeading: !isDemand && rankedVol >= topComp,
+    compGapPct,
+    stage: t.stage,   // each topic sits in exactly one funnel stage (its intent)
+    isClientFootprint: !isDemand && clientKwCount >= gapKwCount,
+    isDemand,
+  };
+}
+
+// ─── Category type badge metadata (v7.169) ────────────────────────────────────
+const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand', { label: string; color: string; bg: string; bdr: string }> = {
+  procedure: { label: 'Procedure',     color: '#9B96FF', bg: 'rgba(155,150,255,0.10)', bdr: 'rgba(155,150,255,0.30)' },
+  brand:     { label: 'Brand',         color: '#F59E0B', bg: 'rgba(245,158,11,0.10)',  bdr: 'rgba(245,158,11,0.30)' },
+  location:  { label: 'Location',      color: '#38BDF8', bg: 'rgba(56,189,248,0.10)',  bdr: 'rgba(56,189,248,0.30)' },
+  demand:    { label: 'Missing demand',color: '#22D3EE', bg: '#062A32',                bdr: '#0E4753' },
+};
+
+// ─── Topic card (v7.169) — one card per theme × intent topic ──────────────────
+function TopicCard({ topic, stat, clientDomain }: { topic: Topic; stat: TopicStat; clientDomain: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const isDemand = stat.isDemand;
+
+  const rankedKws    = topic.keywords.filter(k => k.origin !== 'demand' && k.position !== null && k.position <= 20);
+  const clientCovVol = rankedKws.reduce((s, k) => s + k.searchVolume, 0);
+  const coverage     = pct(clientCovVol, topic.totalVolume);
+
+  const badge = isDemand
+    ? { text: 'Missing demand', bg: '#062A32', bdr: '#0E4753', color: '#22D3EE' }
+    : stat.isLeading
+    ? { text: 'Winning',  bg: '#0D2010', bdr: '#1A4020', color: '#4ADE80' }
+    : { text: 'Trailing', bg: '#2A0D18', bdr: '#4A1A28', color: '#F472B6' };
+
+  const stage = STAGE_META[topic.stage];
+  const topKws = topic.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 12);
+
+  return (
+    <div
+      onClick={() => setExpanded(v => !v)}
+      style={{
+        background: isDemand ? '#08161A' : '#101019',
+        border: `1px solid ${isDemand ? '#0E3038' : '#1E1E32'}`,
+        borderRadius: 10, padding: '12px 13px', cursor: 'pointer', transition: 'border-color 0.15s',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#155E6B' : '#34345A'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#0E3038' : '#1E1E32'; }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 7 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#D8D8F8', lineHeight: 1.3 }}>
+          <i className={`ti ${stage.icon}`} style={{ fontSize: 13, color: '#6A6A90', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
+          {stage.label} · {INTENT_META[topic.intent].label}
+        </span>
+        <span style={{
+          fontSize: 8, fontWeight: 700, letterSpacing: '.06em', flexShrink: 0, textTransform: 'uppercase',
+          padding: '2px 7px', borderRadius: 20, background: badge.bg, border: `1px solid ${badge.bdr}`, color: badge.color,
+        }}>{badge.text}</span>
+      </div>
+
+      <div style={{ fontSize: 10, color: '#5A5A78' }}>{topic.contentType}</div>
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 9 }}>
+        <span style={{ fontSize: 26, fontWeight: 700, color: '#E8E8FF', lineHeight: 1, letterSpacing: '-.5px' }}>{topic.keywords.length}</span>
+        <span style={{ fontSize: 10, color: '#505070' }}>keywords · {fmtVol(topic.totalVolume)}/mo</span>
+      </div>
+
+      <div style={{ fontSize: 10, color: '#484868', marginTop: 6 }}>
+        {isDemand
+          ? <>Deep-journey demand · <span style={{ color: '#22D3EE' }}>not yet owned</span></>
+          : <>{coverage}% content coverage · {rankedKws.length} of {topic.keywords.length} ranked</>}
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: 10, borderTop: '1px solid #1C1C2E', paddingTop: 9, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+          {topKws.map((k, i) => (
+            <span key={i} style={{
+              fontSize: 10, color: k.origin === 'demand' ? '#22D3EE' : k.isGap ? '#F59E0B' : '#8AB89A',
+              background: '#0C0C16', border: '1px solid #1C1C2E', borderRadius: 5, padding: '2px 6px',
+            }}>{k.keyword} · {fmtVol(k.searchVolume)}</span>
+          ))}
+          {topic.keywords.length > topKws.length && (
+            <span style={{ fontSize: 10, color: '#404060', padding: '2px 4px' }}>+{topic.keywords.length - topKws.length} more</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Category section (v7.169) — header + its topic cards ─────────────────────
+function CategorySection({
+  cluster, topics, statById, clientDomain,
+}: {
+  cluster: ThemeCluster; topics: Topic[]; statById: Map<string, TopicStat>; clientDomain: string;
+}) {
+  const tm = TYPE_META[cluster.type];
+  const shownVol = topics.reduce((s, t) => s + t.totalVolume, 0);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#E2E2F6' }}>{cluster.name}</span>
+        <span style={{
+          fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
+          padding: '2px 8px', borderRadius: 20, background: tm.bg, border: `1px solid ${tm.bdr}`, color: tm.color,
+        }}>{tm.label}</span>
+        <span style={{ fontSize: 11, color: '#5A5A78' }}>
+          {topics.length} topic{topics.length === 1 ? '' : 's'} · {fmtVol(shownVol)}/mo
+        </span>
+        <div style={{ flex: 1, height: 1, background: '#181828' }} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+        {topics.map(t => {
+          const stat = statById.get(t.id);
+          return stat ? <TopicCard key={t.id} topic={t} stat={stat} clientDomain={clientDomain} /> : null;
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ClustersTab({
   clusters,
   clientDomain,
@@ -658,86 +839,47 @@ function ClustersTab({
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
 
-  // ── Per-cluster classification ─────────────────────────────────────────────
-  const clusterStats: ClusterStat[] = clusters.map(c => {
-    const rankedVol = c.keywords
-      .filter(k => k.position !== null && k.position <= 20)
-      .reduce((s, k) => s + k.searchVolume, 0);
+  // ── Flatten categories → TOPICS (the counted unit) + classify each ──────────
+  const topics: Topic[] = flattenTopics(clusters);
+  const topicStats: TopicStat[] = topics.map(classifyTopic);
+  const catCount = new Set(clusters.map(c => `${c.type}:${c.name}`)).size;
 
-    const compVolByDom: Record<string, number> = {};
-    for (const kw of c.keywords.filter(k => k.isGap)) {
-      const d = kw.competitor ?? 'Unknown';
-      compVolByDom[d] = (compVolByDom[d] ?? 0) + kw.searchVolume;
-    }
-    const compVals = Object.values(compVolByDom);
-    const topComp  = compVals.length > 0 ? Math.max(...compVals) : 0;
-    const gapVol   = c.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
-    const compGapPct = c.totalVolume > 0 ? gapVol / c.totalVolume : 0;
+  const leadingStats  = topicStats.filter(s => !s.isDemand &&  s.isLeading);
+  const trailingStats = topicStats.filter(s => !s.isDemand && !s.isLeading);
+  // Opportunity = competitor gap vol < 25% of topic total AND client not already leading
+  // (fully-won topics score compGapPct=0 which would falsely pass < 0.25)
+  const oppStats      = topicStats.filter(s => !s.isDemand && s.compGapPct < 0.25 && !s.isLeading);
 
-    // v7.145: dominant funnel stage + client-footprint vs competitor-gap ownership.
-    // Ownership is decided by majority keyword count (each keyword is cleanly
-    // client-ranked [!isGap] or a competitor gap [isGap]); a tie counts as client.
-    // v7.168: merged deep-journey demand (origin:'demand') is a THIRD lens — it
-    // must not count as client rank or competitor gap when classifying a
-    // footprint cluster's ownership. Exclude it from both sides.
-    const footprintKws  = c.keywords.filter(k => k.origin !== 'demand');
-    const clientKwCount = footprintKws.filter(k => !k.isGap).length;
-    const gapKwCount    = footprintKws.filter(k =>  k.isGap).length;
-
-    // v7.162: a missing-demand cluster is a THIRD class — not client footprint,
-    // not competitor gap. Exclude it from ownership/performance so it never
-    // inflates the client or competitor counts.
-    const isDemand = c.type === 'demand';
-
-    return {
-      cluster: c,
-      isLeading: !isDemand && rankedVol >= topComp,
-      compGapPct,
-      stage: dominantStage(c),
-      isClientFootprint: !isDemand && clientKwCount >= gapKwCount,
-      isDemand,
-    };
-  });
-
-  const leadingStats  = clusterStats.filter(s => !s.isDemand &&  s.isLeading);
-  const trailingStats = clusterStats.filter(s => !s.isDemand && !s.isLeading);
-  // Opportunity = competitor gap vol < 25% of cluster total AND client not already leading
-  // (fully-won clusters score compGapPct=0 which would falsely pass < 0.25)
-  const oppStats      = clusterStats.filter(s => !s.isDemand && s.compGapPct < 0.25 && !s.isLeading);
-
-  // ── Funnel-stage roll-up (v7.145) ──────────────────────────────────────────
-  // Each cluster sits in exactly one stage (its dominant intent), split into
-  // client-footprint vs competitor-gap clusters. Annual vol = cluster monthly × 12.
+  // ── Funnel-stage roll-up (v7.169) ──────────────────────────────────────────
+  // Each TOPIC sits in exactly one stage (its intent), split into client-footprint
+  // vs competitor-gap vs demand. Annual vol = topic monthly × 12.
   const stageRollups = JOURNEY_ORDER.map(stage => {
-    const inStage = clusterStats.filter(s => s.stage === stage);
+    const inStage = topicStats.filter(s => s.stage === stage);
     return {
       stage,
       total:          inStage.length,
       clientClusters: inStage.filter(s =>  s.isClientFootprint).length,
-      // v7.162: gap excludes demand; demand counted separately so the band reads
-      // client · gap · demand and reflects overall market demand by stage.
       gapClusters:    inStage.filter(s => !s.isClientFootprint && !s.isDemand).length,
       demandClusters: inStage.filter(s =>  s.isDemand).length,
-      annualVol:      inStage.reduce((sum, s) => sum + s.cluster.totalVolume, 0) * 12,
+      annualVol:      inStage.reduce((sum, s) => sum + s.topic.totalVolume, 0) * 12,
     };
   });
   const STAGE_KEYS = JOURNEY_ORDER as JourneyStage[];
   const isStageFilter = (f: ClusterFilter): f is JourneyStage =>
     (STAGE_KEYS as string[]).includes(f);
 
-  // ── Ownership counts (v7.146) — client footprint vs competitor gap ──────────
-  // v7.162: demand is a third class — excluded from both client and competitor.
-  const clientOwnedCount = clusterStats.filter(s =>  s.isClientFootprint).length;
-  const gapOwnedCount    = clusterStats.filter(s => !s.isClientFootprint && !s.isDemand).length;
-  const demandOwnedCount = clusterStats.filter(s =>  s.isDemand).length;
+  // ── Ownership counts — client footprint vs competitor gap vs demand ─────────
+  const clientOwnedCount = topicStats.filter(s =>  s.isClientFootprint).length;
+  const gapOwnedCount    = topicStats.filter(s => !s.isClientFootprint && !s.isDemand).length;
+  const demandOwnedCount = topicStats.filter(s =>  s.isDemand).length;
 
-  // ── Filter nav model (v7.146): ownership group + funnel-stage group ─────────
+  // ── Filter nav model: ownership group + performance + funnel-stage group ─────
   const navOwnership: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
-    { key: 'all',        label: 'All clusters',    count: clusters.length,   cColor: '#8080A8' },
+    { key: 'all',        label: 'All topics',      count: topics.length,     cColor: '#8080A8' },
     { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: '#4ADE80' },
     { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: '#F59E0B' },
   ];
-  // v7.162: only show the missing-demand pill once a deep journey has surfaced any.
+  // Only show the missing-demand pill once a deep journey has surfaced any.
   if (demandOwnedCount > 0) {
     navOwnership.push({ key: 'demand', label: 'Missing demand', count: demandOwnedCount, cColor: '#22D3EE' });
   }
@@ -750,10 +892,10 @@ function ClustersTab({
     stageRollups.map(r => ({ key: r.stage, label: STAGE_META[r.stage].label, count: r.total, cColor: '#585878' }));
 
   // Annualise monthly volume × 12
-  const ann = (stats: ClusterStat[]) =>
-    stats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
+  const ann = (stats: TopicStat[]) =>
+    stats.reduce((s, cs) => s + cs.topic.totalVolume, 0) * 12;
 
-  const totalAnnualVol  = clusterStats.reduce((s, cs) => s + cs.cluster.totalVolume, 0) * 12;
+  const totalAnnualVol  = topicStats.reduce((s, cs) => s + cs.topic.totalVolume, 0) * 12;
   const totalMonthlyVol = totalAnnualVol / 12;
 
   function fmtHero(v: number): string {
@@ -762,16 +904,27 @@ function ClustersTab({
     return String(v);
   }
 
-  // Filtered grid clusters
-  const filtered: ThemeCluster[] =
-    filter === 'leading'     ? leadingStats.map(s  => s.cluster) :
-    filter === 'trailing'    ? trailingStats.map(s => s.cluster) :
-    filter === 'opportunity' ? oppStats.map(s      => s.cluster) :
-    filter === 'client'      ? clusterStats.filter(s =>  s.isClientFootprint).map(s => s.cluster) :
-    filter === 'competitor'  ? clusterStats.filter(s => !s.isClientFootprint && !s.isDemand).map(s => s.cluster) :
-    filter === 'demand'      ? clusterStats.filter(s =>  s.isDemand).map(s => s.cluster) :
-    isStageFilter(filter)    ? clusterStats.filter(s => s.stage === filter).map(s => s.cluster) :
-    clusters;
+  // Filtered TOPICS (the counted unit), then grouped under their category below.
+  const filteredStats: TopicStat[] =
+    filter === 'leading'     ? leadingStats :
+    filter === 'trailing'    ? trailingStats :
+    filter === 'opportunity' ? oppStats :
+    filter === 'client'      ? topicStats.filter(s =>  s.isClientFootprint) :
+    filter === 'competitor'  ? topicStats.filter(s => !s.isClientFootprint && !s.isDemand) :
+    filter === 'demand'      ? topicStats.filter(s =>  s.isDemand) :
+    isStageFilter(filter)    ? topicStats.filter(s => s.stage === filter) :
+    topicStats;
+
+  const filtered: Topic[] = filteredStats.map(s => s.topic);
+  const statByTopicId = new Map(topicStats.map(s => [s.topic.id, s]));
+
+  // Group the filtered topics under their parent category, preserving cluster order.
+  const sections = clusters
+    .map(c => ({
+      cluster: c,
+      topics:  filtered.filter(t => t.parentName === c.name && t.parentType === c.type),
+    }))
+    .filter(s => s.topics.length > 0);
 
   // ── Summary card definitions ───────────────────────────────────────────────
   const SUMMARY_CARDS: Array<{
@@ -864,9 +1017,9 @@ function ClustersTab({
                   Total clusters
                 </div>
                 <div style={{ fontSize: 60, fontWeight: 700, lineHeight: 1, letterSpacing: -3, color: '#E8E8FF' }}>
-                  {clusters.length}
+                  {topics.length}
                 </div>
-                <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>categories identified</div>
+                <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>topics across {catCount} categories</div>
               </div>
               <div style={{ width: 1, height: 64, background: '#1E1E34', flexShrink: 0 }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1041,7 +1194,7 @@ function ClustersTab({
                       <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-.5px', color: active ? '#9B96FF' : '#E8E8FF' }}>
                         {r.total}
                       </span>
-                      <span style={{ fontSize: 9, color: '#585878' }}>clusters</span>
+                      <span style={{ fontSize: 9, color: '#585878' }}>topics</span>
                       {active && (
                         <span style={{
                           marginLeft: 'auto', fontSize: 8, fontWeight: 700,
@@ -1133,8 +1286,8 @@ function ClustersTab({
               )}
               <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3A3A5A', whiteSpace: 'nowrap' }}>
                 {filter === 'all'
-                  ? `${clusters.length} clusters · click a card to expand`
-                  : `Showing ${filtered.length} of ${clusters.length}`}
+                  ? `${topics.length} topics · click a card to expand`
+                  : `Showing ${filtered.length} of ${topics.length}`}
               </span>
             </div>
             <GlowLine />
@@ -1142,10 +1295,16 @@ function ClustersTab({
         );
       })()}
 
-      {/* ── 4-column cluster grid ────────────────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
-        {filtered.map(cluster => (
-          <ClusterCard key={cluster.id} cluster={cluster} clientDomain={clientDomain} />
+      {/* ── v7.169: two-level — category SECTION → TOPIC cards ───────────────── */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {sections.map(sec => (
+          <CategorySection
+            key={`${sec.cluster.type}:${sec.cluster.id}`}
+            cluster={sec.cluster}
+            topics={sec.topics}
+            statById={statByTopicId}
+            clientDomain={clientDomain}
+          />
         ))}
       </div>
 
@@ -1154,8 +1313,8 @@ function ClustersTab({
           {clusters.length === 0
             ? 'No cluster data — run an analysis first.'
             : filter === 'opportunity'
-            ? 'No clusters with competitor coverage below 25% — competition is active across all clusters.'
-            : 'No clusters match this filter.'}
+            ? 'No topics with competitor coverage below 25% — competition is active across all topics.'
+            : 'No topics match this filter.'}
         </div>
       )}
 
@@ -1246,7 +1405,10 @@ export default function ThemeClustersPanel({
   useEffect(() => { refreshUploadedKeywords(); }, [refreshUploadedKeywords]);
 
   const totalKws   = baseClusters.reduce((s, c) => s + c.keywords.length, 0);
-  const clusterCnt = baseClusters.length;
+  // v7.169: a "cluster" is a topic (theme × intent) — count the sub-clusters, not
+  // the broad categories — so this reconciles with the Audience Journey topic count.
+  const topicCnt   = baseClusters.reduce((s, c) => s + c.subClusters.filter(sc => sc.keywords.length > 0).length, 0);
+  const catCnt     = baseClusters.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -1257,7 +1419,7 @@ export default function ThemeClustersPanel({
           <h2 style={{ fontSize: 13, fontWeight: 600, color: '#D8D8F8', margin: 0 }}>Theme Clusters</h2>
           <p style={{ fontSize: 11, color: '#404060', margin: '2px 0 0' }}>
             {kwLoaded
-              ? `${totalKws} keywords grouped by category · ${clusterCnt} clusters · click any card to see keywords`
+              ? `${totalKws} keywords · ${topicCnt} topic clusters across ${catCnt} categories · click any card to see keywords`
               : 'Loading clusters…'}
           </p>
         </div>
