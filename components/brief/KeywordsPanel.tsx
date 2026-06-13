@@ -45,6 +45,7 @@ interface KeywordRow {
   type:         'ranked' | 'gap';
   branded:      boolean;
   source:       KwSource;
+  origin:       'footprint' | 'demand';   // v7.176: demand = deep-journey "missing demand"
   competitor:   string | null;   // domain that ranks for this keyword (gap rows only)
   // SERP features (only on semrush rows)
   hasAIO:        boolean;
@@ -130,7 +131,10 @@ function buildRows(
     if (k?.keyword) serpMap[k.keyword.toLowerCase()] = k;
   }
 
-  // Core filtering via shared utility — single source of truth
+  // Core filtering via shared utility — single source of truth.
+  // v7.176: includeDemand unions the deep-journey demand keywords (the topics built
+  // in the Journey panel) into the pool as origin:'demand', so the new topic
+  // keywords appear here too and the Keyword / Cluster / Content panels reconcile.
   const pool = buildKwPool({
     semrushSnapshot:  analysis?.semrushSnapshot,
     uploadedKeywords: dbKeywords,
@@ -138,6 +142,7 @@ function buildRows(
     competitorDomains,
     clientVolMin,
     competitorVolMin,
+    includeDemand:    true,
   });
 
   // Map pool items to KeywordRow, adding SERP enrichment
@@ -154,6 +159,7 @@ function buildRows(
       type:         item.isGap ? 'gap' : 'ranked',
       branded:      item.isBranded,
       source:       (dbRow?.source ?? 'semrush') as KwSource,
+      origin:       (item as any).origin === 'demand' ? 'demand' : 'footprint',
       competitor:   item.competitor,
       hasAIO:       serp?.hasAIO ?? false,
       clientInAIO:  serp
@@ -1399,6 +1405,9 @@ export default function KeywordsPanel({
                       <span className="text-[9px] bg-sky-500/10 border border-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded-full shrink-0">non-branded</span>
                     )}
                     <SourceBadge source={row.source} />
+                    {row.origin === 'demand' && (
+                      <span className="text-[9px] bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full shrink-0" title="Surfaced by the deep-journey demand build">demand</span>
+                    )}
                   </div>
                 </td>
 

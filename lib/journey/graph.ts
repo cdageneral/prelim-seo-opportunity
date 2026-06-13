@@ -74,6 +74,15 @@ export interface GraphNode {
   compVol:     number;
   kwCount:     number;
   sampleKws:   string[];
+  keywords:    TopicKeyword[];          // v7.176: full member keyword list (for the keyword/content panels)
+  competitor:  string | null;           // v7.176: competitor domain that ranks for this topic (gap rows)
+  clientCovPct: number;                 // v7.176: % of topic demand the client already ranks for
+}
+
+export interface TopicKeyword {
+  keyword:      string;
+  searchVolume: number;
+  state:        NodeState;              // existing (client ranks) | competitor | missing
 }
 
 export interface GraphEdge {
@@ -172,12 +181,13 @@ function tokensOf(s: string): string[] {
 }
 
 export interface BuildOpts {
-  clientRanked?:     Set<string>;
-  competitorRanked?: Set<string>;
-  urlByKeyword?:     Record<string, string>;
-  activeBucketId?:   string | null;   // segment partition filter (null = combined)
-  seedBucket?:       Map<string, string>;
-  themeLabels?:      Record<string, string>;   // seed(lowercased) → AI-phrased label
+  clientRanked?:        Set<string>;
+  competitorRanked?:    Set<string>;
+  urlByKeyword?:        Record<string, string>;
+  competitorByKeyword?: Record<string, string>;   // v7.176: kw(lower) → competitor domain (from gap rows)
+  activeBucketId?:      string | null;   // segment partition filter (null = combined)
+  seedBucket?:          Map<string, string>;
+  themeLabels?:         Record<string, string>;   // seed(lowercased) → AI-phrased label
 }
 
 const SHARED_BUCKET = 'shared';
@@ -188,10 +198,11 @@ const SHARED_BUCKET = 'shared';
 export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}): JourneyGraph {
   const clientRanked     = opts.clientRanked     ?? new Set<string>();
   const competitorRanked = opts.competitorRanked ?? new Set<string>();
-  const urlByKeyword     = opts.urlByKeyword     ?? {};
-  const activeBucketId   = opts.activeBucketId   ?? null;
-  const seedBucket       = opts.seedBucket       ?? new Map<string, string>();
-  const themeLabels      = opts.themeLabels      ?? {};
+  const urlByKeyword       = opts.urlByKeyword       ?? {};
+  const competitorByKeyword = opts.competitorByKeyword ?? {};
+  const activeBucketId     = opts.activeBucketId     ?? null;
+  const seedBucket         = opts.seedBucket         ?? new Map<string, string>();
+  const themeLabels        = opts.themeLabels        ?? {};
 
   const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
 
@@ -236,6 +247,8 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
     const g = grpArr[gi];
     let totalVol = 0, clientVol = 0, compVol = 0;
     let url: string | null = null;
+    const memberKws: TopicKeyword[] = [];
+    const compTally = new Map<string, number>();   // competitor domain → vol (pick the top)
     // dominant stage by volume
     const stageVol: Record<JourneyStage, number> = { awareness: 0, consideration: 0, decision: 0, retention: 0 };
     const sorted = g.topics.slice().sort((a, b) => b.searchVolume - a.searchVolume);
@@ -244,12 +257,17 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
       const kwLc = t.keyword.toLowerCase();
       totalVol += t.searchVolume;
       const isClient = clientRanked.has(kwLc);
+      const isComp = !isClient && competitorRanked.has(kwLc);
       if (isClient) clientVol += t.searchVolume;
-      else if (competitorRanked.has(kwLc)) compVol += t.searchVolume;
+      else if (isComp) compVol += t.searchVolume;
       if (!url && urlByKeyword[kwLc]) url = urlByKeyword[kwLc];
+      const comp = competitorByKeyword[kwLc];
+      if (!isClient && comp) compTally.set(comp, (compTally.get(comp) ?? 0) + t.searchVolume);
+      memberKws.push({ keyword: t.keyword, searchVolume: t.searchVolume, state: isClient ? 'existing' : (isComp || comp ? 'competitor' : 'missing') });
       const st = g.supportType === 'core' ? stageOf(t.keyword) : (g.supportType === 'comparison' ? 'consideration' : 'decision');
       stageVol[st] += t.searchVolume;
     }
+    memberKws.sort((a, b) => b.searchVolume - a.searchVolume);
     let stage: JourneyStage = 'awareness'; let bv = -1;
     (['awareness','consideration','decision','retention'] as JourneyStage[]).forEach((s) => { if (stageVol[s] > bv) { bv = stageVol[s]; stage = s; } });
     // Supporting nodes always sit at decision (comparison at consideration).
@@ -257,10 +275,19 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
     // Problem nodes never sit at decision — they are pre-purchase by definition.
     if (g.lane === 'pre-product' && stage === 'decision') stage = 'consideration';
 
-    const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+    const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 || compTally.size > 0 ? 'competitor' : 'missing');
     const kind: NodeKind = g.lane === 'pre-product' ? 'problem' : (g.supportType === 'core' ? 'core' : 'support');
     const label = themeLabels[g.seed] ?? titleCase(g.seed);
     const name = kind === 'support' ? (titleCase(g.seed) + ' — ' + SUPPORT_LABEL[g.supportType]) : label;
+    // top competitor for the topic (only surfaced when the client doesn't rank it)
+    let competitor: string | null = null;
+    if (state !== 'existing') {
+      let bestC = ''; let bestV = 0;
+      const ents = Array.from(compTally.entries());
+      for (let i = 0; i < ents.length; i++) if (ents[i][1] > bestV) { bestV = ents[i][1]; bestC = ents[i][0]; }
+      competitor = bestC || null;
+    }
+    const clientCovPct = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
 
     nodes.push({
       id: g.lane + '::' + g.seed + '::' + g.supportType,
@@ -271,6 +298,9 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
       totalVol, clientVol, compVol,
       kwCount: g.topics.length,
       sampleKws: sorted.slice(0, 8).map((t) => t.keyword),
+      keywords: memberKws,
+      competitor,
+      clientCovPct,
     });
   }
 

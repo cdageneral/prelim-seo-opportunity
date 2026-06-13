@@ -15,6 +15,7 @@ import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
 import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 import ContentMapSection    from '@/components/brief/ContentMapSection';
+import ContentPlanSection   from '@/components/brief/ContentPlanSection';
 import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection';
 import { getMarket } from '@/lib/utils/markets';
 
@@ -55,7 +56,7 @@ interface Project {
 // ── Nav config ────────────────────────────────────────────────────────────────
 
 type NavSection =
-  | 'overview' | 'keywords' | 'audienceSegments' | 'journeys' | 'content'
+  | 'overview' | 'keywords' | 'audienceSegments' | 'journeys' | 'content' | 'contentPlan'
   | 'serp' | 'serpFeatures'
   | 'llm'
   | 'local'
@@ -1014,6 +1015,30 @@ export default function ProjectBriefPage() {
                             })}
                           </div>
                         )}
+
+                        {/* ── Content sub-nav (v7.176): Content map + Content plan ── */}
+                        {item.id === 'content' && hasResults && (
+                          <div style={{ background: '#060610', borderTop: '1px solid #0E0E1E' }}>
+                            {([['content', 'Content map', 'ti-map-2'], ['contentPlan', 'Content plan', 'ti-list-check']] as const).map(([sid, label, icon]) => {
+                              const subActive = activeSection === sid;
+                              return (
+                                <button
+                                  key={sid}
+                                  onClick={e => { e.stopPropagation(); setActiveSection(sid as NavSection); }}
+                                  className="w-full flex items-center gap-1.5 text-left"
+                                  style={{
+                                    padding: '6px 12px 6px 32px',
+                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.6)' : '2px solid transparent',
+                                    background: subActive ? '#0F0F1C' : 'transparent',
+                                  }}
+                                >
+                                  <i className={`ti ${icon}`} style={{ fontSize: '12px', color: subActive ? '#6C63FF' : '#545490', width: '14px', flexShrink: 0 }} aria-hidden="true" />
+                                  <span style={{ fontSize: '12px', color: subActive ? '#A0A0D8' : '#6868A8' }}>{label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1238,6 +1263,16 @@ export default function ProjectBriefPage() {
             />
           )}
 
+          {/* ── Content Plan (v7.176 sub-nav) ── */}
+          {hasResults && analysis && activeSection === 'contentPlan' && (
+            <ContentPlanSection
+              kwVersion={kwVersion}
+              projectId={projectId}
+              analysis={analysis}
+              competitors={competitorDomains}
+            />
+          )}
+
           {/* ── Google SERP ── */}
           {hasResults && analysis && activeSection === 'serp' && (
             <GoogleSerpSection
@@ -1292,7 +1327,7 @@ export default function ProjectBriefPage() {
           )}
 
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">

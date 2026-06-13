@@ -1,5 +1,26 @@
 # OrbitIQ Changelog
 
+## v7.176 — 2026-06-13 · Content Plan (new sub-nav) + journey backfill into Keyword/Cluster panels
+
+**What changed:** the journey topics now flow into every downstream panel, and the Content area is rebuilt around them with a new **Content Plan** sub-nav for writers.
+
+**Backfill into existing panels:**
+- **Keyword panel** now includes the deep-journey demand keywords (`includeDemand: true`), tagged with a cyan `demand` badge. The new topic keywords appear alongside the footprint.
+- **Cluster panel** already surfaced deep-journey demand as "missing demand" clusters (v7.162/168/169) — unchanged, still keyed off the same demand universe.
+- **Volume reconciles by construction:** the Keyword, Cluster, Content panel, and Content Plan all read the SAME `_demandUniverse` topic→keyword pool and sum the same verified Semrush volumes.
+
+**Redesigned Content panel (`ContentMapSection`):** when a deep journey exists, the panel leads with a journey-fed explorer — summary cards that double as filters (All / Existing→optimise / Net-new→build / Quick wins, each carrying volume and an existing-vs-net-new split bar), a compact topic list, and a click-to-open right-hand drawer with the full detail. The legacy page/cluster mapping stays below under a "Detailed page & cluster mapping" divider.
+
+**New Content Plan sub-nav (`ContentPlanSection`):** nested under Content in the left nav. A scope row (Total articles / Existing / Net-new, all with volume) sits above P0/P1/P2 priority filter cards; the list opens a drawer with a ready-to-write **brief** per topic — suggested title, H2 outline, People-Also-Ask questions, target keywords (with volumes), internal-linking instructions (derived from the journey edges), SERP-feature targets, refresh flags, quick-win badge, and competitive insight.
+
+**Prioritisation (P0/P1/P2):** bucketed from distance-to-conversion (ordinal: product decision/support = closest, pre-product awareness = farthest) + search demand (vs. the topic-volume median) + audience-prompt coverage (a COUNT of segment prompts touching the topic — never a fabricated "conversation volume"). Quick wins = competitor-ranks-and-you-don't + close to conversion + real demand.
+
+**Architecture:** two new pure, framework-free, ES5-safe modules — `lib/journey/graph.ts` (extended with per-topic member keywords + competitor) and new `lib/journey/contentPlan.ts` (`buildContentPlan` + `planFromSnapshot`, the single wiring point both Content panels share). New `components/brief/ContentPlanSection.tsx` exports the section + a reusable `ContentExplorer` used by both the Content panel and the Content Plan.
+
+**Verification (own debugging agent):** content-plan + graph logic harness 18/18 (distance, priority tiers, quick-win, refresh, prompt coverage, briefs, internal links, SERP targets, **volume reconciliation**); `tsc` at **ES5** clean across all 6 touched files; jsdom render 11/11 (Content Plan scope row + priority cards + rows + drawer; redesigned Content panel filter cards + existing/net-new split + explorer leading). Panel-scroll rule confirmed (section roots are block `overflow-y-auto`; the drawer is `position:fixed`, no nested scroller).
+
+**Files touched:** `lib/journey/graph.ts`, `lib/journey/contentPlan.ts` (new), `components/brief/ContentPlanSection.tsx` (new), `components/brief/ContentMapSection.tsx`, `components/brief/KeywordsPanel.tsx`, `app/projects/[id]/page.tsx`, `package.json`, `CHANGELOG.md`.
+
 ## v7.175 — 2026-06-13 · Connected Audience Journey (relationships + content feed)
 
 **What changed:** the Audience Journey is rebuilt as ONE connected map instead of two disconnected lanes, and every topic now maps to a page (optimise) or a net-new build that feeds the Content panel.
