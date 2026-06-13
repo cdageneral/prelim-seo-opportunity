@@ -1,5 +1,25 @@
 # OrbitIQ Changelog
 
+## v7.177 — 2026-06-13 · Local Search panel (#09) — map pack, reviews, locations, local competition & opportunities
+
+**What changed:** the Local Search nav slot (#09) is now a full working panel. It activates only when the keyword set carries **local intent**, and surfaces — from real data only — how many locations the client has, how they perform in the Google map pack, how strong their reviews are, which local keywords have volume, who the local competition is, and where the search opportunities are.
+
+**Local-intent detection (deterministic, no AI):** a new `lib/local/detect.ts` classifies every keyword as `near-me` (proximity phrasing), `geo-modifier` (a US state, a major city, or a term from the client's own discovered locations), or `implicit-local` (a physical-visit / local-business search such as "emergency dentist", "atm", "store hours"). Every classification records the literal matched term, so it is fully auditable. The panel stays dormant for non-local businesses.
+
+**On-demand local scan (`/api/projects/[id]/local-scan`, streamed):** three steps, all on existing APIs —
+1. **Discover listings** — a SerpAPI Maps brand search returns the client's Google Business listings (rating, reviews, GPS, website). Their cities feed the geo detector so detection adapts per client.
+2. **Detect local keywords** — over the canonical keyword pool (same `buildKwPool` as every panel); scans the **top keywords by volume** (your choice).
+3. **Map-pack scan** — for each local keyword, reads the Google local 3-pack from each location's GPS (`engine=google` + `ll`) and records your best pack rank + the pack members.
+   Persists `semrushSnapshot._localScan` (additive). Determinate progress bar + ETA (global progress rule); a dry-run first reports the exact SerpAPI-credit estimate before any spend; snapshot-first + localStorage cache so results survive tab switches.
+
+**Six views (`LocalSearchSection`):** Local Keywords (intent universe with real Semrush volume — works with no scan), Locations (discovered listings + health flags), Map Pack (rank per keyword from each location), Reviews (real rating + review count per location vs nearby pack leaders), Competition (Share of Local Voice across your packs), Opportunities (deterministic P0/P1/P2 — pack misses with volume at stake, rank-improvement levers, listing-health fixes). A composite **Local Visibility Index** blends presence (40%) · rank quality (25%) · reviews (20%) · listing completeness (15%) — weights shown in the UI, every input a real ratio.
+
+**Defensibility:** every figure traces to a real SerpAPI row (map-pack place, Maps listing, rating/review count) or a real Semrush volume — nothing modeled or simulated. Star distribution / review velocity are intentionally **omitted** in v1 because they require a per-review pull (not fabricated).
+
+**Architecture:** two new pure ES5-safe modules — `lib/local/detect.ts` (detection) and `lib/local/build.ts` (rollups: pack, reviews, share-of-voice, opportunities, index) — shared by the route, the panel, and the tests. New `app/api/projects/[id]/local-scan/route.ts` and `components/brief/LocalSearchSection.tsx`; SerpAPI `getMapsListings` + `getLocalPack` added to `lib/apis/serp.ts`; wired into `app/projects/[id]/page.tsx` (removed from "coming soon").
+
+**Verification (own debugging agent):** `tsc` at **ES5** clean on all new files + the full `page.tsx` component tree; logic harness **32/32** (detection precedence, geo-vocab adaptivity, dedupe, pack rollup, share-of-voice no-double-count, opportunity tiers, review rollup, index); jsdom render of the real component **12/12** (detection banner, local-keyword table, non-local excluded, sub-nav, hero with scan, scan badges, **panel-scroll guard**: root is a block `overflow-y-auto`, not `flex flex-col`). Real-component render snapshot in `orbitiq-v7.177-RENDER.html` (SAMPLE fixture, flagged).
+
 ## v7.176 — 2026-06-13 · Content Plan (new sub-nav) + journey backfill into Keyword/Cluster panels
 
 **What changed:** the journey topics now flow into every downstream panel, and the Content area is rebuilt around them with a new **Content Plan** sub-nav for writers.

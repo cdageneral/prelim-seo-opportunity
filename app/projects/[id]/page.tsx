@@ -17,6 +17,7 @@ import SerpFeaturesSection  from '@/components/brief/SerpFeaturesSection';
 import ContentMapSection    from '@/components/brief/ContentMapSection';
 import ContentPlanSection   from '@/components/brief/ContentPlanSection';
 import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection';
+import LocalSearchSection     from '@/components/brief/LocalSearchSection';
 import { getMarket } from '@/lib/utils/markets';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
@@ -1326,8 +1327,20 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Local Search ── */}
+          {hasResults && analysis && activeSection === 'local' && (
+            <LocalSearchSection
+              kwVersion={kwVersion}
+              projectId={projectId}
+              analysis={analysis}
+              projectName={project.clientName}
+              domain={domainDisplay}
+              competitors={project.competitors}
+            />
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'local' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">

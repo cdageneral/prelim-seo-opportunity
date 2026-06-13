@@ -443,3 +443,131 @@ export function buildSnapshotFromKeywordData(
     fetchedAt: new Date().toISOString(),
   };
 }
+
+// ─── Local / Maps (v7.177 — Local Search panel) ──────────────────────────────
+//
+// Two raw fetchers for the Local panel. Both use the SAME market gl/hl/domain so
+// local results match the analyzed country. Everything returned is REAL SerpAPI
+// data — place names, ratings, review counts, GPS — never modeled.
+
+export interface MapsPlace {
+  title:    string;
+  placeId:  string;
+  address:  string;
+  rating:   number | null;
+  reviews:  number;
+  type:     string;
+  website:  string;   // raw website URL as listed (may be empty)
+  phone:    string;
+  lat:      number | null;
+  lng:      number | null;
+  position: number;   // 1-based order in the result set
+}
+
+function parseMapsPlace(r: any, idx: number): MapsPlace {
+  const gps = r?.gps_coordinates ?? {};
+  const reviewsRaw = r?.reviews;
+  return {
+    title:    r?.title ?? '',
+    placeId:  r?.place_id ?? r?.data_id ?? '',
+    address:  r?.address ?? '',
+    rating:   typeof r?.rating === 'number' ? r.rating : null,
+    reviews:  typeof reviewsRaw === 'number' ? reviewsRaw : (parseInt(reviewsRaw, 10) || 0),
+    type:     r?.type ?? (Array.isArray(r?.types) ? r.types[0] : '') ?? '',
+    website:  r?.website ?? '',
+    phone:    r?.phone ?? '',
+    lat:      typeof gps?.latitude === 'number' ? gps.latitude : null,
+    lng:      typeof gps?.longitude === 'number' ? gps.longitude : null,
+    position: typeof r?.position === 'number' ? r.position : idx + 1,
+  };
+}
+
+/**
+ * Google Maps listings for a free-text query (engine=google_maps). Used to
+ * DISCOVER the client's business listings (search the brand name) and to read
+ * competitor listing detail (rating, reviews, website, GPS). Returns up to
+ * `limit` places. Fault-tolerant: returns [] on any failure.
+ */
+export async function getMapsListings(
+  query: string,
+  market?: Market,
+  ll?: string,
+  limit = 20,
+): Promise<MapsPlace[]> {
+  const API_KEY = process.env.SERP_API_KEY;
+  if (!API_KEY) return [];
+  const m = market ?? getMarket('us');
+  const params = new URLSearchParams({
+    api_key: API_KEY,
+    engine:  'google_maps',
+    type:    'search',
+    q:       query,
+    hl:      m.serpHl,
+    gl:      m.serpGl,
+    output:  'json',
+  });
+  if (ll) params.set('ll', ll);   // '@lat,lng,zoom' — bias to a location
+  try {
+    const res = await fetch(`${SERP_BASE}?${params.toString()}`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) { console.error(`SerpAPI maps error ${res.status}`); return []; }
+    const data = await res.json();
+    // google_maps returns local_results[] for a search; place_results{} for an
+    // exact single match. Normalize both into MapsPlace[].
+    const arr: any[] = Array.isArray(data?.local_results) ? data.local_results : [];
+    const places = arr.slice(0, limit).map((r, i) => parseMapsPlace(r, i));
+    if (places.length === 0 && data?.place_results) {
+      places.push(parseMapsPlace(data.place_results, 0));
+    }
+    return places;
+  } catch (err) {
+    console.error('SerpAPI maps fetch failed:', err);
+    return [];
+  }
+}
+
+export interface LocalPackResult {
+  packPresent: boolean;
+  places:      MapsPlace[];   // the local 3-pack (≤3), in shown order
+}
+
+/**
+ * The Google local 3-pack for a keyword AS SEEN from a location (engine=google
+ * with `ll` GPS bias). Returns the real `local_results.places` Google renders
+ * above the organic results. Fault-tolerant: returns {packPresent:false,[]} on
+ * failure so one bad call never breaks a scan.
+ */
+export async function getLocalPack(
+  keyword: string,
+  market?: Market,
+  ll?: string,
+): Promise<LocalPackResult> {
+  const API_KEY = process.env.SERP_API_KEY;
+  if (!API_KEY) return { packPresent: false, places: [] };
+  const m = market ?? getMarket('us');
+  const params = new URLSearchParams({
+    api_key:       API_KEY,
+    engine:        'google',
+    q:             keyword,
+    hl:            m.serpHl,
+    gl:            m.serpGl,
+    google_domain: m.googleDomain,
+    num:           '10',
+    output:        'json',
+  });
+  if (ll) params.set('ll', ll);
+  try {
+    const res = await fetch(`${SERP_BASE}?${params.toString()}`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) { console.error(`SerpAPI local-pack error ${res.status}`); return { packPresent: false, places: [] }; }
+    const data = await res.json();
+    // On the google engine, local_results is an object { places: [...] }.
+    const lr = data?.local_results;
+    const rawPlaces: any[] = Array.isArray(lr?.places) ? lr.places
+      : Array.isArray(lr) ? lr
+      : [];
+    const places = rawPlaces.slice(0, 3).map((r, i) => parseMapsPlace(r, i));
+    return { packPresent: places.length > 0, places };
+  } catch (err) {
+    console.error('SerpAPI local-pack fetch failed:', err);
+    return { packPresent: false, places: [] };
+  }
+}
