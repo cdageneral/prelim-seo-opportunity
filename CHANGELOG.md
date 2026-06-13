@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.175 — 2026-06-13 · Connected Audience Journey (relationships + content feed)
+
+**What changed:** the Audience Journey is rebuilt as ONE connected map instead of two disconnected lanes, and every topic now maps to a page (optimise) or a net-new build that feeds the Content panel.
+
+**The model (repeatable for any client):**
+- **Problem topics** (pre-product) are derived from each client's OWN audience-segment language (pre-LLM prompts + triggers), reduced to concise head-term seeds — no hardcoded vertical vocabulary, so the deep-journey build now generalises to any industry (verified with a non-cosmetic HVAC fixture). Labels are AI-phrased when available, else the title-cased seed.
+- **Product topics** split into a CORE node (the named solution) plus SUPPORTING nodes (cost & financing, recovery, safety & candidacy, results & reviews, comparisons) — the content a buyer researches before deciding.
+- **Three behaviour-based, data-derived edge kinds:** `co` (problem↔problem — Semrush surfaced both from the same seed = real co-search adjacency), `bridge` (problem→core — co-surfaced shared seed, or concern-vocabulary overlap = the moment a searcher discovers the solution), `support` (core→supporting). No edge is invented; each traces to a shared seed or shared token.
+- **Content mapping on every node:** existing ranking page (links to the URL, optimise) vs net-new build, plus a content-plan rollup (optimise / build counts). The Content panel reads the SAME graph and lists every journey topic mapped to a page — one source of truth.
+
+**Architecture:** new shared, framework-free module `lib/journey/graph.ts` (pure `buildJourneyGraph`) imported by BOTH `JourneySection` and `ContentMapSection`, ending the historical duplicate-builder drift. Footprint mode (no demand universe yet) keeps the prior two-lane view unchanged.
+
+**Defensibility:** topics + volumes are real Semrush; edges trace to data; only node labels may be AI-phrased — no number is invented.
+
+**Verification (own debugging agent):** graph logic harness 27/27 (edges, bridge, supporting-topic split, content plan, segment partition, AI labels); route seed logic 7/7 incl. cross-vertical repeatability; `tsc` at **ES5** clean on the module + both panels; jsdom render of the REAL `JourneySection` 13/13 (connected map, 3 edge legends, content plan, badges, core star — and footprint fallback unaffected); `ContentMapSection` render 5/5 (journey-feed section + counts). Panel-scroll rule confirmed (parent `overflow-y-auto` wrapper; SVG is normal-flow `height:auto`).
+
+**Files touched:** `lib/journey/graph.ts` (new), `components/brief/JourneySection.tsx`, `components/brief/ContentMapSection.tsx`, `app/api/projects/[id]/demand-universe/route.ts`, `package.json`, `CHANGELOG.md`.
+
 ## v7.174 — 2026-06-09 · HOTFIX: v7.173 Vercel build failure (Set iteration at ES5)
 
 **What broke:** the v7.173 deploy failed `npm run build` with `Type error: Type 'Set<string>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher` at `components/brief/ContentMapSection.tsx:310`.

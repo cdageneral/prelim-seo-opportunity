@@ -30,16 +30,56 @@ export const maxDuration = 300;
 const DEFAULT_LINES = 50;
 const MAX_LINES     = 100;
 
-// Concise life-problem anchors. When one appears in a segment trigger or a
-// pre-LLM prompt, the SHORT anchor (not the long sentence) is used as the seed —
-// short head terms return a far richer demand universe from Semrush.
+// v7.175: REPEATABLE problem-seed derivation — no hardcoded vertical vocabulary.
+// Problem seeds come from each client's OWN audience language (segment pre-LLM
+// prompts + triggers). Each prompt is a real problem-aware search; we reduce it to
+// a concise head term by stripping the question scaffolding ("how to", "why can't
+// I", "what is", "best way to", …) and a few generic tails, then keep it short
+// (Semrush returns a far richer demand universe from a 2–5 word head term than from
+// a full sentence). Works for ANY industry because every client gets audience
+// segments with pre-LLM prompts. The anchor list below is a quality SUPPLEMENT for
+// verticals we know well — it never gates the generic path.
+// Longest variants FIRST — the strip loop breaks on first match then re-runs, so a
+// short prefix ('how much') must not pre-empt a longer one ('how much does a').
+const LEAD_SCAFFOLD = [
+  'how much does a', 'how much does', 'how much is a', 'how much is', 'how much',
+  'how do i', 'how do you', 'how can i', 'how to get rid of', 'how to lose', 'how to fix', 'how to',
+  'what is the best', 'whats the best', 'what to do about', 'what is a', 'what is', 'what are',
+  'why cant i', 'why can’t i', 'why wont my', 'why won’t my', 'why do i', 'why is my', 'why is',
+  'best way to', 'best ways to', 'ways to', 'is there a way to', 'can you', 'do i need',
+  'help with', 'i have', 'i want to', 'i need to', 'tips for', 'tips to',
+];
+const TAIL_NOISE = [
+  ' without surgery', ' at home', ' fast', ' quickly', ' naturally', ' on my own',
+  ' that won’t go away', ' that wont go away', ' what to do', ' what can i do', ' for good',
+];
+const STOP_HEAD = new Set(['the','a','an','my','your','to','of','for','is','are','do','does','will','can','i','it','that','this']);
+
+function conciseSeed(prompt: string): string {
+  let s = (prompt ?? '').toLowerCase().replace(/["“”?.!]/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const lead of LEAD_SCAFFOLD) {
+      if (s.startsWith(lead + ' ')) { s = s.slice(lead.length).trim(); changed = true; break; }
+    }
+  }
+  for (const tail of TAIL_NOISE) { if (s.endsWith(tail)) s = s.slice(0, s.length - tail.length).trim(); }
+  const parts = s.split(' ');
+  while (parts.length > 1 && STOP_HEAD.has(parts[0])) parts.shift();
+  return parts.slice(0, 5).join(' ').trim();   // keep a head term (≤5 words)
+}
+
 const PROBLEM_SEED_ANCHORS = [
   'love handles', 'muffin top', 'double chin', 'loose skin', 'saggy skin', 'excess skin',
   'stubborn belly fat', 'belly fat', 'stomach fat', 'lower belly fat', 'stubborn fat',
   'back fat', 'arm fat', 'bra fat', 'thigh fat', 'inner thigh', 'cellulite',
   'sagging breasts', 'small breasts', 'weight loss plateau', 'cant lose weight',
-  'double chin', 'jowls', 'turkey neck',
+  'jowls', 'turkey neck',
 ];
+
+const MAX_PROBLEM_SEEDS = 14;   // cap Semrush spend; richest head terms first
 
 function deriveSeeds(analysis: any): { product: string[]; problem: string[] } {
   const snap = analysis?.semrushSnapshot ?? {};
@@ -52,24 +92,26 @@ function deriveSeeds(analysis: any): { product: string[]; problem: string[] } {
     .map((c: any) => String(c.name ?? '').trim())
     .filter(Boolean);
 
-  // Problem seeds = concise anchors found in the audience's own language
-  // (segment triggers + pre-LLM prompts). Grounded in the analysis, not invented.
-  const problemText = segments.flatMap((s: any) => [
-    String(s?.whoTheyAre?.trigger ?? ''),
+  // Problem seeds — GENERIC, per-client: reduce each pre-LLM prompt to a head term.
+  const prompts: string[] = segments.flatMap((s: any) => [
     ...((s?.preLLMPrompts ?? []) as string[]),
-  ]).join(' ').toLowerCase();
-
+    String(s?.whoTheyAre?.trigger ?? ''),
+  ]);
   const problemSet = new Set<string>();
-  for (const anchor of PROBLEM_SEED_ANCHORS) {
-    if (problemText.includes(anchor)) problemSet.add(anchor);
+  for (const p of prompts) {
+    const seed = conciseSeed(p);
+    if (seed && (seed.indexOf(' ') >= 0 || seed.length >= 5)) problemSet.add(seed);
   }
-  // Fallback: if the audience language yielded nothing, seed the broadest
-  // body-concern anchors so the pre-product lane still expands.
+  // Quality supplement: add any known anchor that literally appears in the language.
+  const allText = prompts.join(' ').toLowerCase();
+  for (const anchor of PROBLEM_SEED_ANCHORS) { if (allText.includes(anchor)) problemSet.add(anchor); }
+
+  // Last-resort fallback so the pre-product lane always expands.
   if (problemSet.size === 0) {
     ['stubborn belly fat', 'loose skin', 'double chin', 'love handles', 'cellulite'].forEach(a => problemSet.add(a));
   }
 
-  return { product, problem: Array.from(problemSet) };
+  return { product, problem: Array.from(problemSet).slice(0, MAX_PROBLEM_SEEDS) };
 }
 
 export async function POST(

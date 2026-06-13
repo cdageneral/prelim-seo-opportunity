@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect } from 'react';
+import { buildJourneyGraph, type GraphNode as JGNode } from '@/lib/journey/graph';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -959,6 +960,28 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     }
   }
 
+  // v7.175: pull the SAME connected-journey graph the Journey panel builds (shared
+  // lib/journey/graph) so every audience-journey topic shows here mapped to an
+  // existing page or a net-new build — one source of truth across the two panels.
+  const journeyGraph = useMemo(() => {
+    const universe = (analysis?.semrushSnapshot as any)?._demandUniverse;
+    if (!universe || !(universe.topics?.length)) return null;
+    const snap = (analysis?.semrushSnapshot as any) ?? {};
+    const client = new Set<string>(); const competitor = new Set<string>();
+    for (const k of (snap.topKeywords ?? [])) { const kw = (k.keyword ?? '').toLowerCase(); if (kw) client.add(kw); }
+    for (const k of (snap.gapKeywords ?? [])) { const kw = (k.keyword ?? '').toLowerCase(); if (kw) competitor.add(kw); }
+    for (const k of (uploadedKeywords ?? [])) {
+      const kw = (k.keyword ?? '').toLowerCase(); if (!kw) continue;
+      if (k.type === 'gap') competitor.add(kw); else if (k.source !== 'blocked') client.add(kw);
+    }
+    return buildJourneyGraph(universe, { clientRanked: client, competitorRanked: competitor, urlByKeyword });
+  }, [analysis, uploadedKeywords, urlByKeyword]);
+
+  const journeyBuild = useMemo(
+    () => (journeyGraph?.nodes ?? []).filter((n: JGNode) => n.action === 'build').slice().sort((a: JGNode, b: JGNode) => b.totalVol - a.totalVol),
+    [journeyGraph],
+  );
+
   const allGaps = useMemo(() => buildContentGaps(clusters, segments), [clusters, segments]);
 
   const filteredGaps = useMemo(() => allGaps.filter((g: ContentGap) => {
@@ -1078,6 +1101,44 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? (totalPagesPulled > 0 ? `of ${totalPagesPulled} ranking pages` : 'Distinct ranking URLs (Semrush)') : 'Click “Map ranking pages”'} />
         <StatCard label="Monthly Volume at Stake" value={fmtVol(totalVol)} sub={`${fmtVol(totalVol * 12)}/yr uncaptured`} />
       </div>
+
+      {/* v7.175: topics fed straight from the Audience Journey — every journey node
+          mapped to an existing page (optimise) or a net-new build. */}
+      {journeyGraph && (
+        <div style={{ border: '1px solid rgba(34,211,238,0.18)', background: 'rgba(34,211,238,0.025)', borderRadius: 12, padding: '16px 18px', marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+            <i className="ti ti-sitemap" style={{ color: '#22d3ee', fontSize: 15 }} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#C8C8E8' }}>From the Audience Journey</span>
+            <span style={{ fontSize: 11, color: '#5A7A80' }}>
+              {journeyGraph.plan.total} topics · <span style={{ color: '#34d399' }}>{journeyGraph.plan.optimize} to optimise</span> · <span style={{ color: '#fb923c' }}>{journeyGraph.plan.build} to build</span>
+            </span>
+          </div>
+          <p style={{ fontSize: 11, color: '#5A5A80', margin: '0 0 12px' }}>
+            Every topic in the connected journey, mapped to a page. Net-new builds are listed first &mdash; this is the journey&rsquo;s content backlog.
+          </p>
+          {journeyBuild.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+              {journeyBuild.slice(0, 18).map((n: JGNode) => {
+                const c = n.state === 'competitor' ? '#a78bfa' : '#fb923c';
+                return (
+                  <div key={n.id} style={{ background: '#0D0D1E', border: '1px solid #1A1A30', borderRadius: 8, padding: '9px 11px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: 8.5, fontWeight: 700, color: c, background: `${c}1a`, border: `1px solid ${c}44`, borderRadius: 4, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {n.state === 'competitor' ? 'Competitor' : 'Build new'}
+                      </span>
+                      <span style={{ fontSize: 8.5, color: '#4A4A6A', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{n.lane === 'pre-product' ? 'Pre-product' : (n.kind === 'core' ? 'Product' : 'Support')}</span>
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#D0D0F0', marginTop: 5, lineHeight: 1.3 }}>{n.kind === 'core' ? '★ ' : ''}{n.name}</div>
+                    <div style={{ fontSize: 10, color: '#6a6a90', fontFamily: 'monospace', marginTop: 3 }}>{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p style={{ fontSize: 11.5, color: '#34d399', margin: 0 }}><i className="ti ti-circle-check" style={{ marginRight: 5 }} />Every journey topic already maps to an existing page — nothing net-new to build.</p>
+          )}
+        </div>
+      )}
 
       {/* Filters + view toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>

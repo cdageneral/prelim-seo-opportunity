@@ -1,6 +1,13 @@
 'use client';
 
 import { useMemo, useState, useEffect, useRef, useLayoutEffect } from 'react';
+import {
+  buildJourneyGraph,
+  SUPPORT_LABEL,
+  type JourneyGraph as JGraph,
+  type GraphNode as JGNode,
+  type EdgeKind as JEdgeKind,
+} from '@/lib/journey/graph';
 
 // SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -1175,6 +1182,255 @@ export function buildConnector(g: ConnGeom): { line: string; brace: string; tipX
   return { line, brace, tipX, perMid };
 }
 
+// ─── Connected journey map (v7.175) ─────────────────────────────────────────────
+//
+// One canvas instead of two disconnected lanes. Top band = pre-product problem
+// topics; bottom band = product core + supporting topics. Three data-derived edge
+// kinds are colour-coded: co-search (cyan, problem↔problem), bridge (dashed,
+// problem→solution), support (purple, core→supporting). Every node shows its
+// content action — optimise an existing page or build a net-new one.
+
+const EDGE_COLOR: Record<JEdgeKind, string> = { co: '#22d3ee', bridge: '#7dd3fc', support: '#a78bfa' };
+const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: '#22d3ee', bridge: '#7dd3fc', support: '#a78bfa' };
+const CM_STAGES: JourneyStage[] = ['awareness', 'consideration', 'decision'];
+
+function ConnectedMap({ graph, onSelect, selectedId }: {
+  graph:      JGraph;
+  onSelect:   (n: JGNode) => void;
+  selectedId: string | null;
+}) {
+  const [hover, setHover] = useState<string | null>(null);
+  const W = 720, NODE_W = 158, NODE_H = 56, PAD = 16, ROW_GAP = 14, BAND_GAP = 56;
+
+  const { pos, H, bandY } = useMemo(() => {
+    // group by lane (band) and column
+    const cellKey = (lane: string, col: number) => `${lane}::${col}`;
+    const cells: Record<string, JGNode[]> = {};
+    for (const n of graph.nodes) {
+      const col = Math.min(2, Math.max(0, n.col));
+      (cells[cellKey(n.lane, col)] = cells[cellKey(n.lane, col)] || []).push(n);
+    }
+    const rowsIn = (lane: string) => {
+      let m = 0;
+      for (let c = 0; c < 3; c++) m = Math.max(m, (cells[cellKey(lane, c)] || []).length);
+      return m;
+    };
+    const preRows = rowsIn('pre-product');
+    const prodRows = rowsIn('product');
+    const blockH = (rows: number) => rows * NODE_H + Math.max(0, rows - 1) * ROW_GAP;
+    const preH = blockH(preRows), prodH = blockH(prodRows);
+    const preTop = PAD;
+    const prodTop = PAD + preH + BAND_GAP;
+    const H = prodTop + prodH + PAD;
+    const colW = W / 3;
+    const map: Record<string, { x: number; y: number; n: JGNode }> = {};
+    const place = (lane: string, top: number, bandH: number) => {
+      for (let c = 0; c < 3; c++) {
+        const arr = (cells[cellKey(lane, c)] || []).slice().sort((a, b) => b.totalVol - a.totalVol);
+        const cx = colW * c + colW / 2;
+        const bh = blockH(arr.length);
+        const startY = top + (bandH - bh) / 2 + NODE_H / 2;
+        arr.forEach((n: JGNode, i: number) => { map[n.id] = { x: cx, y: startY + i * (NODE_H + ROW_GAP), n }; });
+      }
+    };
+    place('pre-product', preTop, preH);
+    place('product', prodTop, prodH);
+    return { pos: map, H, bandY: { preTop, prodTop, preH, prodH } };
+  }, [graph]);
+
+  const edgePath = (a: { x: number; y: number }, b: { x: number; y: number }): string => {
+    if (Math.abs(a.x - b.x) < 1) { const bow = 64; return `M${a.x} ${a.y} C ${a.x + bow} ${a.y} ${b.x + bow} ${b.y} ${b.x} ${b.y}`; }
+    const mx = (a.x + b.x) / 2;
+    return `M${a.x} ${a.y} C ${mx} ${a.y} ${mx} ${b.y} ${b.x} ${b.y}`;
+  };
+
+  if (!graph.nodes.length) {
+    return <p style={{ fontSize: 12, color: '#3A3A5A', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
+  }
+
+  const validEdges = graph.edges.filter((e) => pos[e.from] && pos[e.to]);
+  const neighbors = (id: string) => {
+    const s = new Set<string>([id]);
+    for (const e of graph.edges) { if (e.from === id) s.add(e.to); if (e.to === id) s.add(e.from); }
+    return s;
+  };
+  const nb = hover ? neighbors(hover) : null;
+  const ordered = graph.nodes.slice().sort((a, b) => {
+    const pri = (n: JGNode) => (n.id === hover ? 2 : n.id === selectedId ? 1 : 0);
+    return pri(a) - pri(b);
+  });
+
+  const colW = W / 3;
+  return (
+    <div>
+      {/* stage headers */}
+      <div style={{ display: 'flex', borderBottom: '1px solid #1A1A30' }}>
+        {CM_STAGES.map((s: JourneyStage, i: number) => (
+          <div key={s} style={{ flex: 1, padding: '7px 6px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[s].text, opacity: 0.7, borderRight: i < 2 ? '1px solid #1A1A30' : 'none' }}>
+            {JOURNEY_STAGE_LABELS[s]}
+          </div>
+        ))}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img"
+        aria-label="Connected audience journey: problem topics link by co-search behaviour, bridge to the product that solves them, and fan into supporting decision topics. Colour shows content coverage.">
+        {/* band backgrounds */}
+        <rect x={0} y={bandY.preTop - PAD / 2} width={W} height={bandY.preH + PAD} fill="rgba(34,211,238,0.025)" rx={8} />
+        <rect x={0} y={bandY.prodTop - PAD / 2} width={W} height={bandY.prodH + PAD} fill="rgba(167,139,250,0.03)" rx={8} />
+        <text x={8} y={bandY.preTop + 4} fill="#22d3ee" fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRE-PRODUCT · PROBLEM-AWARE</text>
+        <text x={8} y={bandY.prodTop + 4} fill="#a78bfa" fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRODUCT · SOLUTION-AWARE</text>
+        {/* column dividers */}
+        {[1, 2].map((c) => <line key={c} x1={colW * c} y1={0} x2={colW * c} y2={H} stroke="#13132a" strokeWidth={1} />)}
+        {/* edges */}
+        {validEdges.map((e, i: number) => {
+          const inc = hover === e.from || hover === e.to;
+          const color = EDGE_COLOR[e.kind];
+          return (
+            <path key={i} d={edgePath(pos[e.from], pos[e.to])} fill="none"
+              stroke={inc ? color : (e.kind === 'bridge' ? '#3a5566' : '#33335c')}
+              strokeWidth={inc ? 2.4 : 1.3}
+              strokeDasharray={e.kind === 'bridge' ? '5 4' : undefined}
+              opacity={hover ? (inc ? 0.95 : 0.06) : (e.kind === 'bridge' ? 0.45 : 0.42)} />
+          );
+        })}
+        {/* nodes */}
+        {ordered.map((n: JGNode) => {
+          const p = pos[n.id]; if (!p) return null;
+          const col = STATE_COLOR[n.state];
+          const scale = n.id === hover ? 1.07 : 1;
+          const sel = n.id === selectedId;
+          const dim = nb ? !nb.has(n.id) : false;
+          const label = n.name.length > 24 ? n.name.slice(0, 23) + '…' : n.name;
+          const badge = n.action === 'optimize' ? 'Existing' : 'Build new';
+          return (
+            <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
+              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={() => onSelect(n)}>
+              <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
+                <rect width={NODE_W} height={NODE_H} rx={9} fill="#0D0D22" stroke={col} strokeWidth={n.kind === 'core' ? 2.3 : (sel ? 2.3 : 1.5)} />
+                <rect width={4} height={NODE_H} rx={2} fill={col} />
+                {n.kind === 'core' && <text x={NODE_W - 26} y={16} fill="#a78bfa" fontSize={11} fontFamily="inherit">★</text>}
+                <text x={12} y={17} fill="#D8D8F0" fontSize={10.5} fontWeight={500} fontFamily="inherit">{label}</text>
+                <text x={12} y={31} fill="#6a6a90" fontSize={9} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
+                <g transform={`translate(12 ${NODE_H - 15})`}>
+                  <rect width={n.action === 'optimize' ? 56 : 60} height={12} rx={3} fill={`${col}22`} stroke={`${col}55`} strokeWidth={0.8} />
+                  <text x={6} y={9} fill={col} fontSize={8} fontWeight={700} fontFamily="inherit">{badge}</text>
+                </g>
+                <circle cx={NODE_W - 12} cy={NODE_H - 9} r={3.5} fill={col} />
+              </g>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function ContentPlanSummary({ graph }: { graph: JGraph }) {
+  const p = graph.plan;
+  const cell = (label: string, val: number | string, color: string, sub?: string) => (
+    <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ fontSize: 10.5, color: '#6a6a90' }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 0' }}>{val}</div>
+      {sub && <div style={{ fontSize: 10, color: '#5A5A80', marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6a6a90' }}>Content plan — every topic mapped</span>
+        <span style={{ fontSize: 10.5, color: '#5A7A80' }}><i className="ti ti-arrow-right" style={{ margin: '0 4px' }} />feeds the Content panel</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+        {cell('Topics in journey', p.total, '#C8C8E8')}
+        {cell('Existing — optimize', p.optimize, STATE_COLOR.existing)}
+        {cell('Net-new — build', p.build, STATE_COLOR.missing, `${p.preBuild} pre · ${p.prodBuild} product`)}
+        <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 10.5, color: '#6a6a90' }}>Coverage</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: '#C8C8E8', margin: '2px 0 6px' }}>{p.total ? Math.round((p.optimize / p.total) * 100) : 0}%</div>
+          <div style={{ height: 5, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${p.total ? Math.round((p.optimize / p.total) * 100) : 0}%`, background: STATE_COLOR.existing }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGraph; onClose: () => void }) {
+  if (!node) {
+    return (
+      <div style={{ marginTop: 14, border: '1px solid #1A1A30', borderRadius: 12, background: '#0D0D1E', padding: 16, fontSize: 12, color: '#5A5A80', textAlign: 'center' }}>
+        Select a topic to see its keywords, why it connects, and the content action.
+      </div>
+    );
+  }
+  const col = STATE_COLOR[node.state];
+  const byId = new Map(graph.nodes.map((n) => [n.id, n] as [string, JGNode]));
+  const rels = graph.edges
+    .filter((e) => e.from === node.id || e.to === node.id)
+    .map((e) => { const otherId = e.from === node.id ? e.to : e.from; return { why: e.why, kind: e.kind, name: byId.get(otherId)?.name ?? otherId }; });
+  const kindLabel = node.kind === 'problem' ? 'Pre-product · problem' : node.kind === 'core' ? 'Product · core' : `Product · ${SUPPORT_LABEL[node.supportType].toLowerCase()}`;
+  const rec = node.action === 'optimize'
+    ? 'You already rank here — keep this page linked into the paths above and refresh it.'
+    : node.state === 'competitor'
+      ? 'A competitor owns this step and you do not — build comparable depth to capture it.'
+      : 'No coverage from you or tracked competitors — a net-new page to build.';
+  return (
+    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: '#0D0D1E', padding: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#DCDCF4' }}>{node.kind === 'core' ? '★ ' : ''}{node.name}</div>
+          <div style={{ fontSize: 11, color: '#6a6a90', marginTop: 3, fontFamily: 'monospace' }}>
+            {fmtVol(node.totalVol)} searches/mo · {node.kwCount} keywords · {kindLabel}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 6, padding: '4px 9px', whiteSpace: 'nowrap' }}>
+            {node.action === 'optimize' ? 'Existing page' : (node.state === 'competitor' ? 'Competitor only' : 'Build net-new')}
+          </span>
+          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: '#5A5A80', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}><i className="ti ti-x" /></button>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>WHY IT CONNECTS</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 6 }}>
+        {rels.length ? rels.map((r, i: number) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11.5, color: '#8080a0' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', borderRadius: 4, padding: '2px 6px', color: EDGE_WHY_COLOR[r.kind], background: `${EDGE_WHY_COLOR[r.kind]}1f` }}>{r.why}</span>
+            <i className="ti ti-arrow-right" style={{ color: '#4A4A6A' }} />
+            <span style={{ color: '#C8C8E8' }}>{r.name}</span>
+          </div>
+        )) : <span style={{ color: '#4A4A6A', fontSize: 11.5 }}>Standalone entry point.</span>}
+      </div>
+
+      {node.sampleKws.length > 0 && (
+        <>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {node.sampleKws.map((k: string, i: number) => (
+              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: '#9a9ac0', background: 'rgba(120,120,160,0.08)', border: '1px solid #1f1f3a', borderRadius: 5, padding: '3px 7px' }}>&ldquo;{k}&rdquo;</span>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'rgba(120,120,160,0.05)', border: '1px solid #1f1f3a', borderRadius: 8, padding: '9px 11px' }}>
+        <i className="ti ti-bulb" style={{ color: col, fontSize: 15 }} />
+        <span style={{ fontSize: 11.5, color: '#9090b8' }}>{rec}</span>
+      </div>
+
+      {node.url ? (
+        <a href={node.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px', textDecoration: 'none' }}>
+          <i className="ti ti-external-link" /> Optimize existing page <span style={{ color: '#6a6a90', fontWeight: 400 }}>{node.url}</span>
+        </a>
+      ) : (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px' }}>
+          <i className="ti ti-pencil-plus" /> Add to content plan (net-new build)
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
@@ -1185,6 +1441,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
   const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
+  const [selectedGraphNode, setSelectedGraphNode] = useState<JGNode | null>(null);   // v7.175 connected-map selection
   // v7.155: demand universe (persisted on the snapshot once the on-demand build runs)
   const [demandUniverse, setDemandUniverse] = useState<DemandUniverse | null>(
     () => readDemandCache(analysis),   // v7.157: snapshot → localStorage fallback (survives tab remount)
@@ -1272,6 +1529,48 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
   const preNodes  = demand ? demand.preNodes  : fpPreNodes;
   const prodNodes = demand ? demand.prodNodes : fpProdNodes;
+
+  // v7.175: keyword → real ranking page (snapshot rows + persisted _pageMap) so
+  // every journey node can resolve an existing page to optimise vs a net-new build.
+  const urlByKeyword = useMemo(() => {
+    const m: Record<string, string> = {};
+    const snap = (analysis?.semrushSnapshot as any) ?? {};
+    for (const k of (snap.topKeywords ?? [])) {
+      const kw = (k.keyword ?? '').toLowerCase().trim();
+      if (kw && k.url) m[kw] = k.url;
+    }
+    for (const pg of (snap._pageMap?.pages ?? [])) {
+      if (!pg?.url) continue;
+      for (const kw of (pg.keywords ?? [])) { const k = String(kw).toLowerCase().trim(); if (k) m[k] = pg.url; }
+    }
+    return m;
+  }, [analysis]);
+
+  // v7.175: AI-phrased problem-theme labels (best-effort) — reuse the cached
+  // journey-problem AI names; a demand problem seed inherits the theme name of any
+  // footprint problem keyword that contains it. Falls back to the seed (title-cased)
+  // inside buildJourneyGraph, so labels improve when AI names exist but never block.
+  const themeLabels = useMemo(() => {
+    const m: Record<string, string> = {};
+    const seeds = (demandUniverse?.problemSeeds ?? []).map((s: string) => s.toLowerCase());
+    for (const seed of seeds) {
+      for (const kw of Object.keys(problemAssignments)) {
+        if (kw.includes(seed)) { m[seed] = problemAssignments[kw]; break; }
+      }
+    }
+    return m;
+  }, [demandUniverse, problemAssignments]);
+
+  // v7.175: the connected journey graph — problem topics + product core/supporting,
+  // co-search / bridge / support edges, and a content action per node. One shared
+  // builder (lib/journey/graph) feeds both this panel and the Content panel.
+  const graph = useMemo<JGraph | null>(
+    () => demandMode ? buildJourneyGraph(demandUniverse as any, {
+      clientRanked: footprint.client, competitorRanked: footprint.competitor,
+      urlByKeyword, activeBucketId, seedBucket, themeLabels,
+    }) : null,
+    [demandMode, demandUniverse, footprint, urlByKeyword, activeBucketId, seedBucket, themeLabels],
+  );
 
   // v7.156: consume the route's NDJSON progress stream so the UI shows a
   // determinate bar + ETA ("seed X of N") instead of an indefinite spinner.
@@ -1595,52 +1894,91 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
       <Legend />
 
-      {/* v7.161: combined summary — overall totals with pre/product split, between legend and lanes */}
-      <CombinedSummary preNodes={preNodes} prodNodes={prodNodes} />
+      {demand && graph ? (
+        /* v7.175: ONE connected journey — problem topics link by co-search, bridge
+           to the product that solves them, and fan into supporting decision topics. */
+        <>
+          <ContentPlanSummary graph={graph} />
 
-      {/* Pre-product lane */}
-      <div style={{ background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <i className="ti ti-bulb" style={{ color: '#22d3ee', fontSize: 14 }} />
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>Pre-Product Journey</span>
-              <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,211,238,0.1)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                Problem-aware
-              </span>
+          <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <i className="ti ti-sitemap" style={{ color: '#22d3ee', fontSize: 14 }} />
+                </div>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#C8C8E8' }}>Connected Journey</span>
+                  <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
+                    Life problem &rarr; discovers the solution &rarr; decides. Every link is real search behavior.
+                  </p>
+                </div>
+              </div>
+              {/* relationship legend */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
+                {([['co', 'Co-searched'], ['bridge', 'Discovers solution'], ['support', 'Needs to decide']] as [JEdgeKind, string][]).map(([k, l]: [JEdgeKind, string]) => (
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: '#8080a0' }}>
+                    <svg width={26} height={8}><line x1={0} y1={4} x2={26} y2={4} stroke={EDGE_COLOR[k]} strokeWidth={2.4} strokeDasharray={k === 'bridge' ? '4 3' : undefined} /></svg>{l}
+                  </span>
+                ))}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: '#8080a0' }}>
+                  <span style={{ color: '#a78bfa' }}>&#9733;</span> Core product
+                </span>
+              </div>
             </div>
-            <p style={{ fontSize: 11, color: '#4A7A80', marginTop: 2 }}>
-              They have a life problem but don&apos;t know your product exists yet.
-            </p>
+            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
+            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
+            <ConnectedMap graph={graph} onSelect={setSelectedGraphNode} selectedId={selectedGraphNode?.id ?? null} />
           </div>
-        </div>
-        {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
-        <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
-        <CompletenessRow nodes={preNodes} />
-      </div>
 
-      {/* Product lane */}
-      <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(167,139,250,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <i className="ti ti-route" style={{ color: '#a78bfa', fontSize: 14 }} />
-          </div>
-          <div>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>Product Journey</span>
-            <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
-              Full funnel &mdash; searchers aware of the category and evaluating options.
-            </p>
-          </div>
-        </div>
-        {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
-        <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
-        <CompletenessRow nodes={prodNodes} />
-      </div>
+          <GraphDetail node={selectedGraphNode} graph={graph} onClose={() => setSelectedGraphNode(null)} />
+        </>
+      ) : (
+        /* Footprint mode (no demand universe yet) — the v7.161 two-lane view. */
+        <>
+          <CombinedSummary preNodes={preNodes} prodNodes={prodNodes} />
 
-      {/* Shared cluster detail */}
-      <DetailPanel node={selected} onClose={() => setSelected(null)} />
+          <div style={{ background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <i className="ti ti-bulb" style={{ color: '#22d3ee', fontSize: 14 }} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>Pre-Product Journey</span>
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,211,238,0.1)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    Problem-aware
+                  </span>
+                </div>
+                <p style={{ fontSize: 11, color: '#4A7A80', marginTop: 2 }}>
+                  They have a life problem but don&apos;t know your product exists yet.
+                </p>
+              </div>
+            </div>
+            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
+            <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+            <CompletenessRow nodes={preNodes} />
+          </div>
+
+          <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(167,139,250,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <i className="ti ti-route" style={{ color: '#a78bfa', fontSize: 14 }} />
+              </div>
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>Product Journey</span>
+                <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
+                  Full funnel &mdash; searchers aware of the category and evaluating options.
+                </p>
+              </div>
+            </div>
+            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
+            <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+            <CompletenessRow nodes={prodNodes} />
+          </div>
+
+          <DetailPanel node={selected} onClose={() => setSelected(null)} />
+        </>
+      )}
     </div>
   );
 }
