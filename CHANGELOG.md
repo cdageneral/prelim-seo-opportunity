@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.178 — 2026-06-13 · Local Search panel — fix build error + off-topic keywords
+
+**What changed:** two bug fixes to the v7.177 Local Search panel.
+
+**1) "Unexpected non-whitespace character after JSON" error (gone).** Clicking *Run local scan* showed a red JSON error in the panel header. Cause: the dry-run credit-estimate step streamed a "discovering listings…" progress line *before* the result line, but the panel reads the estimate with a single-object JSON parse — two lines tripped it. The dry-run now returns exactly one JSON object, so the estimate loads cleanly. No effect on the live scan stream.
+
+**2) Off-topic keywords no longer appear.** The Local Keywords list was showing terms unrelated to the client (e.g. *indianapolis zoo*, *al-nassr fc*, *flagstar bank*, *world longest river in the world*, *knicks vs chicago bulls*). Two causes, both fixed:
+   - **State-abbreviation false positives.** A 2-letter state code was matched anywhere it appeared, so the preposition "**in**" (Indiana), the name fragment "**al**" (Alabama), and "**pa**" (Pennsylvania) wrongly flagged keywords as geo-local. State codes are now matched only in the postal "City, **ST**" form (after a comma). Full state names, the major-city list, and the client's own discovered locations are unchanged.
+   - **Missing client-relevance gate.** Unlike the Content & Journey panels (which gained this gate in v7.173), the Local panel surfaced every footprint keyword — including tangential ones that merely contained a city name. The Local panel now applies the same gate: a keyword is only treated as local if it shares vocabulary with the client's own content categories or brand. Nothing is fabricated — every excluded keyword has zero overlap with the client's categories/brand. Applied in both the panel and the scan route.
+
+**Verification (own debugging agent):** detect logic harness **25/25** (abbr false-positives dropped, postal "City, ST" preserved, core intents intact, relevance gate keeps client keywords / drops the exact screenshot junk, gate is opt-in); route harness **14/14** (dry-run body is one parseable JSON object, full scan streams valid NDJSON, junk gated from both the credit estimate and the scan); `tsc` at **ES5** clean on all three changed files; jsdom render of the real panel **13/13** (only client-relevant local keywords shown, junk excluded, panel-scroll guard intact). Render snapshot: `orbitiq-v7.178-RENDER.html` (SAMPLE fixture, flagged).
+
+**Files touched (3):** `lib/local/detect.ts` (abbr fix + `buildClientRelevance` + relevance gate in `classifyLocalKeywords`), `app/api/projects/[id]/local-scan/route.ts` (dry-run single-line fix + relevance gate), `components/brief/LocalSearchSection.tsx` (relevance gate). No files added or removed.
+
 ## v7.177 — 2026-06-13 · Local Search panel (#09) — map pack, reviews, locations, local competition & opportunities
 
 **What changed:** the Local Search nav slot (#09) is now a full working panel. It activates only when the keyword set carries **local intent**, and surfaces — from real data only — how many locations the client has, how they perform in the Google map pack, how strong their reviews are, which local keywords have volume, who the local competition is, and where the search opportunities are.

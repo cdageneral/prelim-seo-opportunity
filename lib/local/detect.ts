@@ -145,12 +145,77 @@ function matchAny(kwLower: string, tokens: string[], list: string[]): string | n
   return null;
 }
 
+// Lookup set for the postal-code abbreviation matcher.
+const ABBR_SET: Record<string, boolean> = (function () {
+  const m: Record<string, boolean> = {};
+  for (let i = 0; i < US_STATE_ABBR.length; i++) m[US_STATE_ABBR[i]] = true;
+  return m;
+})();
+
+/** Match a 2-letter state code ONLY in the postal "City, ST" form (after a comma),
+ *  e.g. "camden, nj" or "scottsdale, az 85251". Returns the matched code or null. */
+function postalAbbr(kwLower: string): string | null {
+  const re = /,\s*([a-z]{2})(?![a-z])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(kwLower)) !== null) {
+    if (ABBR_SET[m[1]] === true) return m[1];
+  }
+  return null;
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 export interface DetectOptions {
   /** Extra geo terms discovered from the client's Google Business listings
    *  (city + neighborhood names). Makes detection client-adaptive. Lowercased. */
   geoVocab?: string[];
+  /** Client-relevance vocabulary (lowercase, len ≥ 4). When provided & non-empty,
+   *  a keyword is only classified as local if it shares one of these tokens with
+   *  the client's categories or brand — so off-topic footprint keywords (e.g. a
+   *  sports/zoo/bank term that merely contains a city name) never enter the panel.
+   *  Build it with `buildClientRelevance`. Mirrors the v7.173 relevance gate used
+   *  by the Content & Journey panels. (v7.178) */
+  relevanceTokens?: string[];
+}
+
+// Generic, non-distinctive category words to ignore when building relevance
+// vocabulary (kept minimal — only words that carry no topical signal).
+const CAT_NOISE: Record<string, boolean> = (function () {
+  const m: Record<string, boolean> = {};
+  ['near', 'other', 'general', 'misc', 'services', 'service', 'online', 'information',
+   'guide', 'guides', 'review', 'reviews', 'best', 'cost', 'costs', 'price', 'prices',
+   'cheap', 'free', 'open', 'hours'].forEach(w => { m[w] = true; });
+  return m;
+})();
+
+/** domain → distinctive brand root ("sonobello.com" → "sonobello"). */
+function brandRoot(domain: string): string {
+  return String(domain ?? '')
+    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
+    .replace(/\/.*$/, '').toLowerCase().trim().split('.')[0] || '';
+}
+
+/**
+ * Build the client-relevance vocabulary from the client's content categories
+ * (`semrushSnapshot._categoryBreakdown.categories`) + client/competitor brand
+ * roots. Tokens are lowercase and len ≥ 4. Pass the result as
+ * `DetectOptions.relevanceTokens`. No AI, no modeling — purely the client's own
+ * category names and brands, so every drop is explainable by zero vocabulary
+ * overlap (same principle as the v7.173 Content/Journey gate).
+ */
+export function buildClientRelevance(
+  categories: Array<{ name?: string }> | null | undefined,
+  clientDomain: string,
+  competitorDomains: string[] = [],
+): string[] {
+  const set: Record<string, boolean> = {};
+  (categories ?? []).forEach(c => {
+    String((c && c.name) || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+      .forEach(w => { if (w.length >= 4 && CAT_NOISE[w] !== true) set[w] = true; });
+  });
+  [clientDomain].concat(competitorDomains ?? []).map(brandRoot).filter(Boolean)
+    .forEach(b => { if (b.length >= 4) set[b] = true; });
+  return Object.keys(set);
 }
 
 /**
@@ -177,11 +242,16 @@ export function detectLocalIntent(
   if (city) return { intent: 'geo-modifier', matchedTerm: city };
   const stateFull = matchAny(kwLower, tokens, US_STATES_FULL);
   if (stateFull) return { intent: 'geo-modifier', matchedTerm: stateFull };
-  // 2-letter abbreviations only when the keyword has >1 token (avoid a bare "ca")
-  if (tokens.length > 1) {
-    const abbr = matchAny(kwLower, tokens, US_STATE_ABBR);
-    if (abbr) return { intent: 'geo-modifier', matchedTerm: abbr };
-  }
+  // 2-letter state abbreviations are matched ONLY in the postal "City, ST" form —
+  // i.e. immediately after a comma ("camden, nj", "scottsdale, az 85251").
+  // v7.177 matched any bare abbr token, which false-fired on common English words
+  // and name fragments that collide with state codes — "world longest river IN the
+  // world" (in=Indiana), "AL-nassr fc" (al=Alabama), "PA-c" (pa=Pennsylvania),
+  // "OR" / "ME" / "HI" / "OK" etc. Requiring a leading comma removes those without
+  // losing real geo: a genuine "City ST" with a known city already matches as a
+  // city above, and a client's own area is covered by geoVocab. (v7.178 fix.)
+  const abbr = postalAbbr(kwLower);
+  if (abbr) return { intent: 'geo-modifier', matchedTerm: abbr };
 
   // 3) implicit-local — visit signals or local-business nouns.
   const implPhrase = matchAny(kwLower, tokens, IMPLICIT_PHRASES);
@@ -203,10 +273,19 @@ export function classifyLocalKeywords(
 ): LocalKeyword[] {
   const out: LocalKeyword[] = [];
   const seen: Record<string, boolean> = {};
+  const rel = opts.relevanceTokens ?? [];
   for (let i = 0; i < pool.length; i++) {
     const item = pool[i];
     const kw = String(item.keyword ?? '').toLowerCase().trim();
     if (!kw || seen[kw]) continue;
+    // client-relevance gate (v7.178): when a relevance vocabulary is supplied,
+    // a keyword must share one of its tokens with the client's categories/brand,
+    // else it is off-topic for this client and excluded entirely.
+    if (rel.length > 0) {
+      let relevant = false;
+      for (let j = 0; j < rel.length; j++) { if (kw.indexOf(rel[j]) >= 0) { relevant = true; break; } }
+      if (!relevant) continue;
+    }
     const hit = detectLocalIntent(kw, opts);
     if (!hit) continue;
     seen[kw] = true;

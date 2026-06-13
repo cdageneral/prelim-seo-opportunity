@@ -30,7 +30,7 @@ import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool } from '@/lib/utils/kwVolume';
-import { classifyLocalKeywords } from '@/lib/local/detect';
+import { classifyLocalKeywords, buildClientRelevance } from '@/lib/local/detect';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan } from '@/lib/local/build';
 
 export const maxDuration = 300;
@@ -125,6 +125,13 @@ export async function POST(
     competitorVolMin:  (project as any).kwVolThresholdCompetitor ?? 0,
   });
 
+  // client-relevance vocabulary (category names + brand) — keeps off-topic
+  // footprint keywords out of the local universe (v7.178; mirrors v7.173 gate).
+  const relevanceTokens = buildClientRelevance(
+    (analysis.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+    clientDomain, manualCompetitorDomains,
+  );
+
   const isClientPlace = (p: MapsPlace): boolean => {
     const w = normalizeDomain(p.website);
     if (w && clientDomain && w === clientDomain) return true;
@@ -140,7 +147,12 @@ export async function POST(
       let callsUsed = 0;
       try {
         // ── 1. Discover client listings (1 call) ──────────────────────────────
-        send({ type: 'progress', done: 0, total: maxKeywords, phase: 'Discovering listings…' });
+        // NOTE: do NOT emit a progress event during a dryRun. The dryRun reply is
+        // read by the client with `r.json()` (a single-object parse), so the stream
+        // must contain exactly ONE JSON line. Emitting a progress line first made
+        // the body two newline-delimited objects → "Unexpected non-whitespace
+        // character after JSON at position N (line 2 column 1)" (v7.178 fix).
+        if (!dryRun) send({ type: 'progress', done: 0, total: maxKeywords, phase: 'Discovering listings…' });
         const rawListings = await getMapsListings(brandQuery, market, undefined, 20);
         callsUsed++;
         const clientPlaces = rawListings.filter(isClientPlace);
@@ -166,7 +178,7 @@ export async function POST(
         listings.forEach(l => { if (l.city) geoVocab.push(l.city.toLowerCase()); });
 
         // ── 2. Detect local keywords (geo-aware) ──────────────────────────────
-        const allLocal = classifyLocalKeywords(pool as any, { geoVocab });
+        const allLocal = classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
         const scanList = allLocal.slice(0, maxKeywords);
 
         // Locations to scan from: client listings with coordinates (cap maxLocations).

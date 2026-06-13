@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { buildKwPool } from '@/lib/utils/kwVolume';
-import { classifyLocalKeywords, localIntentCounts, type LocalKeyword } from '@/lib/local/detect';
+import { classifyLocalKeywords, localIntentCounts, buildClientRelevance, type LocalKeyword } from '@/lib/local/detect';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
   buildLocalOpportunities, buildLocalIndex,
@@ -96,6 +96,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return v;
   }, [scan]);
 
+  // client-relevance vocabulary (category names + brand) — keeps off-topic
+  // footprint keywords out of the local universe (v7.178; mirrors v7.173 gate).
+  const relevanceTokens = useMemo(
+    () => buildClientRelevance(
+      (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+      domain, competitorDomains,
+    ),
+    [analysis, domain, competitorDomains],
+  );
+
   // client-side local keyword universe (real Semrush volume; no scan needed)
   const local: LocalKeyword[] = useMemo(() => {
     if (!analysis?.semrushSnapshot) return [];
@@ -107,8 +117,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       clientVolMin:      0,
       competitorVolMin:  0,
     });
-    return classifyLocalKeywords(pool as any, { geoVocab });
-  }, [analysis, dbKeywords, domain, competitorDomains, geoVocab]);
+    return classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
+  }, [analysis, dbKeywords, domain, competitorDomains, geoVocab, relevanceTokens]);
 
   const counts = useMemo(() => localIntentCounts(local), [local]);
 
