@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.181 — 2026-06-13 · Local Search — location badge on opportunity cards
+
+**What changed:** each Local Opportunity card now shows a prominent **📍 location badge** in its header, so you can see at a glance which location the opportunity targets (e.g. "📍 East Syracuse"). The location was previously only in the card's prose and a small chip at the bottom; the redundant lower "Location" chip was removed now that the badge carries it. Display-only change in `components/brief/LocalSearchSection.tsx` (no data/logic change).
+
+**Verification (own debugging agent):** `tsc` at ES5 clean; jsdom render **5/5** (badge present with the city on each of 3 pack-miss cards, redundant lower chip removed, other chips intact). Render snapshot `orbitiq-v7.181-RENDER.html` (SAMPLE, flagged).
+
+## v7.180 — 2026-06-13 · Local Search — clearer location status labels
+
+**What changed:** the location "Incomplete" label was misleading. Sitemap-discovered locations come with a full address and phone but no Google rating until they show up in a scanned map pack — yet they were flagged "⚠ Incomplete," implying a defect.
+
+Locations now show one of three statuses: **✓ Verified** (a real Google rating, reviews and address are on file), **◷ Rating pending** (discovered from the client's sitemap — the Google rating is captured when the location appears in a scanned map pack; not a defect), or **⚠ Incomplete** (a genuine gap — missing address or no reviews). Each badge has a hover tooltip explaining it. Display-only change in `components/brief/LocalSearchSection.tsx` (new `locStatus` helper); no data or scan logic changed.
+
+**Verification (own debugging agent):** `tsc` at ES5 clean; jsdom render **7/7** — a Verified, a Rating-pending and an Incomplete location each render with the correct single label, and the pending location is no longer flagged as a warning. Render snapshot `orbitiq-v7.180-RENDER.html` (SAMPLE, flagged).
+
 ## v7.179 — 2026-06-13 · Local Search — sitemap location discovery, client/competitor keywords, stronger relevance
 
 **What changed:** the Local Search panel now discovers locations from the client's own website, sources keywords from both the client and competitors (clearly labeled), and applies a much stronger relevance filter so off-topic keywords stop appearing.

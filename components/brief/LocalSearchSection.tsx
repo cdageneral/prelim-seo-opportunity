@@ -67,6 +67,17 @@ function rankChip(rank: number | null): React.CSSProperties {
   return { background: 'rgba(245,158,11,.14)', color: '#f6c061', border: '1px solid rgba(245,158,11,.28)' };
 }
 
+// Location status (v7.180): "Verified" once a real Google rating is captured;
+// "Rating pending" for sitemap-discovered locations not yet seen in a scanned map
+// pack (NOT a defect — address/phone are known, just no GBP rating yet); reserve
+// "Incomplete" for a genuine gap (missing address, or rating with zero reviews).
+function locStatus(l: { verified: boolean; rating: number | null; reviews: number; address: string }):
+  { label: string; color: string; icon: string; hint: string } {
+  if (l.verified) return { label: 'Verified', color: '#5ee68f', icon: '✓', hint: 'Real Google rating, reviews and address on file' };
+  if (l.rating == null) return { label: 'Rating pending', color: '#7aa7ff', icon: '◷', hint: 'Discovered from the client sitemap — Google rating is captured when this location appears in a scanned map pack' };
+  return { label: 'Incomplete', color: '#f6c061', icon: '⚠', hint: 'Listing is missing an address or has no reviews' };
+}
+
 export default function LocalSearchSection({ projectId, analysis, projectName, domain, competitors, kwVersion }: Props) {
   const [dbKeywords, setDbKeywords] = useState<any[]>([]);
   const [dbLoaded, setDbLoaded]     = useState(false);
@@ -379,7 +390,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                           <div className="loc-mk" style={l.healthFlags.length ? { background: 'rgba(245,158,11,.12)', borderColor: 'rgba(245,158,11,.3)' } : {}}>{l.healthFlags.length ? '⚠' : '📍'}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13.5, fontWeight: 700 }}>{l.title}</div>
-                            <div style={{ fontSize: 11, color: '#8888AA' }}>{l.address || 'no address'} · {l.verified ? <span style={{ color: '#5ee68f' }}>✓ Verified</span> : <span style={{ color: '#f6c061' }}>⚠ Incomplete</span>}</div>
+                            <div style={{ fontSize: 11, color: '#8888AA' }}>{l.address || 'no address'} · {(() => { const st = locStatus(l); return <span style={{ color: st.color }} title={st.hint}>{st.icon} {st.label}</span>; })()}</div>
                             <div style={{ marginTop: 6, fontSize: 12 }}>
                               {l.rating != null ? <><span style={{ color: '#f6c061' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: '#555570' }}>rating pending scan</span>}
                               <span style={{ color: '#8888AA' }}> · {fmt(l.reviews)} reviews{l.type ? ` · ${l.type}` : ''}</span>
@@ -511,13 +522,15 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     : roll.opps.opportunities.map((o, i) => (
                         <div key={i} className="opp-row">
                           <span className={`tierbadge t-${o.tier}`}>{o.tier}</span>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{o.title}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{o.title}</div>
+                              {o.location && <span className="locbadge" title={`Targets the ${o.location} location`}>📍 {o.location}</span>}
+                            </div>
                             <div style={{ fontSize: 11.5, color: '#8888AA' }}>{o.detail}</div>
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 9 }}>
                               {o.volume > 0 && <span className="ochip">Volume <b>{fmt(o.volume)}/mo</b></span>}
                               {o.intent && <span className="ochip">Type <b>{INTENT_LABEL[o.intent]}</b></span>}
-                              {o.location && <span className="ochip">Location <b>{o.location}</b></span>}
                               <span className="ochip">Lever <b>{o.kind === 'pack-miss' ? 'GBP + reviews' : o.kind === 'rank-improve' ? 'reviews' : o.kind === 'listing-health' ? 'verify + complete' : 'reviews'}</b></span>
                             </div>
                           </div>
@@ -550,6 +563,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
         .loc-mk{width:34px;height:34px;border-radius:9px;background:rgba(108,99,255,.14);border:1px solid rgba(108,99,255,.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
         .lb-row{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;border:1px solid #1E1E2E;background:#111118;margin-bottom:8px}
         .opp-row{border:1px solid #1E1E2E;border-radius:12px;padding:15px;background:#111118;display:flex;gap:13px;margin-bottom:11px}
+        .locbadge{flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:700;padding:3px 10px;border-radius:7px;background:rgba(108,99,255,.16);color:#b7b2ff;border:1px solid rgba(108,99,255,.35)}
         .tierbadge{font-weight:800;font-size:11px;padding:4px 9px;border-radius:7px;height:fit-content;flex-shrink:0}
         .t-P0{background:rgba(239,68,68,.15);color:#f08a8a;border:1px solid rgba(239,68,68,.3)}
         .t-P1{background:rgba(245,158,11,.15);color:#f6c061;border:1px solid rgba(245,158,11,.3)}
