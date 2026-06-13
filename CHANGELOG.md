@@ -1,5 +1,16 @@
 # OrbitIQ Changelog
 
+## v7.186 — 2026-06-13 · Light mode fixes — stuck dark-blue nav + text contrast
+
+**What changed:** two issues in the v7.185 light theme are fixed.
+
+- **Dark-blue blocks in the left nav are gone.** The expanded sub-nav sections (Keyword list / Theme clusters, Content map / Content plan) and other near-black surfaces were rendering as solid dark-blue in light mode. Cause: the v7.185 "darken vivid accents" step keyed off HSL *saturation*, which spikes to a high value for near-black colors that carry a faint blue tint (e.g. the sub-nav background `#060610`) — so those surfaces were wrongly darkened instead of lightened.
+- **Higher text contrast.** Pure inversion preserved the *deliberately low* contrast of secondary/tertiary text, so faint dark-mode labels stayed faint in light mode.
+
+**How:** the light-value rule now splits colors by **absolute chroma** (max−min of RGB), which is reliable at extreme lightness. Perceptual neutrals (grays/navies, chroma < 0.22) map to a hand-tuned light scale — page bg `#F2F3F8`, white surfaces/cards, `#E3E4EE` borders, and contrast-boosted text (`text-secondary` → `#4C4D67` ≈ 8.7:1 on white, `text-tertiary` → `#6E6F88` ≈ 5:1, primary → near-black). Only genuine accents (chroma ≥ 0.22) use HSL lightness inversion, and the legibility darkening now fires only on true mid-lightness accents — so near-black navies correctly become light surfaces. Dark mode is byte-for-byte unchanged; only the `:root[data-theme="light"]` values in `app/globals.css` changed (no `.tsx` edits).
+
+**Verification (own debugging agent):** TS AST scan of all 52 files still **0 syntax errors / 0 duplicate attributes**; confirmed in the generated `globals.css` that the former dark-nav tokens now resolve light (`--c-060610 → #F2F3F8`, `--c-0d0d16 → #F2F3F8`) and the text channels are boosted; computed contrast ratios for secondary/tertiary text on white meet WCAG AA. Render `orbitiq-v7.186-RENDER.html` (SAMPLE) shows the expanded sub-nav with no dark-blue and readable text.
+
 ## v7.185 — 2026-06-13 · Global dark/light theme toggle
 
 **What changed:** a dark/light switch now lives in the global header (both the project view and the dashboard). The app stays dark by default; flip the switch and the entire UI recolors to a light theme. Your choice is remembered per browser and applied before the page paints, so there's no flash on reload.
