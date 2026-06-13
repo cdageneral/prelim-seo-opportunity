@@ -36,7 +36,8 @@ import {
   pickLocationSitemap, type KmlLocation,
 } from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
-import { buildServiceSeeds, gridKeyword } from '@/lib/local/seeds';
+import { buildServiceSeeds, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
+import { cityMarketRank } from '@/lib/local/detect';
 
 export const maxDuration = 300;
 
@@ -182,6 +183,8 @@ export async function POST(
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const maxSeeds     = Math.min(Math.max(parseInt(body?.maxSeeds, 10)     || DEFAULT_MAX_SEEDS, 1), MAX_MAX_SEEDS);
   const maxLocations = Math.min(Math.max(parseInt(body?.maxLocations, 10) || DEFAULT_MAX_LOC,   1), MAX_MAX_LOC);
+  const locationOrder: LocationOrder = (['market', 'demand', 'az'].indexOf(body?.locationOrder) >= 0)
+    ? body.locationOrder : 'market';
   const dryRun = body?.dryRun === true;
 
   if (!process.env.SERP_API_KEY) {
@@ -287,8 +290,14 @@ export async function POST(
           maxSeeds,
         });
 
-        // Locations to scan: those with coordinates, capped per run (Wayne sets the cap).
-        const scannableLocs = listings.filter(l => l.lat != null && l.lng != null);
+        // Locations to scan: those with coordinates, ORDERED (largest market /
+        // highest demand / A–Z) so a capped run covers the most valuable cities
+        // first, then capped per run (Wayne sets the cap + order).
+        const scannableLocs = orderLocationsForScan(
+          listings.filter(l => l.lat != null && l.lng != null),
+          locationOrder,
+          { pool: pool as any, cityRank: cityMarketRank },
+        );
         const geoLocs = scannableLocs.slice(0, maxLocations);
 
         const potentialCells = seeds.length * scannableLocs.length;   // full grid (all scannable locations)
@@ -311,6 +320,8 @@ export async function POST(
               potentialCells,
               estCalls,
               source,
+              order:              locationOrder,
+              firstCities:        geoLocs.slice(0, 8).map(l => l.city || l.title),
             },
           });
           controller.close();

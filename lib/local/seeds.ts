@@ -116,3 +116,49 @@ export function gridKeyword(seedTerm: string, city: string): string {
   const c = String(city || '').trim();
   return c ? `${s} ${c}`.toLowerCase() : s.toLowerCase();
 }
+
+export type LocationOrder = 'market' | 'demand' | 'az';
+
+export interface OrderableLocation { city?: string; title?: string; }
+
+/**
+ * Order locations for scanning so a capped scan covers the most valuable cities
+ * first. Defensible, data-only orderings:
+ *   'market' — largest metros first (population proxy via `cityRank`, a static
+ *              largest-cities index). Default.
+ *   'demand' — highest real Semrush demand first (max pool volume of any keyword
+ *              naming the city). Uses data already pulled — no fabrication.
+ *   'az'     — alphabetical by city.
+ * Returns a NEW array; ties keep original order (stable).
+ */
+export function orderLocationsForScan<T extends OrderableLocation>(
+  locations: T[],
+  mode: LocationOrder,
+  opts: { pool?: SeedPoolItem[]; cityRank?: (c: string) => number } = {},
+): T[] {
+  const pool = opts.pool ?? [];
+  const cityRank = opts.cityRank ?? (() => 100000);
+  const demandFor = (city: string): number => {
+    const c = String(city || '').toLowerCase().trim();
+    if (!c) return 0;
+    let v = 0;
+    for (let i = 0; i < pool.length; i++) {
+      const k = String(pool[i].keyword || '').toLowerCase();
+      if (k.indexOf(c) >= 0) { const vol = pool[i].searchVolume || 0; if (vol > v) v = vol; }
+    }
+    return v;
+  };
+  const idx = locations.map((l, i) => ({ l, i }));
+  idx.sort((a, b) => {
+    const ca = (a.l.city || a.l.title || ''), cb = (b.l.city || b.l.title || '');
+    if (mode === 'az') {
+      const la = ca.toLowerCase(), lb = cb.toLowerCase();
+      const r = la < lb ? -1 : la > lb ? 1 : 0;
+      return r !== 0 ? r : a.i - b.i;
+    }
+    if (mode === 'demand') { const d = demandFor(cb) - demandFor(ca); return d !== 0 ? d : a.i - b.i; }
+    const r = cityRank(ca) - cityRank(cb);      // 'market' (default)
+    return r !== 0 ? r : a.i - b.i;
+  });
+  return idx.map(x => x.l);
+}

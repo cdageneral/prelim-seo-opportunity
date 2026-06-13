@@ -95,6 +95,28 @@ const US_CITIES = [
   'mission valley', 'la jolla', 'north park', 'pacific beach', 'hillcrest',
 ];
 
+// US_CITIES is ordered largest → smallest, so a city's index is a population-size
+// proxy. cityMarketRank returns that index (lower = bigger metro) or a large
+// number for cities not in the list. Used to order which locations to scan first
+// ("largest markets"). Deterministic, real ordering — no modeling. (v7.184)
+const CITY_RANK: Record<string, number> = (function () {
+  const m: Record<string, number> = {};
+  for (let i = 0; i < US_CITIES.length; i++) { if (!(US_CITIES[i] in m)) m[US_CITIES[i]] = i; }
+  return m;
+})();
+export function cityMarketRank(city: string): number {
+  const c = String(city ?? '').toLowerCase().trim();
+  if (!c) return 100000;
+  if (CITY_RANK[c] != null) return CITY_RANK[c];
+  // substring match (e.g. "east syracuse" → "syracuse" not listed; "north las vegas")
+  let best = 100000;
+  for (let i = 0; i < US_CITIES.length; i++) {
+    const name = US_CITIES[i];
+    if (c.indexOf(name) >= 0 || name.indexOf(c) >= 0) { if (i < best) best = i; }
+  }
+  return best;
+}
+
 // Implicit-local signals — physical-visit / local-business searches with no
 // place name and no "near me". Conservative on purpose.
 const IMPLICIT_PHRASES = [

@@ -86,10 +86,11 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [scanning, setScanning]     = useState(false);
   const [progress, setProgress]     = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
-  const [plan, setPlan]             = useState<{ seeds: number; seedList?: string[]; cells: number; willScan: number; locations: number; locationsScannable: number; locationsUsed: number; potentialCells: number; estCalls: number; source?: string; model?: string } | null>(null);
-  // per-run caps (Wayne sets these each scan): how many locations & service seeds
+  const [plan, setPlan]             = useState<{ seeds: number; seedList?: string[]; cells: number; willScan: number; locations: number; locationsScannable: number; locationsUsed: number; potentialCells: number; estCalls: number; source?: string; model?: string; order?: string; firstCities?: string[] } | null>(null);
+  // per-run scan setup (Wayne sets these each scan)
   const [capLoc, setCapLoc]         = useState<number>(25);
   const [capSeeds, setCapSeeds]     = useState<number>(8);
+  const [locOrder, setLocOrder]     = useState<'market' | 'demand' | 'az'>('market');
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -150,13 +151,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dryRun: true, maxLocations: capLoc, maxSeeds: capSeeds }),
+        body: JSON.stringify({ dryRun: true, maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder }),
       });
       const d = await r.json();
       if (!r.ok) { setScanError(d?.error ?? `Could not estimate (${r.status})`); return; }
       setPlan(d.plan ?? null);
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
-  }, [projectId, capLoc, capSeeds]);
+  }, [projectId, capLoc, capSeeds, locOrder]);
 
   const runScan = useCallback(async () => {
     setPlan(null); setScanError(null); setScanning(true);
@@ -164,7 +165,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxLocations: capLoc, maxSeeds: capSeeds }),
+        body: JSON.stringify({ maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder }),
       });
       if (!r.ok || !r.body) {
         let msg = `Scan failed (${r.status})`;
@@ -199,7 +200,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       }
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
     finally { setScanning(false); setProgress(null); }
-  }, [projectId, analysis, capLoc, capSeeds]);
+  }, [projectId, analysis, capLoc, capSeeds, locOrder]);
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -226,24 +227,52 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               {scanDate && <span className="badge-soft">Last scan: {scanDate}</span>}
               {scan && <span className="badge-soft">{fmt(scan.scannedCount)} cells · {scan.callsUsed} credits</span>}
               {!scanning && (
-                <>
-                  <label className="cap-ctl" title="How many locations to scan this run">
-                    Locations
-                    <input type="number" min={1} max={200} value={capLoc}
-                      onChange={e => setCapLoc(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1)))} />
-                  </label>
-                  <label className="cap-ctl" title="How many service seeds (scanned per location)">
-                    Services
-                    <input type="number" min={1} max={20} value={capSeeds}
-                      onChange={e => setCapSeeds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))} />
-                  </label>
-                  <button onClick={() => (plan ? runScan() : requestPlan())} className="orbit-btn-sm">
-                    {scan ? '↻ Re-run scan' : '▸ Run local scan'}
-                  </button>
-                </>
+                <button onClick={() => (plan ? runScan() : requestPlan())} className="orbit-btn-sm">
+                  {scan ? '↻ Re-run scan' : '▸ Run local scan'}
+                </button>
               )}
             </div>
           </div>
+
+          {/* SCAN SETUP — visible, requires input before a scan */}
+          {!scanning && hasLocal && (
+            <div className="scan-setup">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#cfccff', textTransform: 'uppercase', letterSpacing: '.08em' }}>⚙ Scan setup</span>
+                <span style={{ fontSize: 10.5, color: '#8888AA' }}>Set how much to scan, then Run. Cost = services × locations map-pack checks.</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end' }}>
+                <div className="setup-field">
+                  <label>Services <span style={{ color: '#6a6a90', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(brand + service categories)</span></label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input type="number" min={1} max={20} value={capSeeds}
+                      onChange={e => setCapSeeds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))} />
+                    <button className="setup-all" onClick={() => setCapSeeds(Math.max(1, Math.min(20, seeds.length)))}>All ({seeds.length})</button>
+                  </div>
+                </div>
+                <div className="setup-field">
+                  <label>Locations</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input type="number" min={1} max={200} value={capLoc}
+                      onChange={e => setCapLoc(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1)))} />
+                    <button className="setup-all" onClick={() => setCapLoc(200)}>All</button>
+                  </div>
+                </div>
+                <div className="setup-field">
+                  <label>Location priority</label>
+                  <select value={locOrder} onChange={e => setLocOrder(e.target.value as any)}>
+                    <option value="market">Largest markets first</option>
+                    <option value="demand">Highest demand first</option>
+                    <option value="az">A → Z (city)</option>
+                  </select>
+                </div>
+                <button onClick={() => requestPlan()} className="orbit-btn-sm" style={{ height: 32 }}>Estimate &amp; preview</button>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#6a6a90', marginTop: 7 }}>
+                A capped run scans the top locations by your chosen priority. "Largest markets" uses metro size; "Highest demand" uses real Semrush volume per city. Lowest-competition ranking needs scan data, so it appears in results, not here.
+              </div>
+            </div>
+          )}
 
           {/* progress */}
           {scanning && (
@@ -276,7 +305,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <div style={{ fontSize: 10.5, color: '#9090b8', marginTop: 4 }}>Services: {plan.seedList.join(' · ')}</div>
               )}
               {plan.locationsUsed < plan.locationsScannable && (
-                <div style={{ fontSize: 10.5, color: '#f6c061', marginTop: 4 }}>Scanning the first {plan.locationsUsed} of {plan.locationsScannable} locations — raise the Locations cap to cover more (higher cost).</div>
+                <div style={{ fontSize: 10.5, color: '#f6c061', marginTop: 4 }}>Scanning the top {plan.locationsUsed} of {plan.locationsScannable} locations by <b>{plan.order === 'demand' ? 'highest demand' : plan.order === 'az' ? 'A–Z' : 'largest market'}</b> — set Locations to All to cover every one (higher cost).</div>
+              )}
+              {plan.firstCities && plan.firstCities.length > 0 && (
+                <div style={{ fontSize: 10.5, color: '#9090b8', marginTop: 4 }}>First up: {plan.firstCities.join(' · ')}{plan.locationsUsed > plan.firstCities.length ? ' …' : ''}</div>
               )}
               {(plan.source === 'kml' || plan.source === 'sitemap-pages') && (
                 <div style={{ fontSize: 10.5, color: '#5ee68f', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
@@ -566,6 +598,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
         .orbit-btn-ghost{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid #1E1E2E;background:#13131d;color:#8888AA;cursor:pointer}
         .cap-ctl{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#7777a0;background:#0F0F1E;border:1px solid #1E1E35;border-radius:8px;padding:4px 8px}
         .cap-ctl input{width:46px;background:#07070e;border:1px solid #2a2a3d;border-radius:5px;color:#cfccff;font-size:12px;font-weight:700;padding:3px 5px;text-align:center}
+        .scan-setup{margin-top:14px;padding:13px 15px;border-radius:11px;border:1px solid rgba(108,99,255,.3);background:rgba(108,99,255,.06)}
+        .setup-field{display:flex;flex-direction:column;gap:5px}
+        .setup-field label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9090b8}
+        .setup-field input{width:58px;background:#07070e;border:1px solid #2a2a3d;border-radius:6px;color:#cfccff;font-size:13px;font-weight:700;padding:5px 6px;text-align:center}
+        .setup-field select{background:#07070e;border:1px solid #2a2a3d;border-radius:6px;color:#cfccff;font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer}
+        .setup-all{font-size:10.5px;font-weight:600;padding:0 9px;border-radius:6px;border:1px solid #3D3880;background:rgba(108,99,255,.14);color:#b7b2ff;cursor:pointer}
+        .setup-all:hover{border-color:#6C63FF}
         .local-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
         .local-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#555570;font-weight:600;padding:9px 10px;border-bottom:1px solid #1E1E2E}
         .local-tbl td{padding:10px;border-bottom:1px solid #15151f;vertical-align:middle}

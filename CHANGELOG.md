@@ -1,5 +1,16 @@
 # OrbitIQ Changelog
 
+## v7.184 — 2026-06-13 · Local Search — visible Scan setup, location priority, All toggles
+
+**What changed:** the scan controls were easy to miss and didn't explain themselves, and there was no defensible answer to "which locations get scanned when I cap below my total."
+
+- **Visible "Scan setup" panel.** A clearly labeled panel (services, locations, priority) replaces the cramped inline inputs, with helper text explaining that **Services = your brand + core service categories**, scanned as "{service} {city}" from each location's GPS.
+- **Location priority — you choose, and it's defensible.** A selector controls which locations a capped scan covers first: **Largest markets** (metro-size order, the default), **Highest demand** (real Semrush volume per city, from data already pulled), or **A→Z**. Previously a capped scan just took locations in arbitrary sitemap order. ("Lowest competition" needs scan data to know, so it's surfaced in results, not as a pre-scan selector — noted in the UI.)
+- **"All" toggles** for both Services and Locations, so you can cover everything in one click (cost rises accordingly).
+- The dry-run preview now shows the chosen priority and the first cities that will be scanned.
+
+**Verification (own debugging agent):** ordering harness **10/10** (cityMarketRank ranks bigger metros first; market/demand/A–Z orderings correct; stable, non-mutating); route order harness **4/4** (order echoed, "largest markets" puts NYC/Houston first, A–Z alphabetical, default = market); `tsc` at ES5 clean on all changed files; jsdom render **8/8** (scan-setup panel, All toggles, priority selector, services explanation, competition caveat). Render snapshot `orbitiq-v7.184-RENDER.html` (SAMPLE, flagged). Edited: `lib/local/detect.ts` (cityMarketRank), `lib/local/seeds.ts` (orderLocationsForScan), `app/api/projects/[id]/local-scan/route.ts`, `components/brief/LocalSearchSection.tsx`. No files added.
+
 ## v7.183 — 2026-06-13 · Local Search — per-location map-pack GRID (services × cities)
 
 **What changed:** the Local panel now models local visibility the way a multi-location brand actually competes — a **grid of services × locations**, not a flat list of ~25 national keywords. For each of the client's core services (and brand), it checks the Google map-pack rank **from every location's GPS**, city by city ("liposuction austin", "sono bello dallas", …). With 138 locations and several services, that's hundreds of real, per-location rank checks instead of 25 aggregate ones.
