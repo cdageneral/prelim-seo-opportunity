@@ -75,7 +75,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [scanning, setScanning]     = useState(false);
   const [progress, setProgress]     = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
-  const [plan, setPlan]             = useState<{ localTotal: number; willScan: number; locations: number; locationsUsed: number; estCalls: number } | null>(null);
+  const [plan, setPlan]             = useState<{ localTotal: number; willScan: number; locations: number; locationsUsed: number; estCalls: number; source?: string } | null>(null);
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -96,31 +96,40 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return v;
   }, [scan]);
 
-  // client-relevance vocabulary (category names + brand) — keeps off-topic
-  // footprint keywords out of the local universe (v7.178; mirrors v7.173 gate).
-  const relevanceTokens = useMemo(
-    () => buildClientRelevance(
-      (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
-      domain, competitorDomains,
-    ),
-    [analysis, domain, competitorDomains],
-  );
-
-  // client-side local keyword universe (real Semrush volume; no scan needed)
-  const local: LocalKeyword[] = useMemo(() => {
-    if (!analysis?.semrushSnapshot) return [];
-    const pool = buildKwPool({
+  // canonical keyword pool (same as KeywordsPanel) — client + competitor sources
+  const pool = useMemo(() => {
+    if (!analysis?.semrushSnapshot) return [] as any[];
+    return buildKwPool({
       semrushSnapshot:   analysis.semrushSnapshot,
       uploadedKeywords:  dbKeywords,
       clientDomain:      domain,
       competitorDomains,
       clientVolMin:      0,
       competitorVolMin:  0,
-    });
+    }) as any[];
+  }, [analysis, dbKeywords, domain, competitorDomains]);
+
+  // client-relevance vocabulary (v7.179): categories + brand + the client's OWN
+  // ranking keywords (pool rows with no competitor), geo words excluded. Keeps
+  // off-topic competitor-gap keywords out of the local universe.
+  const relevanceTokens = useMemo(
+    () => buildClientRelevance(
+      (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+      domain, competitorDomains,
+      pool.filter(k => !k.competitor).map(k => String(k.keyword || '')),
+    ),
+    [analysis, domain, competitorDomains, pool],
+  );
+
+  // client-side local keyword universe (real Semrush volume; no scan needed)
+  const local: LocalKeyword[] = useMemo(() => {
+    if (!analysis?.semrushSnapshot) return [];
     return classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
-  }, [analysis, dbKeywords, domain, competitorDomains, geoVocab, relevanceTokens]);
+  }, [analysis, pool, geoVocab, relevanceTokens]);
 
   const counts = useMemo(() => localIntentCounts(local), [local]);
+  const clientLocalCount = useMemo(() => local.filter(l => !l.competitor && (l.position != null || !l.isGap)).length, [local]);
+  const compLocalCount = useMemo(() => local.filter(l => !!l.competitor || l.isGap).length, [local]);
 
   // rollups from a completed scan
   const roll = useMemo(() => {
@@ -246,9 +255,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid rgba(108,99,255,.3)', background: 'rgba(108,99,255,.06)', maxWidth: 560 }}>
               <div style={{ fontSize: 12.5, color: '#cfccff', fontWeight: 600 }}>Ready to scan local map packs</div>
               <div style={{ fontSize: 11.5, color: '#9090b8', marginTop: 5 }}>
-                {plan.willScan} top local keyword{plan.willScan !== 1 ? 's' : ''} × {plan.locationsUsed} location{plan.locationsUsed !== 1 ? 's' : ''} · {plan.locations} listing{plan.locations !== 1 ? 's' : ''} found ·
+                {plan.willScan} top local keyword{plan.willScan !== 1 ? 's' : ''} × {plan.locationsUsed} location{plan.locationsUsed !== 1 ? 's' : ''} · {plan.locations} location{plan.locations !== 1 ? 's' : ''} found ·
                 <b style={{ color: '#f6c061' }}> ~{plan.estCalls} SerpAPI credits</b>
               </div>
+              {(plan.source === 'kml' || plan.source === 'sitemap-pages') && (
+                <div style={{ fontSize: 10.5, color: '#5ee68f', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
+              )}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={runScan} className="orbit-btn-sm">Confirm &amp; scan</button>
                 <button onClick={() => setPlan(null)} className="orbit-btn-ghost">Cancel</button>
@@ -313,27 +325,32 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'kw' && (
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Local-intent keyword universe</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Detected deterministically — every row shows the literal term that classified it. Volume = real Semrush.</div>
+                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>From the same client + competitor keyword pool as the Keywords panel, filtered to local intent and gated to the client's business vocabulary. Every row shows the literal term that classified it. Volume = real Semrush.</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="LOCAL KEYWORDS" v={String(counts.total)} />
                   <MiniStat k="LOCAL VOLUME / MO" v={fmt(counts.totalVolume)} color="#a9a3ff" />
+                  <MiniStat k="CLIENT-RANKED" v={String(clientLocalCount)} color="#5ee68f" />
+                  <MiniStat k="COMPETITOR GAP" v={String(compLocalCount)} color="#f6c061" />
                   <MiniStat k="NEAR-ME" v={String(counts.nearMe)} color="#46cce0" />
-                  <MiniStat k="GEO-MODIFIER" v={String(counts.geo)} color="#a9a3ff" />
-                  <MiniStat k="IMPLICIT-LOCAL" v={String(counts.implicit)} />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
-                    <thead><tr><th>Keyword</th><th>Intent</th><th>Matched term</th><th style={{ textAlign: 'right' }}>Volume</th><th>Organic rank</th></tr></thead>
+                    <thead><tr><th>Keyword</th><th>Source</th><th>Intent</th><th>Matched term</th><th style={{ textAlign: 'right' }}>Volume</th><th>Client rank</th></tr></thead>
                     <tbody>
-                      {local.slice(0, 60).map((l, i) => (
+                      {local.slice(0, 60).map((l, i) => {
+                        const isComp = !!l.competitor || l.isGap;
+                        return (
                         <tr key={i}>
                           <td style={{ fontWeight: 600 }}>{l.keyword}</td>
+                          <td>{isComp
+                            ? <span className="ipill" style={{ background: 'rgba(245,158,11,.13)', color: '#f6c061', border: '1px solid rgba(245,158,11,.28)' }} title={l.competitor || 'competitor gap'}>competitor</span>
+                            : <span className="ipill" style={{ background: 'rgba(34,197,94,.14)', color: '#5ee68f', border: '1px solid rgba(34,197,94,.28)' }}>client</span>}</td>
                           <td><span className="ipill" style={intentClass(l.intent)}>{INTENT_LABEL[l.intent]}</span></td>
                           <td style={{ color: '#8888AA' }}>"{l.matchedTerm}"</td>
                           <td style={{ textAlign: 'right' }}>{fmt(l.searchVolume)}</td>
                           <td>{l.position != null ? <span className="rchip" style={rankChip(l.position <= 3 ? 1 : 2)}>{l.position}</span> : <span style={{ color: '#555570' }}>—</span>}</td>
                         </tr>
-                      ))}
+                      );})}
                     </tbody>
                   </table>
                 </div>
@@ -348,25 +365,36 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'loc' && scan && (
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</div>
+                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>
+                  {scan.source === 'kml' || scan.source === 'sitemap-pages'
+                    ? <><b style={{ color: '#5ee68f' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
+                    : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
+                </div>
                 {clientLocations.length === 0
-                  ? <div style={{ fontSize: 12.5, color: '#f6c061' }}>No verified client listing matched the brand search. Confirm the business name matches the Google Business Profile, or add it manually.</div>
-                  : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
-                      {clientLocations.map((l, i) => (
+                  ? <div style={{ fontSize: 12.5, color: '#f6c061' }}>No client locations were discovered. Confirm the site exposes a sitemap/locations page, or that the business name matches the Google Business Profile.</div>
+                  : <>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+                      {clientLocations.slice(0, 60).map((l, i) => (
                         <div key={i} className="loc-card" style={{ borderColor: l.healthFlags.length ? 'rgba(245,158,11,.3)' : '#1E1E2E' }}>
                           <div className="loc-mk" style={l.healthFlags.length ? { background: 'rgba(245,158,11,.12)', borderColor: 'rgba(245,158,11,.3)' } : {}}>{l.healthFlags.length ? '⚠' : '📍'}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13.5, fontWeight: 700 }}>{l.title}</div>
                             <div style={{ fontSize: 11, color: '#8888AA' }}>{l.address || 'no address'} · {l.verified ? <span style={{ color: '#5ee68f' }}>✓ Verified</span> : <span style={{ color: '#f6c061' }}>⚠ Incomplete</span>}</div>
                             <div style={{ marginTop: 6, fontSize: 12 }}>
-                              {l.rating != null ? <><span style={{ color: '#f6c061' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: '#555570' }}>no rating</span>}
+                              {l.rating != null ? <><span style={{ color: '#f6c061' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: '#555570' }}>rating pending scan</span>}
                               <span style={{ color: '#8888AA' }}> · {fmt(l.reviews)} reviews{l.type ? ` · ${l.type}` : ''}</span>
+                            </div>
+                            <div style={{ marginTop: 4, fontSize: 11, color: '#8888AA' }}>
+                              {l.phone ? <span>{l.phone}</span> : null}
+                              {l.pageUrl ? <> · <a href={l.pageUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#8B85FF' }}>View page ↗</a></> : null}
                             </div>
                             {l.healthFlags.length > 0 && <div style={{ marginTop: 5, fontSize: 10.5, color: '#f6c061' }}>{l.healthFlags.join(' · ')}</div>}
                           </div>
                         </div>
                       ))}
-                    </div>}
+                    </div>
+                    {clientLocations.length > 60 && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Showing 60 of {fmt(clientLocations.length)} locations.</div>}
+                  </>}
               </div>
             )}
 

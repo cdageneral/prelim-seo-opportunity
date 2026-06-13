@@ -195,26 +195,46 @@ function brandRoot(domain: string): string {
     .replace(/\/.*$/, '').toLowerCase().trim().split('.')[0] || '';
 }
 
+// Geographic stopwords (cities + states + abbreviations) — EXCLUDED from the
+// relevance vocabulary. Geography is the local-intent SIGNAL, not the relevance
+// signal: a client that ranks for "sono bello houston" must NOT whitelist
+// "houston rockets". So city/state tokens are dropped when building the vocab;
+// only the business vocabulary (cosmetic terms, brand, etc.) gates relevance.
+const GEO_STOPWORDS: Record<string, boolean> = (function () {
+  const m: Record<string, boolean> = {};
+  const add = (s: string) => { s.split(/\s+/).forEach(w => { if (w) m[w] = true; }); };
+  US_CITIES.forEach(add);
+  US_STATES_FULL.forEach(add);
+  US_STATE_ABBR.forEach(w => { m[w] = true; });
+  return m;
+})();
+
 /**
- * Build the client-relevance vocabulary from the client's content categories
- * (`semrushSnapshot._categoryBreakdown.categories`) + client/competitor brand
- * roots. Tokens are lowercase and len ≥ 4. Pass the result as
- * `DetectOptions.relevanceTokens`. No AI, no modeling — purely the client's own
- * category names and brands, so every drop is explainable by zero vocabulary
- * overlap (same principle as the v7.173 Content/Journey gate).
+ * Build the client-relevance vocabulary (lowercase, len ≥ 4) from:
+ *   1. the client's content categories (`_categoryBreakdown.categories`),
+ *   2. the client's & competitors' brand roots, and
+ *   3. (v7.179) the client's OWN ranking keywords — the most authoritative signal
+ *      of what the business is actually about.
+ * GEO words (cities/states/abbr) and generic noise are EXCLUDED so a shared city
+ * name can never whitelist an off-topic term. Pass the result as
+ * `DetectOptions.relevanceTokens`. No AI, no modeling — every drop is explainable
+ * by zero business-vocabulary overlap (extends the v7.173 Content/Journey gate).
  */
 export function buildClientRelevance(
   categories: Array<{ name?: string }> | null | undefined,
   clientDomain: string,
   competitorDomains: string[] = [],
+  clientKeywords: string[] = [],
 ): string[] {
   const set: Record<string, boolean> = {};
-  (categories ?? []).forEach(c => {
-    String((c && c.name) || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .forEach(w => { if (w.length >= 4 && CAT_NOISE[w] !== true) set[w] = true; });
-  });
+  const addPhrase = (s: string) => {
+    String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+      .forEach(w => { if (w.length >= 4 && CAT_NOISE[w] !== true && GEO_STOPWORDS[w] !== true) set[w] = true; });
+  };
+  (categories ?? []).forEach(c => addPhrase((c && c.name) || ''));
+  (clientKeywords ?? []).forEach(addPhrase);
   [clientDomain].concat(competitorDomains ?? []).map(brandRoot).filter(Boolean)
-    .forEach(b => { if (b.length >= 4) set[b] = true; });
+    .forEach(b => { if (b.length >= 4 && GEO_STOPWORDS[b] !== true) set[b] = true; });
   return Object.keys(set);
 }
 

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.179 — 2026-06-13 · Local Search — sitemap location discovery, client/competitor keywords, stronger relevance
+
+**What changed:** the Local Search panel now discovers locations from the client's own website, sources keywords from both the client and competitors (clearly labeled), and applies a much stronger relevance filter so off-topic keywords stop appearing.
+
+**1) Locations from the client's sitemap (authoritative, free).** A new parser reads the client's `sitemap.xml` → `local-sitemap.xml` → `locations.kml` and extracts every location with its name, full address, city/state, phone, location-page URL, and exact GPS coordinates — straight from the client's own site, at no SerpAPI cost. (For Sono Bello this is all 116 locations.) If the site has no usable sitemap, it falls back to the previous Google Maps brand search. The dry-run estimate now shows the discovery source and notes when locations were read free from the sitemap. Location ratings/reviews are backfilled from the live map-pack scan (no extra API calls).
+
+**2) Keywords come from both client and competitors — and say which.** The local list runs on the same `buildKwPool` as the Keywords panel, which already unions client ranking keywords + competitor gap keywords + uploads. Each local keyword now shows a **client** vs **competitor** source badge, and the summary cards split client-ranked vs competitor-gap counts.
+
+**3) Stronger relevance gate (the real fix for the junk).** The off-topic terms ("march madness locations", "roswell new mexico cast", "houston rockets") were entering through competitor gap keywords. Relevance is now built from the client's **actual ranking vocabulary** (its own keywords + categories + brand), and — critically — **geographic words are excluded** from that vocabulary, so a shared city name can never whitelist an off-topic term (a client ranking for "liposuction houston" no longer lets "houston rockets" through). Every excluded keyword has zero business-vocabulary overlap with the client.
+
+**Verification (own debugging agent):** sitemap parser harness **16/16** against the real Sono Bello KML structure (placemark name/address/city/state/zip/phone/page-URL/GPS, sitemap-index pick, /locations/ page fallback, geo-vocab); relevance-gate harness **16/16** (geo exclusion drops "houston rockets" while keeping "liposuction houston"; competitor-relevant kept with competitor tag; backward-compatible 3-arg call); route harness **15/15** (dry-run single-line, KML discovery via mocked fetch, source=kml with no discovery credits, junk gated from estimate + scan, rating backfill from pack); `tsc` at **ES5** clean on all changed/new files; jsdom render **15/15** (client/competitor badges, junk excluded, scroll guard). Render snapshot: `orbitiq-v7.179-RENDER.html` (SAMPLE fixture, flagged).
+
+**Files:** NEW `lib/local/sitemap.ts`; edited `lib/local/detect.ts` (relevance vocab + geo exclusion), `app/api/projects/[id]/local-scan/route.ts` (sitemap discovery + rating backfill + relevance), `components/brief/LocalSearchSection.tsx` (client/competitor badges, sitemap locations view), `lib/local/build.ts` (LocalListing.pageUrl, LocalScan.source).
+
 ## v7.178 — 2026-06-13 · Local Search panel — fix build error + off-topic keywords
 
 **What changed:** two bug fixes to the v7.177 Local Search panel.

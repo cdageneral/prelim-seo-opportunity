@@ -31,6 +31,7 @@ export interface LocalListing {
   isClient:     boolean;         // matched to the client (by website domain or brand name)
   verified:     boolean;         // heuristic: has rating + reviews + address (Google verified signal proxy)
   healthFlags:  string[];        // e.g. ['no rating', 'few reviews', 'low rating']
+  pageUrl?:     string;          // the client's location page URL (from sitemap/KML) (v7.179)
 }
 
 export interface LocalPackMember {
@@ -64,6 +65,7 @@ export interface LocalScan {
   scannedCount:  number;         // number of local keywords actually scanned
   localTotal:    number;         // total local-intent keywords detected (may exceed scannedCount)
   callsUsed:     number;         // SerpAPI calls spent (audit)
+  source?:       string;         // how locations were discovered: 'kml' | 'sitemap-pages' | 'maps' | 'none' (v7.179)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────

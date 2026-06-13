@@ -31,6 +31,10 @@ import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool } from '@/lib/utils/kwVolume';
 import { classifyLocalKeywords, buildClientRelevance } from '@/lib/local/detect';
+import {
+  parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
+  pickLocationSitemap, geoVocabFromLocations, type KmlLocation,
+} from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan } from '@/lib/local/build';
 
 export const maxDuration = 300;
@@ -70,6 +74,100 @@ function cityFromAddress(address: string): string {
     return parts[parts.length - 2] || '';
   }
   return '';
+}
+
+// ─── sitemap / KML location discovery (v7.179) ──────────────────────────────────
+// Reads the client's OWN site for an authoritative, free list of every location.
+
+async function fetchText(url: string): Promise<string | null> {
+  try {
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(12_000),
+      headers: { 'user-agent': 'OrbitIQ-LocalScan/1.0' },
+    });
+    if (!r.ok) return null;
+    return await r.text();
+  } catch { return null; }
+}
+
+const hasKmlExt = (u: string): boolean => /\.kml(\?|#|$)/i.test(u);
+
+/**
+ * Discover the client's physical locations from its website (free — no SerpAPI):
+ *   sitemap index → local/page child sitemap → locations.kml (name+address+GPS)
+ *   or, as a fallback, /locations/{city}/ page URLs. Returns [] if the site has
+ *   no usable sitemap (caller then falls back to a Maps brand search).
+ */
+async function discoverLocationsFromSite(
+  domain: string,
+): Promise<{ locations: KmlLocation[]; source: string }> {
+  const origins = [`https://www.${domain}`, `https://${domain}`];
+  for (let o = 0; o < origins.length; o++) {
+    const origin = origins[o];
+    const idxXml = (await fetchText(`${origin}/sitemap.xml`)) || (await fetchText(`${origin}/sitemap_index.xml`));
+    if (!idxXml) continue;
+
+    const children = parseSitemapIndex(idxXml);
+    // Build the inspection list: a clear local/store sitemap first, then any
+    // child whose URL hints at locations or pages (location pages often live there).
+    const toInspect: string[] = [];
+    const local = pickLocationSitemap(children);
+    if (local) toInspect.push(local);
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i];
+      if (/page|location|local|store|geo/i.test(c) && toInspect.indexOf(c) < 0) toInspect.push(c);
+    }
+
+    const pageUrls: string[] = [];
+    for (let i = 0; i < toInspect.length && i < 4; i++) {
+      const xml = await fetchText(toInspect[i]);
+      if (!xml) continue;
+      const locs = parseUrlset(xml);
+      for (let j = 0; j < locs.length; j++) {
+        if (hasKmlExt(locs[j])) {
+          const kx = await fetchText(locs[j]);
+          if (kx) { const pm = parseKmlPlacemarks(kx); if (pm.length) return { locations: pm, source: 'kml' }; }
+        }
+        pageUrls.push(locs[j]);
+      }
+    }
+
+    // Direct conventional KML path.
+    const directKml = await fetchText(`${origin}/locations.kml`);
+    if (directKml) { const pm = parseKmlPlacemarks(directKml); if (pm.length) return { locations: pm, source: 'kml' }; }
+
+    // Fallback: /locations/ page URLs (from child sitemaps, or the index itself
+    // if it was actually a urlset rather than an index).
+    const allPageUrls = pageUrls.concat(children.length === 0 ? parseUrlset(idxXml) : []);
+    const fromPages = parseLocationUrls(allPageUrls);
+    if (fromPages.length) return { locations: fromPages, source: 'sitemap-pages' };
+  }
+  return { locations: [], source: 'none' };
+}
+
+// KML location → persisted LocalListing (rating/reviews backfilled later from the
+// map-pack scan when the client appears in a pack — no extra SerpAPI calls).
+function kmlToListing(l: KmlLocation, clientDomain: string): LocalListing {
+  const healthFlags: string[] = [];
+  if (l.lat == null || l.lng == null) healthFlags.push('no map coordinates');
+  if (!l.phone) healthFlags.push('no phone');
+  return {
+    title:   l.name || l.city || 'Location',
+    placeId: '',
+    address: l.address,
+    city:    l.city || l.name,
+    rating:  null,
+    reviews: 0,
+    type:    '',
+    website: clientDomain,
+    phone:   l.phone,
+    lat:     l.lat,
+    lng:     l.lng,
+    isClient: true,
+    verified: false,            // upgraded to true once a real GBP rating is backfilled
+    healthFlags,
+    pageUrl: l.url || '',
+  };
 }
 
 export async function POST(
@@ -125,11 +223,16 @@ export async function POST(
     competitorVolMin:  (project as any).kwVolThresholdCompetitor ?? 0,
   });
 
-  // client-relevance vocabulary (category names + brand) — keeps off-topic
-  // footprint keywords out of the local universe (v7.178; mirrors v7.173 gate).
+  // client-relevance vocabulary (v7.179): category names + brand + the client's
+  // OWN ranking keywords (pool rows with no competitor = client-ranked), with geo
+  // words excluded. Keeps off-topic competitor-gap keywords out of the local
+  // universe (the "march madness locations" / "houston rockets" class).
+  const clientRankedKeywords: string[] = (pool as any[])
+    .filter(k => !k.competitor)
+    .map(k => String(k.keyword || ''));
   const relevanceTokens = buildClientRelevance(
     (analysis.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
-    clientDomain, manualCompetitorDomains,
+    clientDomain, manualCompetitorDomains, clientRankedKeywords,
   );
 
   const isClientPlace = (p: MapsPlace): boolean => {
@@ -146,48 +249,60 @@ export async function POST(
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       let callsUsed = 0;
       try {
-        // ── 1. Discover client listings (1 call) ──────────────────────────────
-        // NOTE: do NOT emit a progress event during a dryRun. The dryRun reply is
-        // read by the client with `r.json()` (a single-object parse), so the stream
-        // must contain exactly ONE JSON line. Emitting a progress line first made
-        // the body two newline-delimited objects → "Unexpected non-whitespace
-        // character after JSON at position N (line 2 column 1)" (v7.178 fix).
-        if (!dryRun) send({ type: 'progress', done: 0, total: maxKeywords, phase: 'Discovering listings…' });
-        const rawListings = await getMapsListings(brandQuery, market, undefined, 20);
-        callsUsed++;
-        const clientPlaces = rawListings.filter(isClientPlace);
-        const listings: LocalListing[] = clientPlaces.map(p => {
-          const healthFlags: string[] = [];
-          if (p.rating == null) healthFlags.push('no rating');
-          else if (p.rating < 4.0) healthFlags.push('low rating');
-          if (p.reviews < 25) healthFlags.push('few reviews');
-          if (!p.address) healthFlags.push('no address');
-          const verified = p.rating != null && p.reviews > 0 && !!p.address;
-          return {
-            title: p.title, placeId: p.placeId, address: p.address,
-            city: cityFromAddress(p.address), rating: p.rating, reviews: p.reviews,
-            type: p.type, website: p.website, phone: p.phone, lat: p.lat, lng: p.lng,
-            isClient: true, verified, healthFlags,
-          };
-        });
+        // ── 1. Discover client locations ──────────────────────────────────────
+        // PRIMARY (v7.179): the client's OWN sitemap/KML — authoritative, free,
+        // every location with GPS. FALLBACK: a SerpAPI Maps brand search (1 call)
+        // when the site has no usable sitemap.
+        // NOTE: do NOT emit a progress event during a dryRun — the dryRun reply is
+        // read with `r.json()` (single-object parse), so the stream must be exactly
+        // ONE JSON line (v7.178 fix).
+        if (!dryRun) send({ type: 'progress', done: 0, total: maxKeywords, phase: 'Discovering locations from sitemap…' });
+
+        let listings: LocalListing[] = [];
+        let source = 'none';
+        const discovered = await discoverLocationsFromSite(clientDomain);
+        if (discovered.locations.length > 0) {
+          source = discovered.source;                       // 'kml' | 'sitemap-pages'
+          listings = discovered.locations.map(l => kmlToListing(l, clientDomain));
+        } else if (!dryRun) {
+          // Fallback to Maps brand search (costs 1 SerpAPI call) — real-run only.
+          const rawListings = await getMapsListings(brandQuery, market, undefined, 20);
+          callsUsed++;
+          source = 'maps';
+          listings = rawListings.filter(isClientPlace).map(p => {
+            const healthFlags: string[] = [];
+            if (p.rating == null) healthFlags.push('no rating');
+            else if (p.rating < 4.0) healthFlags.push('low rating');
+            if (p.reviews < 25) healthFlags.push('few reviews');
+            if (!p.address) healthFlags.push('no address');
+            const verified = p.rating != null && p.reviews > 0 && !!p.address;
+            return {
+              title: p.title, placeId: p.placeId, address: p.address,
+              city: cityFromAddress(p.address), rating: p.rating, reviews: p.reviews,
+              type: p.type, website: p.website, phone: p.phone, lat: p.lat, lng: p.lng,
+              isClient: true, verified, healthFlags,
+            };
+          });
+        }
         const clientPlaceIds: Record<string, boolean> = {};
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
 
-        // geo vocab from discovered listings → adapts the local detector.
-        const geoVocab: string[] = [];
-        listings.forEach(l => { if (l.city) geoVocab.push(l.city.toLowerCase()); });
+        // geo vocab from discovered locations (city + state) → adapts the detector.
+        const geoVocab: string[] = geoVocabFromLocations(
+          listings.map(l => ({ name: l.title, address: l.address, city: l.city, state: '', zip: '', phone: l.phone, url: '', lat: l.lat, lng: l.lng })),
+        );
 
-        // ── 2. Detect local keywords (geo-aware) ──────────────────────────────
+        // ── 2. Detect local keywords (geo-aware + relevance-gated) ─────────────
         const allLocal = classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
         const scanList = allLocal.slice(0, maxKeywords);
 
-        // Locations to scan from: client listings with coordinates (cap maxLocations).
+        // Locations to scan from: discovered locations with coordinates (cap maxLocations).
         const geoLocs = listings.filter(l => l.lat != null && l.lng != null).slice(0, maxLocations);
         const locUnits = geoLocs.length > 0
           ? geoLocs.map(l => ({ ll: `@${l.lat},${l.lng},13z`, placeId: l.placeId, city: l.city || l.title }))
           : [{ ll: '', placeId: '', city: '' }]; // no coords → single national read
 
-        const estCalls = 1 + scanList.length * locUnits.length;
+        const estCalls = (source === 'maps' ? 1 : 0) + scanList.length * locUnits.length;
 
         if (dryRun) {
           send({
@@ -199,6 +314,7 @@ export async function POST(
               locations:     listings.length,
               locationsUsed: locUnits.length,
               estCalls,
+              source,
             },
           });
           controller.close();
@@ -209,6 +325,10 @@ export async function POST(
 
         // ── 3. Map-pack scan per keyword across locations ─────────────────────
         const out: LocalKeywordScan[] = new Array(scanList.length);
+        // Real GBP rating/reviews backfill: captured when the CLIENT appears in a
+        // pack at a given location's GPS — keyed by that location's city. No extra
+        // SerpAPI calls (it reuses the pack reads). Keep the highest review count.
+        const gbpByCity: Record<string, { rating: number | null; reviews: number }> = {};
         let next = 0, done = 0;
         const worker = async (): Promise<void> => {
           while (next < scanList.length) {
@@ -235,6 +355,12 @@ export async function POST(
                 isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
               }));
               const mine = members.find(m => m.isClient);
+              if (mine) {
+                // backfill this location's real GBP rating/reviews from the pack
+                const key = (unit.city || '').toLowerCase();
+                const prev = gbpByCity[key];
+                if (!prev || mine.reviews > prev.reviews) gbpByCity[key] = { rating: mine.rating, reviews: mine.reviews };
+              }
               if (mine && (bestRank == null || mine.position < bestRank)) {
                 bestRank = mine.position;
                 bestPack = members;
@@ -263,6 +389,20 @@ export async function POST(
         };
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, scanList.length || 1) }, () => worker()));
 
+        // Apply the real GBP rating/reviews backfill to the matching locations.
+        listings.forEach(l => {
+          const g = gbpByCity[(l.city || '').toLowerCase()];
+          if (g && (l.rating == null || g.reviews > l.reviews)) {
+            l.rating = g.rating;
+            l.reviews = g.reviews;
+            l.verified = g.rating != null && g.reviews > 0 && !!l.address;
+            l.healthFlags = [];
+            if (g.rating == null) l.healthFlags.push('no rating');
+            else if (g.rating < 4.0) l.healthFlags.push('low rating');
+            if (g.reviews < 25) l.healthFlags.push('few reviews');
+          }
+        });
+
         const localScan: LocalScan = {
           domain:       clientDomain,
           market:       market.code,
@@ -272,6 +412,7 @@ export async function POST(
           scannedCount: scanList.length,
           localTotal:   allLocal.length,
           callsUsed,
+          source,
         };
 
         await db.update(analyses)
