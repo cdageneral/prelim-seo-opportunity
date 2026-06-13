@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import ThemeToggle from '@/components/ThemeToggle';
 import NewProjectModal from '@/components/dashboard/NewProjectModal';
 import ProjectCard from '@/components/dashboard/ProjectCard';
 
@@ -48,6 +49,9 @@ export default function DashboardPage() {
       <nav className="border-b border-orbit-border bg-orbit-surface/80 backdrop-blur-sm sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <span className="text-xl font-bold gradient-text">OrbitIQ</span>
+          <div className="flex items-center gap-3">
+            {/* v7.185: global dark/light theme toggle */}
+            <ThemeToggle />
           <button
             onClick={() => setShowNewModal(true)}
             className="flex items-center gap-2 bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
@@ -57,6 +61,7 @@ export default function DashboardPage() {
             </svg>
             New Project
           </button>
+          </div>
         </div>
       </nav>
 

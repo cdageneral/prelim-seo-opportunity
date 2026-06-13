@@ -48,9 +48,9 @@ function SourceBadge({ source }: { source: PlayerRow['source'] }) {
       <span
         className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
         style={{
-          background: 'rgba(6,182,212,0.12)',
-          color:      '#22d3ee',
-          border:     '1px solid rgba(6,182,212,0.25)',
+          background: 'var(--ca-6-182-212-0_12)',
+          color:      'var(--c-22d3ee)',
+          border:     '1px solid var(--ca-6-182-212-0_25)',
         }}
       >
         SERP
@@ -61,9 +61,9 @@ function SourceBadge({ source }: { source: PlayerRow['source'] }) {
     <span
       className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
       style={{
-        background: 'rgba(245,158,11,0.12)',
-        color:      '#fbbf24',
-        border:     '1px solid rgba(245,158,11,0.25)',
+        background: 'var(--ca-245-158-11-0_12)',
+        color:      'var(--c-fbbf24)',
+        border:     '1px solid var(--ca-245-158-11-0_25)',
       }}
     >
       Manual
@@ -166,7 +166,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           <div className="flex items-center gap-2 mt-2">
             <span
               className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full"
-              style={{ background: 'rgba(66,133,244,0.12)', color: '#6BAAF8', border: '1px solid rgba(66,133,244,0.2)' }}
+              style={{ background: 'var(--ca-66-133-244-0_12)', color: 'var(--c-6baaf8)', border: '1px solid var(--ca-66-133-244-0_2)' }}
             >
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -178,7 +178,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
             </span>
             <span
               className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full"
-              style={{ background: 'rgba(108,99,255,0.12)', color: '#8B85FF', border: '1px solid rgba(108,99,255,0.2)' }}
+              style={{ background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-8b85ff)', border: '1px solid var(--ca-108-99-255-0_2)' }}
             >
               SERP Rankings
             </span>
@@ -187,7 +187,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
 
         {/* Hero — volume to displace */}
         <div className="text-right flex-shrink-0">
-          <span className="text-4xl font-bold leading-none" style={{ color: '#EF4444' }}>
+          <span className="text-4xl font-bold leading-none" style={{ color: 'var(--c-ef4444)' }}>
             {volumeToDisplacePct.toFixed(1)}%
           </span>
           <p className="text-orbit-tertiary text-xs mt-1">
@@ -203,7 +203,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           {/* Client */}
           <div style={{ flex: 1, paddingRight: '20px' }}>
             <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: '0 0 4px' }}>Client</p>
-            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#6C63FF', margin: 0 }}>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: 'var(--c-6c63ff)', margin: 0 }}>
               {totalMonthly > 0 ? ((clientTraffic / totalMonthly) * 100).toFixed(1) : '0'}%
             </p>
             <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>{clientName}</p>
@@ -211,15 +211,15 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           </div>
 
           {/* Divider */}
-          <div style={{ width: '1px', background: '#1E1E2E', flexShrink: 0 }} />
+          <div style={{ width: '1px', background: 'var(--c-1e1e2e)', flexShrink: 0 }} />
 
           {/* Top SERP competitor */}
           <div style={{ flex: 1, padding: '0 20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
               <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: 0 }}>Top competitor</p>
-              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'rgba(6,182,212,0.15)', color: '#06B6D4' }}>SERP</span>
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'var(--ca-6-182-212-0_15)', color: 'var(--c-06b6d4)' }}>SERP</span>
             </div>
-            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#06B6D4', margin: 0 }}>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: 'var(--c-06b6d4)', margin: 0 }}>
               {topSerpPct.toFixed(1)}%
             </p>
             <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>{topSerpDomain}</p>
@@ -227,15 +227,15 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           </div>
 
           {/* Divider */}
-          <div style={{ width: '1px', background: '#1E1E2E', flexShrink: 0 }} />
+          <div style={{ width: '1px', background: 'var(--c-1e1e2e)', flexShrink: 0 }} />
 
           {/* Top manual/tracked competitor */}
           <div style={{ flex: 1, paddingLeft: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
               <p className="text-orbit-tertiary font-medium uppercase tracking-wider" style={{ fontSize: '10px', margin: 0 }}>Brand competitor</p>
-              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'rgba(245,158,11,0.15)', color: '#F59E0B' }}>Tracked</span>
+              <span style={{ fontSize: '10px', fontWeight: 600, padding: '2px 6px', borderRadius: '20px', background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f59e0b)' }}>Tracked</span>
             </div>
-            <p className="font-bold leading-none" style={{ fontSize: '22px', color: '#F59E0B', margin: 0 }}>
+            <p className="font-bold leading-none" style={{ fontSize: '22px', color: 'var(--c-f59e0b)', margin: 0 }}>
               {topManualPct.toFixed(1)}%
             </p>
             <p className="text-orbit-primary font-medium" style={{ fontSize: '13px', margin: '3px 0 2px' }}>
@@ -292,14 +292,14 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
                   <div className="flex items-center gap-1.5">
                     <span
                       className="text-sm"
-                      style={{ color: isC ? '#F0F0FF' : '#8888AA', fontWeight: isC ? 600 : 400 }}
+                      style={{ color: isC ? 'var(--c-f0f0ff)' : 'var(--c-8888aa)', fontWeight: isC ? 600 : 400 }}
                     >
                       {p.domain}
                     </span>
                     {isC && (
                       <span
                         className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-                        style={{ background: 'rgba(108,99,255,0.15)', color: '#8B85FF' }}
+                        style={{ background: 'var(--ca-108-99-255-0_15)', color: 'var(--c-8b85ff)' }}
                       >
                         Client
                       </span>
@@ -309,19 +309,19 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
                   <div className="mt-1.5 h-[3px] bg-orbit-muted rounded-sm overflow-hidden" style={{ width: '85%' }}>
                     <div
                       className="h-full rounded-sm transition-all duration-700"
-                      style={{ width: `${barW}%`, background: isC ? '#6C63FF' : '#3A3860' }}
+                      style={{ width: `${barW}%`, background: isC ? 'var(--c-6c63ff)' : 'var(--c-3a3860)' }}
                     />
                   </div>
                 </div>
                 <span
                   className="text-xs text-right"
-                  style={{ color: isC ? '#8B85FF' : '#8888AA' }}
+                  style={{ color: isC ? 'var(--c-8b85ff)' : 'var(--c-8888aa)' }}
                 >
                   {fmtAnnual(p.traffic)}
                 </span>
                 <span
                   className="text-xs text-right"
-                  style={{ color: isC ? '#F0F0FF' : '#8888AA', fontWeight: isC ? 600 : 400 }}
+                  style={{ color: isC ? 'var(--c-f0f0ff)' : 'var(--c-8888aa)', fontWeight: isC ? 600 : 400 }}
                 >
                   {pct.toFixed(1)}%
                 </span>
@@ -336,20 +336,20 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
               style={{ gridTemplateColumns: '1fr 110px 80px' }}
             >
               <div>
-                <span className="text-sm" style={{ color: '#666688' }}>
+                <span className="text-sm" style={{ color: 'var(--c-666688)' }}>
                   Other players
                 </span>
                 <div className="mt-1.5 h-[3px] bg-orbit-muted rounded-sm overflow-hidden" style={{ width: '85%' }}>
                   <div
                     className="h-full rounded-sm"
-                    style={{ width: `${Math.max(0.4, otherPlayersPct)}%`, background: '#444466' }}
+                    style={{ width: `${Math.max(0.4, otherPlayersPct)}%`, background: 'var(--c-444466)' }}
                   />
                 </div>
               </div>
-              <span className="text-xs text-right" style={{ color: '#666688' }}>
+              <span className="text-xs text-right" style={{ color: 'var(--c-666688)' }}>
                 {fmtAnnual(otherPlayers)}
               </span>
-              <span className="text-xs text-right" style={{ color: '#666688' }}>
+              <span className="text-xs text-right" style={{ color: 'var(--c-666688)' }}>
                 {otherPlayersPct.toFixed(1)}%
               </span>
             </div>
@@ -374,14 +374,14 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           value={fmtAnnual(totalMonthly)}
           sub="Total category"
           source="Semrush keyword research"
-          valueColor="#F0F0FF"
+          valueColor="var(--c-f0f0ff)"
         />
         <StatCard
           label="Top Competitor"
           value={topCompDomain}
           sub={`${topCompPct.toFixed(1)}% of market demand`}
           source={`${fmtAnnual(topCompTraffic)} annual vol.`}
-          valueColor="#F59E0B"
+          valueColor="var(--c-f59e0b)"
           smallValue
         />
         <StatCard
@@ -389,7 +389,7 @@ export default function CompetitorGapSection({ analysis, manualDomains = [] }: P
           value={fmtAnnual(volumeToDisplace)}
           sub="Client's page 1 gap"
           source={`${volumeToDisplacePct.toFixed(1)}% of total demand`}
-          valueColor="#EF4444"
+          valueColor="var(--c-ef4444)"
         />
       </div>
 

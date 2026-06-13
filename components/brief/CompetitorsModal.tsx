@@ -389,34 +389,34 @@ export default function CompetitorsModal({
     const active = current === value;
     return {
       padding: '4px 11px', borderRadius: '20px',
-      border: `1px solid ${active ? color.border : '#3A3A5C'}`,
+      border: `1px solid ${active ? color.border : 'var(--c-3a3a5c)'}`,
       background: active ? color.bg : 'transparent',
-      color: active ? color.text : '#8888B0',
+      color: active ? color.text : 'var(--c-8888b0)',
       fontSize: '11px', cursor: 'pointer', transition: 'all 0.12s',
       fontWeight: active ? 600 : 400,
     };
   };
-  const clientColor     = { bg: 'rgba(56,189,248,0.14)', border: 'rgba(56,189,248,0.6)', text: '#38BDF8' };
-  const competitorColor = { bg: 'rgba(245,158,11,0.14)', border: 'rgba(245,158,11,0.6)', text: '#F59E0B' };
+  const clientColor     = { bg: 'var(--ca-56-189-248-0_14)', border: 'var(--ca-56-189-248-0_6)', text: 'var(--c-38bdf8)' };
+  const competitorColor = { bg: 'var(--ca-245-158-11-0_14)', border: 'var(--ca-245-158-11-0_6)', text: 'var(--c-f59e0b)' };
 
   const iconBtnStyle = (color: string, disabled?: boolean): React.CSSProperties => ({
-    background: 'none', border: '1px solid #26264A', borderRadius: '6px',
+    background: 'none', border: '1px solid var(--c-26264a)', borderRadius: '6px',
     cursor: disabled ? 'not-allowed' : 'pointer', color, padding: '5px 7px',
     display: 'inline-flex', alignItems: 'center', gap: '4px',
     fontSize: '10px', opacity: disabled ? 0.4 : 1, whiteSpace: 'nowrap',
   });
 
   const inputStyle: React.CSSProperties = {
-    width: '100%', background: '#111120', border: '1px solid #1E1E35',
-    borderRadius: '8px', padding: '8px 11px', color: '#F0F0FF',
+    width: '100%', background: 'var(--c-111120)', border: '1px solid var(--c-1e1e35)',
+    borderRadius: '8px', padding: '8px 11px', color: 'var(--c-f0f0ff)',
     fontSize: '12px', outline: 'none', boxSizing: 'border-box',
   };
 
   function SectionLabel({ label }: { label: string }) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-        <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#4A4A72', textTransform: 'uppercase' }}>{label}</span>
-        <div style={{ flex: 1, height: '1px', background: '#1A1A30' }} />
+        <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: 'var(--c-4a4a72)', textTransform: 'uppercase' }}>{label}</span>
+        <div style={{ flex: 1, height: '1px', background: 'var(--c-1a1a30)' }} />
       </div>
     );
   }
@@ -434,24 +434,24 @@ export default function CompetitorsModal({
         className="relative animate-fade-in"
         style={{
           width: '100%', maxWidth: '760px',
-          background: '#0C0C18', border: '1px solid #1E1E35', borderRadius: '14px',
+          background: 'var(--c-0c0c18)', border: '1px solid var(--c-1e1e35)', borderRadius: '14px',
           maxHeight: '90vh', display: 'flex', flexDirection: 'column',
-          boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+          boxShadow: '0 24px 80px var(--ca-0-0-0-0_7)',
         }}
       >
         {/* ── Header ── */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid #1A1A2E', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid var(--c-1a1a2e)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <i className="ti ti-users" style={{ fontSize: '14px', color: '#F59E0B' }} aria-hidden="true" />
+            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--ca-245-158-11-0_10)', border: '1px solid var(--ca-245-158-11-0_25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className="ti ti-users" style={{ fontSize: '14px', color: 'var(--c-f59e0b)' }} aria-hidden="true" />
             </div>
             <div>
-              <h2 style={{ fontSize: '15px', fontWeight: 600, color: '#E8E8FF', margin: 0 }}>Competitors</h2>
-              <p style={{ fontSize: '11px', color: '#555575', margin: '2px 0 0' }}>Tracked competitors, keyword CSVs &amp; volume thresholds</p>
+              <h2 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--c-e8e8ff)', margin: 0 }}>Competitors</h2>
+              <p style={{ fontSize: '11px', color: 'var(--c-555575)', margin: '2px 0 0' }}>Tracked competitors, keyword CSVs &amp; volume thresholds</p>
             </div>
           </div>
           <button type="button" onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#505070', padding: '4px' }}>
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-505070)', padding: '4px' }}>
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -469,8 +469,8 @@ export default function CompetitorsModal({
               style={{
                 marginLeft: '12px', marginBottom: '14px', flexShrink: 0,
                 display: 'inline-flex', alignItems: 'center', gap: '5px',
-                fontSize: '11px', color: '#8B85FF', background: showAdd ? 'rgba(108,99,255,0.08)' : 'none',
-                border: '1px solid rgba(108,99,255,0.35)', borderRadius: '8px',
+                fontSize: '11px', color: 'var(--c-8b85ff)', background: showAdd ? 'var(--ca-108-99-255-0_08)' : 'none',
+                border: '1px solid var(--ca-108-99-255-0_35)', borderRadius: '8px',
                 padding: '5px 11px', cursor: 'pointer', whiteSpace: 'nowrap',
               }}>
               <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -482,33 +482,33 @@ export default function CompetitorsModal({
 
           {/* Add form */}
           {showAdd && (
-            <div style={{ background: '#10101E', border: '1px solid #222240', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+            <div style={{ background: 'var(--c-10101e)', border: '1px solid var(--c-222240)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: '#7070A0', marginBottom: '5px' }}>DOMAIN *</label>
+                  <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', marginBottom: '5px' }}>DOMAIN *</label>
                   <input value={addDomain} onChange={e => setAddDomain(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCompetitor(); } }}
                     placeholder="competitor.com" style={inputStyle} />
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: '#7070A0', marginBottom: '5px' }}>NAME (OPTIONAL)</label>
+                  <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', marginBottom: '5px' }}>NAME (OPTIONAL)</label>
                   <input value={addName} onChange={e => setAddName(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCompetitor(); } }}
                     placeholder="Competitor Co." style={inputStyle} />
                 </div>
               </div>
-              {addError && <p style={{ fontSize: '11px', color: '#F87171', margin: '0 0 8px' }}>{addError}</p>}
+              {addError && <p style={{ fontSize: '11px', color: 'var(--c-f87171)', margin: '0 0 8px' }}>{addError}</p>}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button type="button" onClick={() => { setShowAdd(false); setAddDomain(''); setAddName(''); setAddError(''); }}
-                  style={{ flex: 1, fontSize: '11px', color: '#8080A8', background: 'transparent', border: '1px solid #2A2A48', padding: '7px', borderRadius: '7px', cursor: 'pointer' }}>
+                  style={{ flex: 1, fontSize: '11px', color: 'var(--c-8080a8)', background: 'transparent', border: '1px solid var(--c-2a2a48)', padding: '7px', borderRadius: '7px', cursor: 'pointer' }}>
                   Cancel
                 </button>
                 <button type="button" disabled={!addDomain.trim() || adding} onClick={addCompetitor}
-                  style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: '#FFF', background: '#6C63FF', border: 'none', padding: '7px', borderRadius: '7px', cursor: 'pointer', opacity: !addDomain.trim() || adding ? 0.4 : 1 }}>
+                  style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: 'var(--c-ffffff)', background: 'var(--c-6c63ff)', border: 'none', padding: '7px', borderRadius: '7px', cursor: 'pointer', opacity: !addDomain.trim() || adding ? 0.4 : 1 }}>
                   {adding ? 'Adding…' : 'Add'}
                 </button>
               </div>
-              <p style={{ fontSize: '10px', color: '#505070', margin: '10px 0 0', lineHeight: 1.5 }}>
+              <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '10px 0 0', lineHeight: 1.5 }}>
                 After adding, upload their keyword CSV from the row below (0 Semrush units) — or leave it and the next full analysis auto-discovers their footprint via Semrush (billed per keyword row).
               </p>
             </div>
@@ -517,8 +517,8 @@ export default function CompetitorsModal({
           {/* Rows */}
           {competitors.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '18px 0 22px' }}>
-              <p style={{ fontSize: '12px', color: '#555575', margin: 0 }}>No competitors tracked yet.</p>
-              <p style={{ fontSize: '10px', color: '#404060', margin: '4px 0 0' }}>Add competitors to include them in gap analysis and Share of Voice.</p>
+              <p style={{ fontSize: '12px', color: 'var(--c-555575)', margin: 0 }}>No competitors tracked yet.</p>
+              <p style={{ fontSize: '10px', color: 'var(--c-404060)', margin: '4px 0 0' }}>Add competitors to include them in gap analysis and Share of Voice.</p>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '7px', marginBottom: '6px' }}>
@@ -530,7 +530,7 @@ export default function CompetitorsModal({
                 const busy    = uploadingId === c.id || clearingId === c.id || deletingId === c.id;
 
                 return (
-                  <div key={c.id} style={{ background: '#141428', border: '0.5px solid #2A2A4A', borderRadius: '9px', padding: '11px 13px' }}>
+                  <div key={c.id} style={{ background: 'var(--c-141428)', border: '0.5px solid var(--c-2a2a4a)', borderRadius: '9px', padding: '11px 13px' }}>
                     {editing ? (
                       /* ── Inline edit ── */
                       <div>
@@ -542,19 +542,19 @@ export default function CompetitorsModal({
                             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveEdit(); } }}
                             placeholder="Name (optional)" style={inputStyle} />
                         </div>
-                        {editError && <p style={{ fontSize: '11px', color: '#F87171', margin: '0 0 8px' }}>{editError}</p>}
+                        {editError && <p style={{ fontSize: '11px', color: 'var(--c-f87171)', margin: '0 0 8px' }}>{editError}</p>}
                         {normDomain(editDomain) !== nd && (
-                          <p style={{ fontSize: '10px', color: '#F59E0B', margin: '0 0 8px' }}>
+                          <p style={{ fontSize: '10px', color: 'var(--c-f59e0b)', margin: '0 0 8px' }}>
                             Domain change: any uploaded keywords move to the new domain automatically.
                           </p>
                         )}
                         <div style={{ display: 'flex', gap: '8px' }}>
                           <button type="button" onClick={() => setEditingId(null)}
-                            style={{ fontSize: '11px', color: '#8080A8', background: 'transparent', border: '1px solid #2A2A48', padding: '5px 14px', borderRadius: '7px', cursor: 'pointer' }}>
+                            style={{ fontSize: '11px', color: 'var(--c-8080a8)', background: 'transparent', border: '1px solid var(--c-2a2a48)', padding: '5px 14px', borderRadius: '7px', cursor: 'pointer' }}>
                             Cancel
                           </button>
                           <button type="button" disabled={!editDomain.trim() || editSaving} onClick={saveEdit}
-                            style={{ fontSize: '11px', fontWeight: 600, color: '#FFF', background: '#6C63FF', border: 'none', padding: '5px 16px', borderRadius: '7px', cursor: 'pointer', opacity: !editDomain.trim() || editSaving ? 0.4 : 1 }}>
+                            style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-ffffff)', background: 'var(--c-6c63ff)', border: 'none', padding: '5px 16px', borderRadius: '7px', cursor: 'pointer', opacity: !editDomain.trim() || editSaving ? 0.4 : 1 }}>
                             {editSaving ? 'Saving…' : 'Save'}
                           </button>
                         </div>
@@ -568,23 +568,23 @@ export default function CompetitorsModal({
                           onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontSize: '12px', fontWeight: 500, color: '#C0C0E0', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--c-c0c0e0)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {c.name ?? c.domain}
                           </p>
-                          <p style={{ fontSize: '10px', color: '#555575', margin: '2px 0 0' }}>
+                          <p style={{ fontSize: '10px', color: 'var(--c-555575)', margin: '2px 0 0' }}>
                             {c.name ? `${c.domain} · ` : ''}
                             {kwRows === null ? (
                               <span>loading keywords…</span>
                             ) : stats && stats.count > 0 ? (
-                              <span style={{ color: '#4ADE80' }}>
+                              <span style={{ color: 'var(--c-4ade80)' }}>
                                 {stats.count.toLocaleString()} kws uploaded · {stats.withPos.toLocaleString()} with position
-                                {stats.withPos === 0 && <span style={{ color: '#F59E0B' }}> — re-upload with a Position column for page-1 SOV</span>}
+                                {stats.withPos === 0 && <span style={{ color: 'var(--c-f59e0b)' }}> — re-upload with a Position column for page-1 SOV</span>}
                               </span>
                             ) : (
                               /* v7.106: always show the count, even at zero */
-                              <span><span style={{ color: '#8888B0', fontWeight: 600 }}>0 kws uploaded</span> — no CSV; auto-discover on next full analysis</span>
+                              <span><span style={{ color: 'var(--c-8888b0)', fontWeight: 600 }}>0 kws uploaded</span> — no CSV; auto-discover on next full analysis</span>
                             )}
-                            {kwError && <span style={{ color: '#F87171' }}> (keyword stats unavailable)</span>}
+                            {kwError && <span style={{ color: 'var(--c-f87171)' }}> (keyword stats unavailable)</span>}
                           </p>
                         </div>
 
@@ -592,9 +592,9 @@ export default function CompetitorsModal({
                         {status && (
                           <span style={{
                             fontSize: '10px', padding: '3px 8px', borderRadius: '6px', whiteSpace: 'nowrap',
-                            background: status.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
-                            color:      status.type === 'success' ? '#34d399' : '#f87171',
-                            border:     `1px solid ${status.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)'}`,
+                            background: status.type === 'success' ? 'var(--ca-52-211-153-0_08)' : 'var(--ca-239-68-68-0_08)',
+                            color:      status.type === 'success' ? 'var(--c-34d399)' : 'var(--c-f87171)',
+                            border:     `1px solid ${status.type === 'success' ? 'var(--ca-52-211-153-0_25)' : 'var(--ca-239-68-68-0_25)'}`,
                           }}>
                             {status.msg}
                           </span>
@@ -602,48 +602,48 @@ export default function CompetitorsModal({
 
                         {/* Upload progress */}
                         {uploadingId === c.id && (
-                          <span style={{ fontSize: '10px', color: '#F59E0B', whiteSpace: 'nowrap' }}>Uploading… {uploadPct}%</span>
+                          <span style={{ fontSize: '10px', color: 'var(--c-f59e0b)', whiteSpace: 'nowrap' }}>Uploading… {uploadPct}%</span>
                         )}
 
                         {/* Inline confirms */}
                         {confirmClearId === c.id && !busy && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#f87171', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--c-f87171)', whiteSpace: 'nowrap' }}>
                             Clear {stats?.count.toLocaleString() ?? 0} keywords?
-                            <button type="button" onClick={() => clearKeywords(c)} style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', background: 'rgba(239,68,68,0.15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>Yes</button>
-                            <button type="button" onClick={() => setConfirmClearId(null)} style={{ fontSize: '10px', color: '#6060A0', background: 'none', border: 'none', cursor: 'pointer' }}>No</button>
+                            <button type="button" onClick={() => clearKeywords(c)} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-f87171)', background: 'var(--ca-239-68-68-0_15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>Yes</button>
+                            <button type="button" onClick={() => setConfirmClearId(null)} style={{ fontSize: '10px', color: 'var(--c-6060a0)', background: 'none', border: 'none', cursor: 'pointer' }}>No</button>
                           </span>
                         )}
                         {/* v7.105: Replace vs Merge choice for uploads onto existing data */}
                         {pendingUpload?.competitor.id === c.id && !busy && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#F59E0B', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--c-f59e0b)', whiteSpace: 'nowrap' }}>
                             {stats?.count.toLocaleString() ?? 0} kws exist · new file has {pendingUpload.parsed.length.toLocaleString()} —
                             <button type="button" title="Delete the existing keywords, then load only this file"
                               onClick={() => runUpload(pendingUpload.competitor, pendingUpload.parsed, true)}
-                              style={{ fontSize: '10px', fontWeight: 700, color: '#F59E0B', background: 'rgba(245,158,11,0.15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
+                              style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
                               Replace
                             </button>
                             <button type="button" title="Keep existing keywords; update matches and add new ones"
                               onClick={() => runUpload(pendingUpload.competitor, pendingUpload.parsed, false)}
-                              style={{ fontSize: '10px', fontWeight: 700, color: '#4ADE80', background: 'rgba(74,222,128,0.12)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
+                              style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-4ade80)', background: 'var(--ca-74-222-128-0_12)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>
                               Merge
                             </button>
                             <button type="button" onClick={() => setPendingUpload(null)}
-                              style={{ fontSize: '10px', color: '#6060A0', background: 'none', border: 'none', cursor: 'pointer' }}>
+                              style={{ fontSize: '10px', color: 'var(--c-6060a0)', background: 'none', border: 'none', cursor: 'pointer' }}>
                               Cancel
                             </button>
                           </span>
                         )}
                         {confirmDeleteId === c.id && !busy && (
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#f87171', whiteSpace: 'nowrap' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--c-f87171)', whiteSpace: 'nowrap' }}>
                             Delete competitor{stats && stats.count > 0 ? ` + ${stats.count.toLocaleString()} kws` : ''}?
-                            <button type="button" onClick={() => deleteCompetitor(c.id)} style={{ fontSize: '10px', fontWeight: 700, color: '#f87171', background: 'rgba(239,68,68,0.15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>Yes</button>
-                            <button type="button" onClick={() => setConfirmDeleteId(null)} style={{ fontSize: '10px', color: '#6060A0', background: 'none', border: 'none', cursor: 'pointer' }}>No</button>
+                            <button type="button" onClick={() => deleteCompetitor(c.id)} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-f87171)', background: 'var(--ca-239-68-68-0_15)', border: 'none', borderRadius: '5px', padding: '3px 8px', cursor: 'pointer' }}>Yes</button>
+                            <button type="button" onClick={() => setConfirmDeleteId(null)} style={{ fontSize: '10px', color: 'var(--c-6060a0)', background: 'none', border: 'none', cursor: 'pointer' }}>No</button>
                           </span>
                         )}
 
                         {/* Busy spinners for clear/delete */}
                         {(clearingId === c.id || deletingId === c.id) && (
-                          <span style={{ fontSize: '10px', color: '#f87171', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--c-f87171)', whiteSpace: 'nowrap' }}>
                             {clearingId === c.id ? 'Clearing…' : 'Deleting…'}
                           </span>
                         )}
@@ -652,22 +652,22 @@ export default function CompetitorsModal({
                         {!busy && confirmClearId !== c.id && confirmDeleteId !== c.id && pendingUpload?.competitor.id !== c.id && (
                           <div style={{ display: 'flex', gap: '5px', flexShrink: 0 }}>
                             <button type="button" title="Upload this competitor's keyword CSV (columns: keyword, search_volume, position)"
-                              onClick={() => pickFile(c)} style={iconBtnStyle('#F59E0B')}>
+                              onClick={() => pickFile(c)} style={iconBtnStyle('var(--c-f59e0b)')}>
                               <i className="ti ti-upload" style={{ fontSize: '12px' }} aria-hidden="true" />
                               CSV
                             </button>
                             <button type="button" title="Clear this competitor's uploaded keywords"
                               disabled={!stats || stats.count === 0}
                               onClick={() => { setConfirmClearId(c.id); setConfirmDeleteId(null); }}
-                              style={iconBtnStyle('#8888B0', !stats || stats.count === 0)}>
+                              style={iconBtnStyle('var(--c-8888b0)', !stats || stats.count === 0)}>
                               <i className="ti ti-eraser" style={{ fontSize: '12px' }} aria-hidden="true" />
                             </button>
-                            <button type="button" title="Edit name / domain" onClick={() => startEdit(c)} style={iconBtnStyle('#8888B0')}>
+                            <button type="button" title="Edit name / domain" onClick={() => startEdit(c)} style={iconBtnStyle('var(--c-8888b0)')}>
                               <i className="ti ti-pencil" style={{ fontSize: '12px' }} aria-hidden="true" />
                             </button>
                             <button type="button" title="Delete competitor (also removes its uploaded keywords)"
                               onClick={() => { setConfirmDeleteId(c.id); setConfirmClearId(null); }}
-                              style={iconBtnStyle('#F87171')}>
+                              style={iconBtnStyle('var(--c-f87171)')}>
                               <i className="ti ti-trash" style={{ fontSize: '12px' }} aria-hidden="true" />
                             </button>
                           </div>
@@ -680,23 +680,23 @@ export default function CompetitorsModal({
             </div>
           )}
 
-          <p style={{ fontSize: '10px', color: '#505070', margin: '6px 0 22px', lineHeight: 1.5 }}>
-            Competitors are included in gap analysis and Share of Voice when you run or refresh an analysis. CSV format: <code style={{ background: '#1A1A30', padding: '0 4px', borderRadius: '3px', color: '#8080C0' }}>keyword, search_volume, position</code> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice. When a competitor already has keywords, uploading a CSV asks whether to <strong style={{ color: '#8080C0' }}>Replace</strong> them (clear first, load only the new file) or <strong style={{ color: '#8080C0' }}>Merge</strong> (update matches, add new ones).
+          <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '6px 0 22px', lineHeight: 1.5 }}>
+            Competitors are included in gap analysis and Share of Voice when you run or refresh an analysis. CSV format: <code style={{ background: 'var(--c-1a1a30)', padding: '0 4px', borderRadius: '3px', color: 'var(--c-8080c0)' }}>keyword, search_volume, position</code> — position (the competitor&apos;s rank) is needed for page-1 Share of Voice. When a competitor already has keywords, uploading a CSV asks whether to <strong style={{ color: 'var(--c-8080c0)' }}>Replace</strong> them (clear first, load only the new file) or <strong style={{ color: 'var(--c-8080c0)' }}>Merge</strong> (update matches, add new ones).
           </p>
 
           {/* ── Section 2: Volume thresholds ── */}
           <SectionLabel label="Keyword Volume Thresholds" />
-          <div style={{ background: '#0F0F1C', border: '0.5px solid #1E1E38', borderRadius: '10px', padding: '16px', marginBottom: '8px' }}>
+          <div style={{ background: 'var(--c-0f0f1c)', border: '0.5px solid var(--c-1e1e38)', borderRadius: '10px', padding: '16px', marginBottom: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '16px' }}>
-              <p style={{ fontSize: '11px', color: '#7070A0', margin: 0, lineHeight: 1.5, flex: 1 }}>
-                Keywords below these monthly search volume thresholds are hidden from all analysis panels, and on the next data pull they are excluded inside the Semrush query itself — never fetched, never billed (10 API units per row). Set to <strong style={{ color: '#9090C0' }}>All</strong> to fetch every keyword. Changes save instantly.
+              <p style={{ fontSize: '11px', color: 'var(--c-7070a0)', margin: 0, lineHeight: 1.5, flex: 1 }}>
+                Keywords below these monthly search volume thresholds are hidden from all analysis panels, and on the next data pull they are excluded inside the Semrush query itself — never fetched, never billed (10 API units per row). Set to <strong style={{ color: 'var(--c-9090c0)' }}>All</strong> to fetch every keyword. Changes save instantly.
               </p>
               {threshState !== 'idle' && (
                 <span style={{
                   fontSize: '10px', whiteSpace: 'nowrap', padding: '3px 9px', borderRadius: '10px',
-                  color:      threshState === 'error' ? '#F87171' : threshState === 'saved' ? '#4ADE80' : '#8888B0',
-                  background: threshState === 'error' ? 'rgba(239,68,68,0.08)' : threshState === 'saved' ? 'rgba(74,222,128,0.08)' : 'rgba(136,136,176,0.08)',
-                  border: '1px solid #26264A',
+                  color:      threshState === 'error' ? 'var(--c-f87171)' : threshState === 'saved' ? 'var(--c-4ade80)' : 'var(--c-8888b0)',
+                  background: threshState === 'error' ? 'var(--ca-239-68-68-0_08)' : threshState === 'saved' ? 'var(--ca-74-222-128-0_08)' : 'var(--ca-136-136-176-0_08)',
+                  border: '1px solid var(--c-26264a)',
                 }}>
                   {threshState === 'saving' ? 'Saving…' : threshState === 'saved' ? '✓ Saved' : 'Save failed — try again'}
                 </span>
@@ -706,10 +706,10 @@ export default function CompetitorsModal({
             {/* Client ranked threshold */}
             <div style={{ marginBottom: '14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <span style={{ fontSize: '10px', fontWeight: 600, color: '#38BDF8', letterSpacing: '.04em' }}>Client ranked keywords</span>
-                <span style={{ fontSize: '10px', color: '#505070' }}>min monthly volume</span>
+                <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-38bdf8)', letterSpacing: '.04em' }}>Client ranked keywords</span>
+                <span style={{ fontSize: '10px', color: 'var(--c-505070)' }}>min monthly volume</span>
                 {clientThresh > 0 && (
-                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#38BDF8', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', padding: '1px 8px', borderRadius: '10px' }}>
+                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--c-38bdf8)', background: 'var(--ca-56-189-248-0_1)', border: '1px solid var(--ca-56-189-248-0_3)', padding: '1px 8px', borderRadius: '10px' }}>
                     ≥ {clientThresh >= 1000 ? `${clientThresh / 1000}K` : clientThresh}/mo
                   </span>
                 )}
@@ -727,10 +727,10 @@ export default function CompetitorsModal({
             {/* Competitor gap threshold */}
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <span style={{ fontSize: '10px', fontWeight: 600, color: '#F59E0B', letterSpacing: '.04em' }}>Competitor gap keywords</span>
-                <span style={{ fontSize: '10px', color: '#505070' }}>min monthly volume</span>
+                <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-f59e0b)', letterSpacing: '.04em' }}>Competitor gap keywords</span>
+                <span style={{ fontSize: '10px', color: 'var(--c-505070)' }}>min monthly volume</span>
                 {competitorThresh > 0 && (
-                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#F59E0B', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', padding: '1px 8px', borderRadius: '10px' }}>
+                  <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_1)', border: '1px solid var(--ca-245-158-11-0_3)', padding: '1px 8px', borderRadius: '10px' }}>
                     ≥ {competitorThresh >= 1000 ? `${competitorThresh / 1000}K` : competitorThresh}/mo
                   </span>
                 )}
@@ -748,9 +748,9 @@ export default function CompetitorsModal({
         </div>
 
         {/* ── Footer ── */}
-        <div style={{ padding: '14px 22px', borderTop: '1px solid #1A1A2E', flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ padding: '14px 22px', borderTop: '1px solid var(--c-1a1a2e)', flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
           <button type="button" onClick={onClose}
-            style={{ padding: '9px 26px', borderRadius: '8px', background: '#6C63FF', border: 'none', color: '#FFF', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+            style={{ padding: '9px 26px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
             Done
           </button>
         </div>

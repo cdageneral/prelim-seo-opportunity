@@ -88,16 +88,16 @@ const STAGE_LABELS: Record<JourneyStage, string> = {
   awareness: 'Awareness', consideration: 'Consideration', decision: 'Decision', retention: 'Retention',
 };
 const STAGE_COLORS: Record<JourneyStage, { border: string; text: string; bg: string }> = {
-  awareness:     { border: '#22d3ee', text: '#22d3ee', bg: 'rgba(34,211,238,0.08)'  },
-  consideration: { border: '#a78bfa', text: '#a78bfa', bg: 'rgba(167,139,250,0.08)' },
-  decision:      { border: '#34d399', text: '#34d399', bg: 'rgba(52,211,153,0.08)'  },
-  retention:     { border: '#f59e0b', text: '#f59e0b', bg: 'rgba(245,158,11,0.08)'  },
+  awareness:     { border: 'var(--c-22d3ee)', text: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)'  },
+  consideration: { border: 'var(--c-a78bfa)', text: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_08)' },
+  decision:      { border: 'var(--c-34d399)', text: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_08)'  },
+  retention:     { border: 'var(--c-f59e0b)', text: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_08)'  },
 };
 
 const SEGMENT_ACCENTS = [
-  { border: '#22d3ee', text: '#22d3ee', bg: 'rgba(34,211,238,0.08)'  },
-  { border: '#a78bfa', text: '#a78bfa', bg: 'rgba(167,139,250,0.08)' },
-  { border: '#f59e0b', text: '#f59e0b', bg: 'rgba(245,158,11,0.08)'  },
+  { border: 'var(--c-22d3ee)', text: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)'  },
+  { border: 'var(--c-a78bfa)', text: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_08)' },
+  { border: 'var(--c-f59e0b)', text: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_08)'  },
 ];
 
 const INTENT_META: Record<IntentType, { stage: JourneyStage }> = {
@@ -600,9 +600,9 @@ function fmtVol(v: number): string {
 
 function gapLabel(g: GapType): { text: string; bg: string; color: string; border: string } {
   switch (g) {
-    case 'competitor-gap': return { text: 'COMPETITOR GAP', bg: 'rgba(239,68,68,0.1)',  color: '#f87171', border: 'rgba(239,68,68,0.25)' };
-    case 'missing':        return { text: 'MISSING',        bg: 'rgba(249,115,22,0.1)', color: '#fb923c', border: 'rgba(249,115,22,0.25)' };
-    case 'partial':        return { text: 'PARTIAL',        bg: 'rgba(245,158,11,0.1)', color: '#fbbf24', border: 'rgba(245,158,11,0.25)' };
+    case 'competitor-gap': return { text: 'COMPETITOR GAP', bg: 'var(--ca-239-68-68-0_1)',  color: 'var(--c-f87171)', border: 'var(--ca-239-68-68-0_25)' };
+    case 'missing':        return { text: 'MISSING',        bg: 'var(--ca-249-115-22-0_1)', color: 'var(--c-fb923c)', border: 'var(--ca-249-115-22-0_25)' };
+    case 'partial':        return { text: 'PARTIAL',        bg: 'var(--ca-245-158-11-0_1)', color: 'var(--c-fbbf24)', border: 'var(--ca-245-158-11-0_25)' };
   }
 }
 
@@ -697,18 +697,18 @@ function PageMapProgress({ progress }: { progress: { done: number; total: number
   return (
     <div style={{ marginTop: 12, maxWidth: 460 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
-        <span style={{ fontSize: 11, color: '#9090b8' }}>
-          <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />{label}
+        <span style={{ fontSize: 11, color: 'var(--c-9090b8)' }}>
+          <i className="ti ti-loader-2" style={{ marginRight: 5, color: 'var(--c-22d3ee)' }} />{label}
         </span>
-        <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
           {total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}
         </span>
       </div>
-      <div style={{ height: 6, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ height: 6, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
         {total > 0 ? (
-          <div style={{ height: '100%', width: `${pct}%`, background: '#22d3ee', transition: 'width 0.3s ease' }} />
+          <div style={{ height: '100%', width: `${pct}%`, background: 'var(--c-22d3ee)', transition: 'width 0.3s ease' }} />
         ) : (
-          <div style={{ height: '100%', width: '35%', background: '#22d3ee', opacity: 0.6, animation: 'orbitiq-pm-indet 1.1s ease-in-out infinite' }} />
+          <div style={{ height: '100%', width: '35%', background: 'var(--c-22d3ee)', opacity: 0.6, animation: 'orbitiq-pm-indet 1.1s ease-in-out infinite' }} />
         )}
       </div>
       <style>{`@keyframes orbitiq-pm-indet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
@@ -720,10 +720,10 @@ function PageMapProgress({ progress }: { progress: { done: number; total: number
 
 function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
   return (
-    <div style={{ background: '#0D0D1E', border: '1px solid #1A1A30', borderRadius: 10, padding: '16px 20px' }}>
-      <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: '#4A4A6A', marginBottom: 6 }}>{label}</p>
-      <p style={{ fontSize: 24, fontWeight: 700, color: accent ?? '#DCDCF4', margin: 0, lineHeight: 1 }}>{value}</p>
-      {sub && <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 4 }}>{sub}</p>}
+    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, padding: '16px 20px' }}>
+      <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', marginBottom: 6 }}>{label}</p>
+      <p style={{ fontSize: 24, fontWeight: 700, color: accent ?? 'var(--c-dcdcf4)', margin: 0, lineHeight: 1 }}>{value}</p>
+      {sub && <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 4 }}>{sub}</p>}
     </div>
   );
 }
@@ -734,7 +734,7 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
   const gapStyle     = gapLabel(gap.gapType);
 
   return (
-    <div style={{ background: '#0D0D1E', border: '1px solid #1A1A30', borderRadius: 10, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Top row: stage + gap type + priority */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: stageColors.bg, color: stageColors.text, border: `1px solid ${stageColors.border}40`, textTransform: 'uppercase' as const, letterSpacing: '0.07em' }}>
@@ -743,38 +743,38 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
         <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: gapStyle.bg, color: gapStyle.color, border: `1px solid ${gapStyle.border}`, textTransform: 'uppercase' as const, letterSpacing: '0.06em' }}>
           {gapStyle.text}
         </span>
-        <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color: '#8080A0' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color: 'var(--c-8080a0)' }}>
           Priority {gap.priorityScore}
         </span>
       </div>
 
       {/* Cluster / topic */}
       <div>
-        <p style={{ fontSize: 14, fontWeight: 700, color: '#D0D0F0', margin: 0, lineHeight: 1.3 }}>{gap.clusterName}</p>
-        <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 4 }}>{gap.contentFormat}</p>
+        <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-d0d0f0)', margin: 0, lineHeight: 1.3 }}>{gap.clusterName}</p>
+        <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 4 }}>{gap.contentFormat}</p>
       </div>
 
       {/* Segment served */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: '#4A4A6A' }}>Segment:</span>
+        <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)' }}>Segment:</span>
         <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: segAccent.bg, color: segAccent.text, border: `1px solid ${segAccent.border}30`, fontWeight: 600 }}>
           {gap.segmentName}
         </span>
       </div>
 
       {/* Content angle */}
-      <div style={{ background: '#080814', border: '1px solid #151528', borderRadius: 7, padding: '10px 12px' }}>
-        <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: '#3A3A5A', marginBottom: 5 }}>Content Angle</p>
-        <p style={{ fontSize: 11, color: '#8080B0', lineHeight: 1.5, margin: 0 }}>{gap.contentAngle}</p>
+      <div style={{ background: 'var(--c-080814)', border: '1px solid var(--c-151528)', borderRadius: 7, padding: '10px 12px' }}>
+        <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: 'var(--c-3a3a5a)', marginBottom: 5 }}>Content Angle</p>
+        <p style={{ fontSize: 11, color: 'var(--c-8080b0)', lineHeight: 1.5, margin: 0 }}>{gap.contentAngle}</p>
       </div>
 
       {/* Keywords */}
       {gap.keywords.length > 0 && (
         <div>
-          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: '#3A3A5A', marginBottom: 5 }}>Target Keywords</p>
+          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: 'var(--c-3a3a5a)', marginBottom: 5 }}>Target Keywords</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {gap.keywords.map((kw: string, i: number) => (
-              <span key={i} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: '#0A0A18', border: '1px solid #1A1A30', color: '#6060A0', fontFamily: 'monospace' }}>
+              <span key={i} style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', color: 'var(--c-6060a0)', fontFamily: 'monospace' }}>
                 {kw}
               </span>
             ))}
@@ -783,24 +783,24 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
       )}
 
       {/* Stats row */}
-      <div style={{ display: 'flex', gap: 16, paddingTop: 8, borderTop: '1px solid #121224' }}>
+      <div style={{ display: 'flex', gap: 16, paddingTop: 8, borderTop: '1px solid var(--c-121224)' }}>
         <div>
-          <p style={{ fontSize: 9, color: '#3A3A5A', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Monthly Vol</p>
-          <p style={{ fontSize: 13, fontWeight: 700, color: '#8080B0' }}>{fmtVol(gap.monthlyVolume)}</p>
+          <p style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Monthly Vol</p>
+          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-8080b0)' }}>{fmtVol(gap.monthlyVolume)}</p>
         </div>
         <div>
-          <p style={{ fontSize: 9, color: '#3A3A5A', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Annual Vol</p>
-          <p style={{ fontSize: 13, fontWeight: 700, color: '#8080B0' }}>{fmtVol(gap.annualVolume)}</p>
+          <p style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Annual Vol</p>
+          <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-8080b0)' }}>{fmtVol(gap.annualVolume)}</p>
         </div>
         {gap.topCompetitor && (
           <div>
-            <p style={{ fontSize: 9, color: '#3A3A5A', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Top Competitor</p>
-            <p style={{ fontSize: 13, fontWeight: 700, color: '#f87171' }}>{gap.topCompetitor.replace(/^www\./, '').split('.')[0]}</p>
+            <p style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Top Competitor</p>
+            <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)' }}>{gap.topCompetitor.replace(/^www\./, '').split('.')[0]}</p>
           </div>
         )}
         <div>
-          <p style={{ fontSize: 9, color: '#3A3A5A', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Client Coverage</p>
-          <p style={{ fontSize: 13, fontWeight: 700, color: gap.clientCovPct > 50 ? '#34d399' : '#f87171' }}>{gap.clientCovPct}%</p>
+          <p style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Client Coverage</p>
+          <p style={{ fontSize: 13, fontWeight: 700, color: gap.clientCovPct > 50 ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{gap.clientCovPct}%</p>
         </div>
       </div>
     </div>
@@ -1026,7 +1026,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     return (
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '60px 24px', textAlign: 'center' }}>
         <div style={{ fontSize: 36, marginBottom: 14 }}>📋</div>
-        <p style={{ color: '#4A4A6A', fontSize: 13 }}>
+        <p style={{ color: 'var(--c-4a4a6a)', fontSize: 13 }}>
           Run an analysis to populate the Content Plan. Keyword clusters are required.
         </p>
       </div>
@@ -1038,12 +1038,12 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
         <div>
-          <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>
+          <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--c-4a4a6a)', marginBottom: 5 }}>
             Foundation · 05
           </p>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Content Plan</h2>
-          <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
-            Each keyword cluster mapped to the page that already ranks for it &mdash; so you can see what to <span style={{ color: '#34d399' }}>optimise</span> versus what to <span style={{ color: '#fb923c' }}>build net&#8209;new</span>.
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-dcdcf4)', margin: 0 }}>Content Plan</h2>
+          <p style={{ fontSize: 12, color: 'var(--c-5a5a80)', marginTop: 5 }}>
+            Each keyword cluster mapped to the page that already ranks for it &mdash; so you can see what to <span style={{ color: 'var(--c-34d399)' }}>optimise</span> versus what to <span style={{ color: 'var(--c-fb923c)' }}>build net&#8209;new</span>.
           </p>
         </div>
 
@@ -1054,17 +1054,17 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             disabled={building}
             style={{
               padding: '7px 14px', fontSize: 11, fontWeight: 700, borderRadius: 7,
-              background: building ? '#14142a' : 'rgba(34,211,238,0.1)', color: building ? '#5A5A80' : '#22d3ee',
-              border: '1px solid rgba(34,211,238,0.3)', cursor: building ? 'default' : 'pointer', whiteSpace: 'nowrap' as const,
+              background: building ? 'var(--c-14142a)' : 'var(--ca-34-211-238-0_1)', color: building ? 'var(--c-5a5a80)' : 'var(--c-22d3ee)',
+              border: '1px solid var(--ca-34-211-238-0_3)', cursor: building ? 'default' : 'pointer', whiteSpace: 'nowrap' as const,
             }}
           >
             <i className={`ti ${building ? 'ti-loader-2' : 'ti-map-pin-search'}`} style={{ marginRight: 6 }} />
             {building ? 'Pulling pages…' : hasUrlData ? 'Refresh ranking pages' : 'Map ranking pages'}
           </button>
-          <p style={{ fontSize: 10, color: '#4A4A6A', marginTop: 6, lineHeight: 1.4 }}>
+          <p style={{ fontSize: 10, color: 'var(--c-4a4a6a)', marginTop: 6, lineHeight: 1.4 }}>
             {builtAtLabel ? `Pages mapped ${builtAtLabel} · ` : ''}Pulls your unique ranking pages + their keywords from Semrush
           </p>
-          {buildErr && <p style={{ fontSize: 11, color: '#f87171', marginTop: 4 }}>{buildErr}</p>}
+          {buildErr && <p style={{ fontSize: 11, color: 'var(--c-f87171)', marginTop: 4 }}>{buildErr}</p>}
         </div>
       </div>
 
@@ -1073,8 +1073,8 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* v7.163: flash fix — hold the cards/views until the client footprint loads */}
       {!kwLoaded ? (
         <div style={{ padding: '48px 24px', textAlign: 'center' as const }}>
-          <i className="ti ti-loader-2" style={{ color: '#22d3ee', fontSize: 18 }} />
-          <p style={{ color: '#5A5A80', fontSize: 12, marginTop: 10 }}>Loading content plan&hellip;</p>
+          <i className="ti ti-loader-2" style={{ color: 'var(--c-22d3ee)', fontSize: 18 }} />
+          <p style={{ color: 'var(--c-5a5a80)', fontSize: 12, marginTop: 10 }}>Loading content plan&hellip;</p>
         </div>
       ) : (
       <>
@@ -1085,14 +1085,14 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         </div>
       )}
       {plan && (
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#4A4A6A', margin: '4px 0 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span>Detailed page &amp; cluster mapping</span><span style={{ flex: 1, height: 1, background: '#1A1A30' }} />
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--c-4a4a6a)', margin: '4px 0 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span>Detailed page &amp; cluster mapping</span><span style={{ flex: 1, height: 1, background: 'var(--c-1a1a30)' }} />
         </div>
       )}
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-        <StatCard label="Optimise Existing" value={String(optimizeClusters.length)} accent="#34d399" sub={`${fmtVol(optimizeVol)}/mo · clusters with a ranking page`} />
-        <StatCard label="Build Net-New" value={String(netNewClusters.length)} accent="#fb923c" sub={`${fmtVol(netNewVol)}/mo · clusters with no ranking page`} />
+        <StatCard label="Optimise Existing" value={String(optimizeClusters.length)} accent="var(--c-34d399)" sub={`${fmtVol(optimizeVol)}/mo · clusters with a ranking page`} />
+        <StatCard label="Build Net-New" value={String(netNewClusters.length)} accent="var(--c-fb923c)" sub={`${fmtVol(netNewVol)}/mo · clusters with no ranking page`} />
         <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? (totalPagesPulled > 0 ? `of ${totalPagesPulled} ranking pages` : 'Distinct ranking URLs (Semrush)') : 'Click “Map ranking pages”'} />
         <StatCard label="Monthly Volume at Stake" value={fmtVol(totalVol)} sub={`${fmtVol(totalVol * 12)}/yr uncaptured`} />
       </div>
@@ -1100,11 +1100,11 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* Filters + view toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         {/* View toggle */}
-        <div style={{ display: 'flex', background: '#0A0A18', border: '1px solid #1A1A30', borderRadius: 7, overflow: 'hidden', marginRight: 8 }}>
+        <div style={{ display: 'flex', background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 7, overflow: 'hidden', marginRight: 8 }}>
           {(['pages', 'briefs', 'table'] as const).map((v: 'pages' | 'briefs' | 'table') => (
             <button key={v} onClick={() => setView(v)} style={{
               padding: '6px 14px', fontSize: 11, fontWeight: view === v ? 700 : 500,
-              color: view === v ? '#DCDCF4' : '#4A4A6A', background: view === v ? '#1A1A30' : 'transparent',
+              color: view === v ? 'var(--c-dcdcf4)' : 'var(--c-4a4a6a)', background: view === v ? 'var(--c-1a1a30)' : 'transparent',
               border: 'none', cursor: 'pointer', textTransform: 'capitalize' as const,
             }}>
               {v === 'pages' ? '🗺 Pages' : v === 'briefs' ? '📄 Briefs' : '📊 Table'}
@@ -1122,9 +1122,9 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             return (
               <button key={s} onClick={() => setFilterStage(s)} style={{
                 padding: '4px 10px', fontSize: 10, fontWeight: isActive ? 700 : 500, borderRadius: 5,
-                background: isActive ? (colors ? colors.bg : '#1A1A30') : 'transparent',
-                color: isActive ? (colors ? colors.text : '#D0D0F0') : '#4A4A6A',
-                border: `1px solid ${isActive ? (colors ? colors.border + '40' : '#2A2A40') : '#1A1A30'}`,
+                background: isActive ? (colors ? colors.bg : 'var(--c-1a1a30)') : 'transparent',
+                color: isActive ? (colors ? colors.text : 'var(--c-d0d0f0)') : 'var(--c-4a4a6a)',
+                border: `1px solid ${isActive ? (colors ? colors.border + '40' : 'var(--c-2a2a40)') : 'var(--c-1a1a30)'}`,
                 cursor: 'pointer',
               }}>
                 {s === 'all' ? 'All Stages' : STAGE_LABELS[s]}
@@ -1141,9 +1141,9 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             return (
               <button key={g} onClick={() => setFilterGap(g)} style={{
                 padding: '4px 10px', fontSize: 10, fontWeight: isActive ? 700 : 500, borderRadius: 5,
-                background: isActive ? (gStyle ? gStyle.bg : '#1A1A30') : 'transparent',
-                color: isActive ? (gStyle ? gStyle.color : '#D0D0F0') : '#4A4A6A',
-                border: `1px solid ${isActive ? (gStyle ? gStyle.border : '#2A2A40') : '#1A1A30'}`,
+                background: isActive ? (gStyle ? gStyle.bg : 'var(--c-1a1a30)') : 'transparent',
+                color: isActive ? (gStyle ? gStyle.color : 'var(--c-d0d0f0)') : 'var(--c-4a4a6a)',
+                border: `1px solid ${isActive ? (gStyle ? gStyle.border : 'var(--c-2a2a40)') : 'var(--c-1a1a30)'}`,
                 cursor: 'pointer',
               }}>
                 {g === 'all' ? 'All Gaps' : gapLabel(g as GapType).text}
@@ -1158,8 +1158,8 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             value={filterSegment}
             onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setFilterSegment(e.target.value)}
             style={{
-              padding: '5px 10px', fontSize: 10, background: '#0A0A18', border: '1px solid #1A1A30',
-              borderRadius: 5, color: '#8080A0', cursor: 'pointer',
+              padding: '5px 10px', fontSize: 10, background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)',
+              borderRadius: 5, color: 'var(--c-8080a0)', cursor: 'pointer',
             }}
           >
             <option value="all">All Segments</option>
@@ -1167,7 +1167,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           </select>
         )}
 
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#4A4A6A' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-4a4a6a)' }}>
           {filteredGaps.length} gap{filteredGaps.length !== 1 ? 's' : ''}
         </span>
         </>
@@ -1176,12 +1176,12 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
 
       {/* Table view */}
       {view === 'table' && (
-        <div style={{ background: '#0A0A18', border: '1px solid #1A1A30', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #1A1A30' }}>
+              <tr style={{ borderBottom: '1px solid var(--c-1a1a30)' }}>
                 {['Segment', 'Stage', 'Cluster', 'Gap Type', 'Monthly Vol', 'Annual Vol', 'Coverage', 'Priority'].map((h: string) => (
-                  <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: '#4A4A6A', textAlign: 'left' }}>{h}</th>
+                  <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', textAlign: 'left' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1192,7 +1192,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
                 const sc      = STAGE_COLORS[gap.stage];
                 const gl      = gapLabel(gap.gapType);
                 return (
-                  <tr key={gap.id} style={{ borderBottom: '1px solid #0D0D1A', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                  <tr key={gap.id} style={{ borderBottom: '1px solid var(--c-0d0d1a)', background: i % 2 === 0 ? 'transparent' : 'var(--ca-255-255-255-0_01)' }}>
                     <td style={{ padding: '10px 14px' }}>
                       <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 4, background: sAccent.bg, color: sAccent.text, border: `1px solid ${sAccent.border}25`, fontWeight: 600 }}>
                         {gap.segmentName}
@@ -1203,21 +1203,21 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
                         {gap.journeyType === 'pre-product' ? 'Pre-Product' : STAGE_LABELS[gap.stage]}
                       </span>
                     </td>
-                    <td style={{ padding: '10px 14px', fontSize: 12, color: '#C0C0E0', fontWeight: 500 }}>{gap.clusterName}</td>
+                    <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-c0c0e0)', fontWeight: 500 }}>{gap.clusterName}</td>
                     <td style={{ padding: '10px 14px' }}>
                       <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, background: gl.bg, color: gl.color, border: `1px solid ${gl.border}`, fontWeight: 700 }}>
                         {gl.text}
                       </span>
                     </td>
-                    <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(gap.monthlyVolume)}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(gap.annualVolume)}</td>
-                    <td style={{ padding: '10px 14px', fontSize: 12, color: gap.clientCovPct > 50 ? '#34d399' : '#f87171', fontWeight: 700 }}>{gap.clientCovPct}%</td>
-                    <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontWeight: 700 }}>{gap.priorityScore}</td>
+                    <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(gap.monthlyVolume)}</td>
+                    <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(gap.annualVolume)}</td>
+                    <td style={{ padding: '10px 14px', fontSize: 12, color: gap.clientCovPct > 50 ? 'var(--c-34d399)' : 'var(--c-f87171)', fontWeight: 700 }}>{gap.clientCovPct}%</td>
+                    <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontWeight: 700 }}>{gap.priorityScore}</td>
                   </tr>
                 );
               })}
               {filteredGaps.length === 0 && (
-                <tr><td colSpan={8} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: '#3A3A5A', fontStyle: 'italic' }}>No gaps match the current filters</td></tr>
+                <tr><td colSpan={8} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic' }}>No gaps match the current filters</td></tr>
               )}
             </tbody>
           </table>
@@ -1228,7 +1228,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {view === 'briefs' && (
         <div>
           {uniqueBriefs.length === 0 && (
-            <p style={{ fontSize: 12, color: '#3A3A5A', fontStyle: 'italic', textAlign: 'center', padding: 24 }}>No briefs match the current filters</p>
+            <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', textAlign: 'center', padding: 24 }}>No briefs match the current filters</p>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
             {uniqueBriefs.map((gap: ContentGap) => {
@@ -1243,24 +1243,24 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {view === 'pages' && (
         <div>
           {!hasUrlData && (
-            <div style={{ background: 'rgba(34,211,238,0.05)', border: '1px solid rgba(34,211,238,0.2)', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
-              <p style={{ fontSize: 12, color: '#9090b8', lineHeight: 1.5, margin: 0 }}>
-                <i className="ti ti-info-circle" style={{ marginRight: 6, color: '#22d3ee' }} />
-                No ranking-URL data is stored on this analysis yet (this footprint was loaded from a CSV, so Semrush page URLs weren&rsquo;t captured). Click <strong style={{ color: '#22d3ee' }}>Map ranking pages</strong> above to pull the real ranking URL for each keyword from Semrush, then every cluster will show the page that already ranks for it.
+            <div style={{ background: 'var(--ca-34-211-238-0_05)', border: '1px solid var(--ca-34-211-238-0_2)', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+              <p style={{ fontSize: 12, color: 'var(--c-9090b8)', lineHeight: 1.5, margin: 0 }}>
+                <i className="ti ti-info-circle" style={{ marginRight: 6, color: 'var(--c-22d3ee)' }} />
+                No ranking-URL data is stored on this analysis yet (this footprint was loaded from a CSV, so Semrush page URLs weren&rsquo;t captured). Click <strong style={{ color: 'var(--c-22d3ee)' }}>Map ranking pages</strong> above to pull the real ranking URL for each keyword from Semrush, then every cluster will show the page that already ranks for it.
               </p>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, fontSize: 11, color: '#5A5A80' }}>
-            <span><span style={{ color: '#34d399', fontWeight: 700 }}>{optimizeClusters.length}</span> to optimise</span>
-            <span><span style={{ color: '#fb923c', fontWeight: 700 }}>{netNewClusters.length}</span> net-new</span>
-            {hasUrlData && <span><span style={{ color: '#C0C0E0', fontWeight: 700 }}>{pagesMapped}</span> pages mapped</span>}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, fontSize: 11, color: 'var(--c-5a5a80)' }}>
+            <span><span style={{ color: 'var(--c-34d399)', fontWeight: 700 }}>{optimizeClusters.length}</span> to optimise</span>
+            <span><span style={{ color: 'var(--c-fb923c)', fontWeight: 700 }}>{netNewClusters.length}</span> net-new</span>
+            {hasUrlData && <span><span style={{ color: 'var(--c-c0c0e0)', fontWeight: 700 }}>{pagesMapped}</span> pages mapped</span>}
           </div>
-          <div style={{ background: '#0A0A18', border: '1px solid #1A1A30', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid #1A1A30' }}>
+                <tr style={{ borderBottom: '1px solid var(--c-1a1a30)' }}>
                   {['Cluster', 'Action', 'Existing page(s)', 'Pages', 'Monthly Vol'].map((h: string) => (
-                    <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: '#4A4A6A', textAlign: 'left' }}>{h}</th>
+                    <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', textAlign: 'left' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1268,45 +1268,45 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
                 {mappedClusters.map((c: ThemeCluster, i: number) => {
                   const optimize = c.pageStatus === 'optimize';
                   return (
-                    <tr key={c.id} style={{ borderBottom: '1px solid #0D0D1A', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#C0C0E0', fontWeight: 500 }}>
+                    <tr key={c.id} style={{ borderBottom: '1px solid var(--c-0d0d1a)', background: i % 2 === 0 ? 'transparent' : 'var(--ca-255-255-255-0_01)' }}>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-c0c0e0)', fontWeight: 500 }}>
                         {c.name}
-                        <span style={{ fontSize: 9, marginLeft: 7, color: '#4A4A6A', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>
+                        <span style={{ fontSize: 9, marginLeft: 7, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>
                           {c.journeyType === 'pre-product' ? 'pre-product' : c.type}
                         </span>
                       </td>
                       <td style={{ padding: '10px 14px' }}>
                         <span style={{
                           fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' as const, letterSpacing: '0.06em',
-                          background: optimize ? 'rgba(52,211,153,0.1)' : 'rgba(249,115,22,0.1)',
-                          color: optimize ? '#34d399' : '#fb923c',
-                          border: `1px solid ${optimize ? 'rgba(52,211,153,0.3)' : 'rgba(249,115,22,0.3)'}`,
+                          background: optimize ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-249-115-22-0_1)',
+                          color: optimize ? 'var(--c-34d399)' : 'var(--c-fb923c)',
+                          border: `1px solid ${optimize ? 'var(--ca-52-211-153-0_3)' : 'var(--ca-249-115-22-0_3)'}`,
                         }}>
                           {optimize ? 'Optimise' : 'Build net-new'}
                         </span>
                       </td>
                       <td style={{ padding: '10px 14px', fontSize: 11 }}>
                         {c.existingPages.length === 0 ? (
-                          <span style={{ color: '#4A4A6A', fontStyle: 'italic' }}>&mdash; no ranking page</span>
+                          <span style={{ color: 'var(--c-4a4a6a)', fontStyle: 'italic' }}>&mdash; no ranking page</span>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                             {c.existingPages.slice(0, 3).map((p: string, j: number) => (
                               <a key={j} href={p} target="_blank" rel="noopener noreferrer" title={p}
-                                 style={{ color: '#7c9cf0', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' as const }}>
+                                 style={{ color: 'var(--c-7c9cf0)', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' as const }}>
                                 {prettyUrl(p)}
                               </a>
                             ))}
-                            {c.existingPages.length > 3 && <span style={{ color: '#4A4A6A', fontSize: 10 }}>+{c.existingPages.length - 3} more</span>}
+                            {c.existingPages.length > 3 && <span style={{ color: 'var(--c-4a4a6a)', fontSize: 10 }}>+{c.existingPages.length - 3} more</span>}
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{c.existingPages.length}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: '#8080A0', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(c.totalVolume)}</td>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{c.existingPages.length}</td>
+                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(c.totalVolume)}</td>
                     </tr>
                   );
                 })}
                 {mappedClusters.length === 0 && (
-                  <tr><td colSpan={5} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: '#3A3A5A', fontStyle: 'italic' }}>No clusters yet</td></tr>
+                  <tr><td colSpan={5} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic' }}>No clusters yet</td></tr>
                 )}
               </tbody>
             </table>

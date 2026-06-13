@@ -70,16 +70,16 @@ const JOURNEY_STAGE_LABELS: Record<JourneyStage, string> = {
   awareness: 'Awareness', consideration: 'Consideration', decision: 'Decision', retention: 'Retention',
 };
 const STAGE_COLORS: Record<JourneyStage, { border: string; text: string; bg: string }> = {
-  awareness:     { border: '#22d3ee', text: '#22d3ee', bg: 'rgba(34,211,238,0.06)'  },
-  consideration: { border: '#a78bfa', text: '#a78bfa', bg: 'rgba(167,139,250,0.06)' },
-  decision:      { border: '#34d399', text: '#34d399', bg: 'rgba(52,211,153,0.06)'  },
-  retention:     { border: '#f59e0b', text: '#f59e0b', bg: 'rgba(245,158,11,0.06)'  },
+  awareness:     { border: 'var(--c-22d3ee)', text: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_06)'  },
+  consideration: { border: 'var(--c-a78bfa)', text: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_06)' },
+  decision:      { border: 'var(--c-34d399)', text: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_06)'  },
+  retention:     { border: 'var(--c-f59e0b)', text: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_06)'  },
 };
 
 const SEGMENT_ACCENTS = [
-  { border: '#22d3ee', text: '#22d3ee', bg: 'rgba(34,211,238,0.08)'  },
-  { border: '#a78bfa', text: '#a78bfa', bg: 'rgba(167,139,250,0.08)' },
-  { border: '#f59e0b', text: '#f59e0b', bg: 'rgba(245,158,11,0.08)'  },
+  { border: 'var(--c-22d3ee)', text: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)'  },
+  { border: 'var(--c-a78bfa)', text: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_08)' },
+  { border: 'var(--c-f59e0b)', text: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_08)'  },
 ];
 
 const INTENT_META: Record<IntentType, { stage: JourneyStage }> = {
@@ -528,9 +528,9 @@ function inferStageFromPrompt(text: string): JourneyStage {
 type NodeState = 'existing' | 'missing' | 'competitor';
 
 const STATE_COLOR: Record<NodeState, string> = {
-  existing:   '#34d399',
-  missing:    '#f87171',
-  competitor: '#a78bfa',
+  existing:   'var(--c-34d399)',
+  missing:    'var(--c-f87171)',
+  competitor: 'var(--c-a78bfa)',
 };
 const STATE_LABEL: Record<NodeState, string> = {
   existing:   'Existing content',
@@ -843,12 +843,12 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
   }, [nodes]);
 
   const header = (
-    <div style={{ display: 'flex', borderBottom: '1px solid #1A1A30', marginBottom: 4 }}>
+    <div style={{ display: 'flex', borderBottom: '1px solid var(--c-1a1a30)', marginBottom: 4 }}>
       {JOURNEY_STAGE_ORDER.map((s: JourneyStage, i: number) => (
         <div key={s} style={{
           flex: 1, padding: '7px 6px', textAlign: 'center', fontSize: 9.5, fontWeight: 700,
           letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[s].text,
-          opacity: 0.7, borderRight: i < 3 ? '1px solid #1A1A30' : 'none',
+          opacity: 0.7, borderRight: i < 3 ? '1px solid var(--c-1a1a30)' : 'none',
         }}>
           {JOURNEY_STAGE_LABELS[s]}
         </div>
@@ -860,7 +860,7 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
     return (
       <div>
         {header}
-        <p style={{ fontSize: 11, color: '#3A3A5A', fontStyle: 'italic', padding: '18px 4px' }}>
+        <p style={{ fontSize: 11, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '18px 4px' }}>
           No topic clusters mapped to this journey yet.
         </p>
       </div>
@@ -889,7 +889,7 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
         aria-label="Mind map of topic clusters across the funnel, color-coded by content coverage">
         {validEdges.map(([f, t]: [string, string], i: number) => {
           const inc = hover === f || hover === t;
-          const stroke = inc ? STATE_COLOR[pos[f].n.state] : '#33335c';
+          const stroke = inc ? STATE_COLOR[pos[f].n.state] : 'var(--c-33335c)';
           return (
             <path key={i} d={edgePath(pos[f], pos[t])} fill="none"
               stroke={stroke} strokeWidth={inc ? 2.2 : 1.3}
@@ -909,10 +909,10 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
               onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))}
               onClick={() => onSelect(n)}>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
-                <rect width={NODE_W} height={NODE_H} rx={9} fill="#0D0D22" stroke={col} strokeWidth={sel ? 2.4 : 1.6} />
+                <rect width={NODE_W} height={NODE_H} rx={9} style={{fill:'var(--c-0d0d22)'}} stroke={col} strokeWidth={sel ? 2.4 : 1.6} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
-                <text x={13} y={19} fill="#D8D8F0" fontSize={11} fontWeight={500} fontFamily="inherit">{label}</text>
-                <text x={13} y={34} fill="#6a6a90" fontSize={9.5} fontFamily="monospace">
+                <text x={13} y={19} style={{fill:'var(--c-d8d8f0)'}} fontSize={11} fontWeight={500} fontFamily="inherit">{label}</text>
+                <text x={13} y={34} style={{fill:'var(--c-6a6a90)'}} fontSize={9.5} fontFamily="monospace">
                   {fmtVol(n.totalVol)}/mo · {n.kwCount} kw
                 </text>
                 <circle cx={NODE_W - 13} cy={14} r={4} fill={col} />
@@ -946,7 +946,7 @@ function PromptStrip({ prompts, accent }: { prompts: string[]; accent: string })
 
 function Legend() {
   const item = (c: string, l: string) => (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8080a0' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-8080a0)' }}>
       <span style={{ width: 11, height: 11, borderRadius: 3, background: c }} />{l}
     </span>
   );
@@ -955,7 +955,7 @@ function Legend() {
       {item(STATE_COLOR.existing, 'Existing content')}
       {item(STATE_COLOR.missing, 'Missing')}
       {item(STATE_COLOR.competitor, 'Competitor only')}
-      <span style={{ marginLeft: 'auto', fontSize: 10, color: '#4A4A6A' }}>
+      <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--c-4a4a6a)' }}>
         Hover to enlarge · click for detail · topic links are AI-inferred
       </span>
     </div>
@@ -969,21 +969,21 @@ function CompletenessRow({ nodes }: { nodes: JourneyNode[] }) {
   const tot = nodes.length;
   const pct = tot ? Math.round((ex / tot) * 100) : 0;
   const cell = (label: string, val: number | string, color: string) => (
-    <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '10px 12px' }}>
-      <div style={{ fontSize: 10.5, color: '#6a6a90' }}>{label}</div>
+    <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{label}</div>
       <div style={{ fontSize: 20, fontWeight: 700, color, marginTop: 2 }}>{val}</div>
     </div>
   );
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, marginTop: 12 }}>
-      {cell('Topics in journey', tot, '#C8C8E8')}
+      {cell('Topics in journey', tot, 'var(--c-c8c8e8)')}
       {cell('Existing', ex, STATE_COLOR.existing)}
       {cell('Missing', mi, STATE_COLOR.missing)}
       {cell('Competitor only', co, STATE_COLOR.competitor)}
-      <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '10px 12px' }}>
-        <div style={{ fontSize: 10.5, color: '#6a6a90' }}>Completeness</div>
-        <div style={{ fontSize: 20, fontWeight: 700, color: '#C8C8E8', marginTop: 2 }}>{pct}%</div>
-        <div style={{ height: 4, background: '#1A1A30', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '10px 12px' }}>
+        <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>Completeness</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--c-c8c8e8)', marginTop: 2 }}>{pct}%</div>
+        <div style={{ height: 4, background: 'var(--c-1a1a30)', borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${pct}%`, background: STATE_COLOR.existing }} />
         </div>
       </div>
@@ -993,8 +993,8 @@ function CompletenessRow({ nodes }: { nodes: JourneyNode[] }) {
 
 // v7.161: combined journey summary — one row of cards, each showing the overall
 // total across both lanes plus a pre-product (cyan) / product (purple) split.
-const PRE_COLOR = '#22d3ee';
-const PROD_COLOR = '#a78bfa';
+const PRE_COLOR = 'var(--c-22d3ee)';
+const PROD_COLOR = 'var(--c-a78bfa)';
 
 function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; prodNodes: JourneyNode[] }) {
   const cnt = (nodes: JourneyNode[], st: NodeState) => nodes.filter((n: JourneyNode) => n.state === st).length;
@@ -1010,10 +1010,10 @@ function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; pro
     const denom = pre + prod;
     const preW = denom ? Math.round((pre / denom) * 100) : 0;
     return (
-      <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
-        <div style={{ fontSize: 11, color: '#6a6a90' }}>{label}</div>
+      <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+        <div style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>{label}</div>
         <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 8px' }}>{denom}</div>
-        <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', background: '#1A1A30' }}>
+        <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', background: 'var(--c-1a1a30)' }}>
           <div style={{ width: `${preW}%`, background: PRE_COLOR }} />
           <div style={{ width: `${100 - preW}%`, background: PROD_COLOR }} />
         </div>
@@ -1028,19 +1028,19 @@ function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; pro
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6a6a90' }}>Journey coverage — combined</span>
-        <span style={{ fontSize: 10.5, color: '#8080a0' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PRE_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Pre-product</span>
-        <span style={{ fontSize: 10.5, color: '#8080a0' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PROD_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Product</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)' }}>Journey coverage — combined</span>
+        <span style={{ fontSize: 10.5, color: 'var(--c-8080a0)' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PRE_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Pre-product</span>
+        <span style={{ fontSize: 10.5, color: 'var(--c-8080a0)' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PROD_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Product</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-        {splitCard('Topics in journey', '#C8C8E8', preTot, prodTot)}
+        {splitCard('Topics in journey', 'var(--c-c8c8e8)', preTot, prodTot)}
         {splitCard('Existing', STATE_COLOR.existing, preEx, prodEx)}
         {splitCard('Missing', STATE_COLOR.missing, preMi, prodMi)}
         {splitCard('Competitor only', STATE_COLOR.competitor, preCo, prodCo)}
-        <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
-          <div style={{ fontSize: 11, color: '#6a6a90' }}>Completeness</div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: '#C8C8E8', margin: '2px 0 8px' }}>{pct}%</div>
-          <div style={{ height: 5, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>Completeness</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-c8c8e8)', margin: '2px 0 8px' }}>{pct}%</div>
+          <div style={{ height: 5, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${pct}%`, background: STATE_COLOR.existing }} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10.5, marginTop: 5 }}>
@@ -1057,8 +1057,8 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
   if (!node) {
     return (
       <div style={{
-        marginTop: 14, border: '1px solid #1A1A30', borderRadius: 12, background: '#0D0D1E',
-        padding: 16, fontSize: 12, color: '#5A5A80', textAlign: 'center',
+        marginTop: 14, border: '1px solid var(--c-1a1a30)', borderRadius: 12, background: 'var(--c-0d0d1e)',
+        padding: 16, fontSize: 12, color: 'var(--c-5a5a80)', textAlign: 'center',
       }}>
         Select a topic node to see its cluster detail.
       </div>
@@ -1072,11 +1072,11 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
       ? 'A competitor ranks here and you do not — build comparable depth to capture this step.'
       : 'No coverage from you or tracked competitors — a net-new content opportunity.';
   return (
-    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: '#0D0D1E', padding: 16 }}>
+    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#DCDCF4' }}>{node.name}</div>
-          <div style={{ fontSize: 11, color: '#6a6a90', marginTop: 3, fontFamily: 'monospace' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{node.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 3, fontFamily: 'monospace' }}>
             {fmtVol(node.totalVol)} searches/mo · {node.kwCount} keywords · {JOURNEY_STAGE_LABELS[node.stage]} · {node.lane === 'pre-product' ? 'Pre-product' : 'Product'}
           </div>
         </div>
@@ -1084,25 +1084,25 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
           <span style={{ fontSize: 10, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 6, padding: '4px 9px', whiteSpace: 'nowrap' }}>
             {STATE_LABEL[node.state]}
           </span>
-          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: '#5A5A80', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>
+          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: 'var(--c-5a5a80)', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}>
             <i className="ti ti-x" />
           </button>
         </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-        <div style={{ flex: 1, height: 5, borderRadius: 3, background: '#1A1A30', overflow: 'hidden' }}>
+        <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-1a1a30)', overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${clientPct}%`, background: col }} />
         </div>
-        <span style={{ fontSize: 11, color: '#8080a0', minWidth: 96, textAlign: 'right' }}>{clientPct}% client coverage</span>
+        <span style={{ fontSize: 11, color: 'var(--c-8080a0)', minWidth: 96, textAlign: 'right' }}>{clientPct}% client coverage</span>
       </div>
 
       {node.sampleKws.length > 0 && (
         <>
-          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
             {node.sampleKws.map((k: string, i: number) => (
-              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: '#9a9ac0', background: 'rgba(120,120,160,0.08)', border: '1px solid #1f1f3a', borderRadius: 5, padding: '3px 7px' }}>
+              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-9a9ac0)', background: 'var(--ca-120-120-160-0_08)', border: '1px solid var(--c-1f1f3a)', borderRadius: 5, padding: '3px 7px' }}>
                 &ldquo;{k}&rdquo;
               </span>
             ))}
@@ -1110,9 +1110,9 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
         </>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'rgba(120,120,160,0.05)', border: '1px solid #1f1f3a', borderRadius: 8, padding: '9px 11px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'var(--ca-120-120-160-0_05)', border: '1px solid var(--c-1f1f3a)', borderRadius: 8, padding: '9px 11px' }}>
         <i className="ti ti-bulb" style={{ color: col, fontSize: 15 }} />
-        <span style={{ fontSize: 11.5, color: '#9090b8' }}>{rec}</span>
+        <span style={{ fontSize: 11.5, color: 'var(--c-9090b8)' }}>{rec}</span>
       </div>
     </div>
   );
@@ -1140,18 +1140,18 @@ function DemandProgress({ progress }: { progress: { done: number; total: number;
   return (
     <div style={{ marginTop: 12, maxWidth: 460 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
-        <span style={{ fontSize: 11, color: '#9090b8' }}>
-          <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />{label}
+        <span style={{ fontSize: 11, color: 'var(--c-9090b8)' }}>
+          <i className="ti ti-loader-2" style={{ marginRight: 5, color: 'var(--c-22d3ee)' }} />{label}
         </span>
-        <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
           {total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}
         </span>
       </div>
-      <div style={{ height: 6, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ height: 6, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
         {total > 0 ? (
-          <div style={{ height: '100%', width: `${pct}%`, background: '#22d3ee', transition: 'width 0.3s ease' }} />
+          <div style={{ height: '100%', width: `${pct}%`, background: 'var(--c-22d3ee)', transition: 'width 0.3s ease' }} />
         ) : (
-          <div style={{ height: '100%', width: '35%', background: '#22d3ee', opacity: 0.6, animation: 'orbitiq-indet 1.1s ease-in-out infinite' }} />
+          <div style={{ height: '100%', width: '35%', background: 'var(--c-22d3ee)', opacity: 0.6, animation: 'orbitiq-indet 1.1s ease-in-out infinite' }} />
         )}
       </div>
       <style>{`@keyframes orbitiq-indet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
@@ -1190,8 +1190,8 @@ export function buildConnector(g: ConnGeom): { line: string; brace: string; tipX
 // problem→solution), support (purple, core→supporting). Every node shows its
 // content action — optimise an existing page or build a net-new one.
 
-const EDGE_COLOR: Record<JEdgeKind, string> = { co: '#22d3ee', bridge: '#7dd3fc', support: '#a78bfa' };
-const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: '#22d3ee', bridge: '#7dd3fc', support: '#a78bfa' };
+const EDGE_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)' };
+const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)' };
 const CM_STAGES: JourneyStage[] = ['awareness', 'consideration', 'decision'];
 
 function ConnectedMap({ graph, onSelect, selectedId }: {
@@ -1245,7 +1245,7 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
   };
 
   if (!graph.nodes.length) {
-    return <p style={{ fontSize: 12, color: '#3A3A5A', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
+    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
   }
 
   const validEdges = graph.edges.filter((e) => pos[e.from] && pos[e.to]);
@@ -1264,9 +1264,9 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
   return (
     <div>
       {/* stage headers */}
-      <div style={{ display: 'flex', borderBottom: '1px solid #1A1A30' }}>
+      <div style={{ display: 'flex', borderBottom: '1px solid var(--c-1a1a30)' }}>
         {CM_STAGES.map((s: JourneyStage, i: number) => (
-          <div key={s} style={{ flex: 1, padding: '7px 6px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[s].text, opacity: 0.7, borderRight: i < 2 ? '1px solid #1A1A30' : 'none' }}>
+          <div key={s} style={{ flex: 1, padding: '7px 6px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[s].text, opacity: 0.7, borderRight: i < 2 ? '1px solid var(--c-1a1a30)' : 'none' }}>
             {JOURNEY_STAGE_LABELS[s]}
           </div>
         ))}
@@ -1274,19 +1274,19 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img"
         aria-label="Connected audience journey: problem topics link by co-search behaviour, bridge to the product that solves them, and fan into supporting decision topics. Colour shows content coverage.">
         {/* band backgrounds */}
-        <rect x={0} y={bandY.preTop - PAD / 2} width={W} height={bandY.preH + PAD} fill="rgba(34,211,238,0.025)" rx={8} />
-        <rect x={0} y={bandY.prodTop - PAD / 2} width={W} height={bandY.prodH + PAD} fill="rgba(167,139,250,0.03)" rx={8} />
-        <text x={8} y={bandY.preTop + 4} fill="#22d3ee" fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRE-PRODUCT · PROBLEM-AWARE</text>
-        <text x={8} y={bandY.prodTop + 4} fill="#a78bfa" fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRODUCT · SOLUTION-AWARE</text>
+        <rect x={0} y={bandY.preTop - PAD / 2} width={W} height={bandY.preH + PAD} fill="var(--ca-34-211-238-0_025)" rx={8} />
+        <rect x={0} y={bandY.prodTop - PAD / 2} width={W} height={bandY.prodH + PAD} fill="var(--ca-167-139-250-0_03)" rx={8} />
+        <text x={8} y={bandY.preTop + 4} style={{fill:'var(--c-22d3ee)'}} fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRE-PRODUCT · PROBLEM-AWARE</text>
+        <text x={8} y={bandY.prodTop + 4} style={{fill:'var(--c-a78bfa)'}} fontSize={8.5} fontWeight={700} opacity={0.5} letterSpacing="0.1em">PRODUCT · SOLUTION-AWARE</text>
         {/* column dividers */}
-        {[1, 2].map((c) => <line key={c} x1={colW * c} y1={0} x2={colW * c} y2={H} stroke="#13132a" strokeWidth={1} />)}
+        {[1, 2].map((c) => <line key={c} x1={colW * c} y1={0} x2={colW * c} y2={H} style={{stroke:'var(--c-13132a)'}} strokeWidth={1} />)}
         {/* edges */}
         {validEdges.map((e, i: number) => {
           const inc = hover === e.from || hover === e.to;
           const color = EDGE_COLOR[e.kind];
           return (
             <path key={i} d={edgePath(pos[e.from], pos[e.to])} fill="none"
-              stroke={inc ? color : (e.kind === 'bridge' ? '#3a5566' : '#33335c')}
+              stroke={inc ? color : (e.kind === 'bridge' ? 'var(--c-3a5566)' : 'var(--c-33335c)')}
               strokeWidth={inc ? 2.4 : 1.3}
               strokeDasharray={e.kind === 'bridge' ? '5 4' : undefined}
               opacity={hover ? (inc ? 0.95 : 0.06) : (e.kind === 'bridge' ? 0.45 : 0.42)} />
@@ -1305,11 +1305,11 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
             <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
               onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={() => onSelect(n)}>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
-                <rect width={NODE_W} height={NODE_H} rx={9} fill="#0D0D22" stroke={col} strokeWidth={n.kind === 'core' ? 2.3 : (sel ? 2.3 : 1.5)} />
+                <rect width={NODE_W} height={NODE_H} rx={9} style={{fill:'var(--c-0d0d22)'}} stroke={col} strokeWidth={n.kind === 'core' ? 2.3 : (sel ? 2.3 : 1.5)} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
-                {n.kind === 'core' && <text x={NODE_W - 26} y={16} fill="#a78bfa" fontSize={11} fontFamily="inherit">★</text>}
-                <text x={12} y={17} fill="#D8D8F0" fontSize={10.5} fontWeight={500} fontFamily="inherit">{label}</text>
-                <text x={12} y={31} fill="#6a6a90" fontSize={9} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
+                {n.kind === 'core' && <text x={NODE_W - 26} y={16} style={{fill:'var(--c-a78bfa)'}} fontSize={11} fontFamily="inherit">★</text>}
+                <text x={12} y={17} style={{fill:'var(--c-d8d8f0)'}} fontSize={10.5} fontWeight={500} fontFamily="inherit">{label}</text>
+                <text x={12} y={31} style={{fill:'var(--c-6a6a90)'}} fontSize={9} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
                 <g transform={`translate(12 ${NODE_H - 15})`}>
                   <rect width={n.action === 'optimize' ? 56 : 60} height={12} rx={3} fill={`${col}22`} stroke={`${col}55`} strokeWidth={0.8} />
                   <text x={6} y={9} fill={col} fontSize={8} fontWeight={700} fontFamily="inherit">{badge}</text>
@@ -1327,26 +1327,26 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
 function ContentPlanSummary({ graph }: { graph: JGraph }) {
   const p = graph.plan;
   const cell = (label: string, val: number | string, color: string, sub?: string) => (
-    <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
-      <div style={{ fontSize: 10.5, color: '#6a6a90' }}>{label}</div>
+    <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 0' }}>{val}</div>
-      {sub && <div style={{ fontSize: 10, color: '#5A5A80', marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 10, color: 'var(--c-5a5a80)', marginTop: 2 }}>{sub}</div>}
     </div>
   );
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6a6a90' }}>Content plan — every topic mapped</span>
-        <span style={{ fontSize: 10.5, color: '#5A7A80' }}><i className="ti ti-arrow-right" style={{ margin: '0 4px' }} />feeds the Content panel</span>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)' }}>Content plan — every topic mapped</span>
+        <span style={{ fontSize: 10.5, color: 'var(--c-5a7a80)' }}><i className="ti ti-arrow-right" style={{ margin: '0 4px' }} />feeds the Content panel</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-        {cell('Topics in journey', p.total, '#C8C8E8')}
+        {cell('Topics in journey', p.total, 'var(--c-c8c8e8)')}
         {cell('Existing — optimize', p.optimize, STATE_COLOR.existing)}
         {cell('Net-new — build', p.build, STATE_COLOR.missing, `${p.preBuild} pre · ${p.prodBuild} product`)}
-        <div style={{ background: '#0D0D1E', borderRadius: 8, padding: '12px 14px' }}>
-          <div style={{ fontSize: 10.5, color: '#6a6a90' }}>Coverage</div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: '#C8C8E8', margin: '2px 0 6px' }}>{p.total ? Math.round((p.optimize / p.total) * 100) : 0}%</div>
-          <div style={{ height: 5, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>Coverage</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-c8c8e8)', margin: '2px 0 6px' }}>{p.total ? Math.round((p.optimize / p.total) * 100) : 0}%</div>
+          <div style={{ height: 5, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${p.total ? Math.round((p.optimize / p.total) * 100) : 0}%`, background: STATE_COLOR.existing }} />
           </div>
         </div>
@@ -1358,7 +1358,7 @@ function ContentPlanSummary({ graph }: { graph: JGraph }) {
 function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGraph; onClose: () => void }) {
   if (!node) {
     return (
-      <div style={{ marginTop: 14, border: '1px solid #1A1A30', borderRadius: 12, background: '#0D0D1E', padding: 16, fontSize: 12, color: '#5A5A80', textAlign: 'center' }}>
+      <div style={{ marginTop: 14, border: '1px solid var(--c-1a1a30)', borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16, fontSize: 12, color: 'var(--c-5a5a80)', textAlign: 'center' }}>
         Select a topic to see its keywords, why it connects, and the content action.
       </div>
     );
@@ -1375,11 +1375,11 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
       ? 'A competitor owns this step and you do not — build comparable depth to capture it.'
       : 'No coverage from you or tracked competitors — a net-new page to build.';
   return (
-    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: '#0D0D1E', padding: 16 }}>
+    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#DCDCF4' }}>{node.kind === 'core' ? '★ ' : ''}{node.name}</div>
-          <div style={{ fontSize: 11, color: '#6a6a90', marginTop: 3, fontFamily: 'monospace' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{node.kind === 'core' ? '★ ' : ''}{node.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 3, fontFamily: 'monospace' }}>
             {fmtVol(node.totalVol)} searches/mo · {node.kwCount} keywords · {kindLabel}
           </div>
         </div>
@@ -1387,40 +1387,40 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
           <span style={{ fontSize: 10, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 6, padding: '4px 9px', whiteSpace: 'nowrap' }}>
             {node.action === 'optimize' ? 'Existing page' : (node.state === 'competitor' ? 'Competitor only' : 'Build net-new')}
           </span>
-          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: '#5A5A80', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}><i className="ti ti-x" /></button>
+          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: 'var(--c-5a5a80)', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}><i className="ti ti-x" /></button>
         </div>
       </div>
 
-      <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>WHY IT CONNECTS</div>
+      <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>WHY IT CONNECTS</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 6 }}>
         {rels.length ? rels.map((r, i: number) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11.5, color: '#8080a0' }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 11.5, color: 'var(--c-8080a0)' }}>
             <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', borderRadius: 4, padding: '2px 6px', color: EDGE_WHY_COLOR[r.kind], background: `${EDGE_WHY_COLOR[r.kind]}1f` }}>{r.why}</span>
-            <i className="ti ti-arrow-right" style={{ color: '#4A4A6A' }} />
-            <span style={{ color: '#C8C8E8' }}>{r.name}</span>
+            <i className="ti ti-arrow-right" style={{ color: 'var(--c-4a4a6a)' }} />
+            <span style={{ color: 'var(--c-c8c8e8)' }}>{r.name}</span>
           </div>
-        )) : <span style={{ color: '#4A4A6A', fontSize: 11.5 }}>Standalone entry point.</span>}
+        )) : <span style={{ color: 'var(--c-4a4a6a)', fontSize: 11.5 }}>Standalone entry point.</span>}
       </div>
 
       {node.sampleKws.length > 0 && (
         <>
-          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: '#4A4A6A', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
             {node.sampleKws.map((k: string, i: number) => (
-              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: '#9a9ac0', background: 'rgba(120,120,160,0.08)', border: '1px solid #1f1f3a', borderRadius: 5, padding: '3px 7px' }}>&ldquo;{k}&rdquo;</span>
+              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-9a9ac0)', background: 'var(--ca-120-120-160-0_08)', border: '1px solid var(--c-1f1f3a)', borderRadius: 5, padding: '3px 7px' }}>&ldquo;{k}&rdquo;</span>
             ))}
           </div>
         </>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'rgba(120,120,160,0.05)', border: '1px solid #1f1f3a', borderRadius: 8, padding: '9px 11px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14, background: 'var(--ca-120-120-160-0_05)', border: '1px solid var(--c-1f1f3a)', borderRadius: 8, padding: '9px 11px' }}>
         <i className="ti ti-bulb" style={{ color: col, fontSize: 15 }} />
-        <span style={{ fontSize: 11.5, color: '#9090b8' }}>{rec}</span>
+        <span style={{ fontSize: 11.5, color: 'var(--c-9090b8)' }}>{rec}</span>
       </div>
 
       {node.url ? (
         <a href={node.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px', textDecoration: 'none' }}>
-          <i className="ti ti-external-link" /> Optimize existing page <span style={{ color: '#6a6a90', fontWeight: 400 }}>{node.url}</span>
+          <i className="ti ti-external-link" /> Optimize existing page <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>{node.url}</span>
         </a>
       ) : (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px' }}>
@@ -1743,7 +1743,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     return (
       <div style={{ padding: '60px 24px', textAlign: 'center' }}>
         <div style={{ fontSize: 36, marginBottom: 14 }}>🗺️</div>
-        <p style={{ color: '#4A4A6A', fontSize: 13 }}>
+        <p style={{ color: 'var(--c-4a4a6a)', fontSize: 13 }}>
           Run an analysis to populate the Journey panel. Audience segments and keyword clusters are required.
         </p>
       </div>
@@ -1754,11 +1754,11 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* Header */}
       <div style={{ marginBottom: 18 }}>
-        <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4A4A6A', marginBottom: 5 }}>
+        <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--c-4a4a6a)', marginBottom: 5 }}>
           Foundation · 04
         </p>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#DCDCF4', margin: 0 }}>Audience Journeys</h2>
-        <p style={{ fontSize: 12, color: '#5A5A80', marginTop: 5 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-dcdcf4)', margin: 0 }}>Audience Journeys</h2>
+        <p style={{ fontSize: 12, color: 'var(--c-5a5a80)', marginTop: 5 }}>
           How each segment moves from life-problem search to product decision &mdash; a topic mind map color-coded by content coverage.
         </p>
       </div>
@@ -1776,7 +1776,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               const isHovered = hoveredTab === tab.id;
               const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
               const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
-              const ac = tAccent ? tAccent.text : '#8080A0';
+              const ac = tAccent ? tAccent.text : 'var(--c-8080a0)';
               const lit = isActive || isHovered;   // v7.160: active OR hovered → accent + glow
               return (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -1787,9 +1787,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
                     display: 'inline-flex', alignItems: 'center', gap: 8,
                     padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
                     fontSize: 12, fontWeight: isActive ? 700 : 500,
-                    color: lit ? ac : '#6A6A90',
+                    color: lit ? ac : 'var(--c-6a6a90)',
                     background: isActive ? `${ac}14` : (isHovered ? `${ac}0d` : 'transparent'),
-                    border: `1px solid ${lit ? ac + '55' : '#1A1A30'}`,
+                    border: `1px solid ${lit ? ac + '55' : 'var(--c-1a1a30)'}`,
                     boxShadow: lit ? `0 0 0 1px ${ac}22, 0 0 14px ${ac}40` : 'none',
                     borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
                   }}>
@@ -1805,7 +1805,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
                   )}
                   {tab.label}
                   {tSeg && (
-                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'rgba(50,50,70,0.4)', color: isActive ? ac : '#4A4A6A', fontWeight: 600 }}>
+                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'var(--ca-50-50-70-0_4)', color: isActive ? ac : 'var(--c-4a4a6a)', fontWeight: 600 }}>
                       {tSeg.volumePct}%
                     </span>
                   )}
@@ -1828,9 +1828,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
                   </div>
                 )}
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#DCDCF4', marginBottom: 3 }}>{activeSegment.name}</div>
-                  <p style={{ fontSize: 11.5, color: '#8A8AB0', margin: '0 0 5px', lineHeight: 1.5 }}>{activeSegment.whoTheyAre.trigger}</p>
-                  <p style={{ fontSize: 12, color: '#9090B0', fontStyle: 'italic', margin: 0 }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-dcdcf4)', marginBottom: 3 }}>{activeSegment.name}</div>
+                  <p style={{ fontSize: 11.5, color: 'var(--c-8a8ab0)', margin: '0 0 5px', lineHeight: 1.5 }}>{activeSegment.whoTheyAre.trigger}</p>
+                  <p style={{ fontSize: 12, color: 'var(--c-9090b0)', fontStyle: 'italic', margin: 0 }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
                 </div>
               </div>
 
@@ -1850,8 +1850,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           <button onClick={buildDeepJourney} disabled={building}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
-              color: building ? '#6A6A90' : '#0D0D22', background: building ? 'transparent' : '#22d3ee',
-              border: `1px solid ${building ? '#1A1A30' : '#22d3ee'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
+              color: building ? 'var(--c-6a6a90)' : 'var(--c-0d0d22)', background: building ? 'transparent' : 'var(--c-22d3ee)',
+              border: `1px solid ${building ? 'var(--c-1a1a30)' : 'var(--c-22d3ee)'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
             }}>
             <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
             {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
@@ -1859,33 +1859,33 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
           {/* run-status badge: never run · building · last run [date] */}
           {building ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#22d3ee', background: 'rgba(34,211,238,0.12)', border: '1px solid #22d3ee55', borderRadius: 8, padding: '3px 9px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-22d3ee)', background: 'var(--ca-34-211-238-0_12)', border: '1px solid var(--c-22d3ee55)', borderRadius: 8, padding: '3px 9px' }}>
               <i className="ti ti-loader-2" /> Building…
             </span>
           ) : demandMode ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#34d399', background: 'rgba(52,211,153,0.12)', border: '1px solid #34d39955', borderRadius: 8, padding: '3px 9px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-34d399)', background: 'var(--ca-52-211-153-0_12)', border: '1px solid var(--c-34d39955)', borderRadius: 8, padding: '3px 9px' }}>
               <i className="ti ti-circle-check" /> {demandUniverse?.builtAt ? `Last run ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : 'Built'}
             </span>
           ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#8A8AA8', background: 'rgba(120,120,150,0.12)', border: '1px solid #2A2A40', borderRadius: 8, padding: '3px 9px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-8a8aa8)', background: 'var(--ca-120-120-150-0_12)', border: '1px solid var(--c-2a2a40)', borderRadius: 8, padding: '3px 9px' }}>
               <i className="ti ti-circle-dashed" /> Never run
             </span>
           )}
 
           {!building && (demandMode ? (
-            <span style={{ fontSize: 11, color: '#6A6A90', textAlign: 'right' }}>
-              <span style={{ color: '#34d399', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
+            <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', textAlign: 'right' }}>
+              <span style={{ color: 'var(--c-34d399)', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
               {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
               {' '}(Semrush)
             </span>
           ) : (
-            <span style={{ fontSize: 11, color: '#6A6A90', textAlign: 'right' }}>
-              Showing your <span style={{ color: '#a78bfa' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
+            <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', textAlign: 'right' }}>
+              Showing your <span style={{ color: 'var(--c-a78bfa)' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
             </span>
           ))}
           {building && <DemandProgress progress={progress} />}
           {buildError && (
-            <p style={{ fontSize: 11, color: '#f87171', margin: 0, textAlign: 'right' }}>
+            <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: 0, textAlign: 'right' }}>
               <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}
             </p>
           )}
@@ -1900,15 +1900,15 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         <>
           <ContentPlanSummary graph={graph} />
 
-          <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+          <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <i className="ti ti-sitemap" style={{ color: '#22d3ee', fontSize: 14 }} />
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--ca-34-211-238-0_1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <i className="ti ti-sitemap" style={{ color: 'var(--c-22d3ee)', fontSize: 14 }} />
                 </div>
                 <div>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: '#C8C8E8' }}>Connected Journey</span>
-                  <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>Connected Journey</span>
+                  <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 1 }}>
                     Life problem &rarr; discovers the solution &rarr; decides. Every link is real search behavior.
                   </p>
                 </div>
@@ -1916,17 +1916,17 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               {/* relationship legend */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
                 {([['co', 'Co-searched'], ['bridge', 'Discovers solution'], ['support', 'Needs to decide']] as [JEdgeKind, string][]).map(([k, l]: [JEdgeKind, string]) => (
-                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: '#8080a0' }}>
+                  <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--c-8080a0)' }}>
                     <svg width={26} height={8}><line x1={0} y1={4} x2={26} y2={4} stroke={EDGE_COLOR[k]} strokeWidth={2.4} strokeDasharray={k === 'bridge' ? '4 3' : undefined} /></svg>{l}
                   </span>
                 ))}
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: '#8080a0' }}>
-                  <span style={{ color: '#a78bfa' }}>&#9733;</span> Core product
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'var(--c-8080a0)' }}>
+                  <span style={{ color: 'var(--c-a78bfa)' }}>&#9733;</span> Core product
                 </span>
               </div>
             </div>
-            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
-            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
+            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="var(--c-22d3ee)" />}
+            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
             <ConnectedMap graph={graph} onSelect={setSelectedGraphNode} selectedId={selectedGraphNode?.id ?? null} />
           </div>
 
@@ -1937,41 +1937,41 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         <>
           <CombinedSummary preNodes={preNodes} prodNodes={prodNodes} />
 
-          <div style={{ background: 'rgba(34,211,238,0.02)', border: '1px solid rgba(34,211,238,0.15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+          <div style={{ background: 'var(--ca-34-211-238-0_02)', border: '1px solid var(--ca-34-211-238-0_15)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(34,211,238,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <i className="ti ti-bulb" style={{ color: '#22d3ee', fontSize: 14 }} />
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--ca-34-211-238-0_1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <i className="ti ti-bulb" style={{ color: 'var(--c-22d3ee)', fontSize: 14 }} />
               </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: '#22d3ee' }}>Pre-Product Journey</span>
-                  <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(34,211,238,0.1)', color: '#22d3ee', border: '1px solid rgba(34,211,238,0.2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-22d3ee)' }}>Pre-Product Journey</span>
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--ca-34-211-238-0_2)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                     Problem-aware
                   </span>
                 </div>
-                <p style={{ fontSize: 11, color: '#4A7A80', marginTop: 2 }}>
+                <p style={{ fontSize: 11, color: 'var(--c-4a7a80)', marginTop: 2 }}>
                   They have a life problem but don&apos;t know your product exists yet.
                 </p>
               </div>
             </div>
-            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="#22d3ee" />}
+            {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="var(--c-22d3ee)" />}
             <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
             <CompletenessRow nodes={preNodes} />
           </div>
 
-          <div style={{ border: '1px solid #1A1A30', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
+          <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 12, padding: '18px 20px', marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(167,139,250,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                <i className="ti ti-route" style={{ color: '#a78bfa', fontSize: 14 }} />
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--ca-167-139-250-0_1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <i className="ti ti-route" style={{ color: 'var(--c-a78bfa)', fontSize: 14 }} />
               </div>
               <div>
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa' }}>Product Journey</span>
-                <p style={{ fontSize: 11, color: '#5A5A80', marginTop: 1 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-a78bfa)' }}>Product Journey</span>
+                <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 1 }}>
                   Full funnel &mdash; searchers aware of the category and evaluating options.
                 </p>
               </div>
             </div>
-            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="#a78bfa" />}
+            {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
             <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
             <CompletenessRow nodes={prodNodes} />
           </div>

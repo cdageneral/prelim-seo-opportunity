@@ -3,10 +3,10 @@
 interface Props { analysis: any; }
 
 const BUCKETS = [
-  { key: '1-3',   label: 'Pos 1–3',  hex: '#6C63FF' },
-  { key: '4-10',  label: 'Pos 4–10', hex: '#06B6D4' },
-  { key: '11-20', label: 'Page 2',   hex: '#F59E0B' },
-  { key: '21+',   label: 'Page 3+',  hex: '#EF4444' },
+  { key: '1-3',   label: 'Pos 1–3',  hex: 'var(--c-6c63ff)' },
+  { key: '4-10',  label: 'Pos 4–10', hex: 'var(--c-06b6d4)' },
+  { key: '11-20', label: 'Page 2',   hex: 'var(--c-f59e0b)' },
+  { key: '21+',   label: 'Page 3+',  hex: 'var(--c-ef4444)' },
 ];
 
 const CHART_H  = 120;
@@ -58,14 +58,14 @@ function SerpFeatureCard({
         </p>
       ) : (
         <>
-          <p style={{ fontSize: '13px', color: '#8888AA', margin: '0 0 8px' }}>
-            <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{acquired}</span>
+          <p style={{ fontSize: '13px', color: 'var(--c-8888aa)', margin: '0 0 8px' }}>
+            <span style={{ color: 'var(--c-f0f0ff)', fontWeight: 600 }}>{acquired}</span>
             {' '}{acquiredLabel}
             &nbsp;/&nbsp;
-            <span style={{ color: '#F0F0FF', fontWeight: 600 }}>{available}</span>
+            <span style={{ color: 'var(--c-f0f0ff)', fontWeight: 600 }}>{available}</span>
             {' '}{availableLabel}
           </p>
-          <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '4px', width: '100%' }}>
+          <div style={{ background: 'var(--c-1e1e2e)', borderRadius: '3px', height: '4px', width: '100%' }}>
             <div
               style={{
                 background:   color,
@@ -194,8 +194,8 @@ export default function FootprintSection({ analysis }: Props) {
               {/* Y-axis grid + labels */}
               {yGridLines.map(({ val, y }) => (
                 <g key={y}>
-                  <line x1={28} y1={y} x2={CHART_W} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-                  <text x={24} y={y + 4} textAnchor="end" fontSize="9" fill="#555570">{val}</text>
+                  <line x1={28} y1={y} x2={CHART_W} y2={y} stroke="var(--ca-255-255-255-0_06)" strokeWidth="1" />
+                  <text x={24} y={y + 4} textAnchor="end" fontSize="9" style={{fill:'var(--c-555570)'}}>{val}</text>
                 </g>
               ))}
 
@@ -215,18 +215,18 @@ export default function FootprintSection({ analysis }: Props) {
                     )}
                     <text
                       x={cx} y={count > 0 ? barY - 5 : CHART_H - 5}
-                      textAnchor="middle" fontSize="10" fontWeight="600" fill="#F0F0FF"
+                      textAnchor="middle" fontSize="10" fontWeight="600" style={{fill:'var(--c-f0f0ff)'}}
                     >
                       {count.toLocaleString()}
                     </text>
-                    <text x={cx} y={CHART_H + 14} textAnchor="middle" fontSize="9" fill="#8888AA">{b.label}</text>
-                    <text x={cx} y={CHART_H + 26} textAnchor="middle" fontSize="8" fill="#555570">{pct}%</text>
+                    <text x={cx} y={CHART_H + 14} textAnchor="middle" fontSize="9" style={{fill:'var(--c-8888aa)'}}>{b.label}</text>
+                    <text x={cx} y={CHART_H + 26} textAnchor="middle" fontSize="8" style={{fill:'var(--c-555570)'}}>{pct}%</text>
                   </g>
                 );
               })}
 
               {/* X-axis baseline */}
-              <line x1={28} y1={CHART_H} x2={CHART_W} y2={CHART_H} stroke="#1E1E2E" strokeWidth="1" />
+              <line x1={28} y1={CHART_H} x2={CHART_W} y2={CHART_H} style={{stroke:'var(--c-1e1e2e)'}} strokeWidth="1" />
             </svg>
           </div>
 
@@ -235,23 +235,23 @@ export default function FootprintSection({ analysis }: Props) {
             <div className="bg-orbit-surface border border-orbit-border rounded-lg p-3 flex items-center gap-4">
               {/* Left: big % + label */}
               <div className="shrink-0" style={{ textAlign: 'left' }}>
-                <p style={{ color: '#EF4444', fontSize: '32px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
+                <p style={{ color: 'var(--c-ef4444)', fontSize: '32px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
                   {pctOutsideTop3}%
                 </p>
-                <p style={{ color: '#8888AA', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.07em', margin: '4px 0 0', lineHeight: 1.3 }}>
+                <p style={{ color: 'var(--c-8888aa)', fontSize: '10px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.07em', margin: '4px 0 0', lineHeight: 1.3 }}>
                   volume<br />outside top 3
                 </p>
               </div>
               {/* Divider */}
-              <div style={{ width: '1px', height: '48px', background: '#1E1E2E', flexShrink: 0 }} />
+              <div style={{ width: '1px', height: '48px', background: 'var(--c-1e1e2e)', flexShrink: 0 }} />
               {/* Right: annualized counts */}
               <div style={{ textAlign: 'left' }}>
-                <p style={{ color: '#F0F0FF', fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                <p style={{ color: 'var(--c-f0f0ff)', fontSize: '14px', fontWeight: 600, margin: 0 }}>
                   {(volumeOutsideTop3 * 12).toLocaleString()}
-                  {' '}<span style={{ color: '#555570', fontWeight: 400 }}>out of</span>{' '}
+                  {' '}<span style={{ color: 'var(--c-555570)', fontWeight: 400 }}>out of</span>{' '}
                   {(totalVolume * 12).toLocaleString()}
                 </p>
-                <p style={{ color: '#8888AA', fontSize: '12px', margin: '4px 0 0' }}>
+                <p style={{ color: 'var(--c-8888aa)', fontSize: '12px', margin: '4px 0 0' }}>
                   annual searches outside top 3 ranks
                 </p>
               </div>
@@ -267,19 +267,19 @@ export default function FootprintSection({ analysis }: Props) {
           <div className="flex justify-center py-2">
             <div className="relative" style={{ width: '140px', height: '140px' }}>
               <svg viewBox="0 0 36 36" width="140" height="140" style={{ transform: 'rotate(-90deg)' }}>
-                <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="2.8" />
+                <circle cx="18" cy="18" r="15.9" fill="none" style={{stroke:'var(--c-1e1e2e)'}} strokeWidth="2.8" />
                 <circle
                   cx="18" cy="18" r="15.9"
-                  fill="none" stroke="#6C63FF" strokeWidth="2.8"
+                  fill="none" style={{stroke:'var(--c-6c63ff)'}} strokeWidth="2.8"
                   strokeLinecap="round"
                   strokeDasharray={`${combinedRate} 100`}
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span style={{ color: '#6C63FF', fontWeight: 700, fontSize: '28px', lineHeight: 1 }}>
+                <span style={{ color: 'var(--c-6c63ff)', fontWeight: 700, fontSize: '28px', lineHeight: 1 }}>
                   {combinedRate}%
                 </span>
-                <span style={{ color: '#8888AA', fontSize: '11px', marginTop: '4px', textAlign: 'center', lineHeight: 1.3 }}>
+                <span style={{ color: 'var(--c-8888aa)', fontSize: '11px', marginTop: '4px', textAlign: 'center', lineHeight: 1.3 }}>
                   SERP coverage
                 </span>
               </div>
@@ -289,7 +289,7 @@ export default function FootprintSection({ analysis }: Props) {
           {/* AIO: rate = aioAcq / aioAvail */}
           <SerpFeatureCard
             label="AI Overviews"
-            color="#6C63FF"
+            color="var(--c-6c63ff)"
             rate={aioRate}
             acquired={aioAcq}
             available={aioAvail}
@@ -301,7 +301,7 @@ export default function FootprintSection({ analysis }: Props) {
           {/* PAA: rate = paaAcq / paaAvail */}
           <SerpFeatureCard
             label="People Also Ask"
-            color="#06B6D4"
+            color="var(--c-06b6d4)"
             rate={paaRate}
             acquired={paaAcq}
             available={paaAvail}
@@ -313,7 +313,7 @@ export default function FootprintSection({ analysis }: Props) {
           {/* Video: rate = videoAcq / videoAvail */}
           <SerpFeatureCard
             label="Video Carousel"
-            color="#F59E0B"
+            color="var(--c-f59e0b)"
             rate={videoRate}
             acquired={videoAcq}
             available={videoAvail}

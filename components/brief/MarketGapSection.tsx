@@ -75,7 +75,7 @@ export default function MarketGapSection({ analysis }: Props) {
           <h3 className="text-orbit-primary text-lg font-semibold mt-1">True market share</h3>
           <div className="flex items-center gap-2 mt-2">
             <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-0.5 rounded-full"
-              style={{ background: 'rgba(66,133,244,0.12)', color: '#6BAAF8', border: '1px solid rgba(66,133,244,0.2)' }}>
+              style={{ background: 'var(--ca-66-133-244-0_12)', color: 'var(--c-6baaf8)', border: '1px solid var(--ca-66-133-244-0_2)' }}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                 <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -85,7 +85,7 @@ export default function MarketGapSection({ analysis }: Props) {
               Google Platform
             </span>
             <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full"
-              style={{ background: 'rgba(108,99,255,0.12)', color: '#8B85FF', border: '1px solid rgba(108,99,255,0.2)' }}>
+              style={{ background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-8b85ff)', border: '1px solid var(--ca-108-99-255-0_2)' }}>
               SERP Rankings
             </span>
           </div>
@@ -163,22 +163,22 @@ export default function MarketGapSection({ analysis }: Props) {
         {/* Card 2: Total Demand Captured */}
         <div className="bg-orbit-surface rounded-lg p-3 border border-orbit-border">
           <p className="text-orbit-primary text-[13px] font-semibold mb-1.5">Total Demand Captured</p>
-          <p className="font-semibold text-lg leading-tight" style={{ color: '#8B85FF' }}>{fmtAnnual(page1Monthly)}</p>
+          <p className="font-semibold text-lg leading-tight" style={{ color: 'var(--c-8b85ff)' }}>{fmtAnnual(page1Monthly)}</p>
           <p className="text-orbit-secondary text-xs mt-1">Captured on page 1</p>
-          <p className="text-[10px] mt-1.5" style={{ color: '#8B85FF' }}>Brand: {fmtAnnual(brandedMonthly)}</p>
-          <p className="text-[10px] mt-0.5" style={{ color: '#22C55E' }}>Non-brand: {fmtAnnual(nonBrandedMonthly)}</p>
+          <p className="text-[10px] mt-1.5" style={{ color: 'var(--c-8b85ff)' }}>Brand: {fmtAnnual(brandedMonthly)}</p>
+          <p className="text-[10px] mt-0.5" style={{ color: 'var(--c-22c55e)' }}>Non-brand: {fmtAnnual(nonBrandedMonthly)}</p>
         </div>
 
         {/* Card 3: Page 1 Capture Rate */}
         <div className="bg-orbit-surface rounded-lg p-3 border border-orbit-border">
           <p className="text-orbit-primary text-[13px] font-semibold mb-1.5">Page 1 Capture Rate</p>
           <p className="font-semibold text-lg leading-tight text-orbit-accent">{pctDisplay}</p>
-          <p className="text-[10px] mt-1.5" style={{ color: '#22C55E' }}>
+          <p className="text-[10px] mt-1.5" style={{ color: 'var(--c-22c55e)' }}>
             Ranks 1–3: {top3Monthly > 0 && totalMonthly > 0
               ? `${((top3Monthly / totalMonthly) * 100).toFixed(1)}%`
               : '—'}
           </p>
-          <p className="text-[10px] mt-0.5" style={{ color: '#F59E0B' }}>
+          <p className="text-[10px] mt-0.5" style={{ color: 'var(--c-f59e0b)' }}>
             Ranks 4–10: {ranks4to10Monthly > 0 && totalMonthly > 0
               ? `${((ranks4to10Monthly / totalMonthly) * 100).toFixed(1)}%`
               : '—'}
@@ -209,21 +209,21 @@ function CategoryTableRow({ cat, dimmed }: { cat: CategoryRow; dimmed: boolean }
       style={{ gridTemplateColumns: '1fr 110px 90px 68px', opacity: dimmed ? 0.45 : 1 }}
     >
       <div>
-        <span className="text-sm" style={{ color: dimmed ? '#666680' : '#F0F0FF' }}>{cat.name}</span>
+        <span className="text-sm" style={{ color: dimmed ? 'var(--c-666680)' : 'var(--c-f0f0ff)' }}>{cat.name}</span>
         <div className="mt-1.5 h-[3px] bg-orbit-muted rounded-sm overflow-hidden" style={{ width: '85%' }}>
           <div
             className="h-full rounded-sm transition-all duration-700"
-            style={{ width: `${barW}%`, background: dimmed ? '#555570' : '#6C63FF' }}
+            style={{ width: `${barW}%`, background: dimmed ? 'var(--c-555570)' : 'var(--c-6c63ff)' }}
           />
         </div>
       </div>
       <span className="text-orbit-secondary text-xs text-right">{fmtAnn(cat.monthlyDemand)}</span>
       <span className="text-xs text-right font-medium"
-        style={{ color: hasData ? (dimmed ? '#555570' : '#8B85FF') : '#555570' }}>
+        style={{ color: hasData ? (dimmed ? 'var(--c-555570)' : 'var(--c-8b85ff)') : 'var(--c-555570)' }}>
         {hasData ? fmtAnn(cat.page1Demand) : '—'}
       </span>
       <span className="text-sm font-semibold text-right"
-        style={{ color: hasData ? (dimmed ? '#555570' : '#F0F0FF') : '#555570' }}>
+        style={{ color: hasData ? (dimmed ? 'var(--c-555570)' : 'var(--c-f0f0ff)') : 'var(--c-555570)' }}>
         {hasData ? `${share.toFixed(1)}%` : '—'}
       </span>
     </div>

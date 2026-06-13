@@ -9,26 +9,29 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // OrbitIQ brand palette — dark professional
+        // OrbitIQ brand palette — theme-aware (v7.185).
+        // Each color resolves to a CSS channel var (R G B) so it follows the
+        // active [data-theme] (dark default / light) AND keeps Tailwind opacity
+        // modifiers like bg-orbit-card/50 working via <alpha-value>.
         orbit: {
-          bg:       '#0A0A0F',
-          surface:  '#111118',
-          card:     '#16161F',
-          border:   '#1E1E2E',
-          muted:    '#2A2A3D',
+          bg:       'rgb(var(--orbit-bg) / <alpha-value>)',
+          surface:  'rgb(var(--orbit-surface) / <alpha-value>)',
+          card:     'rgb(var(--orbit-card) / <alpha-value>)',
+          border:   'rgb(var(--orbit-border) / <alpha-value>)',
+          muted:    'rgb(var(--orbit-muted) / <alpha-value>)',
           // Accent — electric indigo
-          accent:   '#6C63FF',
-          'accent-light': '#8B85FF',
-          'accent-dim':   '#3D3880',
+          accent:   'rgb(var(--orbit-accent) / <alpha-value>)',
+          'accent-light': 'rgb(var(--orbit-accent-light) / <alpha-value>)',
+          'accent-dim':   'rgb(var(--orbit-accent-dim) / <alpha-value>)',
           // Signal colors
-          green:    '#22C55E',
-          amber:    '#F59E0B',
-          red:      '#EF4444',
-          cyan:     '#06B6D4',
+          green:    'rgb(var(--orbit-green) / <alpha-value>)',
+          amber:    'rgb(var(--orbit-amber) / <alpha-value>)',
+          red:      'rgb(var(--orbit-red) / <alpha-value>)',
+          cyan:     'rgb(var(--orbit-cyan) / <alpha-value>)',
           // Text
-          primary:  '#F0F0FF',
-          secondary: '#8888AA',
-          tertiary:  '#555570',
+          primary:  'rgb(var(--orbit-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--orbit-secondary) / <alpha-value>)',
+          tertiary:  'rgb(var(--orbit-tertiary) / <alpha-value>)',
         },
       },
       fontFamily: {

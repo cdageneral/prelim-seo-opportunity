@@ -57,14 +57,14 @@ const fmt = (n: number) => (n ?? 0).toLocaleString();
 
 const INTENT_LABEL: Record<string, string> = { 'near-me': 'near-me', 'geo-modifier': 'geo-mod', 'implicit-local': 'implicit' };
 function intentClass(i: string): React.CSSProperties {
-  if (i === 'near-me')      return { background: 'rgba(6,182,212,.13)',  color: '#46cce0', border: '1px solid rgba(6,182,212,.25)' };
-  if (i === 'geo-modifier') return { background: 'rgba(108,99,255,.15)', color: '#a9a3ff', border: '1px solid rgba(108,99,255,.3)' };
-  return { background: 'rgba(136,136,170,.12)', color: '#9a9ac0', border: '1px solid #2a2a3d' };
+  if (i === 'near-me')      return { background: 'var(--ca-6-182-212-0_13)',  color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' };
+  if (i === 'geo-modifier') return { background: 'var(--ca-108-99-255-0_15)', color: 'var(--c-a9a3ff)', border: '1px solid var(--ca-108-99-255-0_3)' };
+  return { background: 'var(--ca-136-136-170-0_12)', color: 'var(--c-9a9ac0)', border: '1px solid var(--c-2a2a3d)' };
 }
 function rankChip(rank: number | null): React.CSSProperties {
-  if (rank == null)      return { background: 'rgba(239,68,68,.13)', color: '#f08a8a', border: '1px solid rgba(239,68,68,.28)' };
-  if (rank === 1)        return { background: 'rgba(34,197,94,.16)', color: '#5ee68f', border: '1px solid rgba(34,197,94,.3)' };
-  return { background: 'rgba(245,158,11,.14)', color: '#f6c061', border: '1px solid rgba(245,158,11,.28)' };
+  if (rank == null)      return { background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)', border: '1px solid var(--ca-239-68-68-0_28)' };
+  if (rank === 1)        return { background: 'var(--ca-34-197-94-0_16)', color: 'var(--c-5ee68f)', border: '1px solid var(--ca-34-197-94-0_3)' };
+  return { background: 'var(--ca-245-158-11-0_14)', color: 'var(--c-f6c061)', border: '1px solid var(--ca-245-158-11-0_28)' };
 }
 
 // Location status (v7.180): "Verified" once a real Google rating is captured;
@@ -73,9 +73,9 @@ function rankChip(rank: number | null): React.CSSProperties {
 // "Incomplete" for a genuine gap (missing address, or rating with zero reviews).
 function locStatus(l: { verified: boolean; rating: number | null; reviews: number; address: string }):
   { label: string; color: string; icon: string; hint: string } {
-  if (l.verified) return { label: 'Verified', color: '#5ee68f', icon: '✓', hint: 'Real Google rating, reviews and address on file' };
-  if (l.rating == null) return { label: 'Rating pending', color: '#7aa7ff', icon: '◷', hint: 'Discovered from the client sitemap — Google rating is captured when this location appears in a scanned map pack' };
-  return { label: 'Incomplete', color: '#f6c061', icon: '⚠', hint: 'Listing is missing an address or has no reviews' };
+  if (l.verified) return { label: 'Verified', color: 'var(--c-5ee68f)', icon: '✓', hint: 'Real Google rating, reviews and address on file' };
+  if (l.rating == null) return { label: 'Rating pending', color: 'var(--c-7aa7ff)', icon: '◷', hint: 'Discovered from the client sitemap — Google rating is captured when this location appears in a scanned map pack' };
+  return { label: 'Incomplete', color: 'var(--c-f6c061)', icon: '⚠', hint: 'Listing is missing an address or has no reviews' };
 }
 
 export default function LocalSearchSection({ projectId, analysis, projectName, domain, competitors, kwVersion }: Props) {
@@ -238,12 +238,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
           {!scanning && hasLocal && (
             <div className="scan-setup">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#cfccff', textTransform: 'uppercase', letterSpacing: '.08em' }}>⚙ Scan setup</span>
-                <span style={{ fontSize: 10.5, color: '#8888AA' }}>Set how much to scan, then Run. Cost = services × locations map-pack checks.</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-cfccff)', textTransform: 'uppercase', letterSpacing: '.08em' }}>⚙ Scan setup</span>
+                <span style={{ fontSize: 10.5, color: 'var(--c-8888aa)' }}>Set how much to scan, then Run. Cost = services × locations map-pack checks.</span>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end' }}>
                 <div className="setup-field">
-                  <label>Services <span style={{ color: '#6a6a90', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(brand + service categories)</span></label>
+                  <label>Services <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(brand + service categories)</span></label>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <input type="number" min={1} max={20} value={capSeeds}
                       onChange={e => setCapSeeds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))} />
@@ -268,7 +268,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 </div>
                 <button onClick={() => requestPlan()} className="orbit-btn-sm" style={{ height: 32 }}>Estimate &amp; preview</button>
               </div>
-              <div style={{ fontSize: 10.5, color: '#6a6a90', marginTop: 7 }}>
+              <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', marginTop: 7 }}>
                 A capped run scans the top locations by your chosen priority. "Largest markets" uses metro size; "Highest demand" uses real Semrush volume per city. Lowest-competition ranking needs scan data, so it appears in results, not here.
               </div>
             </div>
@@ -278,16 +278,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
           {scanning && (
             <div style={{ marginTop: 12, maxWidth: 480 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
-                <span style={{ fontSize: 11, color: '#9090b8' }}>
-                  <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />
+                <span style={{ fontSize: 11, color: 'var(--c-9090b8)' }}>
+                  <i className="ti ti-loader-2" style={{ marginRight: 5, color: 'var(--c-22d3ee)' }} />
                   {(!progress || progress.total === 0) ? (progress?.seed || 'Starting — discovering locations…') : `Cell ${progress.done} of ${progress.total}${progress.seed ? ` · ${progress.seed}` : ''}`}
                 </span>
-                <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{progress && progress.total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}</span>
+                <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{progress && progress.total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}</span>
               </div>
-              <div style={{ height: 6, background: '#1A1A30', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: 6, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
                 {progress && progress.total > 0
-                  ? <div style={{ height: '100%', width: `${pct}%`, background: '#22d3ee', transition: 'width 0.3s ease' }} />
-                  : <div style={{ height: '100%', width: '35%', background: '#22d3ee', opacity: 0.6, animation: 'orbitiq-lindet 1.1s ease-in-out infinite' }} />}
+                  ? <div style={{ height: '100%', width: `${pct}%`, background: 'var(--c-22d3ee)', transition: 'width 0.3s ease' }} />
+                  : <div style={{ height: '100%', width: '35%', background: 'var(--c-22d3ee)', opacity: 0.6, animation: 'orbitiq-lindet 1.1s ease-in-out infinite' }} />}
               </div>
               <style>{`@keyframes orbitiq-lindet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
             </div>
@@ -295,23 +295,23 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
           {/* confirm plan */}
           {plan && !scanning && (
-            <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid rgba(108,99,255,.3)', background: 'rgba(108,99,255,.06)', maxWidth: 560 }}>
-              <div style={{ fontSize: 12.5, color: '#cfccff', fontWeight: 600 }}>Ready to scan the map-pack grid</div>
-              <div style={{ fontSize: 11.5, color: '#9090b8', marginTop: 5 }}>
-                <b style={{ color: '#cfccff' }}>{plan.seeds}</b> service{plan.seeds !== 1 ? 's' : ''} × <b style={{ color: '#cfccff' }}>{plan.locationsUsed}</b> of {plan.locationsScannable} location{plan.locationsScannable !== 1 ? 's' : ''} = <b style={{ color: '#cfccff' }}>{fmt(plan.cells)}</b> map-pack checks ·
-                <b style={{ color: '#f6c061' }}> ~{fmt(plan.estCalls)} SerpAPI credits</b>
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid var(--ca-108-99-255-0_3)', background: 'var(--ca-108-99-255-0_06)', maxWidth: 560 }}>
+              <div style={{ fontSize: 12.5, color: 'var(--c-cfccff)', fontWeight: 600 }}>Ready to scan the map-pack grid</div>
+              <div style={{ fontSize: 11.5, color: 'var(--c-9090b8)', marginTop: 5 }}>
+                <b style={{ color: 'var(--c-cfccff)' }}>{plan.seeds}</b> service{plan.seeds !== 1 ? 's' : ''} × <b style={{ color: 'var(--c-cfccff)' }}>{plan.locationsUsed}</b> of {plan.locationsScannable} location{plan.locationsScannable !== 1 ? 's' : ''} = <b style={{ color: 'var(--c-cfccff)' }}>{fmt(plan.cells)}</b> map-pack checks ·
+                <b style={{ color: 'var(--c-f6c061)' }}> ~{fmt(plan.estCalls)} SerpAPI credits</b>
               </div>
               {plan.seedList && plan.seedList.length > 0 && (
-                <div style={{ fontSize: 10.5, color: '#9090b8', marginTop: 4 }}>Services: {plan.seedList.join(' · ')}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--c-9090b8)', marginTop: 4 }}>Services: {plan.seedList.join(' · ')}</div>
               )}
               {plan.locationsUsed < plan.locationsScannable && (
-                <div style={{ fontSize: 10.5, color: '#f6c061', marginTop: 4 }}>Scanning the top {plan.locationsUsed} of {plan.locationsScannable} locations by <b>{plan.order === 'demand' ? 'highest demand' : plan.order === 'az' ? 'A–Z' : 'largest market'}</b> — set Locations to All to cover every one (higher cost).</div>
+                <div style={{ fontSize: 10.5, color: 'var(--c-f6c061)', marginTop: 4 }}>Scanning the top {plan.locationsUsed} of {plan.locationsScannable} locations by <b>{plan.order === 'demand' ? 'highest demand' : plan.order === 'az' ? 'A–Z' : 'largest market'}</b> — set Locations to All to cover every one (higher cost).</div>
               )}
               {plan.firstCities && plan.firstCities.length > 0 && (
-                <div style={{ fontSize: 10.5, color: '#9090b8', marginTop: 4 }}>First up: {plan.firstCities.join(' · ')}{plan.locationsUsed > plan.firstCities.length ? ' …' : ''}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--c-9090b8)', marginTop: 4 }}>First up: {plan.firstCities.join(' · ')}{plan.locationsUsed > plan.firstCities.length ? ' …' : ''}</div>
               )}
               {(plan.source === 'kml' || plan.source === 'sitemap-pages') && (
-                <div style={{ fontSize: 10.5, color: '#5ee68f', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
+                <div style={{ fontSize: 10.5, color: 'var(--c-5ee68f)', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
               )}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                 <button onClick={runScan} className="orbit-btn-sm">Confirm &amp; scan</button>
@@ -319,14 +319,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               </div>
             </div>
           )}
-          {scanError && <div style={{ marginTop: 10, fontSize: 11.5, color: '#f08a8a' }}>{scanError}</div>}
+          {scanError && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f08a8a)' }}>{scanError}</div>}
         </div>
 
         {/* Detection banner / trigger */}
         {dbLoaded && (
-          <div style={{ background: hasLocal ? 'linear-gradient(90deg,rgba(6,182,212,.12),transparent)' : '#13131d', border: `1px solid ${hasLocal ? 'rgba(6,182,212,.28)' : '#1E1E2E'}`, borderRadius: 11, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: hasLocal ? 'rgba(6,182,212,.18)' : '#1a1a2a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📍</div>
-            <div style={{ flex: 1, fontSize: 12.5, color: '#c8c8e0' }}>
+          <div style={{ background: hasLocal ? 'linear-gradient(90deg,var(--ca-6-182-212-0_12),transparent)' : 'var(--c-13131d)', border: `1px solid ${hasLocal ? 'var(--ca-6-182-212-0_28)' : 'var(--c-1e1e2e)'}`, borderRadius: 11, padding: '12px 15px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: hasLocal ? 'var(--ca-6-182-212-0_18)' : 'var(--c-1a1a2a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📍</div>
+            <div style={{ flex: 1, fontSize: 12.5, color: 'var(--c-c8c8e0)' }}>
               {hasLocal
                 ? <><b>Local panel active — {seeds.length} service{seeds.length !== 1 ? 's' : ''} tracked.</b> <span className="text-orbit-secondary"> Each service is checked in the Google map pack as "{`{service} {city}`}" from every location's GPS{scan ? <> — last grid scanned {fmt(scan.scannedCount)} service×city cells across {fmt(scan.locationsScanned ?? 0)} locations.</> : <>. Run a scan to map your rank city by city.</>}</span></>
                 : <><b>No services detected yet.</b> <span className="text-orbit-secondary"> Couldn't derive service seeds from this client's categories/keywords — confirm the analysis ran with keyword data.</span></>}
@@ -341,24 +341,24 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <div className="orbit-card p-5" style={{ flex: '0 0 300px', display: 'flex', gap: 16, alignItems: 'center' }}>
                 <div style={{ position: 'relative', width: 120, height: 120, flexShrink: 0 }}>
                   <svg viewBox="0 0 36 36" width="120" height="120" style={{ transform: 'rotate(-90deg)' }}>
-                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="3" />
-                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="#6C63FF" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${roll ? roll.index.score : 0} 100`} />
+                    <circle cx="18" cy="18" r="15.9" fill="none" style={{stroke:'var(--c-1e1e2e)'}} strokeWidth="3" />
+                    <circle cx="18" cy="18" r="15.9" fill="none" style={{stroke:'var(--c-6c63ff)'}} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${roll ? roll.index.score : 0} 100`} />
                   </svg>
                   <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                    <b style={{ fontSize: 27, fontWeight: 800, color: roll ? '#8B85FF' : '#555570' }}>{roll ? roll.index.score : '—'}</b>
-                    <span style={{ fontSize: 9, color: '#8888AA', marginTop: 2, textAlign: 'center', lineHeight: 1.3 }}>Local Visibility<br />Index</span>
+                    <b style={{ fontSize: 27, fontWeight: 800, color: roll ? 'var(--c-8b85ff)' : 'var(--c-555570)' }}>{roll ? roll.index.score : '—'}</b>
+                    <span style={{ fontSize: 9, color: 'var(--c-8888aa)', marginTop: 2, textAlign: 'center', lineHeight: 1.3 }}>Local Visibility<br />Index</span>
                   </div>
                 </div>
-                <div style={{ fontSize: 12, color: '#8888AA', lineHeight: 1.55 }}>
+                <div style={{ fontSize: 12, color: 'var(--c-8888aa)', lineHeight: 1.55 }}>
                   {roll
-                    ? <>Blend of map-pack presence (40%), rank quality (25%), reviews (20%) &amp; listing completeness (15%) across <b style={{ color: '#F0F0FF' }}>{clientLocations.length} location{clientLocations.length !== 1 ? 's' : ''}</b>.</>
+                    ? <>Blend of map-pack presence (40%), rank quality (25%), reviews (20%) &amp; listing completeness (15%) across <b style={{ color: 'var(--c-f0f0ff)' }}>{clientLocations.length} location{clientLocations.length !== 1 ? 's' : ''}</b>.</>
                     : <>Run a local scan to compute the index from real map-pack, listing &amp; review data.</>}
                 </div>
               </div>
               <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, minWidth: 360 }}>
                 <Stat k="Locations" v={scan ? String(clientLocations.length) : '—'} d={scan ? `${clientLocations.filter(l => l.verified).length} verified` : 'after scan'} />
-                <Stat k="Map-Pack Presence" v={roll ? `${roll.pack.presenceRate}%` : '—'} d={roll ? `${roll.pack.inPack} of ${roll.pack.withPack} packs` : 'after scan'} color="#5ee68f" bar={roll ? roll.pack.presenceRate : 0} />
-                <Stat k="Avg Pack Rank" v={roll && roll.pack.avgRank > 0 ? String(roll.pack.avgRank) : '—'} d="when present (1–3)" color="#f6c061" />
+                <Stat k="Map-Pack Presence" v={roll ? `${roll.pack.presenceRate}%` : '—'} d={roll ? `${roll.pack.inPack} of ${roll.pack.withPack} packs` : 'after scan'} color="var(--c-5ee68f)" bar={roll ? roll.pack.presenceRate : 0} />
+                <Stat k="Avg Pack Rank" v={roll && roll.pack.avgRank > 0 ? String(roll.pack.avgRank) : '—'} d="when present (1–3)" color="var(--c-f6c061)" />
                 <Stat k="Avg Rating" v={roll && roll.reviews.avgRating > 0 ? `${roll.reviews.avgRating}★` : '—'} d={roll ? `${fmt(roll.reviews.totalReviews)} reviews` : 'after scan'} />
               </div>
             </div>
@@ -377,12 +377,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'kw' && (
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Services tracked per location</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Your brand + top service categories, derived from the client's own footprint. Each is scanned in the Google map pack as <b style={{ color: '#c8c8e0' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + top service categories, derived from the client's own footprint. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="SERVICES" v={String(seeds.length)} />
-                  <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="#46cce0" />
-                  <MiniStat k="GRID CELLS" v={scan ? fmt(scan.scannedCount) : `${seeds.length} × locations`} color="#a9a3ff" />
-                  <MiniStat k="SERVICE VOL / MO" v={fmt(seedVolume)} color="#a9a3ff" />
+                  <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="var(--c-46cce0)" />
+                  <MiniStat k="GRID CELLS" v={scan ? fmt(scan.scannedCount) : `${seeds.length} × locations`} color="var(--c-a9a3ff)" />
+                  <MiniStat k="SERVICE VOL / MO" v={fmt(seedVolume)} color="var(--c-a9a3ff)" />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
@@ -392,16 +392,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                         <tr key={i}>
                           <td style={{ fontWeight: 600 }}>{s.term}</td>
                           <td>{s.kind === 'brand'
-                            ? <span className="ipill" style={{ background: 'rgba(108,99,255,.15)', color: '#a9a3ff', border: '1px solid rgba(108,99,255,.3)' }}>brand</span>
-                            : <span className="ipill" style={{ background: 'rgba(34,197,94,.14)', color: '#5ee68f', border: '1px solid rgba(34,197,94,.28)' }}>service</span>}</td>
-                          <td style={{ textAlign: 'right' }}>{s.volume > 0 ? fmt(s.volume) : <span style={{ color: '#555570' }}>—</span>}</td>
-                          <td style={{ color: '#8888AA' }}>"{s.term} {`{city}`}"</td>
+                            ? <span className="ipill" style={{ background: 'var(--ca-108-99-255-0_15)', color: 'var(--c-a9a3ff)', border: '1px solid var(--ca-108-99-255-0_3)' }}>brand</span>
+                            : <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_14)', color: 'var(--c-5ee68f)', border: '1px solid var(--ca-34-197-94-0_28)' }}>service</span>}</td>
+                          <td style={{ textAlign: 'right' }}>{s.volume > 0 ? fmt(s.volume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
+                          <td style={{ color: 'var(--c-8888aa)' }}>"{s.term} {`{city}`}"</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Adjust the <b>Services</b> and <b>Locations</b> caps at the top, then run a scan to see map-pack rank per city in the Map Pack tab.</div>
+                <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Adjust the <b>Services</b> and <b>Locations</b> caps at the top, then run a scan to see map-pack rank per city in the Map Pack tab.</div>
               </div>
             )}
 
@@ -412,35 +412,35 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'loc' && scan && (
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>
                   {scan.source === 'kml' || scan.source === 'sitemap-pages'
-                    ? <><b style={{ color: '#5ee68f' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
+                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
                 </div>
                 {clientLocations.length === 0
-                  ? <div style={{ fontSize: 12.5, color: '#f6c061' }}>No client locations were discovered. Confirm the site exposes a sitemap/locations page, or that the business name matches the Google Business Profile.</div>
+                  ? <div style={{ fontSize: 12.5, color: 'var(--c-f6c061)' }}>No client locations were discovered. Confirm the site exposes a sitemap/locations page, or that the business name matches the Google Business Profile.</div>
                   : <>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
                       {clientLocations.slice(0, 60).map((l, i) => (
-                        <div key={i} className="loc-card" style={{ borderColor: l.healthFlags.length ? 'rgba(245,158,11,.3)' : '#1E1E2E' }}>
-                          <div className="loc-mk" style={l.healthFlags.length ? { background: 'rgba(245,158,11,.12)', borderColor: 'rgba(245,158,11,.3)' } : {}}>{l.healthFlags.length ? '⚠' : '📍'}</div>
+                        <div key={i} className="loc-card" style={{ borderColor: l.healthFlags.length ? 'var(--ca-245-158-11-0_3)' : 'var(--c-1e1e2e)' }}>
+                          <div className="loc-mk" style={l.healthFlags.length ? { background: 'var(--ca-245-158-11-0_12)', borderColor: 'var(--ca-245-158-11-0_3)' } : {}}>{l.healthFlags.length ? '⚠' : '📍'}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13.5, fontWeight: 700 }}>{l.title}</div>
-                            <div style={{ fontSize: 11, color: '#8888AA' }}>{l.address || 'no address'} · {(() => { const st = locStatus(l); return <span style={{ color: st.color }} title={st.hint}>{st.icon} {st.label}</span>; })()}</div>
+                            <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{l.address || 'no address'} · {(() => { const st = locStatus(l); return <span style={{ color: st.color }} title={st.hint}>{st.icon} {st.label}</span>; })()}</div>
                             <div style={{ marginTop: 6, fontSize: 12 }}>
-                              {l.rating != null ? <><span style={{ color: '#f6c061' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: '#555570' }}>rating pending scan</span>}
-                              <span style={{ color: '#8888AA' }}> · {fmt(l.reviews)} reviews{l.type ? ` · ${l.type}` : ''}</span>
+                              {l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: 'var(--c-555570)' }}>rating pending scan</span>}
+                              <span style={{ color: 'var(--c-8888aa)' }}> · {fmt(l.reviews)} reviews{l.type ? ` · ${l.type}` : ''}</span>
                             </div>
-                            <div style={{ marginTop: 4, fontSize: 11, color: '#8888AA' }}>
+                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-8888aa)' }}>
                               {l.phone ? <span>{l.phone}</span> : null}
-                              {l.pageUrl ? <> · <a href={l.pageUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#8B85FF' }}>View page ↗</a></> : null}
+                              {l.pageUrl ? <> · <a href={l.pageUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--c-8b85ff)' }}>View page ↗</a></> : null}
                             </div>
-                            {l.healthFlags.length > 0 && <div style={{ marginTop: 5, fontSize: 10.5, color: '#f6c061' }}>{l.healthFlags.join(' · ')}</div>}
+                            {l.healthFlags.length > 0 && <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-f6c061)' }}>{l.healthFlags.join(' · ')}</div>}
                           </div>
                         </div>
                       ))}
                     </div>
-                    {clientLocations.length > 60 && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Showing 60 of {fmt(clientLocations.length)} locations.</div>}
+                    {clientLocations.length > 60 && <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Showing 60 of {fmt(clientLocations.length)} locations.</div>}
                   </>}
               </div>
             )}
@@ -449,14 +449,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'pack' && scan && roll && (
               <>
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <MiniCard k="IN PACK (1–3)" v={String(roll.pack.inPack)} color="#5ee68f" bar={roll.pack.withPack ? Math.round(roll.pack.inPack / roll.pack.withPack * 100) : 0} />
+                  <MiniCard k="IN PACK (1–3)" v={String(roll.pack.inPack)} color="var(--c-5ee68f)" bar={roll.pack.withPack ? Math.round(roll.pack.inPack / roll.pack.withPack * 100) : 0} />
                   <MiniCard k="RANK 1" v={String(roll.pack.rank1)} d="top of pack" />
-                  <MiniCard k="NOT IN PACK" v={String(roll.pack.notInPack)} color="#f08a8a" d="competitors rank, you don't" />
+                  <MiniCard k="NOT IN PACK" v={String(roll.pack.notInPack)} color="var(--c-f08a8a)" d="competitors rank, you don't" />
                   <MiniCard k="PACKS FOUND" v={`${roll.pack.withPack}/${roll.pack.scanned}`} d="queries with a 3-pack" />
                 </div>
                 <div className="orbit-card p-5">
                   <div style={{ fontSize: 13, fontWeight: 700 }}>Map-pack rank by service × location</div>
-                  <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Your position in Google's local 3-pack for each service in each city, checked from that location's GPS. Real SerpAPI local results — {fmt(scan.scannedCount)} cells across {fmt(scan.locationsScanned ?? 0)} locations.</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your position in Google's local 3-pack for each service in each city, checked from that location's GPS. Real SerpAPI local results — {fmt(scan.scannedCount)} cells across {fmt(scan.locationsScanned ?? 0)} locations.</div>
                   <div style={{ overflowX: 'auto' }}>
                     <table className="local-tbl">
                       <thead><tr><th>Service</th><th>City</th><th style={{ textAlign: 'right' }}>Base vol</th><th>Pack?</th><th>Your rank</th><th>Pack leader</th></tr></thead>
@@ -471,17 +471,17 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                         }).slice(0, 400).map((s, i) => (
                           <tr key={i}>
                             <td style={{ fontWeight: 600 }}>{s.seed || s.keyword}</td>
-                            <td style={{ color: '#c8c8e0' }}>{s.city || s.bestLocationCity || '—'}</td>
-                            <td style={{ textAlign: 'right' }}>{s.searchVolume > 0 ? fmt(s.searchVolume) : <span style={{ color: '#555570' }}>—</span>}</td>
-                            <td>{s.packPresent ? '✓' : <span style={{ color: '#555570' }}>—</span>}</td>
+                            <td style={{ color: 'var(--c-c8c8e0)' }}>{s.city || s.bestLocationCity || '—'}</td>
+                            <td style={{ textAlign: 'right' }}>{s.searchVolume > 0 ? fmt(s.searchVolume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
+                            <td>{s.packPresent ? '✓' : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
                             <td><span className="rchip" style={rankChip(s.clientBestRank)}>{s.clientBestRank ?? '—'}</span></td>
-                            <td style={{ color: '#8888AA' }}>{s.pack.find(m => m.isClient && m.position === s.clientBestRank) ? 'You' : (s.packLeader || '—')}</td>
+                            <td style={{ color: 'var(--c-8888aa)' }}>{s.pack.find(m => m.isClient && m.position === s.clientBestRank) ? 'You' : (s.packLeader || '—')}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  {scan.keywords.length > 400 && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Showing 400 of {fmt(scan.keywords.length)} cells.</div>}
+                  {scan.keywords.length > 400 && <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Showing 400 of {fmt(scan.keywords.length)} cells.</div>}
                 </div>
               </>
             )}
@@ -493,22 +493,22 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                   <div className="orbit-card p-5" style={{ flex: '0 0 270px', display: 'flex', gap: 14, alignItems: 'center' }}>
                     <div style={{ position: 'relative', width: 104, height: 104, flexShrink: 0 }}>
                       <svg viewBox="0 0 36 36" width="104" height="104" style={{ transform: 'rotate(-90deg)' }}>
-                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="#1E1E2E" strokeWidth="3" />
-                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f6c061" strokeWidth="3" strokeLinecap="round" strokeDasharray={`${Math.round((roll.reviews.avgRating / 5) * 100)} 100`} />
+                        <circle cx="18" cy="18" r="15.9" fill="none" style={{stroke:'var(--c-1e1e2e)'}} strokeWidth="3" />
+                        <circle cx="18" cy="18" r="15.9" fill="none" style={{stroke:'var(--c-f6c061)'}} strokeWidth="3" strokeLinecap="round" strokeDasharray={`${Math.round((roll.reviews.avgRating / 5) * 100)} 100`} />
                       </svg>
                       <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                        <b style={{ fontSize: 22, color: '#f6c061' }}>{roll.reviews.avgRating || '—'}</b>
-                        <span style={{ fontSize: 9, color: '#8888AA', marginTop: 2, textAlign: 'center' }}>avg ★ across<br />{roll.reviews.locationCount} loc</span>
+                        <b style={{ fontSize: 22, color: 'var(--c-f6c061)' }}>{roll.reviews.avgRating || '—'}</b>
+                        <span style={{ fontSize: 9, color: 'var(--c-8888aa)', marginTop: 2, textAlign: 'center' }}>avg ★ across<br />{roll.reviews.locationCount} loc</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, color: '#8888AA' }}>
-                      <b style={{ color: '#F0F0FF', fontSize: 14 }}>{fmt(roll.reviews.totalReviews)}</b> total reviews<br />
+                    <div style={{ fontSize: 12, color: 'var(--c-8888aa)' }}>
+                      <b style={{ color: 'var(--c-f0f0ff)', fontSize: 14 }}>{fmt(roll.reviews.totalReviews)}</b> total reviews<br />
                       range {roll.reviews.worstRating}–{roll.reviews.bestRating}★ across locations
                     </div>
                   </div>
                   <div className="orbit-card p-5" style={{ flex: 1, minWidth: 320 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Reviews by location</div>
-                    <div style={{ fontSize: 11, color: '#8888AA', marginBottom: 10 }}>Real Google rating + review count. (Star distribution &amp; velocity require a per-review pull — not fabricated here.)</div>
+                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count. (Star distribution &amp; velocity require a per-review pull — not fabricated here.)</div>
                     <div style={{ overflowX: 'auto' }}>
                       <table className="local-tbl">
                         <thead><tr><th>Location</th><th>Rating</th><th style={{ textAlign: 'right' }}>Reviews</th><th>Status</th></tr></thead>
@@ -516,9 +516,9 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                           {clientLocations.map((l, i) => (
                             <tr key={i}>
                               <td style={{ fontWeight: 600 }}>{l.city || l.title}</td>
-                              <td>{l.rating != null ? <><span style={{ color: '#f6c061' }}>★</span> {l.rating}</> : '—'}</td>
+                              <td>{l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> {l.rating}</> : '—'}</td>
                               <td style={{ textAlign: 'right' }}>{fmt(l.reviews)}</td>
-                              <td>{l.rating != null && l.rating >= 4.5 ? <span className="ipill" style={{ background: 'rgba(34,197,94,.15)', color: '#5ee68f' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'rgba(245,158,11,.15)', color: '#f6c061' }}>OK</span> : <span className="ipill" style={{ background: 'rgba(239,68,68,.13)', color: '#f08a8a' }}>Weak</span>}</td>
+                              <td>{l.rating != null && l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -533,16 +533,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'comp' && scan && roll && (
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Share of Local Voice</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 14 }}>Who appears most across your {roll.pack.withPack} local packs. Share = packs where each business holds a 3-pack slot.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 14 }}>Who appears most across your {roll.pack.withPack} local packs. Share = packs where each business holds a 3-pack slot.</div>
                 {roll.sov.slice(0, 12).map((row, i) => (
-                  <div key={i} className="lb-row" style={row.isClient ? { borderColor: '#3D3880', background: 'linear-gradient(90deg,rgba(108,99,255,.12),transparent)' } : {}}>
-                    <span style={{ fontFamily: 'monospace', fontWeight: 800, color: '#555570', width: 20 }}>{i + 1}</span>
+                  <div key={i} className="lb-row" style={row.isClient ? { borderColor: 'var(--c-3d3880)', background: 'linear-gradient(90deg,var(--ca-108-99-255-0_12),transparent)' } : {}}>
+                    <span style={{ fontFamily: 'monospace', fontWeight: 800, color: 'var(--c-555570)', width: 20 }}>{i + 1}</span>
                     <div style={{ flex: '0 0 180px', minWidth: 0 }}>
                       <b style={{ fontSize: 12.5 }}>{row.isClient ? `${projectName} (You)` : row.name}</b>
-                      <div style={{ fontSize: 10.5, color: '#8888AA' }}>{row.avgRating != null ? `${row.avgRating}★` : 'no rating'}{row.maxReviews ? ` · ${fmt(row.maxReviews)} rev` : ''}</div>
+                      <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)' }}>{row.avgRating != null ? `${row.avgRating}★` : 'no rating'}{row.maxReviews ? ` · ${fmt(row.maxReviews)} rev` : ''}</div>
                     </div>
-                    <div style={{ height: 7, borderRadius: 4, background: '#0e0e18', flex: 1, overflow: 'hidden', minWidth: 80 }}>
-                      <i style={{ display: 'block', height: '100%', width: `${row.sharePct}%`, background: row.isClient ? 'linear-gradient(90deg,#6C63FF,#06B6D4)' : '#5b5b7a' }} />
+                    <div style={{ height: 7, borderRadius: 4, background: 'var(--c-0e0e18)', flex: 1, overflow: 'hidden', minWidth: 80 }}>
+                      <i style={{ display: 'block', height: '100%', width: `${row.sharePct}%`, background: row.isClient ? 'linear-gradient(90deg,var(--c-6c63ff),var(--c-06b6d4))' : 'var(--c-5b5b7a)' }} />
                     </div>
                     <span style={{ width: 46, textAlign: 'right', fontWeight: 700, fontSize: 12.5 }}>{row.sharePct}%</span>
                   </div>
@@ -554,14 +554,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {tab === 'opp' && scan && roll && (
               <>
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <MiniCard k="P0 — DO NOW" v={String(roll.opps.counts.P0)} color="#f08a8a" />
-                  <MiniCard k="P1 — NEXT" v={String(roll.opps.counts.P1)} color="#f6c061" />
-                  <MiniCard k="P2 — LATER" v={String(roll.opps.counts.P2)} color="#a9a3ff" />
+                  <MiniCard k="P0 — DO NOW" v={String(roll.opps.counts.P0)} color="var(--c-f08a8a)" />
+                  <MiniCard k="P1 — NEXT" v={String(roll.opps.counts.P1)} color="var(--c-f6c061)" />
+                  <MiniCard k="P2 — LATER" v={String(roll.opps.counts.P2)} color="var(--c-a9a3ff)" />
                   <MiniCard k="VOLUME AT STAKE" v={fmt(roll.opps.volumeAtStake)} d="/mo in pack misses" />
                 </div>
                 <div className="orbit-card p-5">
                   {roll.opps.opportunities.length === 0
-                    ? <div style={{ fontSize: 12.5, color: '#5ee68f' }}>No local gaps found in the scanned set — you hold the pack where it counts. 🎉</div>
+                    ? <div style={{ fontSize: 12.5, color: 'var(--c-5ee68f)' }}>No local gaps found in the scanned set — you hold the pack where it counts. 🎉</div>
                     : roll.opps.opportunities.map((o, i) => (
                         <div key={i} className="opp-row">
                           <span className={`tierbadge t-${o.tier}`}>{o.tier}</span>
@@ -570,7 +570,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                               <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{o.title}</div>
                               {o.location && <span className="locbadge" title={`Targets the ${o.location} location`}>📍 {o.location}</span>}
                             </div>
-                            <div style={{ fontSize: 11.5, color: '#8888AA' }}>{o.detail}</div>
+                            <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)' }}>{o.detail}</div>
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 9 }}>
                               {o.volume > 0 && <span className="ochip">Volume <b>{fmt(o.volume)}/mo</b></span>}
                               {o.intent && <span className="ochip">Type <b>{INTENT_LABEL[o.intent]}</b></span>}
@@ -583,7 +583,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               </>
             )}
 
-            <div style={{ fontSize: 11, color: '#555570', textAlign: 'center', padding: '6px 0 24px' }}>
+            <div style={{ fontSize: 11, color: 'var(--c-555570)', textAlign: 'center', padding: '6px 0 24px' }}>
               Every figure traces to a real source row — SerpAPI (map pack, Maps listings, ratings) + Semrush (volume). Nothing modeled.
             </div>
           </>
@@ -592,36 +592,36 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
       {/* scoped styles */}
       <style>{`
-        .badge-soft{font-size:10px;padding:3px 8px;border-radius:5px;background:#0F0F1E;border:1px solid #1E1E35;color:#7777a0}
-        .orbit-btn-sm{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid #3D3880;background:linear-gradient(180deg,rgba(108,99,255,.25),rgba(108,99,255,.12));color:#cfccff;cursor:pointer}
-        .orbit-btn-sm:hover{border-color:#6C63FF}
-        .orbit-btn-ghost{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid #1E1E2E;background:#13131d;color:#8888AA;cursor:pointer}
-        .cap-ctl{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#7777a0;background:#0F0F1E;border:1px solid #1E1E35;border-radius:8px;padding:4px 8px}
-        .cap-ctl input{width:46px;background:#07070e;border:1px solid #2a2a3d;border-radius:5px;color:#cfccff;font-size:12px;font-weight:700;padding:3px 5px;text-align:center}
-        .scan-setup{margin-top:14px;padding:13px 15px;border-radius:11px;border:1px solid rgba(108,99,255,.3);background:rgba(108,99,255,.06)}
+        .badge-soft{font-size:10px;padding:3px 8px;border-radius:5px;background:var(--c-0f0f1e);border:1px solid var(--c-1e1e35);color:var(--c-7777a0)}
+        .orbit-btn-sm{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid var(--c-3d3880);background:linear-gradient(180deg,var(--ca-108-99-255-0_25),var(--ca-108-99-255-0_12));color:var(--c-cfccff);cursor:pointer}
+        .orbit-btn-sm:hover{border-color:var(--c-6c63ff)}
+        .orbit-btn-ghost{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid var(--c-1e1e2e);background:var(--c-13131d);color:var(--c-8888aa);cursor:pointer}
+        .cap-ctl{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--c-7777a0);background:var(--c-0f0f1e);border:1px solid var(--c-1e1e35);border-radius:8px;padding:4px 8px}
+        .cap-ctl input{width:46px;background:var(--c-07070e);border:1px solid var(--c-2a2a3d);border-radius:5px;color:var(--c-cfccff);font-size:12px;font-weight:700;padding:3px 5px;text-align:center}
+        .scan-setup{margin-top:14px;padding:13px 15px;border-radius:11px;border:1px solid var(--ca-108-99-255-0_3);background:var(--ca-108-99-255-0_06)}
         .setup-field{display:flex;flex-direction:column;gap:5px}
-        .setup-field label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9090b8}
-        .setup-field input{width:58px;background:#07070e;border:1px solid #2a2a3d;border-radius:6px;color:#cfccff;font-size:13px;font-weight:700;padding:5px 6px;text-align:center}
-        .setup-field select{background:#07070e;border:1px solid #2a2a3d;border-radius:6px;color:#cfccff;font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer}
-        .setup-all{font-size:10.5px;font-weight:600;padding:0 9px;border-radius:6px;border:1px solid #3D3880;background:rgba(108,99,255,.14);color:#b7b2ff;cursor:pointer}
-        .setup-all:hover{border-color:#6C63FF}
+        .setup-field label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--c-9090b8)}
+        .setup-field input{width:58px;background:var(--c-07070e);border:1px solid var(--c-2a2a3d);border-radius:6px;color:var(--c-cfccff);font-size:13px;font-weight:700;padding:5px 6px;text-align:center}
+        .setup-field select{background:var(--c-07070e);border:1px solid var(--c-2a2a3d);border-radius:6px;color:var(--c-cfccff);font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer}
+        .setup-all{font-size:10.5px;font-weight:600;padding:0 9px;border-radius:6px;border:1px solid var(--c-3d3880);background:var(--ca-108-99-255-0_14);color:var(--c-b7b2ff);cursor:pointer}
+        .setup-all:hover{border-color:var(--c-6c63ff)}
         .local-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
-        .local-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#555570;font-weight:600;padding:9px 10px;border-bottom:1px solid #1E1E2E}
-        .local-tbl td{padding:10px;border-bottom:1px solid #15151f;vertical-align:middle}
-        .local-tbl tr:hover td{background:#13131d}
+        .local-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-555570);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--c-1e1e2e)}
+        .local-tbl td{padding:10px;border-bottom:1px solid var(--c-15151f);vertical-align:middle}
+        .local-tbl tr:hover td{background:var(--c-13131d)}
         .ipill{font-size:9.5px;padding:2px 7px;border-radius:5px;font-weight:600;white-space:nowrap}
         .rchip{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:23px;border-radius:7px;font-weight:800;font-size:12px;padding:0 6px}
-        .loc-card{background:#111118;border:1px solid #1E1E2E;border-radius:11px;padding:14px;display:flex;gap:12px;align-items:flex-start}
-        .loc-mk{width:34px;height:34px;border-radius:9px;background:rgba(108,99,255,.14);border:1px solid rgba(108,99,255,.3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
-        .lb-row{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;border:1px solid #1E1E2E;background:#111118;margin-bottom:8px}
-        .opp-row{border:1px solid #1E1E2E;border-radius:12px;padding:15px;background:#111118;display:flex;gap:13px;margin-bottom:11px}
-        .locbadge{flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:700;padding:3px 10px;border-radius:7px;background:rgba(108,99,255,.16);color:#b7b2ff;border:1px solid rgba(108,99,255,.35)}
+        .loc-card{background:var(--c-111118);border:1px solid var(--c-1e1e2e);border-radius:11px;padding:14px;display:flex;gap:12px;align-items:flex-start}
+        .loc-mk{width:34px;height:34px;border-radius:9px;background:var(--ca-108-99-255-0_14);border:1px solid var(--ca-108-99-255-0_3);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
+        .lb-row{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:10px;border:1px solid var(--c-1e1e2e);background:var(--c-111118);margin-bottom:8px}
+        .opp-row{border:1px solid var(--c-1e1e2e);border-radius:12px;padding:15px;background:var(--c-111118);display:flex;gap:13px;margin-bottom:11px}
+        .locbadge{flex-shrink:0;white-space:nowrap;font-size:11px;font-weight:700;padding:3px 10px;border-radius:7px;background:var(--ca-108-99-255-0_16);color:var(--c-b7b2ff);border:1px solid var(--ca-108-99-255-0_35)}
         .tierbadge{font-weight:800;font-size:11px;padding:4px 9px;border-radius:7px;height:fit-content;flex-shrink:0}
-        .t-P0{background:rgba(239,68,68,.15);color:#f08a8a;border:1px solid rgba(239,68,68,.3)}
-        .t-P1{background:rgba(245,158,11,.15);color:#f6c061;border:1px solid rgba(245,158,11,.3)}
-        .t-P2{background:rgba(108,99,255,.14);color:#a9a3ff;border:1px solid rgba(108,99,255,.3)}
-        .ochip{font-size:10.5px;padding:3px 9px;border-radius:6px;background:#0e0e18;border:1px solid #1E1E2E;color:#8888AA}
-        .ochip b{color:#F0F0FF}
+        .t-P0{background:var(--ca-239-68-68-0_15);color:var(--c-f08a8a);border:1px solid var(--ca-239-68-68-0_3)}
+        .t-P1{background:var(--ca-245-158-11-0_15);color:var(--c-f6c061);border:1px solid var(--ca-245-158-11-0_3)}
+        .t-P2{background:var(--ca-108-99-255-0_14);color:var(--c-a9a3ff);border:1px solid var(--ca-108-99-255-0_3)}
+        .ochip{font-size:10.5px;padding:3px 9px;border-radius:6px;background:var(--c-0e0e18);border:1px solid var(--c-1e1e2e);color:var(--c-8888aa)}
+        .ochip b{color:var(--c-f0f0ff)}
       `}</style>
     </div>
   );
@@ -635,31 +635,31 @@ function TabBtn({ id, cur, set, icon, label, cnt }: { id: Tab; cur: Tab; set: (t
     <button onClick={() => set(id)} style={{
       fontSize: 12.5, fontWeight: 600, padding: '8px 14px', borderRadius: 9, cursor: 'pointer',
       display: 'flex', alignItems: 'center', gap: 7,
-      background: active ? 'linear-gradient(180deg,rgba(108,99,255,.22),rgba(108,99,255,.06))' : '#13131d',
-      border: `1px solid ${active ? '#3D3880' : '#1E1E2E'}`, color: active ? '#fff' : '#8888AA',
+      background: active ? 'linear-gradient(180deg,var(--ca-108-99-255-0_22),var(--ca-108-99-255-0_06))' : 'var(--c-13131d)',
+      border: `1px solid ${active ? 'var(--c-3d3880)' : 'var(--c-1e1e2e)'}`, color: active ? 'var(--c-ffffff)' : 'var(--c-8888aa)',
     }}>
       <span style={{ fontSize: 13 }}>{icon}</span>{label}
-      {cnt != null && <span style={{ fontSize: 10, background: '#0c0c15', border: '1px solid #1E1E2E', borderRadius: 10, padding: '1px 7px', color: '#8888AA' }}>{cnt}</span>}
+      {cnt != null && <span style={{ fontSize: 10, background: 'var(--c-0c0c15)', border: '1px solid var(--c-1e1e2e)', borderRadius: 10, padding: '1px 7px', color: 'var(--c-8888aa)' }}>{cnt}</span>}
     </button>
   );
 }
 
 function Stat({ k, v, d, color, bar }: { k: string; v: string; d?: string; color?: string; bar?: number }) {
   return (
-    <div style={{ background: '#111118', border: '1px solid #1E1E2E', borderRadius: 11, padding: 13 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: '#8888AA' }}>{k}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, marginTop: 5, lineHeight: 1, color: color || '#F0F0FF' }}>{v}</div>
-      {d && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 5 }}>{d}</div>}
-      {bar != null && <div style={{ height: 6, borderRadius: 4, background: '#0e0e18', overflow: 'hidden', marginTop: 9 }}><i style={{ display: 'block', height: '100%', width: `${bar}%`, background: color || '#6C63FF' }} /></div>}
+    <div style={{ background: 'var(--c-111118)', border: '1px solid var(--c-1e1e2e)', borderRadius: 11, padding: 13 }}>
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--c-8888aa)' }}>{k}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, marginTop: 5, lineHeight: 1, color: color || 'var(--c-f0f0ff)' }}>{v}</div>
+      {d && <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 5 }}>{d}</div>}
+      {bar != null && <div style={{ height: 6, borderRadius: 4, background: 'var(--c-0e0e18)', overflow: 'hidden', marginTop: 9 }}><i style={{ display: 'block', height: '100%', width: `${bar}%`, background: color || 'var(--c-6c63ff)' }} /></div>}
     </div>
   );
 }
 
 function MiniStat({ k, v, color }: { k: string; v: string; color?: string }) {
   return (
-    <div style={{ background: '#111118', border: '1px solid #1E1E2E', borderRadius: 11, padding: 12 }}>
-      <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.08em', color: '#8888AA' }}>{k}</div>
-      <div style={{ fontSize: 21, fontWeight: 800, marginTop: 4, color: color || '#F0F0FF' }}>{v}</div>
+    <div style={{ background: 'var(--c-111118)', border: '1px solid var(--c-1e1e2e)', borderRadius: 11, padding: 12 }}>
+      <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--c-8888aa)' }}>{k}</div>
+      <div style={{ fontSize: 21, fontWeight: 800, marginTop: 4, color: color || 'var(--c-f0f0ff)' }}>{v}</div>
     </div>
   );
 }
@@ -667,10 +667,10 @@ function MiniStat({ k, v, color }: { k: string; v: string; color?: string }) {
 function MiniCard({ k, v, d, color, bar }: { k: string; v: string; d?: string; color?: string; bar?: number }) {
   return (
     <div className="orbit-card" style={{ flex: 1, minWidth: 150, padding: 14 }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em', color: '#8888AA' }}>{k}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, color: color || '#F0F0FF' }}>{v}</div>
-      {d && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 3 }}>{d}</div>}
-      {bar != null && <div style={{ height: 6, borderRadius: 4, background: '#0e0e18', overflow: 'hidden', marginTop: 9 }}><i style={{ display: 'block', height: '100%', width: `${bar}%`, background: color || '#6C63FF' }} /></div>}
+      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--c-8888aa)' }}>{k}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, marginTop: 4, color: color || 'var(--c-f0f0ff)' }}>{v}</div>
+      {d && <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 3 }}>{d}</div>}
+      {bar != null && <div style={{ height: 6, borderRadius: 4, background: 'var(--c-0e0e18)', overflow: 'hidden', marginTop: 9 }}><i style={{ display: 'block', height: '100%', width: `${bar}%`, background: color || 'var(--c-6c63ff)' }} /></div>}
     </div>
   );
 }
@@ -679,8 +679,8 @@ function EmptyScan({ onRun, scanning }: { onRun: () => void; scanning: boolean }
   return (
     <div className="orbit-card p-5" style={{ textAlign: 'center', padding: '40px 20px' }}>
       <div style={{ fontSize: 28, marginBottom: 8 }}>🗺️</div>
-      <div style={{ fontSize: 13.5, fontWeight: 700, color: '#F0F0FF' }}>Run a local scan to populate this view</div>
-      <div style={{ fontSize: 12, color: '#8888AA', margin: '6px 0 14px' }}>Discovers your Google Business listings and checks your map-pack rank for the top local keywords — all real SerpAPI data.</div>
+      <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--c-f0f0ff)' }}>Run a local scan to populate this view</div>
+      <div style={{ fontSize: 12, color: 'var(--c-8888aa)', margin: '6px 0 14px' }}>Discovers your Google Business listings and checks your map-pack rank for the top local keywords — all real SerpAPI data.</div>
       {!scanning && <button onClick={onRun} className="orbit-btn-sm">▸ Run local scan</button>}
     </div>
   );

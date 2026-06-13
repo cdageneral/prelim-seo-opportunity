@@ -76,20 +76,20 @@ interface Props {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const POSITION_BUCKETS = [
-  { key: '1-3',   label: 'Pos 1–3',  hex: '#6C63FF', min: 1,  max: 3    },
-  { key: '4-10',  label: 'Pos 4–10', hex: '#06B6D4', min: 4,  max: 10   },
-  { key: '11-20', label: 'Page 2',   hex: '#F59E0B', min: 11, max: 20   },
-  { key: '21+',   label: 'Page 3+',  hex: '#EF4444', min: 21, max: 9999 },
+  { key: '1-3',   label: 'Pos 1–3',  hex: 'var(--c-6c63ff)', min: 1,  max: 3    },
+  { key: '4-10',  label: 'Pos 4–10', hex: 'var(--c-06b6d4)', min: 4,  max: 10   },
+  { key: '11-20', label: 'Page 2',   hex: 'var(--c-f59e0b)', min: 11, max: 20   },
+  { key: '21+',   label: 'Page 3+',  hex: 'var(--c-ef4444)', min: 21, max: 9999 },
 ];
 
 const FEATURE_META: Record<string, { label: string; color: string }> = {
-  ai_overview:      { label: 'AIO',      color: '#6C63FF' },
-  featured_snippet: { label: 'Snippet',  color: '#22C55E' },
-  knowledge_panel:  { label: 'KP',       color: '#F59E0B' },
-  local_pack:       { label: 'Local',    color: '#EF4444' },
-  shopping:         { label: 'Shop',     color: '#F97316' },
-  video_carousel:   { label: 'Video',    color: '#06B6D4' },
-  image_pack:       { label: 'Images',   color: '#8B5CF6' },
+  ai_overview:      { label: 'AIO',      color: 'var(--c-6c63ff)' },
+  featured_snippet: { label: 'Snippet',  color: 'var(--c-22c55e)' },
+  knowledge_panel:  { label: 'KP',       color: 'var(--c-f59e0b)' },
+  local_pack:       { label: 'Local',    color: 'var(--c-ef4444)' },
+  shopping:         { label: 'Shop',     color: 'var(--c-f97316)' },
+  video_carousel:   { label: 'Video',    color: 'var(--c-06b6d4)' },
+  image_pack:       { label: 'Images',   color: 'var(--c-8b5cf6)' },
   twitter_pack:     { label: 'Twitter',  color: '#1DA1F2' },
 };
 
@@ -112,10 +112,10 @@ function fmtAnnual(monthly: number): string {
 }
 
 function bucketHex(pos: number): string {
-  if (pos <= 3)  return '#6C63FF';
-  if (pos <= 10) return '#06B6D4';
-  if (pos <= 20) return '#F59E0B';
-  return '#EF4444';
+  if (pos <= 3)  return 'var(--c-6c63ff)';
+  if (pos <= 10) return 'var(--c-06b6d4)';
+  if (pos <= 20) return 'var(--c-f59e0b)';
+  return 'var(--c-ef4444)';
 }
 
 function buildPositionDist(kws: SemKw[]): Record<string, number> {
@@ -171,10 +171,10 @@ function inferCategoryForKw(
 function StatCard({ label, value, sub, sub2, color }: { label: string; value: string; sub: string; sub2?: string; color?: string }) {
   return (
     <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
-      <p style={{ fontSize: '11px', color: '#8888AA', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em' }}>{label}</p>
-      <p style={{ fontSize: '24px', fontWeight: 700, color: color ?? '#F0F0FF', lineHeight: 1 }}>{value}</p>
-      <p style={{ fontSize: '11px', color: '#555570' }}>{sub}</p>
-      {sub2 && <p style={{ fontSize: '10px', color: '#444460', marginTop: '1px' }}>{sub2}</p>}
+      <p style={{ fontSize: '11px', color: 'var(--c-8888aa)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em' }}>{label}</p>
+      <p style={{ fontSize: '24px', fontWeight: 700, color: color ?? 'var(--c-f0f0ff)', lineHeight: 1 }}>{value}</p>
+      <p style={{ fontSize: '11px', color: 'var(--c-555570)' }}>{sub}</p>
+      {sub2 && <p style={{ fontSize: '10px', color: 'var(--c-444460)', marginTop: '1px' }}>{sub2}</p>}
     </div>
   );
 }
@@ -182,10 +182,10 @@ function StatCard({ label, value, sub, sub2, color }: { label: string; value: st
 // ── Category Performance Section ──────────────────────────────────────────────
 
 const RANK_BUCKET_META = [
-  { key: '1-3',   color: '#6C63FF', label: '1–3'  },
-  { key: '4-10',  color: '#06B6D4', label: '4–10' },
-  { key: '11-20', color: '#F59E0B', label: 'P2'   },
-  { key: '21+',   color: '#EF4444', label: 'P3+'  },
+  { key: '1-3',   color: 'var(--c-6c63ff)', label: '1–3'  },
+  { key: '4-10',  color: 'var(--c-06b6d4)', label: '4–10' },
+  { key: '11-20', color: 'var(--c-f59e0b)', label: 'P2'   },
+  { key: '21+',   color: 'var(--c-ef4444)', label: 'P3+'  },
 ];
 
 function fmtAnn(monthly: number): string {
@@ -242,7 +242,7 @@ function CategoryPerformanceSection({
       {/* Table header */}
       <div className="grid pb-2 border-b border-orbit-border" style={{ gridTemplateColumns: '24px 1fr 110px 90px 58px 70px 120px' }}>
         {['', 'Category', 'Annual Demand', 'Page 1', 'Share', 'Avg Pos', 'Rank Split'].map((h, i) => (
-          <span key={i} style={{ fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i <= 1 ? 'left' : i === 6 ? 'center' : 'right' as const }}>
+          <span key={i} style={{ fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i <= 1 ? 'left' : i === 6 ? 'center' : 'right' as const }}>
             {h}
           </span>
         ))}
@@ -250,7 +250,7 @@ function CategoryPerformanceSection({
 
       {/* Procedure section */}
       {procedureCats.length > 0 && (
-        <p style={{ fontSize: '9px', fontWeight: 600, color: '#4A4A72', letterSpacing: '.08em', textTransform: 'uppercase', padding: '6px 0 2px' }}>
+        <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-4a4a72)', letterSpacing: '.08em', textTransform: 'uppercase', padding: '6px 0 2px' }}>
           Procedure Lines
         </p>
       )}
@@ -263,7 +263,7 @@ function CategoryPerformanceSection({
 
       {/* Brand & navigation section */}
       {navCats.length > 0 && (
-        <p style={{ fontSize: '9px', fontWeight: 600, color: '#4A4A72', letterSpacing: '.08em', textTransform: 'uppercase', padding: '8px 0 2px', borderTop: '1px solid #111120', marginTop: '4px' }}>
+        <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-4a4a72)', letterSpacing: '.08em', textTransform: 'uppercase', padding: '8px 0 2px', borderTop: '1px solid var(--c-111120)', marginTop: '4px' }}>
           Brand &amp; Navigation
         </p>
       )}
@@ -302,19 +302,19 @@ interface CatSummaryRow {
 }
 
 const SUMMARY_ACCENTS = {
-  strong: '#22C55E',
-  weak:   '#EF4444',
-  comp:   '#F59E0B',
-  opp:    '#6C63FF',
+  strong: 'var(--c-22c55e)',
+  weak:   'var(--c-ef4444)',
+  comp:   'var(--c-f59e0b)',
+  opp:    'var(--c-6c63ff)',
 };
 
 function SummaryCardShell({ accent, label, children }: { accent: string; label: string; children: React.ReactNode }) {
   return (
     <div style={{
-      background: '#13131F', border: '1px solid #1E1E2E', borderLeft: `3px solid ${accent}`,
+      background: 'var(--c-13131f)', border: '1px solid var(--c-1e1e2e)', borderLeft: `3px solid ${accent}`,
       borderRadius: '0 10px 10px 0', padding: '14px 16px', display: 'flex', flexDirection: 'column', minWidth: 0,
     }}>
-      <p style={{ fontSize: '10px', color: '#8888AA', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', margin: '0 0 8px' }}>
+      <p style={{ fontSize: '10px', color: 'var(--c-8888aa)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', margin: '0 0 8px' }}>
         {label}
       </p>
       {children}
@@ -325,10 +325,10 @@ function SummaryCardShell({ accent, label, children }: { accent: string; label: 
 function SummaryRunnerUps({ rows, accent }: { rows: Array<{ name: string; stat: string }>; accent: string }) {
   if (rows.length === 0) return null;
   return (
-    <div style={{ borderTop: '1px solid #1A1A2A', paddingTop: '7px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+    <div style={{ borderTop: '1px solid var(--c-1a1a2a)', paddingTop: '7px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
       {rows.map(r => (
         <div key={r.name} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={{ fontSize: '11px', color: '#A0A0C0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+          <span style={{ fontSize: '11px', color: 'var(--c-a0a0c0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
           <span style={{ fontSize: '11px', color: accent, flexShrink: 0 }}>{r.stat}</span>
         </div>
       ))}
@@ -339,15 +339,15 @@ function SummaryRunnerUps({ rows, accent }: { rows: Array<{ name: string; stat: 
 function SummaryHero({ name, stat, sub, accent }: { name: string; stat: string; sub: string; accent: string }) {
   return (
     <div style={{ marginBottom: '10px' }}>
-      <p style={{ fontSize: '15px', fontWeight: 600, color: '#F0F0FF', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</p>
+      <p style={{ fontSize: '15px', fontWeight: 600, color: 'var(--c-f0f0ff)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</p>
       <p style={{ fontSize: '11px', color: accent, margin: '3px 0 0' }}>{stat}</p>
-      <p style={{ fontSize: '10px', color: '#555570', margin: '2px 0 0' }}>{sub}</p>
+      <p style={{ fontSize: '10px', color: 'var(--c-555570)', margin: '2px 0 0' }}>{sub}</p>
     </div>
   );
 }
 
 function SummaryEmpty({ text }: { text: string }) {
-  return <p style={{ fontSize: '11px', color: '#555570', lineHeight: 1.5, margin: 0 }}>{text}</p>;
+  return <p style={{ fontSize: '11px', color: 'var(--c-555570)', lineHeight: 1.5, margin: 0 }}>{text}</p>;
 }
 
 function CategoryPositionSummary({
@@ -502,9 +502,9 @@ function CategoryPositionSummary({
           {hasCompPos && outperform.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <SummaryEmpty text="No major category where a competitor's page-1 volume beats yours." />
-              <div style={{ borderTop: '1px solid #1A1A2A', paddingTop: '7px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ borderTop: '1px solid var(--c-1a1a2a)', paddingTop: '7px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {compDiag.map(c => (
-                  <p key={c.domain} style={{ fontSize: '10px', lineHeight: 1.5, margin: 0, color: c.p1 === 0 ? '#D9A23F' : '#555570' }}>
+                  <p key={c.domain} style={{ fontSize: '10px', lineHeight: 1.5, margin: 0, color: c.p1 === 0 ? 'var(--c-d9a23f)' : 'var(--c-555570)' }}>
                     {c.domain}: {c.rows.toLocaleString()} kws · {c.p1.toLocaleString()} page-1
                     {c.p1 === 0 && ` (best pos ${isFinite(c.minPos) ? c.minPos : '—'}) — verify CSV Position column if unexpected`}
                   </p>
@@ -547,7 +547,7 @@ function CategoryPositionSummary({
         </SummaryCardShell>
 
       </div>
-      <p style={{ fontSize: '9px', color: '#3A3A55', margin: '6px 2px 0' }}>
+      <p style={{ fontSize: '9px', color: 'var(--c-3a3a55)', margin: '6px 2px 0' }}>
         Share = client page-1 volume vs category demand · competitor comparison from uploaded competitor keyword positions · categories under 2% of total demand excluded
       </p>
     </div>
@@ -585,42 +585,42 @@ function CatRow({
         style={{
           gridTemplateColumns: '24px 1fr 110px 90px 58px 70px 120px',
           opacity:    dimmed ? 0.55 : 1,
-          background: isExpanded ? 'rgba(108,99,255,0.06)' : 'transparent',
+          background: isExpanded ? 'var(--ca-108-99-255-0_06)' : 'transparent',
           transition: 'background 0.1s',
         }}
-        onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; }}
+        onMouseEnter={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background = 'var(--ca-255-255-255-0_02)'; }}
         onMouseLeave={e => { if (!isExpanded) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
       >
         {/* Chevron */}
-        <span style={{ fontSize: '10px', color: isExpanded ? '#8B85FF' : '#444458', transition: 'transform 0.15s', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none' }}>
+        <span style={{ fontSize: '10px', color: isExpanded ? 'var(--c-8b85ff)' : 'var(--c-444458)', transition: 'transform 0.15s', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'none' }}>
           ▶
         </span>
 
         {/* Category name + mini share bar */}
         <div>
-          <span style={{ fontSize: '13px', color: dimmed ? '#666680' : (isExpanded ? '#C0B8FF' : '#F0F0FF') }}>{cat.name}</span>
-          <div style={{ marginTop: '5px', height: '3px', width: '85%', background: '#1E1E2E', borderRadius: '2px', overflow: 'hidden' }}>
-            <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? '#555570' : '#6C63FF', borderRadius: '2px', transition: 'width 0.6s ease' }} />
+          <span style={{ fontSize: '13px', color: dimmed ? 'var(--c-666680)' : (isExpanded ? 'var(--c-c0b8ff)' : 'var(--c-f0f0ff)') }}>{cat.name}</span>
+          <div style={{ marginTop: '5px', height: '3px', width: '85%', background: 'var(--c-1e1e2e)', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ width: `${barW}%`, height: '100%', background: dimmed ? 'var(--c-555570)' : 'var(--c-6c63ff)', borderRadius: '2px', transition: 'width 0.6s ease' }} />
           </div>
         </div>
 
         {/* Annual demand (total market demand from synthesis) */}
-        <span style={{ fontSize: '12px', color: '#8888AA', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: '12px', color: 'var(--c-8888aa)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {fmtAnn(annualDemand)}
         </span>
 
         {/* Page 1 (from full keyword footprint via inferCategoryForKw) */}
-        <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? '#555570' : '#8B85FF') : '#444458', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? 'var(--c-555570)' : 'var(--c-8b85ff)') : 'var(--c-444458)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {hasPage1 ? fmtAnn(page1Monthly) : '—'}
         </span>
 
         {/* Share */}
-        <span style={{ fontSize: '13px', fontWeight: 600, color: hasPage1 ? (dimmed ? '#555570' : '#F0F0FF') : '#444458', textAlign: 'right' }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: hasPage1 ? (dimmed ? 'var(--c-555570)' : 'var(--c-f0f0ff)') : 'var(--c-444458)', textAlign: 'right' }}>
           {hasPage1 ? `${share.toFixed(1)}%` : '—'}
         </span>
 
         {/* Avg position */}
-        <span style={{ fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#444458' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
+        <span style={{ fontSize: '12px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? 'var(--c-444458)' : avgPos <= 3 ? 'var(--c-6c63ff)' : avgPos <= 10 ? 'var(--c-06b6d4)' : avgPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)' }}>
           {avgPos !== null ? avgPos.toFixed(1) : '—'}
         </span>
 
@@ -639,36 +639,36 @@ function CatRow({
                   );
                 })}
               </div>
-              <span style={{ fontSize: '9px', color: '#555570', flexShrink: 0 }}>{totalInCat}</span>
+              <span style={{ fontSize: '9px', color: 'var(--c-555570)', flexShrink: 0 }}>{totalInCat}</span>
             </>
           ) : (
-            <span style={{ fontSize: '10px', color: '#333350' }}>—</span>
+            <span style={{ fontSize: '10px', color: 'var(--c-333350)' }}>—</span>
           )}
         </div>
       </div>
 
       {/* Expanded keyword sub-table */}
       {isExpanded && (
-        <div style={{ background: '#070710', borderBottom: '1px solid #1A1A30', padding: '0 12px 12px 36px' }}>
+        <div style={{ background: 'var(--c-070710)', borderBottom: '1px solid var(--c-1a1a30)', padding: '0 12px 12px 36px' }}>
           {expandedKws.length === 0 ? (
-            <p style={{ fontSize: '11px', color: '#444458', padding: '12px 0' }}>No ranked keywords found for this category in your current footprint.</p>
+            <p style={{ fontSize: '11px', color: 'var(--c-444458)', padding: '12px 0' }}>No ranked keywords found for this category in your current footprint.</p>
           ) : (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '8px 0 4px', borderBottom: '1px solid #111120' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '8px 0 4px', borderBottom: '1px solid var(--c-111120)' }}>
                 {['Pos', 'Keyword', 'Vol / mo', 'Annual Vol'].map((h, i) => (
-                  <span key={h} style={{ fontSize: '9px', color: '#404060', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i > 1 ? 'right' : 'left' as const }}>{h}</span>
+                  <span key={h} style={{ fontSize: '9px', color: 'var(--c-404060)', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: i > 1 ? 'right' : 'left' as const }}>{h}</span>
                 ))}
               </div>
               {expandedKws.slice(0, 25).map((kw, idx) => (
-                <div key={kw.keyword} style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                <div key={kw.keyword} style={{ display: 'grid', gridTemplateColumns: '44px 1fr 90px 90px', padding: '5px 0', borderBottom: '1px solid var(--ca-255-255-255-0_03)', background: idx % 2 === 0 ? 'transparent' : 'var(--ca-255-255-255-0_01)' }}>
                   <PosBadge pos={kw.position} />
-                  <span style={{ fontSize: '12px', color: '#C0C0E0', alignSelf: 'center', paddingLeft: '4px' }}>{kw.keyword}</span>
-                  <span style={{ fontSize: '11px', color: '#666688', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{kw.searchVolume.toLocaleString()}</span>
-                  <span style={{ fontSize: '11px', color: '#505070', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{fmtAnn(kw.searchVolume)}</span>
+                  <span style={{ fontSize: '12px', color: 'var(--c-c0c0e0)', alignSelf: 'center', paddingLeft: '4px' }}>{kw.keyword}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--c-666688)', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{kw.searchVolume.toLocaleString()}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--c-505070)', textAlign: 'right', alignSelf: 'center', fontVariantNumeric: 'tabular-nums' }}>{fmtAnn(kw.searchVolume)}</span>
                 </div>
               ))}
               {expandedKws.length > 25 && (
-                <p style={{ fontSize: '10px', color: '#444458', paddingTop: '8px', textAlign: 'center' }}>
+                <p style={{ fontSize: '10px', color: 'var(--c-444458)', paddingTop: '8px', textAlign: 'center' }}>
                   Showing 25 of {expandedKws.length} keywords · use the keyword table below to see all
                 </p>
               )}
@@ -688,8 +688,8 @@ function PosBadge({ pos }: { pos: number | null }) {
       <span style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: '32px', height: '22px', borderRadius: '5px',
-        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-        color: '#444458', fontSize: '11px', flexShrink: 0,
+        background: 'var(--ca-255-255-255-0_04)', border: '1px solid var(--ca-255-255-255-0_08)',
+        color: 'var(--c-444458)', fontSize: '11px', flexShrink: 0,
       }}>—</span>
     );
   }
@@ -730,8 +730,8 @@ function FeaturePill({ feature }: { feature: string }) {
 
 // ── Share of Voice ─────────────────────────────────────────────────────────────
 
-const SOV_SERP_COLORS  = ['#06B6D4', '#0891B2', '#0E7490'];
-const SOV_BRAND_COLORS = ['#F59E0B', '#D97706', '#B45309'];
+const SOV_SERP_COLORS  = ['var(--c-06b6d4)', 'var(--c-0891b2)', 'var(--c-0e7490)'];
+const SOV_BRAND_COLORS = ['var(--c-f59e0b)', 'var(--c-d97706)', 'var(--c-b45309)'];
 
 interface SovRawEntry {
   domain:  string;
@@ -755,7 +755,7 @@ function LegendRow({ arc }: { arc: SovArc }) {
       <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: arc.color, flexShrink: 0 }} />
       <span style={{
         fontSize: isClient ? '12px' : '11px',
-        color: isClient ? '#C0C0E8' : '#888899',
+        color: isClient ? 'var(--c-c0c0e8)' : 'var(--c-888899)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
         flex: 1, fontWeight: isClient ? 600 : 400,
       }}>
@@ -899,7 +899,7 @@ export function computeSov(
   // never the generic word "Client".
   const clientDisplay = (clientLabel ?? '').trim() || snap.domain || 'Client';
   const rawEntries: SovRawEntry[] = [
-    { domain: clientDisplay, traffic: clientVoice, type: 'client', color: '#6C63FF' },
+    { domain: clientDisplay, traffic: clientVoice, type: 'client', color: 'var(--c-6c63ff)' },
   ];
   let serpIdx = 0;
   let brandIdx = 0;
@@ -950,7 +950,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
   const otherPct = total > 0 ? otherT / total : 0;
   if (otherPct > 0.005) {
     arcs.push({
-      domain: 'Other', traffic: otherT, type: 'serp', color: '#2A2A44',
+      domain: 'Other', traffic: otherT, type: 'serp', color: 'var(--c-2a2a44)',
       pct: otherPct,
       dash: Math.max(0, otherPct * C - GAP),
       dashOffset: cumPct * C,
@@ -968,13 +968,13 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
-        <p style={{ fontSize: '12px', color: '#8888B0', lineHeight: 1.6 }}>
-          Share of Voice is computed from <span style={{ color: '#C0C0E8' }}>page-1 keyword volume per domain</span>, and the uploaded competitor keywords have no rank positions, so it cannot be calculated yet.
+        <p style={{ fontSize: '12px', color: 'var(--c-8888b0)', lineHeight: 1.6 }}>
+          Share of Voice is computed from <span style={{ color: 'var(--c-c0c0e8)' }}>page-1 keyword volume per domain</span>, and the uploaded competitor keywords have no rank positions, so it cannot be calculated yet.
         </p>
-        <p style={{ fontSize: '11px', color: '#7070A0', lineHeight: 1.6 }}>
-          Fix: re-upload each competitor&apos;s keyword CSV including a <span className="font-mono" style={{ color: '#9B96FF' }}>Position</span> column (Semrush exports include it). Existing rows are updated in place — the donut appears automatically once positions exist.
+        <p style={{ fontSize: '11px', color: 'var(--c-7070a0)', lineHeight: 1.6 }}>
+          Fix: re-upload each competitor&apos;s keyword CSV including a <span className="font-mono" style={{ color: 'var(--c-9b96ff)' }}>Position</span> column (Semrush exports include it). Existing rows are updated in place — the donut appears automatically once positions exist.
         </p>
-        <p style={{ fontSize: '9px', color: '#383858', margin: 0 }}>
+        <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0 }}>
           on file: {compRows.length.toLocaleString()} competitor keyword{compRows.length === 1 ? '' : 's'}, 0 with positions
         </p>
       </div>
@@ -985,7 +985,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
-        <p style={{ fontSize: '12px', color: '#555570' }}>
+        <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>
           No traffic or page-1 keyword data available yet. Run an analysis to populate.
         </p>
       </div>
@@ -996,7 +996,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
     <div className="orbit-card p-5 flex flex-col gap-3">
       <div>
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
-        <p style={{ fontSize: '9px', color: '#4A4A70', marginTop: 2 }}>
+        <p style={{ fontSize: '9px', color: 'var(--c-4a4a70)', marginTop: 2 }}>
           {basis === 'traffic' && 'by organic traffic (Semrush)'}
           {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
           {basis === 'gapOnly' && 'by page-1 gap-keyword volume only — competitor rankings on shared keywords not available'}
@@ -1023,11 +1023,11 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
               ) : null)}
             </g>
             {/* Inner fill — must be OUTSIDE the rotated group so text renders upright */}
-            <circle cx="72" cy="72" r="45" fill="#0F0F1C" />
-            <text x="72" y="68" textAnchor="middle" fontSize="17" fontWeight="700" fill="#F0F0FF">
+            <circle cx="72" cy="72" r="45" style={{fill:'var(--c-0f0f1c)'}} />
+            <text x="72" y="68" textAnchor="middle" fontSize="17" fontWeight="700" style={{fill:'var(--c-f0f0ff)'}}>
               {Math.round((clientArc?.pct ?? 0) * 100)}%
             </text>
-            <text x="72" y="82" textAnchor="middle" fontSize="8.5" fill="#555578" letterSpacing=".07em">
+            <text x="72" y="82" textAnchor="middle" fontSize="8.5" style={{fill:'var(--c-555578)'}} letterSpacing=".07em">
               CLIENT SOV
             </text>
           </svg>
@@ -1039,7 +1039,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
           {serpArcs.length > 0 && (
             <>
-              <p style={{ fontSize: '9px', fontWeight: 600, color: '#3A3A5C', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
                 SERP Discovered
               </p>
               {serpArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
@@ -1048,7 +1048,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
           {brandArcs.length > 0 && (
             <>
-              <p style={{ fontSize: '9px', fontWeight: 600, color: '#3A3A5C', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
                 Brand Competitors
               </p>
               {brandArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
@@ -1056,10 +1056,10 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           )}
 
           {otherArc && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '5px', paddingTop: '5px', borderTop: '1px solid #1A1A2E' }}>
-              <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: '#2A2A44', flexShrink: 0 }} />
-              <span style={{ fontSize: '11px', color: '#555570', flex: 1 }}>Other</span>
-              <span style={{ fontSize: '10px', color: '#444460' }}>{Math.round(otherArc.pct * 100)}%</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '5px', paddingTop: '5px', borderTop: '1px solid var(--c-1a1a2e)' }}>
+              <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: 'var(--c-2a2a44)', flexShrink: 0 }} />
+              <span style={{ fontSize: '11px', color: 'var(--c-555570)', flex: 1 }}>Other</span>
+              <span style={{ fontSize: '10px', color: 'var(--c-444460)' }}>{Math.round(otherArc.pct * 100)}%</span>
             </div>
           )}
         </div>
@@ -1067,12 +1067,12 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
       {/* Type legend pills */}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'rgba(6,182,212,.08)', border: '1px solid rgba(6,182,212,.2)', color: '#06B6D4' }}>
-          <span style={{ width: '5px', height: '5px', background: '#06B6D4', borderRadius: '50%' }} />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'var(--ca-6-182-212-0_08)', border: '1px solid var(--ca-6-182-212-0_2)', color: 'var(--c-06b6d4)' }}>
+          <span style={{ width: '5px', height: '5px', background: 'var(--c-06b6d4)', borderRadius: '50%' }} />
           SERP discovered
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.2)', color: '#F59E0B' }}>
-          <span style={{ width: '5px', height: '5px', background: '#F59E0B', borderRadius: '50%' }} />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--ca-245-158-11-0_2)', color: 'var(--c-f59e0b)' }}>
+          <span style={{ width: '5px', height: '5px', background: 'var(--c-f59e0b)', borderRadius: '50%' }} />
           Brand / manual
         </span>
       </div>
@@ -1080,7 +1080,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       {/* v7.91: underlying data readout — keyword counts + monthly volume per
           domain, so the basis behind every percentage is verifiable on screen */}
       {basis !== 'traffic' && (
-        <p style={{ fontSize: '9px', color: '#383858', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
+        <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
           data: {clientDisplay.replace(/^www\./, '')} {clientKwsUsed.toLocaleString()} kws · {Math.round(clientVoice).toLocaleString()}/mo
           {compEntries.map(c => (
             <span key={c.domain}>
@@ -1099,11 +1099,11 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           previously such domains disappeared from the donut/legend silently */}
       {basis === 'volume' && zeroP1Domains.length > 0 && (
         <div style={{
-          background: 'rgba(245,158,11,.06)', border: '1px solid rgba(245,158,11,.25)',
+          background: 'var(--ca-245-158-11-0_06)', border: '1px solid var(--ca-245-158-11-0_25)',
           borderRadius: '8px', padding: '8px 10px',
         }}>
           {zeroP1Domains.map(z => (
-            <p key={z.domain} style={{ fontSize: '10px', color: '#D9A23F', lineHeight: 1.5, margin: 0 }}>
+            <p key={z.domain} style={{ fontSize: '10px', color: 'var(--c-d9a23f)', lineHeight: 1.5, margin: 0 }}>
               <span style={{ fontWeight: 600 }}>{z.domain}</span>: {z.rows.toLocaleString()} uploaded kws, none rank page 1
               (best position {isFinite(z.minPos) ? z.minPos : '—'}) — excluded from page-1 Share of Voice.
               If unexpected, open the CSV and verify the Position column values.
@@ -1312,11 +1312,11 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             {scanDate && (
-              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: '#0F0F1E', border: '1px solid #1E1E35', color: '#505070' }}>
+              <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>
                 Last scan: {scanDate}
               </span>
             )}
-            <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'rgba(66,133,244,0.1)', border: '1px solid rgba(66,133,244,0.2)', color: '#6BAAF8' }}>
+            <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--ca-66-133-244-0_1)', border: '1px solid var(--ca-66-133-244-0_2)', color: 'var(--c-6baaf8)' }}>
               <svg style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                 <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -1359,19 +1359,19 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           value={dbLoaded ? `${page1Pct}%` : '—'}
           sub={dbLoaded ? `${page1Kws} of ${posKws.length} kws rank pg 1` : 'Loading…'}
           sub2={dbLoaded && page1Vol > 0 ? `${fmtAnnual(page1Vol)} annual vol at pg 1` : undefined}
-          color="#6C63FF"
+          color="var(--c-6c63ff)"
         />
         <StatCard
           label="Wtd. Avg Position"
           value={dbLoaded ? (weightedPos > 0 ? weightedPos.toFixed(1) : '—') : '—'}
           sub="weighted by search volume"
-          color={weightedPos > 0 && weightedPos <= 5 ? '#22C55E' : weightedPos <= 10 ? '#F59E0B' : '#EF4444'}
+          color={weightedPos > 0 && weightedPos <= 5 ? 'var(--c-22c55e)' : weightedPos <= 10 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)'}
         />
         <StatCard
           label="Top-3 Volume Share"
           value={dbLoaded ? `${top3VolPct}%` : '—'}
           sub={dbLoaded ? `${fmtAnnual(top3Vol)} / yr in positions 1–3` : 'Loading…'}
-          color="#22C55E"
+          color="var(--c-22c55e)"
         />
       </div>
 
@@ -1390,23 +1390,23 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
             <>
               <div className="flex items-center gap-4 py-2">
                 <div>
-                  <p style={{ color: '#EF4444', fontSize: '40px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
+                  <p style={{ color: 'var(--c-ef4444)', fontSize: '40px', fontWeight: 700, lineHeight: 1, margin: 0 }}>
                     {pctOutsideTop3}%
                   </p>
-                  <p style={{ color: '#8888AA', fontSize: '11px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '5px' }}>
+                  <p style={{ color: 'var(--c-8888aa)', fontSize: '11px', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: '5px' }}>
                     of volume outside top 3
                   </p>
                 </div>
-                <div style={{ width: '1px', height: '56px', background: '#1E1E2E', flexShrink: 0 }} />
+                <div style={{ width: '1px', height: '56px', background: 'var(--c-1e1e2e)', flexShrink: 0 }} />
                 <div>
-                  <p style={{ color: '#F0F0FF', fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                  <p style={{ color: 'var(--c-f0f0ff)', fontSize: '15px', fontWeight: 600, margin: 0 }}>
                     {fmtAnnual(volOutsideTop3)}
-                    <span style={{ color: '#444458', fontWeight: 400, fontSize: '13px' }}> / yr</span>
+                    <span style={{ color: 'var(--c-444458)', fontWeight: 400, fontSize: '13px' }}> / yr</span>
                   </p>
-                  <p style={{ color: '#8888AA', fontSize: '11px', margin: '4px 0 0' }}>
+                  <p style={{ color: 'var(--c-8888aa)', fontSize: '11px', margin: '4px 0 0' }}>
                     annual searches pos 4+
                   </p>
-                  <p style={{ color: '#555570', fontSize: '10px', margin: '2px 0 0' }}>
+                  <p style={{ color: 'var(--c-555570)', fontSize: '10px', margin: '2px 0 0' }}>
                     out of {fmtAnnual(totalVol)} total
                   </p>
                 </div>
@@ -1415,20 +1415,20 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
               {/* Volume breakdown bars */}
               <div className="flex flex-col gap-2.5">
                 {[
-                  { label: 'Positions 1–3', vol: top3Vol, color: '#6C63FF' },
-                  { label: 'Positions 4–10', vol: page1Vol - top3Vol, color: '#06B6D4' },
-                  { label: 'Page 2+ (11+)', vol: totalVol - page1Vol, color: '#EF4444' },
+                  { label: 'Positions 1–3', vol: top3Vol, color: 'var(--c-6c63ff)' },
+                  { label: 'Positions 4–10', vol: page1Vol - top3Vol, color: 'var(--c-06b6d4)' },
+                  { label: 'Page 2+ (11+)', vol: totalVol - page1Vol, color: 'var(--c-ef4444)' },
                 ].map(row => {
                   const pct = totalVol > 0 ? (row.vol / totalVol) * 100 : 0;
                   return (
                     <div key={row.label}>
                       <div className="flex justify-between mb-1">
-                        <span style={{ fontSize: '11px', color: '#8888AA' }}>{row.label}</span>
+                        <span style={{ fontSize: '11px', color: 'var(--c-8888aa)' }}>{row.label}</span>
                         <span style={{ fontSize: '11px', fontWeight: 600, color: row.color }}>
-                          {fmtAnnual(row.vol)}<span style={{ color: '#444458', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span>
+                          {fmtAnnual(row.vol)}<span style={{ color: 'var(--c-444458)', fontWeight: 400 }}> ({pct.toFixed(1)}%)</span>
                         </span>
                       </div>
-                      <div style={{ background: '#1E1E2E', borderRadius: '3px', height: '5px' }}>
+                      <div style={{ background: 'var(--c-1e1e2e)', borderRadius: '3px', height: '5px' }}>
                         <div style={{
                           background: row.color, borderRadius: '3px', height: '5px',
                           width: `${Math.min(100, pct)}%`, transition: 'width 0.6s ease',
@@ -1441,14 +1441,14 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
 
               {/* Insight callout */}
               <div style={{
-                background: '#0F0F1E', border: '1px solid #1E1E35', borderLeft: '3px solid #6C63FF',
+                background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', borderLeft: '3px solid var(--c-6c63ff)',
                 borderRadius: '0 8px 8px 0', padding: '10px 12px', marginTop: '4px',
               }}>
-                <p style={{ fontSize: '11px', color: '#8888AA', lineHeight: 1.5, margin: 0 }}>
-                  <span style={{ color: '#C0C0E8', fontWeight: 500 }}>Opportunity: </span>
+                <p style={{ fontSize: '11px', color: 'var(--c-8888aa)', lineHeight: 1.5, margin: 0 }}>
+                  <span style={{ color: 'var(--c-c0c0e8)', fontWeight: 500 }}>Opportunity: </span>
                   Moving {Math.min(5, POSITION_BUCKETS[1] ? (posDist['4-10'] ?? 0) : 0)} of your Pos 4–10 keywords
                   into top 3 could unlock{' '}
-                  <span style={{ color: '#6C63FF', fontWeight: 600 }}>
+                  <span style={{ color: 'var(--c-6c63ff)', fontWeight: 600 }}>
                     ~{fmtAnnual(Math.round((page1Vol - top3Vol) * 0.3))}
                   </span>{' '}
                   additional annual searches.
@@ -1458,7 +1458,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           )}
 
           {totalVol === 0 && (
-            <p style={{ fontSize: '12px', color: '#555570' }}>No keyword volume data available. Run analysis to see results.</p>
+            <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No keyword volume data available. Run analysis to see results.</p>
           )}
         </div>
       </div>
@@ -1487,18 +1487,18 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <p className="text-orbit-secondary text-xs font-medium">Keyword Rankings</p>
-            <p style={{ fontSize: '10px', color: '#444458', marginTop: '2px' }}>
+            <p style={{ fontSize: '10px', color: 'var(--c-444458)', marginTop: '2px' }}>
               {filteredKws.length} keyword{filteredKws.length !== 1 ? 's' : ''}
               {filter !== 'all' ? ` · filtered to ${POSITION_BUCKETS.find(b => b.key === filter)?.label}` : ''}
               {serpScannedCount > 0 && (
-                <span style={{ color: '#555570' }}> · SERP features shown for {serpScannedCount} scanned keywords</span>
+                <span style={{ color: 'var(--c-555570)' }}> · SERP features shown for {serpScannedCount} scanned keywords</span>
               )}
             </p>
           </div>
 
           {/* Filter pills */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            {([{ key: 'all', label: 'All', hex: '#8888B0' }, ...POSITION_BUCKETS] as const).map(b => {
+            {([{ key: 'all', label: 'All', hex: 'var(--c-8888b0)' }, ...POSITION_BUCKETS] as const).map(b => {
               const active = filter === b.key;
               return (
                 <button
@@ -1507,8 +1507,8 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
                   style={{
                     padding: '3px 10px', borderRadius: '20px', fontSize: '10px', cursor: 'pointer',
                     background: active ? `${b.hex}22` : 'transparent',
-                    border: `1px solid ${active ? b.hex : '#2A2A44'}`,
-                    color: active ? b.hex : '#505070',
+                    border: `1px solid ${active ? b.hex : 'var(--c-2a2a44)'}`,
+                    color: active ? b.hex : 'var(--c-505070)',
                     fontWeight: active ? 600 : 400,
                     transition: 'all .12s',
                   }}
@@ -1524,32 +1524,32 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid #1E1E2E' }}>
-                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '44px' }}>
-                  <button onClick={() => toggleSort('position')} style={{ cursor: 'pointer', color: sortCol === 'position' ? '#8B85FF' : '#555570', display: 'flex', alignItems: 'center', gap: '3px', background: 'none', border: 'none', padding: 0 }}>
+              <tr style={{ borderBottom: '1px solid var(--c-1e1e2e)' }}>
+                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '44px' }}>
+                  <button onClick={() => toggleSort('position')} style={{ cursor: 'pointer', color: sortCol === 'position' ? 'var(--c-8b85ff)' : 'var(--c-555570)', display: 'flex', alignItems: 'center', gap: '3px', background: 'none', border: 'none', padding: 0 }}>
                     Pos {sortCol === 'position' && (sortAsc ? '↑' : '↓')}
                   </button>
                 </th>
-                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em' }}>Keyword</th>
-                <th style={{ textAlign: 'right', padding: '6px 8px', fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '90px' }}>
-                  <button onClick={() => toggleSort('volume')} style={{ cursor: 'pointer', color: sortCol === 'volume' ? '#8B85FF' : '#555570', display: 'flex', alignItems: 'center', gap: '3px', background: 'none', border: 'none', padding: 0, marginLeft: 'auto' }}>
+                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em' }}>Keyword</th>
+                <th style={{ textAlign: 'right', padding: '6px 8px', fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '90px' }}>
+                  <button onClick={() => toggleSort('volume')} style={{ cursor: 'pointer', color: sortCol === 'volume' ? 'var(--c-8b85ff)' : 'var(--c-555570)', display: 'flex', alignItems: 'center', gap: '3px', background: 'none', border: 'none', padding: 0, marginLeft: 'auto' }}>
                     Vol / mo {sortCol === 'volume' && (sortAsc ? '↓' : '↑')}
                   </button>
                 </th>
-                <th style={{ textAlign: 'right', padding: '6px 8px', fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '90px' }}>Annual Vol</th>
-                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: '#555570', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '140px' }}>SERP Features</th>
+                <th style={{ textAlign: 'right', padding: '6px 8px', fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '90px' }}>Annual Vol</th>
+                <th style={{ textAlign: 'left', padding: '6px 8px', fontSize: '10px', color: 'var(--c-555570)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.06em', width: '140px' }}>SERP Features</th>
               </tr>
             </thead>
             <tbody>
               {pagedKws.map((kw, idx) => {
                 const serpKw = serpKwMap[kw.keyword.toLowerCase().trim()];
                 const isBranded = kw.branded === true;
-                const rowBg = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)';
+                const rowBg = idx % 2 === 0 ? 'transparent' : 'var(--ca-255-255-255-0_012)';
 
                 return (
                   <tr
                     key={kw.keyword}
-                    style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: rowBg }}
+                    style={{ borderBottom: '1px solid var(--ca-255-255-255-0_04)', background: rowBg }}
                   >
                     {/* Position */}
                     <td style={{ padding: '7px 8px' }}>
@@ -1559,24 +1559,24 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
                     {/* Keyword */}
                     <td style={{ padding: '7px 8px' }}>
                       <div className="flex items-center gap-2">
-                        <span style={{ fontSize: '12px', color: '#D0D0F0' }}>{kw.keyword}</span>
+                        <span style={{ fontSize: '12px', color: 'var(--c-d0d0f0)' }}>{kw.keyword}</span>
                         {isBranded && (
                           <span style={{
                             fontSize: '8px', padding: '1px 5px', borderRadius: '3px',
-                            background: '#1A1A40', border: '1px solid #3A3A80',
-                            color: '#7070C0', flexShrink: 0,
+                            background: 'var(--c-1a1a40)', border: '1px solid var(--c-3a3a80)',
+                            color: 'var(--c-7070c0)', flexShrink: 0,
                           }}>brand</span>
                         )}
                       </div>
                     </td>
 
                     {/* Monthly vol */}
-                    <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: '12px', color: '#8888AA', fontVariantNumeric: 'tabular-nums' }}>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: '12px', color: 'var(--c-8888aa)', fontVariantNumeric: 'tabular-nums' }}>
                       {(kw.searchVolume ?? 0).toLocaleString()}
                     </td>
 
                     {/* Annual vol */}
-                    <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: '12px', color: '#6060A0', fontVariantNumeric: 'tabular-nums' }}>
+                    <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: '12px', color: 'var(--c-6060a0)', fontVariantNumeric: 'tabular-nums' }}>
                       {fmtAnnual(kw.searchVolume ?? 0)}
                     </td>
 
@@ -1586,11 +1586,11 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
                         <div className="flex flex-wrap gap-1">
                           {serpKw.serpFeatures.map(f => <FeaturePill key={f} feature={f} />)}
                           {serpKw.serpFeatures.length === 0 && (
-                            <span style={{ fontSize: '10px', color: '#333350' }}>no features</span>
+                            <span style={{ fontSize: '10px', color: 'var(--c-333350)' }}>no features</span>
                           )}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '10px', color: '#2A2A40' }}>—</span>
+                        <span style={{ fontSize: '10px', color: 'var(--c-2a2a40)' }}>—</span>
                       )}
                     </td>
                   </tr>
@@ -1600,21 +1600,21 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           </table>
 
           {filteredKws.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '32px', color: '#444458', fontSize: '13px' }}>
+            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--c-444458)', fontSize: '13px' }}>
               No keywords in this position range.
             </div>
           )}
           {filteredKws.length > KW_PAGE_SIZE && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 8px', borderTop: '1px solid #1E1E2E' }}>
-              <span style={{ fontSize: '11px', color: '#555570' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 8px', borderTop: '1px solid var(--c-1e1e2e)' }}>
+              <span style={{ fontSize: '11px', color: 'var(--c-555570)' }}>
                 Showing {(kwSafePage * KW_PAGE_SIZE + 1).toLocaleString()}–{Math.min((kwSafePage + 1) * KW_PAGE_SIZE, filteredKws.length).toLocaleString()} of {filteredKws.length.toLocaleString()}
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <button type="button" onClick={() => setKwPage(0)} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>« First</button>
-                <button type="button" onClick={() => setKwPage(p => Math.max(0, p - 1))} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>‹ Prev</button>
-                <span style={{ fontSize: '11px', color: '#8888B0', padding: '0 6px' }}>Page {(kwSafePage + 1).toLocaleString()} of {kwPageCount.toLocaleString()}</span>
-                <button type="button" onClick={() => setKwPage(p => Math.min(kwPageCount - 1, p + 1))} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Next ›</button>
-                <button type="button" onClick={() => setKwPage(kwPageCount - 1)} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid #2A2A44', color: '#8888B0', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Last »</button>
+                <button type="button" onClick={() => setKwPage(0)} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid var(--c-2a2a44)', color: 'var(--c-8888b0)', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>« First</button>
+                <button type="button" onClick={() => setKwPage(p => Math.max(0, p - 1))} disabled={kwSafePage === 0} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid var(--c-2a2a44)', color: 'var(--c-8888b0)', cursor: 'pointer', opacity: kwSafePage === 0 ? 0.3 : 1 }}>‹ Prev</button>
+                <span style={{ fontSize: '11px', color: 'var(--c-8888b0)', padding: '0 6px' }}>Page {(kwSafePage + 1).toLocaleString()} of {kwPageCount.toLocaleString()}</span>
+                <button type="button" onClick={() => setKwPage(p => Math.min(kwPageCount - 1, p + 1))} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid var(--c-2a2a44)', color: 'var(--c-8888b0)', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Next ›</button>
+                <button type="button" onClick={() => setKwPage(kwPageCount - 1)} disabled={kwSafePage >= kwPageCount - 1} style={{ fontSize: '11px', padding: '3px 10px', borderRadius: '5px', background: 'transparent', border: '1px solid var(--c-2a2a44)', color: 'var(--c-8888b0)', cursor: 'pointer', opacity: kwSafePage >= kwPageCount - 1 ? 0.3 : 1 }}>Last »</button>
               </div>
             </div>
           )}

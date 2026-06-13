@@ -87,7 +87,7 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
   return (
     <div className="flex justify-between items-center py-1 border-b border-orbit-border last:border-0">
       <span className="text-[10px] text-orbit-secondary">{label}</span>
-      <span className="text-[11px] font-semibold" style={{ color: valueColor ?? '#F0F0FF' }}>{value}</span>
+      <span className="text-[11px] font-semibold" style={{ color: valueColor ?? 'var(--c-f0f0ff)' }}>{value}</span>
     </div>
   );
 }
@@ -98,15 +98,15 @@ function SignalCard({ source, value, desc, accentColor }: {
   return (
     <div className="px-3 py-2.5 mb-1.5"
       style={{
-        background: '#111118', borderLeft: `3px solid ${accentColor}`,
-        borderTop: '1px solid #1E1E2E', borderRight: '1px solid #1E1E2E',
-        borderBottom: '1px solid #1E1E2E', borderRadius: '0 6px 6px 0',
+        background: 'var(--c-111118)', borderLeft: `3px solid ${accentColor}`,
+        borderTop: '1px solid var(--c-1e1e2e)', borderRight: '1px solid var(--c-1e1e2e)',
+        borderBottom: '1px solid var(--c-1e1e2e)', borderRadius: '0 6px 6px 0',
       }}>
       <p className="text-[8px] font-bold uppercase tracking-wider mb-0.5" style={{ color: accentColor }}>
         {source}
       </p>
-      <p className="text-[17px] font-bold leading-tight" style={{ color: '#F0F0FF' }}>{value}</p>
-      <p className="text-[9px] leading-snug mt-0.5" style={{ color: '#8888AA' }}>{desc}</p>
+      <p className="text-[17px] font-bold leading-tight" style={{ color: 'var(--c-f0f0ff)' }}>{value}</p>
+      <p className="text-[9px] leading-snug mt-0.5" style={{ color: 'var(--c-8888aa)' }}>{desc}</p>
     </div>
   );
 }
@@ -364,19 +364,19 @@ export default function ExecutiveSummarySection({
   const narrativeText = rawNarrative ? firstSentences(rawNarrative, 4) : '';
 
   // ── Color helpers ─────────────────────────────────────────────────────────
-  const captureColor = captureRate < 0.15 ? '#EF4444' : captureRate < 0.35 ? '#F59E0B' : '#22C55E';
-  const llmColor     = overallLlmRate < 34 ? '#EF4444' : overallLlmRate < 67 ? '#F59E0B' : '#22C55E';
-  const pg1Color     = page1Pct < 30 ? '#F59E0B' : '#22C55E';
-  const aioColor     = aioRate < 20 ? '#EF4444' : aioRate < 50 ? '#F59E0B' : '#06B6D4';
-  const avgPosColor  = weightedPos > 0 && weightedPos <= 5 ? '#22C55E'
-    : weightedPos <= 20 ? '#F59E0B' : '#EF4444';
+  const captureColor = captureRate < 0.15 ? 'var(--c-ef4444)' : captureRate < 0.35 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
+  const llmColor     = overallLlmRate < 34 ? 'var(--c-ef4444)' : overallLlmRate < 67 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
+  const pg1Color     = page1Pct < 30 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
+  const aioColor     = aioRate < 20 ? 'var(--c-ef4444)' : aioRate < 50 ? 'var(--c-f59e0b)' : 'var(--c-06b6d4)';
+  const avgPosColor  = weightedPos > 0 && weightedPos <= 5 ? 'var(--c-22c55e)'
+    : weightedPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)';
 
   const CATEGORY_COLOR: Record<string, string> = {
-    SEO: 'rgba(108,99,255,.15)', GEO: 'rgba(6,182,212,.12)', Content: 'rgba(139,133,255,.12)',
-    Technical: 'rgba(245,158,11,.12)', Competitive: 'rgba(239,68,68,.12)',
+    SEO: 'var(--ca-108-99-255-0_15)', GEO: 'var(--ca-6-182-212-0_12)', Content: 'var(--ca-139-133-255-0_12)',
+    Technical: 'var(--ca-245-158-11-0_12)', Competitive: 'var(--ca-239-68-68-0_12)',
   };
   const CATEGORY_TEXT: Record<string, string> = {
-    SEO: '#8B85FF', GEO: '#06B6D4', Content: '#8B85FF', Technical: '#F59E0B', Competitive: '#EF4444',
+    SEO: 'var(--c-8b85ff)', GEO: 'var(--c-06b6d4)', Content: 'var(--c-8b85ff)', Technical: 'var(--c-f59e0b)', Competitive: 'var(--c-ef4444)',
   };
 
   // ── AI visibility — single defendable figure (v7.130) ──────────────────────
@@ -388,22 +388,22 @@ export default function ExecutiveSummarySection({
     aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
     : overallTotal > 0 ? `of ${overallTotal} AI probes citing you`
     : 'run an AIO scan to measure';
-  const aiVisColor = aiVisPct === null ? '#555570' : aiVisPct < 20 ? '#EF4444' : aiVisPct < 50 ? '#F59E0B' : '#22C55E';
+  const aiVisColor = aiVisPct === null ? 'var(--c-555570)' : aiVisPct < 20 ? 'var(--c-ef4444)' : aiVisPct < 50 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
 
   const STATUS_STYLE: Record<'present' | 'thin' | 'absent', { bg: string; fg: string; label: string }> = {
-    present: { bg: '#166534', fg: '#86EFAC', label: 'present' },
-    thin:    { bg: '#854D0E', fg: '#FDE68A', label: 'thin' },
-    absent:  { bg: '#2A2A3A', fg: '#8888AA', label: 'absent' },
+    present: { bg: 'var(--c-166534)', fg: 'var(--c-86efac)', label: 'present' },
+    thin:    { bg: 'var(--c-854d0e)', fg: 'var(--c-fde68a)', label: 'thin' },
+    absent:  { bg: 'var(--c-2a2a3a)', fg: 'var(--c-8888aa)', label: 'absent' },
   };
 
   // ── v7.131: GEO Visibility Score (equal-weighted; formula shown on screen) ──
   const scoreDims = [
-    { label: 'Traditional', val: page1Pct, color: '#22C55E' },
-    ...(aiVisPct !== null ? [{ label: 'AI visibility', val: aiVisPct, color: '#EF4444' }] : []),
-    { label: 'Journey', val: Math.round((journeyStagesCovered / 4) * 100), color: '#06B6D4' },
+    { label: 'Traditional', val: page1Pct, color: 'var(--c-22c55e)' },
+    ...(aiVisPct !== null ? [{ label: 'AI visibility', val: aiVisPct, color: 'var(--c-ef4444)' }] : []),
+    { label: 'Journey', val: Math.round((journeyStagesCovered / 4) * 100), color: 'var(--c-06b6d4)' },
   ];
   const geoScore = scoreDims.length ? Math.round(scoreDims.reduce((s, d) => s + d.val, 0) / scoreDims.length) : 0;
-  const geoScoreColor = geoScore < 25 ? '#EF4444' : geoScore < 50 ? '#F59E0B' : '#22C55E';
+  const geoScoreColor = geoScore < 25 ? 'var(--c-ef4444)' : geoScore < 50 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
   const aiMeasured = aiVisPct !== null;
 
   // ── v7.131: Read-confidence meter (which data signals are present) ──────────
@@ -417,7 +417,7 @@ export default function ExecutiveSummarySection({
   const signalsOk      = signals.filter(s => s.ok).length;
   const confidencePct  = Math.round((signalsOk / signals.length) * 100);
   const missingSignals = signals.filter(s => !s.ok).map(s => s.key);
-  const confColor      = confidencePct >= 80 ? '#22C55E' : confidencePct >= 50 ? '#F59E0B' : '#EF4444';
+  const confColor      = confidencePct >= 80 ? 'var(--c-22c55e)' : confidencePct >= 50 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)';
 
   // ── v7.131: Quick-wins ladder + modeled value-at-stake (CTR-by-position) ────
   const CTR: Record<number, number> = { 1: .28, 2: .15, 3: .10, 4: .07, 5: .05, 6: .04, 7: .03, 8: .025, 9: .02, 10: .018 };
@@ -430,9 +430,9 @@ export default function ExecutiveSummarySection({
   const climbClicks = Math.round(climber.reduce((s, k) => s + Math.max(0, ctrAt(8) - ctrAt(k.position)) * k.searchVolume * 12, 0));
   const betClicks   = Math.round(ctrAt(8) * gapVolume * 12);
   const ladder = [
-    { tier: 'Quick win', color: '#22C55E', move: 'Near-misses (pos 4–10) → push to top 3',     n: nearMiss.length, volMonthly: nearMissVol, clicks: quickClicks },
-    { tier: 'Climber',   color: '#F59E0B', move: 'Page-2 (pos 11–20) → push to page 1',         n: climber.length,  volMonthly: climberVol,  clicks: climbClicks },
-    { tier: 'Big bet',   color: '#EF4444', move: 'Net-new (gaps) → build content authority',    n: gapKwCount,      volMonthly: gapVolume,   clicks: betClicks },
+    { tier: 'Quick win', color: 'var(--c-22c55e)', move: 'Near-misses (pos 4–10) → push to top 3',     n: nearMiss.length, volMonthly: nearMissVol, clicks: quickClicks },
+    { tier: 'Climber',   color: 'var(--c-f59e0b)', move: 'Page-2 (pos 11–20) → push to page 1',         n: climber.length,  volMonthly: climberVol,  clicks: climbClicks },
+    { tier: 'Big bet',   color: 'var(--c-ef4444)', move: 'Net-new (gaps) → build content authority',    n: gapKwCount,      volMonthly: gapVolume,   clicks: betClicks },
   ];
 
   // ── v7.134: LLM sentiment-when-mentioned for the LLM-visibility card ────────
@@ -452,7 +452,7 @@ export default function ExecutiveSummarySection({
   if (!dbLoaded) {
     return (
       <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
-        <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+        <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
           <p className="text-[9px] text-orbit-tertiary uppercase tracking-widest mb-1">Market capture rate</p>
           <p className="text-[11px] text-orbit-secondary">Loading keyword data…</p>
         </div>
@@ -464,34 +464,34 @@ export default function ExecutiveSummarySection({
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
       {/* ═══ v7.131 — GEO VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
-      <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
+      <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 14, alignItems: 'center' }}>
-          <div style={{ textAlign: 'center', paddingRight: 14, borderRight: '1px solid #1E1E2E' }}>
-            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: '#8888AA' }}>GEO Visibility Score</p>
+          <div style={{ textAlign: 'center', paddingRight: 14, borderRight: '1px solid var(--c-1e1e2e)' }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>GEO Visibility Score</p>
             <p style={{ margin: '4px 0 0', fontSize: 40, fontWeight: 800, lineHeight: 1, color: geoScoreColor }}>
-              {geoScore}<span style={{ fontSize: 16, color: '#555570' }}>/100</span>
+              {geoScore}<span style={{ fontSize: 16, color: 'var(--c-555570)' }}>/100</span>
             </p>
           </div>
           <div>
-            <p style={{ margin: '0 0 6px', fontSize: 10, color: '#555570' }}>
+            <p style={{ margin: '0 0 6px', fontSize: 10, color: 'var(--c-555570)' }}>
               Equal-weighted ⅓ each · {scoreDims.map(d => `${d.label.toLowerCase()} ${d.val}`).join(' · ')}{aiMeasured ? '' : ' · AI not yet measured (excluded)'}
             </p>
             <div className="flex flex-col gap-1.5">
               {scoreDims.map(d => (
                 <div key={d.label} className="flex items-center gap-2">
                   <span style={{ width: 82, fontSize: 11, color: d.color }}>{d.label}</span>
-                  <div style={{ flex: 1, background: '#1E1E2E', borderRadius: 3, height: 7 }}>
+                  <div style={{ flex: 1, background: 'var(--c-1e1e2e)', borderRadius: 3, height: 7 }}>
                     <div style={{ width: `${Math.min(100, d.val)}%`, background: d.color, height: 7, borderRadius: 3 }} />
                   </div>
-                  <span style={{ fontSize: 11, color: '#8888AA', width: 28, textAlign: 'right' }}>{d.val}</span>
+                  <span style={{ fontSize: 11, color: 'var(--c-8888aa)', width: 28, textAlign: 'right' }}>{d.val}</span>
                 </div>
               ))}
             </div>
           </div>
-          <div style={{ textAlign: 'center', paddingLeft: 14, borderLeft: '1px solid #1E1E2E', minWidth: 110 }}>
-            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: '#8888AA' }}>Read confidence</p>
+          <div style={{ textAlign: 'center', paddingLeft: 14, borderLeft: '1px solid var(--c-1e1e2e)', minWidth: 110 }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>Read confidence</p>
             <p style={{ margin: '4px 0 2px', fontSize: 22, fontWeight: 700, color: confColor }}>{confidencePct}%</p>
-            <p style={{ margin: 0, fontSize: 9, color: '#555570' }}>
+            <p style={{ margin: 0, fontSize: 9, color: 'var(--c-555570)' }}>
               {signalsOk} of {signals.length} signals{missingSignals.length > 0 ? ` · missing: ${missingSignals.join(', ')}` : ' · all present'}
             </p>
           </div>
@@ -500,12 +500,12 @@ export default function ExecutiveSummarySection({
 
       {/* ═══ THE LANDSCAPE — headline renders ONLY when narrative data exists ═══ */}
       {narrativeText ? (
-        <div className="orbit-card p-4" style={{ borderColor: 'rgba(108,99,255,0.4)' }}>
-          <p className="text-[9px] uppercase mb-1" style={{ color: '#6C63FF', letterSpacing: '.12em' }}>
+        <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
+          <p className="text-[9px] uppercase mb-1" style={{ color: 'var(--c-6c63ff)', letterSpacing: '.12em' }}>
             The landscape · your position in the new discovery ecosystem
           </p>
-          <p className="font-semibold" style={{ fontSize: 18, color: '#F0F0FF', lineHeight: 1.35 }}>
-            You win page-1 rankings for <span style={{ color: '#22C55E' }}>{page1Pct}%</span> of demand
+          <p className="font-semibold" style={{ fontSize: 18, color: 'var(--c-f0f0ff)', lineHeight: 1.35 }}>
+            You win page-1 rankings for <span style={{ color: 'var(--c-22c55e)' }}>{page1Pct}%</span> of demand
             {aiVisPct !== null
               ? <> — but you&rsquo;re cited in just <span style={{ color: aiVisColor }}>{aiVisPct}%</span> of the AI answers your buyers now read first.</>
               : <>. AI-answer visibility is not yet measured — run an AIO scan to see it.</>}
@@ -523,26 +523,26 @@ export default function ExecutiveSummarySection({
         </p>
         <div className="grid grid-cols-4 gap-2">
           {[
-            { key: 'trad', accent: '#22C55E', icon: 'Traditional',
-              big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: '#F0F0FF',
+            { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Traditional',
+              big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: 'var(--c-f0f0ff)',
               sub: 'of demand ranked page 1' },
-            { key: 'ai', accent: '#EF4444', icon: 'AI visibility',
+            { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility',
               big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
               sub: aiVisDenom },
-            { key: 'gap', accent: '#F59E0B', icon: 'Coverage gap',
-              big: gapVolume > 0 ? fmtAnnual(gapVolume) : '—', bigSuffix: '', bigColor: '#F59E0B',
+            { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage gap',
+              big: gapVolume > 0 ? fmtAnnual(gapVolume) : '—', bigSuffix: '', bigColor: 'var(--c-f59e0b)',
               sub: `${gapKwCount} non-branded voids / yr` },
-            { key: 'journey', accent: '#06B6D4', icon: 'Journey',
-              big: `${journeyStagesCovered}`, bigSuffix: ' of 4', bigColor: '#F0F0FF',
+            { key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey',
+              big: `${journeyStagesCovered}`, bigSuffix: ' of 4', bigColor: 'var(--c-f0f0ff)',
               sub: 'stages with organic coverage' },
           ].map(b => (
             <div key={b.key} className="orbit-card p-3"
               style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0' }}>
               <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: b.accent }}>{b.icon}</p>
               <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor, marginTop: 8 }}>
-                {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: '#8888AA' }}>{b.bigSuffix}</span> : null}
+                {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
               </p>
-              <p className="text-[9px] mt-1" style={{ color: '#8888AA' }}>{b.sub}</p>
+              <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p>
             </div>
           ))}
         </div>
@@ -554,10 +554,10 @@ export default function ExecutiveSummarySection({
         <div style={{ display: 'grid', gridTemplateColumns: '84px repeat(4,1fr)', gap: 6, alignItems: 'center' }}>
           <span />
           {journeyStages.map(s => (
-            <span key={`h-${s.stage}`} className="text-[9px]" style={{ color: '#8888AA', textAlign: 'center' }}>{s.label}</span>
+            <span key={`h-${s.stage}`} className="text-[9px]" style={{ color: 'var(--c-8888aa)', textAlign: 'center' }}>{s.label}</span>
           ))}
 
-          <span className="text-[9px]" style={{ color: '#22C55E' }}>Organic</span>
+          <span className="text-[9px]" style={{ color: 'var(--c-22c55e)' }}>Organic</span>
           {journeyStages.map(s => {
             const st = STATUS_STYLE[s.status];
             return (
@@ -569,16 +569,16 @@ export default function ExecutiveSummarySection({
             );
           })}
 
-          <span className="text-[9px]" style={{ color: '#555570' }}>AI</span>
+          <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>AI</span>
           {journeyStages.map(s => (
             <div key={`a-${s.stage}`}
-              style={{ background: '#16161F', color: '#555570', height: 26, borderRadius: 4,
-                border: '1px dashed #2A2A3A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
+              style={{ background: 'var(--c-16161f)', color: 'var(--c-555570)', height: 26, borderRadius: 4,
+                border: '1px dashed var(--c-2a2a3a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
               coming
             </div>
           ))}
         </div>
-        <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
+        <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
           AI-per-stage visibility, audience segments, and Sentinel live signals are in build — this row activates once LLM probes are mapped to journey stages.
         </p>
       </div>
@@ -593,9 +593,9 @@ export default function ExecutiveSummarySection({
             <>
               {llmPlatforms.map((p: any) => {
                 const pct      = Math.round((p.mentionRate ?? 0) * 100);
-                const col      = pct < 34 ? '#EF4444' : pct < 67 ? '#F59E0B' : '#22C55E';
-                const bgBadge  = p.platform === 'claude' ? 'rgba(108,99,255,.15)' : 'rgba(34,197,94,.1)';
-                const txtBadge = p.platform === 'claude' ? '#8B85FF' : '#22C55E';
+                const col      = pct < 34 ? 'var(--c-ef4444)' : pct < 67 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
+                const bgBadge  = p.platform === 'claude' ? 'var(--ca-108-99-255-0_15)' : 'var(--ca-34-197-94-0_1)';
+                const txtBadge = p.platform === 'claude' ? 'var(--c-8b85ff)' : 'var(--c-22c55e)';
                 return (
                   <div key={p.platform} className="flex items-center gap-2 mt-2 rounded-md px-2.5 py-1.5 bg-orbit-surface">
                     <span className="text-[9px] font-bold rounded px-1.5 py-1 shrink-0" style={{ background: bgBadge, color: txtBadge }}>
@@ -612,7 +612,7 @@ export default function ExecutiveSummarySection({
                   </div>
                 );
               })}
-              <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid #1E1E2E' }}>
+              <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid var(--c-1e1e2e)' }}>
                 <span className="text-[10px] text-orbit-secondary">Overall citation rate</span>
                 <span className="text-[11px] font-semibold" style={{ color: llmColor }}>{overallLlmRate}% · {overallMentions}/{overallTotal} prompts</span>
               </div>
@@ -622,15 +622,15 @@ export default function ExecutiveSummarySection({
                     <span className="text-[9px] text-orbit-tertiary">Sentiment when mentioned</span>
                     <span className="text-[9px] text-orbit-tertiary">{llmSent.total} mentions</span>
                   </div>
-                  <div className="flex rounded-full overflow-hidden" style={{ height: 6, background: '#1E1E2E' }}>
-                    <div style={{ width: `${(llmSent.pos / llmSent.total) * 100}%`, background: '#22C55E' }} />
-                    <div style={{ width: `${(llmSent.neu / llmSent.total) * 100}%`, background: '#8888AA' }} />
-                    <div style={{ width: `${(llmSent.neg / llmSent.total) * 100}%`, background: '#EF4444' }} />
+                  <div className="flex rounded-full overflow-hidden" style={{ height: 6, background: 'var(--c-1e1e2e)' }}>
+                    <div style={{ width: `${(llmSent.pos / llmSent.total) * 100}%`, background: 'var(--c-22c55e)' }} />
+                    <div style={{ width: `${(llmSent.neu / llmSent.total) * 100}%`, background: 'var(--c-8888aa)' }} />
+                    <div style={{ width: `${(llmSent.neg / llmSent.total) * 100}%`, background: 'var(--c-ef4444)' }} />
                   </div>
                   <div className="flex gap-3 mt-1">
-                    <span className="text-[9px]" style={{ color: '#22C55E' }}>{llmSent.pos} positive</span>
-                    <span className="text-[9px]" style={{ color: '#8888AA' }}>{llmSent.neu} neutral</span>
-                    <span className="text-[9px]" style={{ color: '#EF4444' }}>{llmSent.neg} negative</span>
+                    <span className="text-[9px]" style={{ color: 'var(--c-22c55e)' }}>{llmSent.pos} positive</span>
+                    <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>{llmSent.neu} neutral</span>
+                    <span className="text-[9px]" style={{ color: 'var(--c-ef4444)' }}>{llmSent.neg} negative</span>
                   </div>
                 </div>
               ) : null}
@@ -648,33 +648,33 @@ export default function ExecutiveSummarySection({
           {ladder.map(t => (
             <div key={t.tier} style={{ display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: 12, alignItems: 'center' }}>
               <span style={{ fontSize: 11, fontWeight: 600, color: t.color }}>{t.tier}</span>
-              <span style={{ fontSize: 11, color: '#F0F0FF' }}>{t.move}</span>
-              <span style={{ fontSize: 11, color: '#8888AA', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                {t.n.toLocaleString()} kws · {fmtAnnual(t.volMonthly)}/yr · <span style={{ color: '#6C63FF' }}>~{fmtCompact(t.clicks)} clicks</span>
+              <span style={{ fontSize: 11, color: 'var(--c-f0f0ff)' }}>{t.move}</span>
+              <span style={{ fontSize: 11, color: 'var(--c-8888aa)', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                {t.n.toLocaleString()} kws · {fmtAnnual(t.volMonthly)}/yr · <span style={{ color: 'var(--c-6c63ff)' }}>~{fmtCompact(t.clicks)} clicks</span>
               </span>
             </div>
           ))}
         </div>
-        <p className="text-[9px] mt-2" style={{ color: '#555570' }}>
-          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: '#8888AA' }}>modeled</span> from an industry-average organic CTR-by-position curve (pos 1≈28%, pos 3≈10%, pos 8≈2.5%); they show the upside of each move, not a guarantee.
+        <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
+          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: 'var(--c-8888aa)' }}>modeled</span> from an industry-average organic CTR-by-position curve (pos 1≈28%, pos 3≈10%, pos 8≈2.5%); they show the upside of each move, not a guarantee.
         </p>
       </div>
 
       {/* ═══ THE CONTINUOUS CYCLE — SECURE THE COVERAGE GAPS ═══ */}
       <div>
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
-          style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10 }}>
+          style={{ borderTop: '1px solid var(--c-1e1e2e)', paddingTop: 10 }}>
           The continuous cycle · {hasFallbackActions ? 'recommended priorities to secure coverage' : 'AI-generated priorities to secure coverage'}
         </p>
         <div className="grid grid-cols-3 gap-3">
           {actions.map((a, i) => {
-            const catColor = CATEGORY_TEXT[a.category]  ?? '#8B85FF';
-            const catBg    = CATEGORY_COLOR[a.category] ?? 'rgba(108,99,255,.12)';
+            const catColor = CATEGORY_TEXT[a.category]  ?? 'var(--c-8b85ff)';
+            const catBg    = CATEGORY_COLOR[a.category] ?? 'var(--ca-108-99-255-0_12)';
             return (
               <div key={a.id ?? a.rank ?? i} className="orbit-card p-4 flex flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                    style={{ background: '#6C63FF' }}>
+                    style={{ background: 'var(--c-6c63ff)' }}>
                     {i + 1}
                   </div>
                   <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
@@ -692,11 +692,11 @@ export default function ExecutiveSummarySection({
 
       {/* ═══ SLIM ROLL-UP FOOTER ═══ */}
       <div className="flex items-center justify-between gap-3"
-        style={{ borderTop: '1px solid #1E1E2E', paddingTop: 10, flexWrap: 'wrap' }}>
-        <span className="text-[9px]" style={{ color: '#555570' }}>
+        style={{ borderTop: '1px solid var(--c-1e1e2e)', paddingTop: 10, flexWrap: 'wrap' }}>
+        <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
-        <span className="text-[9px]" style={{ color: '#8888AA' }}>
+        <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>
           Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {sovTotal > 0 && sovClient ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>

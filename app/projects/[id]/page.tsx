@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import ThemeToggle from '@/components/ThemeToggle';
 import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import JourneySection         from '@/components/brief/JourneySection';
@@ -546,38 +547,38 @@ export default function ProjectBriefPage() {
     return {
       btn: {
         padding:    '7px 12px',
-        borderLeft: active   ? '2px solid #6C63FF'
-                  : hovered  ? '2px solid rgba(108,99,255,0.45)'
+        borderLeft: active   ? '2px solid var(--c-6c63ff)'
+                  : hovered  ? '2px solid var(--ca-108-99-255-0_45)'
                   :             '2px solid transparent',
-        background: active   ? '#14141F'
-                  : hovered  ? '#11111E'
+        background: active   ? 'var(--c-14141f)'
+                  : hovered  ? 'var(--c-11111e)'
                   :             'transparent',
         transition: 'background 0.12s, border-left-color 0.12s',
       } as React.CSSProperties,
       icon: {
         fontSize: '14px', width: '15px', flexShrink: 0,
-        color: active  ? '#8B85FF'
-             : hovered ? '#6A65C0'
-             : hasData ? '#5858A0'
-             :            '#484878',
+        color: active  ? 'var(--c-8b85ff)'
+             : hovered ? 'var(--c-6a65c0)'
+             : hasData ? 'var(--c-5858a0)'
+             :            'var(--c-484878)',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       label: {
         flex: 1, fontSize: '13px', overflow: 'hidden',
         textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
-        color: active  ? '#E0E0FF'
-             : hovered ? '#8080C0'
-             : hasData ? '#7878B0'
-             :            '#606090',
+        color: active  ? 'var(--c-e0e0ff)'
+             : hovered ? 'var(--c-8080c0)'
+             : hasData ? 'var(--c-7878b0)'
+             :            'var(--c-606090)',
         transition: 'color 0.12s',
       } as React.CSSProperties,
       score: {
         fontSize: '11px', fontWeight: 500,
         fontVariantNumeric: 'tabular-nums' as const,
-        color: active  ? '#6C63FF'
-             : hovered ? '#6060B8'
-             : hasData ? '#6060A0'
-             :            '#484870',
+        color: active  ? 'var(--c-6c63ff)'
+             : hovered ? 'var(--c-6060b8)'
+             : hasData ? 'var(--c-6060a0)'
+             :            'var(--c-484870)',
         transition: 'color 0.12s',
       } as React.CSSProperties,
     };
@@ -684,7 +685,7 @@ export default function ProjectBriefPage() {
                 <button
                   onClick={copyPptPrompt}
                   className="flex items-center gap-1.5 text-xs border px-3 py-1.5 rounded-lg transition-colors"
-                  style={pptCopied ? { color: '#4ADE80', borderColor: 'rgba(74,222,128,0.4)' } : { color: '#8080B0', borderColor: '#2A2A4A' }}
+                  style={pptCopied ? { color: 'var(--c-4ade80)', borderColor: 'var(--ca-74-222-128-0_4)' } : { color: 'var(--c-8080b0)', borderColor: 'var(--c-2a2a4a)' }}
                 >
                   {pptCopied ? (
                     <>
@@ -733,6 +734,8 @@ export default function ProjectBriefPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* v7.185: global dark/light theme toggle */}
+          <ThemeToggle />
           <button
             onClick={() => setShowEditProject(true)}
             className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
@@ -747,7 +750,7 @@ export default function ProjectBriefPage() {
           <button
             onClick={() => setShowCompetitors(true)}
             className="text-xs border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-            style={{ color: '#F59E0B', borderColor: 'rgba(245,158,11,0.35)' }}
+            style={{ color: 'var(--c-f59e0b)', borderColor: 'var(--ca-245-158-11-0_35)' }}
             title="Manage competitors: add / edit / delete, upload keyword CSVs, clear files, set volume thresholds"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -755,7 +758,7 @@ export default function ProjectBriefPage() {
             </svg>
             Competitors
             {(project.competitors?.length ?? 0) > 0 && (
-              <span style={{ fontSize: '9px', fontWeight: 700, background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '10px', padding: '1px 6px' }}>
+              <span style={{ fontSize: '9px', fontWeight: 700, background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_3)', borderRadius: '10px', padding: '1px 6px' }}>
                 {project.competitors!.length}
               </span>
             )}
@@ -822,22 +825,22 @@ export default function ProjectBriefPage() {
         <div
           className="flex-shrink-0 flex items-center gap-3 px-5 py-2 border-b"
           style={{
-            borderColor: '#1A1A30',
-            background:  serpScan.error ? 'rgba(239,68,68,0.06)' : serpScan.complete ? 'rgba(52,211,153,0.06)' : '#0A0A16',
+            borderColor: 'var(--c-1a1a30)',
+            background:  serpScan.error ? 'var(--ca-239-68-68-0_06)' : serpScan.complete ? 'var(--ca-52-211-153-0_06)' : 'var(--c-0a0a16)',
           }}
         >
           {serpScan.running ? (
-            <svg className="animate-spin shrink-0" style={{ width: 13, height: 13, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+            <svg className="animate-spin shrink-0" style={{ width: 13, height: 13, color: 'var(--c-8b85ff)' }} fill="none" viewBox="0 0 24 24">
               <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
             </svg>
           ) : serpScan.error ? (
-            <span style={{ color: '#f87171', fontSize: 13 }}>⚠</span>
+            <span style={{ color: 'var(--c-f87171)', fontSize: 13 }}>⚠</span>
           ) : (
-            <span style={{ color: '#34D399', fontSize: 13 }}>✓</span>
+            <span style={{ color: 'var(--c-34d399)', fontSize: 13 }}>✓</span>
           )}
 
-          <span className="text-[11px] font-medium" style={{ color: serpScan.error ? '#f87171' : serpScan.complete ? '#34D399' : '#C4C0FF' }}>
+          <span className="text-[11px] font-medium" style={{ color: serpScan.error ? 'var(--c-f87171)' : serpScan.complete ? 'var(--c-34d399)' : 'var(--c-c4c0ff)' }}>
             {serpScan.error
               ? 'SERP scan paused'
               : serpScan.complete
@@ -847,13 +850,13 @@ export default function ProjectBriefPage() {
 
           {serpScan.running && (
             <>
-              <div style={{ width: 140, height: 4, borderRadius: 2, background: '#14142A', overflow: 'hidden' }}>
+              <div style={{ width: 140, height: 4, borderRadius: 2, background: 'var(--c-14142a)', overflow: 'hidden' }}>
                 <div style={{
                   width: serpScan.total > 0 ? `${Math.min((serpScan.done / serpScan.total) * 100, 100)}%` : '0%',
-                  height: '100%', background: '#6C63FF', borderRadius: 2, transition: 'width 0.4s ease',
+                  height: '100%', background: 'var(--c-6c63ff)', borderRadius: 2, transition: 'width 0.4s ease',
                 }} />
               </div>
-              <span className="text-[10px]" style={{ color: '#55557A' }}>
+              <span className="text-[10px]" style={{ color: 'var(--c-55557a)' }}>
                 ~{Math.max(serpScan.total - serpScan.done, 0).toLocaleString()} credits left · keeps running while you browse — keep this tab open
               </span>
             </>
@@ -861,11 +864,11 @@ export default function ProjectBriefPage() {
 
           {serpScan.error && (
             <>
-              <span className="text-[10px]" style={{ color: '#A36A6A' }}>{serpScan.error}</span>
+              <span className="text-[10px]" style={{ color: 'var(--c-a36a6a)' }}>{serpScan.error}</span>
               <button
                 onClick={() => runSerpScan(Math.max(serpScan.total - serpScan.done, 0) || undefined)}
                 className="text-[10px] px-3 py-0.5 rounded-full border ml-1 transition-colors"
-                style={{ borderColor: 'rgba(108,99,255,0.5)', color: '#9B96FF', background: 'rgba(108,99,255,0.08)' }}
+                style={{ borderColor: 'var(--ca-108-99-255-0_5)', color: 'var(--c-9b96ff)', background: 'var(--ca-108-99-255-0_08)' }}
               >
                 Resume
               </button>
@@ -876,7 +879,7 @@ export default function ProjectBriefPage() {
             <button
               onClick={() => setSerpScan(s => ({ ...s, error: null, complete: false }))}
               className="ml-auto text-[10px] transition-colors"
-              style={{ color: '#55557A' }}
+              style={{ color: 'var(--c-55557a)' }}
             >
               Dismiss
             </button>
@@ -886,33 +889,33 @@ export default function ProjectBriefPage() {
 
       {/* ── v7.132: SERP scan cost-confirm modal ── */}
       {(serpScan.confirm || serpScan.checking) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.65)' }}>
-          <div className="rounded-xl p-6" style={{ background: '#0D0D18', border: '1px solid #2A2A45', width: 420, maxWidth: '90vw' }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'var(--ca-0-0-0-0_65)' }}>
+          <div className="rounded-xl p-6" style={{ background: 'var(--c-0d0d18)', border: '1px solid var(--c-2a2a45)', width: 420, maxWidth: '90vw' }}>
             {serpScan.checking ? (
               <div className="flex items-center gap-3">
-                <svg className="animate-spin" style={{ width: 16, height: 16, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+                <svg className="animate-spin" style={{ width: 16, height: 16, color: 'var(--c-8b85ff)' }} fill="none" viewBox="0 0 24 24">
                   <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                 </svg>
-                <span className="text-sm" style={{ color: '#A0A0C8' }}>Checking how many keywords remain…</span>
+                <span className="text-sm" style={{ color: 'var(--c-a0a0c8)' }}>Checking how many keywords remain…</span>
               </div>
             ) : serpScan.confirm && (
               <>
-                <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>Scan all remaining SERP features</p>
-                <p className="text-xs mb-3" style={{ color: '#7070A0' }}>
+                <p className="text-sm font-medium mb-1" style={{ color: 'var(--c-e8e8ff)' }}>Scan all remaining SERP features</p>
+                <p className="text-xs mb-3" style={{ color: 'var(--c-7070a0)' }}>
                   This will scan every unscanned keyword automatically, in batches of {SERP_SCAN_BATCH}, until coverage is full. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.
                 </p>
-                <div className="rounded-lg p-3 mb-3" style={{ background: '#0A0A14', border: '1px solid #1E1E30' }}>
+                <div className="rounded-lg p-3 mb-3" style={{ background: 'var(--c-0a0a14)', border: '1px solid var(--c-1e1e30)' }}>
                   <div className="flex justify-between text-xs py-0.5">
-                    <span style={{ color: '#A0A0C8' }}>Keywords remaining</span>
-                    <span style={{ color: '#D0D0F0' }}>{serpScan.confirm.remaining.toLocaleString()}</span>
+                    <span style={{ color: 'var(--c-a0a0c8)' }}>Keywords remaining</span>
+                    <span style={{ color: 'var(--c-d0d0f0)' }}>{serpScan.confirm.remaining.toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid #1E1E30' }}>
-                    <span className="font-medium" style={{ color: '#E8E8FF' }}>Maximum cost</span>
-                    <span className="font-medium" style={{ color: '#F59E0B' }}>up to {serpScan.confirm.remaining.toLocaleString()} SerpAPI credits</span>
+                  <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid var(--c-1e1e30)' }}>
+                    <span className="font-medium" style={{ color: 'var(--c-e8e8ff)' }}>Maximum cost</span>
+                    <span className="font-medium" style={{ color: 'var(--c-f59e0b)' }}>up to {serpScan.confirm.remaining.toLocaleString()} SerpAPI credits</span>
                   </div>
                 </div>
-                <p className="text-[11px] mb-4" style={{ color: '#55557A' }}>
+                <p className="text-[11px] mb-4" style={{ color: 'var(--c-55557a)' }}>
                   The scan keeps running while you browse other panels — just keep this tab open. If it stops early, every completed batch is saved and you can resume.
                 </p>
                 <div className="flex justify-end gap-2">
@@ -925,7 +928,7 @@ export default function ProjectBriefPage() {
                   <button
                     onClick={() => runSerpScan(serpScan.confirm?.remaining)}
                     className="text-xs font-medium px-4 py-2 rounded-lg text-white transition-colors"
-                    style={{ background: '#6C63FF' }}
+                    style={{ background: 'var(--c-6c63ff)' }}
                   >
                     Scan all {serpScan.confirm.remaining.toLocaleString()} · ~{serpScan.confirm.remaining.toLocaleString()} credits
                   </button>
@@ -942,15 +945,15 @@ export default function ProjectBriefPage() {
         {/* ── SIDEBAR ── */}
         <aside
           className="flex-shrink-0 border-r border-orbit-border flex flex-col"
-          style={{ width: '252px', background: '#0D0D16' }}
+          style={{ width: '252px', background: 'var(--c-0d0d16)' }}
         >
           <div className="px-3 py-3 border-b border-orbit-border">
             <div className="text-orbit-primary text-[12px] font-semibold truncate">{domainDisplay}</div>
             {project.industry && (
-              <div className="text-[11px] mt-0.5" style={{ color: '#5858A0' }}>{project.industry}</div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--c-5858a0)' }}>{project.industry}</div>
             )}
             {scanDate && (
-              <div className="text-[9px] mt-1.5" style={{ color: '#383858' }}>SCAN: {scanDate}</div>
+              <div className="text-[9px] mt-1.5" style={{ color: 'var(--c-383858)' }}>SCAN: {scanDate}</div>
             )}
           </div>
 
@@ -960,7 +963,7 @@ export default function ProjectBriefPage() {
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
-                    <div className="text-[10px] font-semibold tracking-[.08em] uppercase px-3 pt-3 pb-1" style={{ color: '#4A4A72' }}>
+                    <div className="text-[10px] font-semibold tracking-[.08em] uppercase px-3 pt-3 pb-1" style={{ color: 'var(--c-4a4a72)' }}>
                       {group}
                     </div>
                   )}
@@ -976,7 +979,7 @@ export default function ProjectBriefPage() {
                           className="w-full flex items-center gap-1.5 text-left"
                           style={styles.btn}
                         >
-                          <span style={{ fontSize: '10px', color: '#505078', width: '15px', flexShrink: 0 }}>
+                          <span style={{ fontSize: '10px', color: 'var(--c-505078)', width: '15px', flexShrink: 0 }}>
                             {item.num}
                           </span>
                           <i className={`ti ${item.icon}`} style={styles.icon} aria-hidden="true" />
@@ -985,7 +988,7 @@ export default function ProjectBriefPage() {
 
                         {/* ── Keywords sub-nav (v7.172: always expanded, not gated on active) ── */}
                         {item.id === 'keywords' && hasResults && (
-                          <div style={{ background: '#060610', borderTop: '1px solid #0E0E1E' }}>
+                          <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
                             {(['list', 'clusters'] as const).map(sv => {
                               // v7.172: only highlight a sub-item when the Keyword panel is the
                               // active section — otherwise the row stays expanded but unhighlighted.
@@ -999,16 +1002,16 @@ export default function ProjectBriefPage() {
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
                                     padding: '6px 12px 6px 32px',
-                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.6)' : '2px solid transparent',
-                                    background: subActive ? '#0F0F1C' : 'transparent',
+                                    borderLeft: subActive ? '2px solid var(--ca-108-99-255-0_6)' : '2px solid transparent',
+                                    background: subActive ? 'var(--c-0f0f1c)' : 'transparent',
                                   }}
                                 >
                                   <i
                                     className={`ti ${subIcons[sv]}`}
-                                    style={{ fontSize: '12px', color: subActive ? '#6C63FF' : '#545490', width: '14px', flexShrink: 0 }}
+                                    style={{ fontSize: '12px', color: subActive ? 'var(--c-6c63ff)' : 'var(--c-545490)', width: '14px', flexShrink: 0 }}
                                     aria-hidden="true"
                                   />
-                                  <span style={{ fontSize: '12px', color: subActive ? '#A0A0D8' : '#6868A8' }}>
+                                  <span style={{ fontSize: '12px', color: subActive ? 'var(--c-a0a0d8)' : 'var(--c-6868a8)' }}>
                                     {subLabels[sv]}
                                   </span>
                                 </button>
@@ -1019,7 +1022,7 @@ export default function ProjectBriefPage() {
 
                         {/* ── Content sub-nav (v7.176): Content map + Content plan ── */}
                         {item.id === 'content' && hasResults && (
-                          <div style={{ background: '#060610', borderTop: '1px solid #0E0E1E' }}>
+                          <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
                             {([['content', 'Content map', 'ti-map-2'], ['contentPlan', 'Content plan', 'ti-list-check']] as const).map(([sid, label, icon]) => {
                               const subActive = activeSection === sid;
                               return (
@@ -1029,12 +1032,12 @@ export default function ProjectBriefPage() {
                                   className="w-full flex items-center gap-1.5 text-left"
                                   style={{
                                     padding: '6px 12px 6px 32px',
-                                    borderLeft: subActive ? '2px solid rgba(108,99,255,0.6)' : '2px solid transparent',
-                                    background: subActive ? '#0F0F1C' : 'transparent',
+                                    borderLeft: subActive ? '2px solid var(--ca-108-99-255-0_6)' : '2px solid transparent',
+                                    background: subActive ? 'var(--c-0f0f1c)' : 'transparent',
                                   }}
                                 >
-                                  <i className={`ti ${icon}`} style={{ fontSize: '12px', color: subActive ? '#6C63FF' : '#545490', width: '14px', flexShrink: 0 }} aria-hidden="true" />
-                                  <span style={{ fontSize: '12px', color: subActive ? '#A0A0D8' : '#6868A8' }}>{label}</span>
+                                  <i className={`ti ${icon}`} style={{ fontSize: '12px', color: subActive ? 'var(--c-6c63ff)' : 'var(--c-545490)', width: '14px', flexShrink: 0 }} aria-hidden="true" />
+                                  <span style={{ fontSize: '12px', color: subActive ? 'var(--c-a0a0d8)' : 'var(--c-6868a8)' }}>{label}</span>
                                 </button>
                               );
                             })}
@@ -1050,14 +1053,14 @@ export default function ProjectBriefPage() {
 
           <div className="border-t border-orbit-border px-3 py-2.5">
             <div className="flex items-center gap-1.5 mb-1">
-              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#22C55E', flexShrink: 0 }} />
-              <span style={{ fontSize: '8px', fontWeight: 600, letterSpacing: '.07em', color: '#22C55E' }}>SYS:OPERATIONAL</span>
+              <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: 'var(--c-22c55e)', flexShrink: 0 }} />
+              <span style={{ fontSize: '8px', fontWeight: 600, letterSpacing: '.07em', color: 'var(--c-22c55e)' }}>SYS:OPERATIONAL</span>
             </div>
             <button
               className="w-full flex items-center gap-1.5 rounded-md text-[9px] transition-colors mt-1.5"
-              style={{ background: '#111120', border: '1px solid #1C1C2E', color: '#383858', padding: '5px 9px' }}
+              style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1c1c2e)', color: 'var(--c-383858)', padding: '5px 9px' }}
             >
-              <span style={{ width: '9px', height: '9px', borderRadius: '50%', border: '1px solid #3A3AAA', flexShrink: 0 }} />
+              <span style={{ width: '9px', height: '9px', borderRadius: '50%', border: '1px solid var(--c-3a3aaa)', flexShrink: 0 }} />
               <span style={{ flex: 1, textAlign: 'left' }}>ORBIT MAP</span>
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -1091,55 +1094,55 @@ export default function ProjectBriefPage() {
 
           {/* ── Semrush cost-estimate confirm (v7.86) — uncapped pulls ── */}
           {(costEstimate || estimating) && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.65)' }}>
-              <div className="rounded-xl p-6" style={{ background: '#0D0D18', border: '1px solid #2A2A45', width: 440, maxWidth: '90vw' }}>
+            <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'var(--ca-0-0-0-0_65)' }}>
+              <div className="rounded-xl p-6" style={{ background: 'var(--c-0d0d18)', border: '1px solid var(--c-2a2a45)', width: 440, maxWidth: '90vw' }}>
                 {estimating ? (
                   <div className="flex items-center gap-3">
-                    <svg className="animate-spin" style={{ width: 16, height: 16, color: '#8B85FF' }} fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin" style={{ width: 16, height: 16, color: 'var(--c-8b85ff)' }} fill="none" viewBox="0 0 24 24">
                       <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                     </svg>
-                    <span className="text-sm" style={{ color: '#A0A0C8' }}>Estimating Semrush API unit cost…</span>
+                    <span className="text-sm" style={{ color: 'var(--c-a0a0c8)' }}>Estimating Semrush API unit cost…</span>
                   </div>
                 ) : (
                   <>
-                    <p className="text-sm font-medium mb-1" style={{ color: '#E8E8FF' }}>
+                    <p className="text-sm font-medium mb-1" style={{ color: 'var(--c-e8e8ff)' }}>
                       Confirm Semrush pull
                       {costEstimate.database && (
-                        <span className="ml-2 text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: '#1A1A38', color: '#8B85FF', border: '1px solid #2A2A4A' }}>
+                        <span className="ml-2 text-[10px] font-normal px-2 py-0.5 rounded-full" style={{ background: 'var(--c-1a1a38)', color: 'var(--c-8b85ff)', border: '1px solid var(--c-2a2a4a)' }}>
                           {getMarket(costEstimate.database).flag} {getMarket(costEstimate.database).label} database
                         </span>
                       )}
                     </p>
-                    <p className="text-xs mb-3" style={{ color: '#7070A0' }}>
+                    <p className="text-xs mb-3" style={{ color: 'var(--c-7070a0)' }}>
                       Full-footprint analysis fetches every keyword Semrush has for each domain in this market. Semrush bills 10 API units per keyword row.
                     </p>
-                    <div className="rounded-lg p-3 mb-3" style={{ background: '#0A0A14', border: '1px solid #1E1E30' }}>
+                    <div className="rounded-lg p-3 mb-3" style={{ background: 'var(--c-0a0a14)', border: '1px solid var(--c-1e1e30)' }}>
                       <div className="flex justify-between text-xs py-0.5">
-                        <span style={{ color: '#A0A0C8' }}>{costEstimate.client.domain} <span style={{ color: '#8B85FF' }}>client</span></span>
-                        <span style={{ color: '#D0D0F0' }}>{costEstimate.client.keywords.toLocaleString()} keywords</span>
+                        <span style={{ color: 'var(--c-a0a0c8)' }}>{costEstimate.client.domain} <span style={{ color: 'var(--c-8b85ff)' }}>client</span></span>
+                        <span style={{ color: 'var(--c-d0d0f0)' }}>{costEstimate.client.keywords.toLocaleString()} keywords</span>
                       </div>
                       {costEstimate.competitors.map((c: any) => (
                         <div key={c.domain} className="flex justify-between text-xs py-0.5">
-                          <span style={{ color: '#7070A0' }}>{c.domain}</span>
-                          <span style={{ color: '#9090B8' }}>{c.keywords.toLocaleString()} keywords</span>
+                          <span style={{ color: 'var(--c-7070a0)' }}>{c.domain}</span>
+                          <span style={{ color: 'var(--c-9090b8)' }}>{c.keywords.toLocaleString()} keywords</span>
                         </div>
                       ))}
-                      <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid #1E1E30' }}>
-                        <span className="font-medium" style={{ color: '#E8E8FF' }}>
+                      <div className="flex justify-between text-xs pt-2 mt-1.5" style={{ borderTop: '1px solid var(--c-1e1e30)' }}>
+                        <span className="font-medium" style={{ color: 'var(--c-e8e8ff)' }}>
                           {costEstimate.isCeiling ? 'Maximum cost' : 'Estimated cost'}
                         </span>
-                        <span className="font-medium" style={{ color: '#F59E0B' }}>
+                        <span className="font-medium" style={{ color: 'var(--c-f59e0b)' }}>
                           {costEstimate.isCeiling ? 'up to ' : '~'}{costEstimate.totalUnits.toLocaleString()} API units ({costEstimate.totalRows.toLocaleString()} rows)
                         </span>
                       </div>
                       {costEstimate.isCeiling && (
-                        <p className="text-[11px] pt-2" style={{ color: '#4ADE80', margin: 0 }}>
+                        <p className="text-[11px] pt-2" style={{ color: 'var(--c-4ade80)', margin: 0 }}>
                           Volume floor active{costEstimate.clientVolMin > 0 ? ` — client ≥ ${costEstimate.clientVolMin.toLocaleString()}/mo` : ''}{costEstimate.competitorVolMin > 0 ? ` — competitors ≥ ${costEstimate.competitorVolMin.toLocaleString()}/mo` : ''}. Keyword counts above are full footprints; rows below the floor are excluded inside the Semrush query and never billed, so actual cost will be lower.
                         </p>
                       )}
                     </div>
-                    <p className="text-[11px] mb-4" style={{ color: '#55557A' }}>
+                    <p className="text-[11px] mb-4" style={{ color: 'var(--c-55557a)' }}>
                       If your unit balance runs out mid-pull, Semrush returns partial data and you&apos;ll see a warning banner. Check your balance under Subscription info → API units at semrush.com.
                     </p>
                     <div className="flex justify-end gap-2">
@@ -1152,7 +1155,7 @@ export default function ProjectBriefPage() {
                       <button
                         onClick={() => triggerAnalysis(costEstimate.mode)}
                         className="text-xs font-medium px-4 py-2 rounded-lg text-white transition-colors"
-                        style={{ background: '#6C63FF' }}
+                        style={{ background: 'var(--c-6c63ff)' }}
                       >
                         Run analysis (~{costEstimate.totalUnits.toLocaleString()} units)
                       </button>
@@ -1386,8 +1389,8 @@ function DataSourceCard({
 
   const cardStyle = (selected: boolean): React.CSSProperties => ({
     flex: 1, textAlign: 'left', cursor: 'pointer',
-    background: selected ? '#14142C' : '#0F0F1E',
-    border: `1.5px solid ${selected ? '#6C63FF' : '#1E1E35'}`,
+    background: selected ? 'var(--c-14142c)' : 'var(--c-0f0f1e)',
+    border: `1.5px solid ${selected ? 'var(--c-6c63ff)' : 'var(--c-1e1e35)'}`,
     borderRadius: '10px', padding: '16px',
     transition: 'border-color .15s, background .15s',
   });
@@ -1405,43 +1408,43 @@ function DataSourceCard({
         {/* Auto-discover */}
         <button style={cardStyle(dataSource === 'auto')} onClick={() => onSelectSource('auto')}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <i className="ti ti-antenna" style={{ fontSize: '18px', color: dataSource === 'auto' ? '#7B68EE' : '#404060' }} aria-hidden="true" />
-            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#2B0D0D', color: '#F87171' }}>cost shown before run</span>
+            <i className="ti ti-antenna" style={{ fontSize: '18px', color: dataSource === 'auto' ? 'var(--c-7b68ee)' : 'var(--c-404060)' }} aria-hidden="true" />
+            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: 'var(--c-2b0d0d)', color: 'var(--c-f87171)' }}>cost shown before run</span>
           </div>
-          <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Auto-discover</p>
-          <p style={{ fontSize: '11px', color: '#707090', margin: '0 0 6px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--c-e0e0f0)', margin: '0 0 4px' }}>Auto-discover</p>
+          <p style={{ fontSize: '11px', color: 'var(--c-707090)', margin: '0 0 6px', lineHeight: 1.5 }}>
             Semrush crawls the client and all competitors automatically on run.
           </p>
-          <p style={{ fontSize: '10px', color: '#404060', margin: 0 }}>Current behavior</p>
+          <p style={{ fontSize: '10px', color: 'var(--c-404060)', margin: 0 }}>Current behavior</p>
         </button>
 
         {/* Upload footprints */}
         <button style={cardStyle(dataSource === 'upload')} onClick={() => onSelectSource('upload')}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-            <i className="ti ti-upload" style={{ fontSize: '18px', color: dataSource === 'upload' ? '#00C9B1' : '#404060' }} aria-hidden="true" />
-            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: '#0D2B1D', color: '#4ADE80' }}>0 units</span>
+            <i className="ti ti-upload" style={{ fontSize: '18px', color: dataSource === 'upload' ? 'var(--c-00c9b1)' : 'var(--c-404060)' }} aria-hidden="true" />
+            <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '20px', fontWeight: 500, background: 'var(--c-0d2b1d)', color: 'var(--c-4ade80)' }}>0 units</span>
           </div>
-          <p style={{ fontSize: '13px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 4px' }}>Upload footprints</p>
-          <p style={{ fontSize: '11px', color: '#707090', margin: '0 0 6px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--c-e0e0f0)', margin: '0 0 4px' }}>Upload footprints</p>
+          <p style={{ fontSize: '11px', color: 'var(--c-707090)', margin: '0 0 6px', lineHeight: 1.5 }}>
             Import CSV keyword exports. Semrush skipped — saves ~2,000 units on creation.
           </p>
-          <p style={{ fontSize: '10px', color: '#404060', margin: 0 }}>SerpAPI still runs for live SERP features</p>
+          <p style={{ fontSize: '10px', color: 'var(--c-404060)', margin: 0 }}>SerpAPI still runs for live SERP features</p>
         </button>
 
       </div>
 
       {/* Auto-discover info panel */}
       {dataSource === 'auto' && (
-        <div style={{ background: '#0F0F1E', border: '0.5px solid #1E1E35', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
+        <div style={{ background: 'var(--c-0f0f1e)', border: '0.5px solid var(--c-1e1e35)', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-            <i className="ti ti-info-circle" style={{ fontSize: '13px', color: '#6C63FF' }} aria-hidden="true" />
-            <span style={{ fontSize: '11px', color: '#8080B0', fontWeight: 500 }}>Semrush will fetch the FULL keyword footprint for the client + up to 5 competitor domains (10 API units per keyword row — exact cost estimate shown before the run starts)</span>
+            <i className="ti ti-info-circle" style={{ fontSize: '13px', color: 'var(--c-6c63ff)' }} aria-hidden="true" />
+            <span style={{ fontSize: '11px', color: 'var(--c-8080b0)', fontWeight: 500 }}>Semrush will fetch the FULL keyword footprint for the client + up to 5 competitor domains (10 API units per keyword row — exact cost estimate shown before the run starts)</span>
           </div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             <DomainPill domain={clientDomain} label="client" />
             {competitors.map(c => <DomainPill key={c.id} domain={c.domain} />)}
             {competitors.length === 0 && (
-              <span style={{ fontSize: '10px', color: '#404060' }}>Add competitors above to include their footprints</span>
+              <span style={{ fontSize: '10px', color: 'var(--c-404060)' }}>Add competitors above to include their footprints</span>
             )}
           </div>
         </div>
@@ -1450,11 +1453,11 @@ function DataSourceCard({
       {/* Upload zones */}
       {dataSource === 'upload' && (
         <div style={{ marginBottom: '16px' }}>
-          <p style={{ fontSize: '11px', color: '#707090', marginBottom: '10px' }}>
+          <p style={{ fontSize: '11px', color: 'var(--c-707090)', marginBottom: '10px' }}>
             Upload a CSV per domain. Required columns:{' '}
-            <code style={{ color: '#8080C0', fontSize: '10px', background: '#1A1A30', padding: '1px 5px', borderRadius: '3px' }}>keyword, search_volume</code>
+            <code style={{ color: 'var(--c-8080c0)', fontSize: '10px', background: 'var(--c-1a1a30)', padding: '1px 5px', borderRadius: '3px' }}>keyword, search_volume</code>
             {' '}· optional:{' '}
-            <code style={{ color: '#8080C0', fontSize: '10px', background: '#1A1A30', padding: '1px 5px', borderRadius: '3px' }}>position</code>
+            <code style={{ color: 'var(--c-8080c0)', fontSize: '10px', background: 'var(--c-1a1a30)', padding: '1px 5px', borderRadius: '3px' }}>position</code>
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <UploadZone
@@ -1478,14 +1481,14 @@ function DataSourceCard({
               />
             ))}
             {competitors.length === 0 && (
-              <p style={{ fontSize: '10px', color: '#404060', margin: '4px 0 0' }}>
+              <p style={{ fontSize: '10px', color: 'var(--c-404060)', margin: '4px 0 0' }}>
                 <i className="ti ti-info-circle" style={{ fontSize: '11px', marginRight: '4px' }} aria-hidden="true" />
                 Add competitors above to include their keyword footprints in the upload
               </p>
             )}
           </div>
           {uploadError && (
-            <p style={{ fontSize: '11px', color: '#F87171', marginTop: '8px' }}>{uploadError}</p>
+            <p style={{ fontSize: '11px', color: 'var(--c-f87171)', marginTop: '8px' }}>{uploadError}</p>
           )}
         </div>
       )}
@@ -1521,9 +1524,9 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
       {/* Domain label */}
       <div style={{ width: '140px', flexShrink: 0 }}>
-        <span style={{ fontSize: '11px', color: '#C0C0D8' }}>{domain}</span>
+        <span style={{ fontSize: '11px', color: 'var(--c-c0c0d8)' }}>{domain}</span>
         {label && (
-          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: '#2A2A5A', color: '#9090C0', marginLeft: '5px' }}>{label}</span>
+          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: 'var(--c-2a2a5a)', color: 'var(--c-9090c0)', marginLeft: '5px' }}>{label}</span>
         )}
       </div>
 
@@ -1533,20 +1536,20 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
         disabled={uploading}
         style={{
           flex: 1, cursor: uploading ? 'wait' : 'pointer',
-          background: uploaded ? '#071A10' : '#0F0F1E',
-          border: `1.5px ${uploaded ? 'solid #22C55E' : 'dashed #2A2A4A'}`,
+          background: uploaded ? 'var(--c-071a10)' : 'var(--c-0f0f1e)',
+          border: `1.5px ${uploaded ? 'solid var(--c-22c55e)' : 'dashed var(--c-2a2a4a)'}`,
           borderRadius: '7px', padding: '10px 14px', textAlign: 'center',
           transition: 'border-color .15s',
         }}
       >
         {uploading ? (
-          <span style={{ fontSize: '11px', color: '#707090' }}>Uploading…</span>
+          <span style={{ fontSize: '11px', color: 'var(--c-707090)' }}>Uploading…</span>
         ) : uploaded ? (
-          <span style={{ fontSize: '11px', color: '#4ADE80', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--c-4ade80)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
             <i className="ti ti-circle-check" style={{ fontSize: '13px' }} aria-hidden="true" /> Uploaded
           </span>
         ) : (
-          <span style={{ fontSize: '11px', color: '#505070', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--c-505070)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
             <i className="ti ti-file-text" style={{ fontSize: '13px' }} aria-hidden="true" /> Click to upload · CSV
           </span>
         )}
@@ -1572,9 +1575,9 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
 
 function DomainPill({ domain, label }: { domain: string; label?: string }) {
   return (
-    <span style={{ fontSize: '10px', background: '#1A1A30', border: '0.5px solid #2A2A50', borderRadius: '5px', padding: '3px 8px', color: '#B0B0D0' }}>
+    <span style={{ fontSize: '10px', background: 'var(--c-1a1a30)', border: '0.5px solid var(--c-2a2a50)', borderRadius: '5px', padding: '3px 8px', color: 'var(--c-b0b0d0)' }}>
       {domain}
-      {label && <span style={{ color: '#6C63FF', marginLeft: '4px', fontSize: '9px' }}>{label}</span>}
+      {label && <span style={{ color: 'var(--c-6c63ff)', marginLeft: '4px', fontSize: '9px' }}>{label}</span>}
     </span>
   );
 }

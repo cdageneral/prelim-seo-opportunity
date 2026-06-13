@@ -121,17 +121,17 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
     const active = current === value;
     return {
       padding: '4px 11px', borderRadius: '20px',
-      border: `1px solid ${active ? color.border : '#2A2A48'}`,
+      border: `1px solid ${active ? color.border : 'var(--c-2a2a48)'}`,
       background: active ? color.bg : 'transparent',
-      color: active ? color.text : '#707090',
+      color: active ? color.text : 'var(--c-707090)',
       fontSize: '11px', cursor: 'pointer',
       transition: 'all 0.12s',
       fontWeight: active ? 600 : 400,
     };
   }
 
-  const clientColor     = { bg: 'rgba(56,189,248,0.14)', border: 'rgba(56,189,248,0.6)', text: '#38BDF8' };
-  const competitorColor = { bg: 'rgba(245,158,11,0.14)', border: 'rgba(245,158,11,0.6)', text: '#F59E0B' };
+  const clientColor     = { bg: 'var(--ca-56-189-248-0_14)', border: 'var(--ca-56-189-248-0_6)', text: 'var(--c-38bdf8)' };
+  const competitorColor = { bg: 'var(--ca-245-158-11-0_14)', border: 'var(--ca-245-158-11-0_6)', text: 'var(--c-f59e0b)' };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -139,15 +139,15 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
       <div className="relative w-full animate-fade-in"
         style={{
           maxWidth: '560px', maxHeight: '92vh',
-          background: '#0C0C18', border: '1px solid #1E1E35',
+          background: 'var(--c-0c0c18)', border: '1px solid var(--c-1e1e35)',
           borderRadius: '14px', display: 'flex', flexDirection: 'column',
-          boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+          boxShadow: '0 24px 80px var(--ca-0-0-0-0_7)',
         }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid #1A1A2E', flexShrink: 0 }}>
-          <h2 style={{ fontSize: '15px', fontWeight: 600, color: '#E8E8FF', margin: 0 }}>Add New Client</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#505070', padding: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid var(--c-1a1a2e)', flexShrink: 0 }}>
+          <h2 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--c-e8e8ff)', margin: 0 }}>Add New Client</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-505070)', padding: '4px' }}>
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -171,7 +171,7 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
               onChange={e => setForm(f => ({ ...f, websiteUrl: e.target.value }))}
               onBlur={handleUrlBlur}
               placeholder="acme.com" style={inputStyle} />
-            <p style={{ fontSize: '10px', color: '#505070', marginTop: '4px' }}>https:// added automatically.</p>
+            <p style={{ fontSize: '10px', color: 'var(--c-505070)', marginTop: '4px' }}>https:// added automatically.</p>
           </Field>
 
           <Field label="Industry">
@@ -185,22 +185,22 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
             <select value={market} onChange={e => setMarket(e.target.value)} style={inputStyle}>
               {MARKETS.map(m => <option key={m.code} value={m.code}>{m.flag} {m.label}</option>)}
             </select>
-            <p style={{ fontSize: '10px', color: '#505070', marginTop: '4px' }}>
+            <p style={{ fontSize: '10px', color: 'var(--c-505070)', marginTop: '4px' }}>
               Which country&apos;s Google to analyze — sets the Semrush keyword database AND the country used for SERP feature scans.
             </p>
           </Field>
 
           {/* ── Keyword data source ── */}
-          <div style={{ borderTop: '0.5px solid #1E1E35', paddingTop: '14px' }}>
+          <div style={{ borderTop: '0.5px solid var(--c-1e1e35)', paddingTop: '14px' }}>
             <SectionLabel label="Keyword Data Source" />
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
               {!dataSource && (
-                <span style={{ fontSize: '10px', color: '#F87171', background: '#2B0D0D', padding: '2px 8px', borderRadius: '10px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--c-f87171)', background: 'var(--c-2b0d0d)', padding: '2px 8px', borderRadius: '10px' }}>
                   Choose one to continue
                 </span>
               )}
               {dataSource && (
-                <span style={{ fontSize: '10px', color: '#4ADE80', background: '#0D2B1D', padding: '2px 8px', borderRadius: '10px' }}>
+                <span style={{ fontSize: '10px', color: 'var(--c-4ade80)', background: 'var(--c-0d2b1d)', padding: '2px 8px', borderRadius: '10px' }}>
                   Selected
                 </span>
               )}
@@ -209,31 +209,31 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
             <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
               {/* Auto-discover */}
               <button type="button" onClick={() => setDataSource('auto')}
-                style={{ flex: 1, textAlign: 'left', cursor: 'pointer', background: dataSource === 'auto' ? '#1A1A3A' : '#111118', border: `1.5px solid ${dataSource === 'auto' ? '#6C63FF' : '#1E1E2E'}`, borderRadius: '8px', padding: '12px', transition: 'border-color .15s, background .15s' }}>
+                style={{ flex: 1, textAlign: 'left', cursor: 'pointer', background: dataSource === 'auto' ? 'var(--c-1a1a3a)' : 'var(--c-111118)', border: `1.5px solid ${dataSource === 'auto' ? 'var(--c-6c63ff)' : 'var(--c-1e1e2e)'}`, borderRadius: '8px', padding: '12px', transition: 'border-color .15s, background .15s' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '7px' }}>
-                  <i className="ti ti-antenna" style={{ fontSize: '16px', color: dataSource === 'auto' ? '#7B68EE' : '#404060' }} aria-hidden="true" />
-                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: '#2B0D0D', color: '#F87171', fontWeight: 500 }}>cost shown before run</span>
+                  <i className="ti ti-antenna" style={{ fontSize: '16px', color: dataSource === 'auto' ? 'var(--c-7b68ee)' : 'var(--c-404060)' }} aria-hidden="true" />
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: 'var(--c-2b0d0d)', color: 'var(--c-f87171)', fontWeight: 500 }}>cost shown before run</span>
                 </div>
-                <p style={{ fontSize: '12px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 3px' }}>Auto-discover</p>
-                <p style={{ fontSize: '11px', color: '#707090', margin: 0, lineHeight: 1.4 }}>Semrush crawls client + competitors automatically.</p>
+                <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--c-e0e0f0)', margin: '0 0 3px' }}>Auto-discover</p>
+                <p style={{ fontSize: '11px', color: 'var(--c-707090)', margin: 0, lineHeight: 1.4 }}>Semrush crawls client + competitors automatically.</p>
               </button>
 
               {/* Upload */}
               <button type="button" onClick={() => setDataSource('upload')}
-                style={{ flex: 1, textAlign: 'left', cursor: 'pointer', background: dataSource === 'upload' ? '#0D1E2B' : '#111118', border: `1.5px solid ${dataSource === 'upload' ? '#00C9B1' : '#1E1E2E'}`, borderRadius: '8px', padding: '12px', transition: 'border-color .15s, background .15s' }}>
+                style={{ flex: 1, textAlign: 'left', cursor: 'pointer', background: dataSource === 'upload' ? 'var(--c-0d1e2b)' : 'var(--c-111118)', border: `1.5px solid ${dataSource === 'upload' ? 'var(--c-00c9b1)' : 'var(--c-1e1e2e)'}`, borderRadius: '8px', padding: '12px', transition: 'border-color .15s, background .15s' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '7px' }}>
-                  <i className="ti ti-upload" style={{ fontSize: '16px', color: dataSource === 'upload' ? '#00C9B1' : '#404060' }} aria-hidden="true" />
-                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: '#0D2B1D', color: '#4ADE80', fontWeight: 500 }}>0 units</span>
+                  <i className="ti ti-upload" style={{ fontSize: '16px', color: dataSource === 'upload' ? 'var(--c-00c9b1)' : 'var(--c-404060)' }} aria-hidden="true" />
+                  <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '20px', background: 'var(--c-0d2b1d)', color: 'var(--c-4ade80)', fontWeight: 500 }}>0 units</span>
                 </div>
-                <p style={{ fontSize: '12px', fontWeight: 500, color: '#E0E0F0', margin: '0 0 3px' }}>Upload files</p>
-                <p style={{ fontSize: '11px', color: '#707090', margin: 0, lineHeight: 1.4 }}>Upload keyword CSVs on the project page — no auto-crawl.</p>
+                <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--c-e0e0f0)', margin: '0 0 3px' }}>Upload files</p>
+                <p style={{ fontSize: '11px', color: 'var(--c-707090)', margin: 0, lineHeight: 1.4 }}>Upload keyword CSVs on the project page — no auto-crawl.</p>
               </button>
             </div>
 
             {dataSource === 'auto' && (
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', background: '#141428', border: '0.5px solid #2A2A4A', borderRadius: '6px', padding: '9px 11px' }}>
-                <i className="ti ti-info-circle" style={{ fontSize: '13px', color: '#6C63FF', flexShrink: 0, marginTop: '1px' }} aria-hidden="true" />
-                <p style={{ fontSize: '11px', color: '#8080B0', margin: 0, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', background: 'var(--c-141428)', border: '0.5px solid var(--c-2a2a4a)', borderRadius: '6px', padding: '9px 11px' }}>
+                <i className="ti ti-info-circle" style={{ fontSize: '13px', color: 'var(--c-6c63ff)', flexShrink: 0, marginTop: '1px' }} aria-hidden="true" />
+                <p style={{ fontSize: '11px', color: 'var(--c-8080b0)', margin: 0, lineHeight: 1.5 }}>
                   Semrush will run automatically on first analysis. Add competitors below to include their footprints.
                 </p>
               </div>
@@ -241,9 +241,9 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
           </div>
 
           {/* ── Competitors ── */}
-          <div style={{ borderTop: '0.5px solid #1E1E35', paddingTop: '14px' }}>
+          <div style={{ borderTop: '0.5px solid var(--c-1e1e35)', paddingTop: '14px' }}>
             <SectionLabel label="Competitors (optional)" />
-            <p style={{ fontSize: '11px', color: '#606080', marginBottom: '12px', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '11px', color: 'var(--c-606080)', marginBottom: '12px', lineHeight: 1.5 }}>
               Add up to 5 competitors. CSV keyword upload is available in Edit Project after creation.
             </p>
 
@@ -269,9 +269,9 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
                 disabled={competitors.length >= 5}
                 style={{
                   padding: '9px 16px', borderRadius: '8px',
-                  background: competitors.length >= 5 ? '#1A1A30' : 'rgba(108,99,255,0.15)',
-                  border: `1px solid ${competitors.length >= 5 ? '#1E1E35' : 'rgba(108,99,255,0.45)'}`,
-                  color: competitors.length >= 5 ? '#404060' : '#9B96FF',
+                  background: competitors.length >= 5 ? 'var(--c-1a1a30)' : 'var(--ca-108-99-255-0_15)',
+                  border: `1px solid ${competitors.length >= 5 ? 'var(--c-1e1e35)' : 'var(--ca-108-99-255-0_45)'}`,
+                  color: competitors.length >= 5 ? 'var(--c-404060)' : 'var(--c-9b96ff)',
                   fontSize: '12px', cursor: competitors.length >= 5 ? 'not-allowed' : 'pointer',
                   flexShrink: 0,
                 }}
@@ -279,19 +279,19 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
                 Add
               </button>
             </div>
-            {compError && <p style={{ fontSize: '11px', color: '#F87171', marginBottom: '6px' }}>{compError}</p>}
+            {compError && <p style={{ fontSize: '11px', color: 'var(--c-f87171)', marginBottom: '6px' }}>{compError}</p>}
 
             {/* Competitor list */}
             {competitors.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                 {competitors.map(c => (
-                  <div key={c.domain} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#141428', border: '0.5px solid #2A2A4A', borderRadius: '7px', padding: '8px 12px' }}>
+                  <div key={c.domain} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--c-141428)', border: '0.5px solid var(--c-2a2a4a)', borderRadius: '7px', padding: '8px 12px' }}>
                     <img src={`https://www.google.com/s2/favicons?domain=${c.domain}&sz=14`} alt="" style={{ width: '14px', height: '14px', borderRadius: '2px', opacity: 0.7 }}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                    <span style={{ fontSize: '12px', color: '#C0C0E0', flex: 1 }}>{c.name || c.domain}</span>
-                    {c.name && <span style={{ fontSize: '10px', color: '#555575' }}>{c.domain}</span>}
+                    <span style={{ fontSize: '12px', color: 'var(--c-c0c0e0)', flex: 1 }}>{c.name || c.domain}</span>
+                    {c.name && <span style={{ fontSize: '10px', color: 'var(--c-555575)' }}>{c.domain}</span>}
                     <button type="button" onClick={() => removeCompetitor(c.domain)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#404060', padding: '2px' }}>
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-404060)', padding: '2px' }}>
                       <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
@@ -303,19 +303,19 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
           </div>
 
           {/* ── Keyword volume thresholds ── */}
-          <div style={{ borderTop: '0.5px solid #1E1E35', paddingTop: '14px' }}>
+          <div style={{ borderTop: '0.5px solid var(--c-1e1e35)', paddingTop: '14px' }}>
             <SectionLabel label="Keyword Volume Thresholds" />
-            <div style={{ background: '#0F0F1C', border: '0.5px solid #1E1E38', borderRadius: '10px', padding: '14px' }}>
-              <p style={{ fontSize: '11px', color: '#7070A0', marginBottom: '14px', lineHeight: 1.5 }}>
+            <div style={{ background: 'var(--c-0f0f1c)', border: '0.5px solid var(--c-1e1e38)', borderRadius: '10px', padding: '14px' }}>
+              <p style={{ fontSize: '11px', color: 'var(--c-7070a0)', marginBottom: '14px', lineHeight: 1.5 }}>
                 Hide keywords below these monthly volume minimums. Can be changed anytime in Edit Project.
               </p>
 
               {/* Client */}
               <div style={{ marginBottom: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
-                  <span style={{ fontSize: '10px', fontWeight: 600, color: '#38BDF8', letterSpacing: '.04em' }}>Client ranked</span>
+                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-38bdf8)', letterSpacing: '.04em' }}>Client ranked</span>
                   {clientThresh > 0 && (
-                    <span style={{ fontSize: '10px', color: '#38BDF8', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', padding: '1px 7px', borderRadius: '10px' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--c-38bdf8)', background: 'var(--ca-56-189-248-0_1)', border: '1px solid var(--ca-56-189-248-0_3)', padding: '1px 7px', borderRadius: '10px' }}>
                       ≥ {clientThresh >= 1000 ? `${clientThresh / 1000}K` : clientThresh}/mo
                     </span>
                   )}
@@ -333,9 +333,9 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
               {/* Competitor */}
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
-                  <span style={{ fontSize: '10px', fontWeight: 600, color: '#F59E0B', letterSpacing: '.04em' }}>Competitor gap</span>
+                  <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-f59e0b)', letterSpacing: '.04em' }}>Competitor gap</span>
                   {competitorThresh > 0 && (
-                    <span style={{ fontSize: '10px', color: '#F59E0B', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', padding: '1px 7px', borderRadius: '10px' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_1)', border: '1px solid var(--ca-245-158-11-0_3)', padding: '1px 7px', borderRadius: '10px' }}>
                       ≥ {competitorThresh >= 1000 ? `${competitorThresh / 1000}K` : competitorThresh}/mo
                     </span>
                   )}
@@ -352,15 +352,15 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
             </div>
           </div>
 
-          {error && <p style={{ fontSize: '12px', color: '#F87171' }}>{error}</p>}
+          {error && <p style={{ fontSize: '12px', color: 'var(--c-f87171)' }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: '10px', paddingTop: '4px', paddingBottom: '4px' }}>
             <button type="button" onClick={onClose}
-              style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid #2A2A48', color: '#8080A8', fontSize: '13px', cursor: 'pointer' }}>
+              style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--c-2a2a48)', color: 'var(--c-8080a8)', fontSize: '13px', cursor: 'pointer' }}>
               Cancel
             </button>
             <button type="submit" disabled={!canSubmit}
-              style={{ flex: 2, padding: '10px', borderRadius: '8px', background: canSubmit ? '#6C63FF' : '#3D3D8A', border: 'none', color: '#FFF', fontSize: '13px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: !dataSource ? 0.4 : 1 }}>
+              style={{ flex: 2, padding: '10px', borderRadius: '8px', background: canSubmit ? 'var(--c-6c63ff)' : 'var(--c-3d3d8a)', border: 'none', color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: !dataSource ? 0.4 : 1 }}>
               {loading ? 'Creating...' : 'Create Project'}
             </button>
           </div>
@@ -373,16 +373,16 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', background: '#111118', border: '1px solid #1E1E2E',
-  borderRadius: '8px', padding: '9px 12px', color: '#F0F0FF',
+  width: '100%', background: 'var(--c-111118)', border: '1px solid var(--c-1e1e2e)',
+  borderRadius: '8px', padding: '9px 12px', color: 'var(--c-f0f0ff)',
   fontSize: '13px', outline: 'none', boxSizing: 'border-box',
 };
 
 function SectionLabel({ label }: { label: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-      <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#4A4A72', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{label}</span>
-      <div style={{ flex: 1, height: '1px', background: '#1A1A30' }} />
+      <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: 'var(--c-4a4a72)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{label}</span>
+      <div style={{ flex: 1, height: '1px', background: 'var(--c-1a1a30)' }} />
     </div>
   );
 }
@@ -390,7 +390,7 @@ function SectionLabel({ label }: { label: string }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: '#7070A0', letterSpacing: '.05em', marginBottom: '6px', textTransform: 'uppercase' }}>
+      <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', letterSpacing: '.05em', marginBottom: '6px', textTransform: 'uppercase' }}>
         {label}
       </label>
       {children}
@@ -402,9 +402,9 @@ function presetStyle(value: number, current: number, color: { bg: string; border
   const active = current === value;
   return {
     padding: '4px 11px', borderRadius: '20px',
-    border: `1px solid ${active ? color.border : '#2A2A48'}`,
+    border: `1px solid ${active ? color.border : 'var(--c-2a2a48)'}`,
     background: active ? color.bg : 'transparent',
-    color: active ? color.text : '#707090',
+    color: active ? color.text : 'var(--c-707090)',
     fontSize: '11px', cursor: 'pointer',
     transition: 'all 0.12s',
     fontWeight: active ? 600 : 400,

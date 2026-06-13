@@ -54,7 +54,7 @@ interface Props {
 
 // ─── Competitor colour palette ────────────────────────────────────────────────
 
-const COMP_COLORS = ['#6C63FF', '#F59E0B', '#22C55E', '#38BDF8', '#F472B6', '#A78BFA', '#FB923C'];
+const COMP_COLORS = ['var(--c-6c63ff)', 'var(--c-f59e0b)', 'var(--c-22c55e)', 'var(--c-38bdf8)', 'var(--c-f472b6)', 'var(--c-a78bfa)', 'var(--c-fb923c)'];
 // index 0 = client (purple), 1–6 = competitors
 
 // ─── Branded / domain helpers ─────────────────────────────────────────────────
@@ -420,13 +420,13 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
     ...compEntries.slice(0, 4).map(([dom, vol], i) => ({
       name:  displayName(dom),
       vol,
-      color: COMP_COLORS[i + 1] ?? '#888',
+      color: COMP_COLORS[i + 1] ?? 'var(--c-888888)',
     })),
   ];
 
   const cardStyle: React.CSSProperties = {
-    background:   '#0F0F1E',
-    border:       `1px solid ${isDemand ? '#0E3038' : isLeading ? '#1C2C1C' : '#2C1C1C'}`,
+    background:   'var(--c-0f0f1e)',
+    border:       `1px solid ${isDemand ? 'var(--c-0e3038)' : isLeading ? 'var(--c-1c2c1c)' : 'var(--c-2c1c1c)'}`,
     borderRadius: 12,
     padding:      '16px',
     cursor:       'pointer',
@@ -437,13 +437,13 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
     <div
       style={cardStyle}
       onClick={() => setExpanded(v => !v)}
-      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#155E6B' : isLeading ? '#2A4A2A' : '#4A2A2A'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#0E3038' : isLeading ? '#1C2C1C' : '#2C1C1C'; }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? 'var(--c-155e6b)' : isLeading ? 'var(--c-2a4a2a)' : 'var(--c-4a2a2a)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? 'var(--c-0e3038)' : isLeading ? 'var(--c-1c2c1c)' : 'var(--c-2c1c1c)'; }}
     >
       {/* ── Header: name + badge ── */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
         <span style={{
-          fontSize: 13, fontWeight: 600, color: '#D8D8F8', lineHeight: 1.3,
+          fontSize: 13, fontWeight: 600, color: 'var(--c-d8d8f8)', lineHeight: 1.3,
           overflow: 'hidden', textOverflow: 'ellipsis',
           display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
         }}>
@@ -453,24 +453,24 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
           fontSize: 9, fontWeight: 700, letterSpacing: '.06em', flexShrink: 0,
           padding: '3px 8px', borderRadius: 20, textTransform: 'uppercase',
           ...(isDemand
-            ? { background: '#062A32', border: '1px solid #0E4753', color: '#22D3EE' }
+            ? { background: 'var(--c-062a32)', border: '1px solid var(--c-0e4753)', color: 'var(--c-22d3ee)' }
             : isLeading
-            ? { background: '#0D2010', border: '1px solid #1A4020', color: '#4ADE80' }
-            : { background: '#2A0D18', border: '1px solid #4A1A28', color: '#F472B6' }),
+            ? { background: 'var(--c-0d2010)', border: '1px solid var(--c-1a4020)', color: 'var(--c-4ade80)' }
+            : { background: 'var(--c-2a0d18)', border: '1px solid var(--c-4a1a28)', color: 'var(--c-f472b6)' }),
         }}>
           {isDemand ? 'Missing demand' : isLeading ? 'Leading' : 'Trailing'}
         </span>
       </div>
 
       {/* ── Sub-header stats ── */}
-      <div style={{ fontSize: 10, color: '#484868', marginBottom: 14 }}>
+      <div style={{ fontSize: 10, color: 'var(--c-484868)', marginBottom: 14 }}>
         {cluster.keywords.length} kws &nbsp;·&nbsp; {rankedKws.length} ranked
         {avgRank !== null && <> &nbsp;·&nbsp; Avg #{avgRank}</>}
       </div>
 
       {/* ── v7.168: same-intent deep-journey demand merged into this cluster ── */}
       {!isDemand && (cluster.demandMergedCount ?? 0) > 0 && (
-        <div style={{ fontSize: 10, color: '#22D3EE', marginTop: -8, marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: 'var(--c-22d3ee)', marginTop: -8, marginBottom: 14 }}>
           + {cluster.demandMergedCount} deep-journey demand kw{(cluster.demandMergedCount ?? 0) === 1 ? '' : 's'}
           &nbsp;·&nbsp; {fmtVol(cluster.demandMergedVol ?? 0)}/mo
         </div>
@@ -479,20 +479,20 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
       {/* ── Big metric: content coverage ── */}
       <div style={{ marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-          <span style={{ fontSize: 42, fontWeight: 700, color: '#D8D8F8', lineHeight: 1, letterSpacing: '-1px' }}>
+          <span style={{ fontSize: 42, fontWeight: 700, color: 'var(--c-d8d8f8)', lineHeight: 1, letterSpacing: '-1px' }}>
             {clientCovPct}%
           </span>
-          <span style={{ fontSize: 11, color: '#505070', lineHeight: 1.3 }}>
+          <span style={{ fontSize: 11, color: 'var(--c-505070)', lineHeight: 1.3 }}>
             Content coverage<br />
-            <span style={{ color: '#6A6A90' }}>{rankedKws.length} of {cluster.keywords.length} kws</span>
+            <span style={{ color: 'var(--c-6a6a90)' }}>{rankedKws.length} of {cluster.keywords.length} kws</span>
           </span>
         </div>
-        <div style={{ fontSize: 11, color: '#404060', marginTop: 6 }}>
+        <div style={{ fontSize: 11, color: 'var(--c-404060)', marginTop: 6 }}>
           {isDemand ? (
-            <>Deep-journey demand · <strong style={{ color: '#22D3EE' }}>not yet owned</strong></>
+            <>Deep-journey demand · <strong style={{ color: 'var(--c-22d3ee)' }}>not yet owned</strong></>
           ) : (
-            <>Leader: <strong style={{ color: isLeading ? '#4ADE80' : '#F472B6' }}>{leaderName}</strong>
-            <span style={{ color: '#484868' }}> ({leaderPct}%)</span></>
+            <>Leader: <strong style={{ color: isLeading ? 'var(--c-4ade80)' : 'var(--c-f472b6)' }}>{leaderName}</strong>
+            <span style={{ color: 'var(--c-484868)' }}> ({leaderPct}%)</span></>
           )}
         </div>
       </div>
@@ -501,28 +501,28 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
       {avgRank !== null ? (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
-          padding: '6px 10px', background: '#0A0A16', borderRadius: 6,
-          border: '1px solid #1A1A2C',
+          padding: '6px 10px', background: 'var(--c-0a0a16)', borderRadius: 6,
+          border: '1px solid var(--c-1a1a2c)',
         }}>
-          <i className="ti ti-trending-up" style={{ fontSize: 12, color: '#6C63FF', flexShrink: 0 }} aria-hidden="true" />
+          <i className="ti ti-trending-up" style={{ fontSize: 12, color: 'var(--c-6c63ff)', flexShrink: 0 }} aria-hidden="true" />
           <div style={{ flex: 1 }}>
-            <span style={{ fontSize: 11, color: '#6A6A90' }}>Avg Google rank </span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#9B96FF' }}>#{avgRank}</span>
+            <span style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>Avg Google rank </span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-9b96ff)' }}>#{avgRank}</span>
           </div>
           <span style={{
             fontSize: 9, padding: '2px 6px', borderRadius: 10, fontWeight: 600,
             ...(avgRank <= 10
-              ? { background: '#0D2010', border: '1px solid #1A4020', color: '#4ADE80' }
-              : { background: '#1C1408', border: '1px solid #342507', color: '#F59E0B' }),
+              ? { background: 'var(--c-0d2010)', border: '1px solid var(--c-1a4020)', color: 'var(--c-4ade80)' }
+              : { background: 'var(--c-1c1408)', border: '1px solid var(--c-342507)', color: 'var(--c-f59e0b)' }),
           }}>
             {avgRank <= 3 ? 'Top 3' : avgRank <= 10 ? 'Page 1' : avgRank <= 20 ? 'Page 2' : 'Page 3+'}
           </span>
         </div>
       ) : (
         <div style={{
-          fontSize: 10, color: '#383858', marginBottom: 12,
-          padding: '6px 10px', background: '#0A0A14', borderRadius: 6,
-          border: '1px solid #141428',
+          fontSize: 10, color: 'var(--c-383858)', marginBottom: 12,
+          padding: '6px 10px', background: 'var(--c-0a0a14)', borderRadius: 6,
+          border: '1px solid var(--c-141428)',
         }}>
           <i className="ti ti-ban" style={{ fontSize: 11, marginRight: 5 }} aria-hidden="true" />
           Not ranking for any keywords in this cluster
@@ -530,7 +530,7 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
       )}
 
       {/* ── Segmented bar ── */}
-      <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: '#1A1A30', marginBottom: 8 }}>
+      <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', background: 'var(--c-1a1a30)', marginBottom: 8 }}>
         {barSegments.map(seg => {
           const segPct = pct(seg.vol, totalVol);
           if (segPct === 0) return null;
@@ -549,8 +549,8 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
         {barSegments.filter(s => pct(s.vol, totalVol) > 0).map(seg => (
           <div key={seg.name} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
-            <span style={{ fontSize: 10, color: '#484868' }}>
-              {seg.name} <span style={{ color: '#6A6A90' }}>{pct(seg.vol, totalVol)}%</span>
+            <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>
+              {seg.name} <span style={{ color: 'var(--c-6a6a90)' }}>{pct(seg.vol, totalVol)}%</span>
             </span>
           </div>
         ))}
@@ -558,8 +558,8 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
 
       {/* ── Expanded keyword list ── */}
       {expanded && (
-        <div style={{ marginTop: 12, borderTop: '1px solid #1A1A2C', paddingTop: 10 }}>
-          <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: '#2E2E50', marginBottom: 6 }}>
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--c-1a1a2c)', paddingTop: 10 }}>
+          <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--c-2e2e50)', marginBottom: 6 }}>
             Keywords
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -567,19 +567,19 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
             {cluster.keywords.slice(0, 300).map(kw => (
               <span key={kw.keyword} style={{
                 fontSize: 9,
-                background: kw.isGap ? '#1A1008' : '#0F0F22',
-                border: `1px solid ${kw.isGap ? '#3A2508' : '#1E1E38'}`,
+                background: kw.isGap ? 'var(--c-1a1008)' : 'var(--c-0f0f22)',
+                border: `1px solid ${kw.isGap ? 'var(--c-3a2508)' : 'var(--c-1e1e38)'}`,
                 borderRadius: 4, padding: '2px 7px',
-                color: kw.isGap ? '#C99C4A' : '#555570',
+                color: kw.isGap ? 'var(--c-c99c4a)' : 'var(--c-555570)',
               }}>
                 {kw.keyword}
                 {kw.position !== null && (
-                  <span style={{ color: '#22C55E', marginLeft: 4 }}>#{kw.position}</span>
+                  <span style={{ color: 'var(--c-22c55e)', marginLeft: 4 }}>#{kw.position}</span>
                 )}
               </span>
             ))}
           {cluster.keywords.length > 300 && (
-              <span style={{ fontSize: 9, color: '#444468', padding: '2px 7px' }}>
+              <span style={{ fontSize: 9, color: 'var(--c-444468)', padding: '2px 7px' }}>
                 +{(cluster.keywords.length - 300).toLocaleString()} more — use the Keyword Landscape panel to browse all
               </span>
             )}
@@ -720,10 +720,10 @@ function classifyTopic(t: Topic): TopicStat {
 
 // ─── Category type badge metadata (v7.169) ────────────────────────────────────
 const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand', { label: string; color: string; bg: string; bdr: string }> = {
-  procedure: { label: 'Procedure',     color: '#9B96FF', bg: 'rgba(155,150,255,0.10)', bdr: 'rgba(155,150,255,0.30)' },
-  brand:     { label: 'Brand',         color: '#F59E0B', bg: 'rgba(245,158,11,0.10)',  bdr: 'rgba(245,158,11,0.30)' },
-  location:  { label: 'Location',      color: '#38BDF8', bg: 'rgba(56,189,248,0.10)',  bdr: 'rgba(56,189,248,0.30)' },
-  demand:    { label: 'Missing demand',color: '#22D3EE', bg: '#062A32',                bdr: '#0E4753' },
+  procedure: { label: 'Procedure',     color: 'var(--c-9b96ff)', bg: 'var(--ca-155-150-255-0_10)', bdr: 'var(--ca-155-150-255-0_30)' },
+  brand:     { label: 'Brand',         color: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_10)',  bdr: 'var(--ca-245-158-11-0_30)' },
+  location:  { label: 'Location',      color: 'var(--c-38bdf8)', bg: 'var(--ca-56-189-248-0_10)',  bdr: 'var(--ca-56-189-248-0_30)' },
+  demand:    { label: 'Missing demand',color: 'var(--c-22d3ee)', bg: 'var(--c-062a32)',                bdr: 'var(--c-0e4753)' },
 };
 
 // ─── Topic card (v7.169) — one card per theme × intent topic ──────────────────
@@ -736,10 +736,10 @@ function TopicCard({ topic, stat, clientDomain }: { topic: Topic; stat: TopicSta
   const coverage     = pct(clientCovVol, topic.totalVolume);
 
   const badge = isDemand
-    ? { text: 'Missing demand', bg: '#062A32', bdr: '#0E4753', color: '#22D3EE' }
+    ? { text: 'Missing demand', bg: 'var(--c-062a32)', bdr: 'var(--c-0e4753)', color: 'var(--c-22d3ee)' }
     : stat.isLeading
-    ? { text: 'Winning',  bg: '#0D2010', bdr: '#1A4020', color: '#4ADE80' }
-    : { text: 'Trailing', bg: '#2A0D18', bdr: '#4A1A28', color: '#F472B6' };
+    ? { text: 'Winning',  bg: 'var(--c-0d2010)', bdr: 'var(--c-1a4020)', color: 'var(--c-4ade80)' }
+    : { text: 'Trailing', bg: 'var(--c-2a0d18)', bdr: 'var(--c-4a1a28)', color: 'var(--c-f472b6)' };
 
   const stage = STAGE_META[topic.stage];
   const topKws = topic.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 12);
@@ -748,16 +748,16 @@ function TopicCard({ topic, stat, clientDomain }: { topic: Topic; stat: TopicSta
     <div
       onClick={() => setExpanded(v => !v)}
       style={{
-        background: isDemand ? '#08161A' : '#101019',
-        border: `1px solid ${isDemand ? '#0E3038' : '#1E1E32'}`,
+        background: isDemand ? 'var(--c-08161a)' : 'var(--c-101019)',
+        border: `1px solid ${isDemand ? 'var(--c-0e3038)' : 'var(--c-1e1e32)'}`,
         borderRadius: 10, padding: '12px 13px', cursor: 'pointer', transition: 'border-color 0.15s',
       }}
-      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#155E6B' : '#34345A'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? '#0E3038' : '#1E1E32'; }}
+      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? 'var(--c-155e6b)' : 'var(--c-34345a)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isDemand ? 'var(--c-0e3038)' : 'var(--c-1e1e32)'; }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 7 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#D8D8F8', lineHeight: 1.3 }}>
-          <i className={`ti ${stage.icon}`} style={{ fontSize: 13, color: '#6A6A90', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f8)', lineHeight: 1.3 }}>
+          <i className={`ti ${stage.icon}`} style={{ fontSize: 13, color: 'var(--c-6a6a90)', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
           {stage.label} · {INTENT_META[topic.intent].label}
         </span>
         <span style={{
@@ -766,29 +766,29 @@ function TopicCard({ topic, stat, clientDomain }: { topic: Topic; stat: TopicSta
         }}>{badge.text}</span>
       </div>
 
-      <div style={{ fontSize: 10, color: '#5A5A78' }}>{topic.contentType}</div>
+      <div style={{ fontSize: 10, color: 'var(--c-5a5a78)' }}>{topic.contentType}</div>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 9 }}>
-        <span style={{ fontSize: 26, fontWeight: 700, color: '#E8E8FF', lineHeight: 1, letterSpacing: '-.5px' }}>{topic.keywords.length}</span>
-        <span style={{ fontSize: 10, color: '#505070' }}>keywords · {fmtVol(topic.totalVolume)}/mo</span>
+        <span style={{ fontSize: 26, fontWeight: 700, color: 'var(--c-e8e8ff)', lineHeight: 1, letterSpacing: '-.5px' }}>{topic.keywords.length}</span>
+        <span style={{ fontSize: 10, color: 'var(--c-505070)' }}>keywords · {fmtVol(topic.totalVolume)}/mo</span>
       </div>
 
-      <div style={{ fontSize: 10, color: '#484868', marginTop: 6 }}>
+      <div style={{ fontSize: 10, color: 'var(--c-484868)', marginTop: 6 }}>
         {isDemand
-          ? <>Deep-journey demand · <span style={{ color: '#22D3EE' }}>not yet owned</span></>
+          ? <>Deep-journey demand · <span style={{ color: 'var(--c-22d3ee)' }}>not yet owned</span></>
           : <>{coverage}% content coverage · {rankedKws.length} of {topic.keywords.length} ranked</>}
       </div>
 
       {expanded && (
-        <div style={{ marginTop: 10, borderTop: '1px solid #1C1C2E', paddingTop: 9, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+        <div style={{ marginTop: 10, borderTop: '1px solid var(--c-1c1c2e)', paddingTop: 9, display: 'flex', flexWrap: 'wrap', gap: 5 }}>
           {topKws.map((k, i) => (
             <span key={i} style={{
-              fontSize: 10, color: k.origin === 'demand' ? '#22D3EE' : k.isGap ? '#F59E0B' : '#8AB89A',
-              background: '#0C0C16', border: '1px solid #1C1C2E', borderRadius: 5, padding: '2px 6px',
+              fontSize: 10, color: k.origin === 'demand' ? 'var(--c-22d3ee)' : k.isGap ? 'var(--c-f59e0b)' : 'var(--c-8ab89a)',
+              background: 'var(--c-0c0c16)', border: '1px solid var(--c-1c1c2e)', borderRadius: 5, padding: '2px 6px',
             }}>{k.keyword} · {fmtVol(k.searchVolume)}</span>
           ))}
           {topic.keywords.length > topKws.length && (
-            <span style={{ fontSize: 10, color: '#404060', padding: '2px 4px' }}>+{topic.keywords.length - topKws.length} more</span>
+            <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{topic.keywords.length - topKws.length} more</span>
           )}
         </div>
       )}
@@ -808,15 +808,15 @@ function CategorySection({
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: '#E2E2F6' }}>{cluster.name}</span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-e2e2f6)' }}>{cluster.name}</span>
         <span style={{
           fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
           padding: '2px 8px', borderRadius: 20, background: tm.bg, border: `1px solid ${tm.bdr}`, color: tm.color,
         }}>{tm.label}</span>
-        <span style={{ fontSize: 11, color: '#5A5A78' }}>
+        <span style={{ fontSize: 11, color: 'var(--c-5a5a78)' }}>
           {topics.length} topic{topics.length === 1 ? '' : 's'} · {fmtVol(shownVol)}/mo
         </span>
-        <div style={{ flex: 1, height: 1, background: '#181828' }} />
+        <div style={{ flex: 1, height: 1, background: 'var(--c-181828)' }} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         {topics.map(t => {
@@ -875,21 +875,21 @@ function ClustersTab({
 
   // ── Filter nav model: ownership group + performance + funnel-stage group ─────
   const navOwnership: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
-    { key: 'all',        label: 'All topics',      count: topics.length,     cColor: '#8080A8' },
-    { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: '#4ADE80' },
-    { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: '#F59E0B' },
+    { key: 'all',        label: 'All topics',      count: topics.length,     cColor: 'var(--c-8080a8)' },
+    { key: 'client',     label: 'Client only',     count: clientOwnedCount,  cColor: 'var(--c-4ade80)' },
+    { key: 'competitor', label: 'Competitor only', count: gapOwnedCount,     cColor: 'var(--c-f59e0b)' },
   ];
   // Only show the missing-demand pill once a deep journey has surfaced any.
   if (demandOwnedCount > 0) {
-    navOwnership.push({ key: 'demand', label: 'Missing demand', count: demandOwnedCount, cColor: '#22D3EE' });
+    navOwnership.push({ key: 'demand', label: 'Missing demand', count: demandOwnedCount, cColor: 'var(--c-22d3ee)' });
   }
   const navPerformance: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> = [
-    { key: 'leading',     label: 'Winning',         count: leadingStats.length,  cColor: '#4ADE80' },
-    { key: 'trailing',    label: 'Trailing',        count: trailingStats.length, cColor: '#F472B6' },
-    { key: 'opportunity', label: 'Low Competition', count: oppStats.length,      cColor: '#38BDF8' },
+    { key: 'leading',     label: 'Winning',         count: leadingStats.length,  cColor: 'var(--c-4ade80)' },
+    { key: 'trailing',    label: 'Trailing',        count: trailingStats.length, cColor: 'var(--c-f472b6)' },
+    { key: 'opportunity', label: 'Low Competition', count: oppStats.length,      cColor: 'var(--c-38bdf8)' },
   ];
   const navStages: Array<{ key: ClusterFilter; label: string; count: number; cColor: string }> =
-    stageRollups.map(r => ({ key: r.stage, label: STAGE_META[r.stage].label, count: r.total, cColor: '#585878' }));
+    stageRollups.map(r => ({ key: r.stage, label: STAGE_META[r.stage].label, count: r.total, cColor: 'var(--c-585878)' }));
 
   // Annualise monthly volume × 12
   const ann = (stats: TopicStat[]) =>
@@ -946,11 +946,11 @@ function ClustersTab({
       count:    leadingStats.length,
       vol:      ann(leadingStats),
       subtitle: 'Clusters you are winning',
-      accent:   '#4ADE80',
-      activeBg: 'rgba(74,222,128,0.10)',
-      activeBdr:'rgba(74,222,128,0.45)',
-      dimBg:    'rgba(74,222,128,0.04)',
-      dimBdr:   'rgba(74,222,128,0.15)',
+      accent:   'var(--c-4ade80)',
+      activeBg: 'var(--ca-74-222-128-0_10)',
+      activeBdr:'var(--ca-74-222-128-0_45)',
+      dimBg:    'var(--ca-74-222-128-0_04)',
+      dimBdr:   'var(--ca-74-222-128-0_15)',
       icon:     'ti-trophy',
     },
     {
@@ -959,11 +959,11 @@ function ClustersTab({
       count:    trailingStats.length,
       vol:      ann(trailingStats),
       subtitle: 'Clusters competitors lead',
-      accent:   '#F472B6',
-      activeBg: 'rgba(244,114,182,0.10)',
-      activeBdr:'rgba(244,114,182,0.45)',
-      dimBg:    'rgba(244,114,182,0.04)',
-      dimBdr:   'rgba(244,114,182,0.15)',
+      accent:   'var(--c-f472b6)',
+      activeBg: 'var(--ca-244-114-182-0_10)',
+      activeBdr:'var(--ca-244-114-182-0_45)',
+      dimBg:    'var(--ca-244-114-182-0_04)',
+      dimBdr:   'var(--ca-244-114-182-0_15)',
       icon:     'ti-trending-down',
     },
     {
@@ -972,11 +972,11 @@ function ClustersTab({
       count:    oppStats.length,
       vol:      ann(oppStats),
       subtitle: 'Competitors least present',
-      accent:   '#38BDF8',
-      activeBg: 'rgba(56,189,248,0.10)',
-      activeBdr:'rgba(56,189,248,0.45)',
-      dimBg:    'rgba(56,189,248,0.04)',
-      dimBdr:   'rgba(56,189,248,0.15)',
+      accent:   'var(--c-38bdf8)',
+      activeBg: 'var(--ca-56-189-248-0_10)',
+      activeBdr:'var(--ca-56-189-248-0_45)',
+      dimBg:    'var(--ca-56-189-248-0_04)',
+      dimBdr:   'var(--ca-56-189-248-0_15)',
       icon:     'ti-target',
     },
   ];
@@ -1000,49 +1000,49 @@ function ClustersTab({
               style={{
                 display: 'flex', alignItems: 'center', gap: 28,
                 padding: '20px 24px',
-                background:   allActive ? 'rgba(155,150,255,0.10)' : 'rgba(155,150,255,0.04)',
-                border:       `1px solid ${allActive ? 'rgba(155,150,255,0.45)' : 'rgba(155,150,255,0.18)'}`,
+                background:   allActive ? 'var(--ca-155-150-255-0_10)' : 'var(--ca-155-150-255-0_04)',
+                border:       `1px solid ${allActive ? 'var(--ca-155-150-255-0_45)' : 'var(--ca-155-150-255-0_18)'}`,
                 borderRadius: 12,
                 cursor:       'pointer',
                 textAlign:    'left',
                 transition:   'all 0.15s',
                 outline:      'none',
-                boxShadow:    allActive ? '0 0 0 1px rgba(155,150,255,0.45)' : 'none',
+                boxShadow:    allActive ? '0 0 0 1px var(--ca-155-150-255-0_45)' : 'none',
               }}
-              onMouseEnter={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(155,150,255,0.40)'; }}
-              onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(155,150,255,0.18)'; }}
+              onMouseEnter={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_40)'; }}
+              onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_18)'; }}
             >
               <div style={{ textAlign: 'center', flexShrink: 0 }}>
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: '#585878', marginBottom: 4 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 4 }}>
                   Total clusters
                 </div>
-                <div style={{ fontSize: 60, fontWeight: 700, lineHeight: 1, letterSpacing: -3, color: '#E8E8FF' }}>
+                <div style={{ fontSize: 60, fontWeight: 700, lineHeight: 1, letterSpacing: -3, color: 'var(--c-e8e8ff)' }}>
                   {topics.length}
                 </div>
-                <div style={{ fontSize: 11, color: '#484868', marginTop: 4 }}>topics across {catCount} categories</div>
+                <div style={{ fontSize: 11, color: 'var(--c-484868)', marginTop: 4 }}>topics across {catCount} categories</div>
               </div>
-              <div style={{ width: 1, height: 64, background: '#1E1E34', flexShrink: 0 }} />
+              <div style={{ width: 1, height: 64, background: 'var(--c-1e1e34)', flexShrink: 0 }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div>
-                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
+                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 3 }}>
                     Total annual search volume
                   </div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: '#9B96FF' }}>
+                    <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: -1, color: 'var(--c-9b96ff)' }}>
                       {fmtHero(totalAnnualVol)}
                     </span>
-                    <span style={{ fontSize: 11, color: '#484868' }}>searches / yr</span>
+                    <span style={{ fontSize: 11, color: 'var(--c-484868)' }}>searches / yr</span>
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: '#585878', marginBottom: 3 }}>
+                  <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 3 }}>
                     Total monthly volume
                   </div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                    <span style={{ fontSize: 19, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: '#6A6A90' }}>
+                    <span style={{ fontSize: 19, fontWeight: 600, lineHeight: 1, letterSpacing: -.5, color: 'var(--c-6a6a90)' }}>
                       {fmtHero(totalMonthlyVol)}
                     </span>
-                    <span style={{ fontSize: 11, color: '#383858' }}>searches / mo</span>
+                    <span style={{ fontSize: 11, color: 'var(--c-383858)' }}>searches / mo</span>
                   </div>
                 </div>
               </div>
@@ -1097,7 +1097,7 @@ function ClustersTab({
                       </span>
                     )}
                   </div>
-                  <div style={{ fontSize: 11, color: '#7070A0' }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-7070a0)' }}>
                     {card.subtitle}
                   </div>
                 </div>
@@ -1107,15 +1107,15 @@ function ClustersTab({
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, justifyContent: 'flex-end' }}>
                     <span style={{
                       fontSize: 30, fontWeight: 700, lineHeight: 1, letterSpacing: '-1.5px',
-                      color: active ? card.accent : '#E8E8FF',
+                      color: active ? card.accent : 'var(--c-e8e8ff)',
                     }}>
                       {card.count}
                     </span>
-                    <span style={{ fontSize: 12, color: '#9090B8' }}>clusters</span>
+                    <span style={{ fontSize: 12, color: 'var(--c-9090b8)' }}>clusters</span>
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 600, color: card.accent, marginTop: 3 }}>
                     {fmtVol(card.vol)}
-                    <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
+                    <span style={{ fontSize: 11, color: 'var(--c-8080a8)', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
                 </div>
               </button>
@@ -1128,19 +1128,19 @@ function ClustersTab({
         {/* stage's label / count / split sits beside its band. Each band is   */}
         {/* clickable → filter the grid by that dominant stage (toggle to all). */}
         <div style={{
-          background: '#0F0F1E', border: '1px solid #1E1E34', borderRadius: 12,
+          background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e34)', borderRadius: 12,
           padding: '12px 14px', display: 'flex', flexDirection: 'column',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <i className="ti ti-filter" style={{ fontSize: 12, color: '#8B85FF' }} aria-hidden="true" />
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: '#585878' }}>
+            <i className="ti ti-filter" style={{ fontSize: 12, color: 'var(--c-8b85ff)' }} aria-hidden="true" />
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
               Clusters by funnel stage
             </span>
           </div>
-          <div style={{ fontSize: 9, color: '#3A3A5A', marginBottom: 10, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 10, lineHeight: 1.4 }}>
             Each cluster counted once · stage = its dominant intent ·&nbsp;
-            <span style={{ color: '#4ADE80' }}>client</span> ranks for most /&nbsp;
-            <span style={{ color: '#F59E0B' }}>gap</span> = competitors own most · click to filter
+            <span style={{ color: 'var(--c-4ade80)' }}>client</span> ranks for most /&nbsp;
+            <span style={{ color: 'var(--c-f59e0b)' }}>gap</span> = competitors own most · click to filter
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, justifyContent: 'center' }}>
@@ -1151,8 +1151,8 @@ function ClustersTab({
               // 18% per stage so the four bands form one continuous funnel.
               const topInset    = 18 * i;
               const botInset    = 18 * (i + 1);
-              const BAND_COLORS = ['#8B85FF', '#6C63FF', '#574DD6', '#443AA8'];
-              const bandColor   = active ? '#B7B1FF' : BAND_COLORS[i];
+              const BAND_COLORS = ['var(--c-8b85ff)', 'var(--c-6c63ff)', 'var(--c-574dd6)', 'var(--c-443aa8)'];
+              const bandColor   = active ? 'var(--c-b7b1ff)' : BAND_COLORS[i];
               return (
                 <button
                   key={r.stage}
@@ -1162,7 +1162,7 @@ function ClustersTab({
                     alignItems: 'stretch',
                     gap:        10,
                     width:      '100%',
-                    background: active ? 'rgba(155,150,255,0.08)' : 'transparent',
+                    background: active ? 'var(--ca-155-150-255-0_08)' : 'transparent',
                     border:     'none',
                     borderRadius: 8,
                     padding:    '3px 4px',
@@ -1171,7 +1171,7 @@ function ClustersTab({
                     outline:    'none',
                     transition: 'background 0.15s',
                   }}
-                  onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'rgba(155,150,255,0.04)'; }}
+                  onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'var(--ca-155-150-255-0_04)'; }}
                   onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
                 >
                   {/* Funnel band — flat edge on the right (clip-path trapezoid) */}
@@ -1188,35 +1188,35 @@ function ClustersTab({
                   {/* Stage info — sits beside the pyramid's flat edge */}
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.03em', color: active ? '#C8C4FF' : '#C8C8E8' }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.03em', color: active ? 'var(--c-c8c4ff)' : 'var(--c-c8c8e8)' }}>
                         {meta.label}
                       </span>
-                      <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-.5px', color: active ? '#9B96FF' : '#E8E8FF' }}>
+                      <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-.5px', color: active ? 'var(--c-9b96ff)' : 'var(--c-e8e8ff)' }}>
                         {r.total}
                       </span>
-                      <span style={{ fontSize: 9, color: '#585878' }}>topics</span>
+                      <span style={{ fontSize: 9, color: 'var(--c-585878)' }}>topics</span>
                       {active && (
                         <span style={{
                           marginLeft: 'auto', fontSize: 8, fontWeight: 700,
-                          background: 'rgba(155,150,255,0.10)', border: '1px solid rgba(155,150,255,0.45)',
-                          color: '#9B96FF', borderRadius: 20, padding: '1px 6px',
+                          background: 'var(--ca-155-150-255-0_10)', border: '1px solid var(--ca-155-150-255-0_45)',
+                          color: 'var(--c-9b96ff)', borderRadius: 20, padding: '1px 6px',
                         }}>
                           ACTIVE
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: 9, color: '#6A6A90', marginTop: 2 }}>
-                      <span style={{ color: '#4ADE80', fontWeight: 600 }}>{r.clientClusters}</span> client
+                    <div style={{ fontSize: 9, color: 'var(--c-6a6a90)', marginTop: 2 }}>
+                      <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.clientClusters}</span> client
                       &nbsp;·&nbsp;
-                      <span style={{ color: '#F59E0B', fontWeight: 600 }}>{r.gapClusters}</span> gap
+                      <span style={{ color: 'var(--c-f59e0b)', fontWeight: 600 }}>{r.gapClusters}</span> gap
                       {r.demandClusters > 0 && (
                         <>
                           &nbsp;·&nbsp;
-                          <span style={{ color: '#22D3EE', fontWeight: 600 }}>{r.demandClusters}</span> demand
+                          <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>{r.demandClusters}</span> demand
                         </>
                       )}
                       &nbsp;·&nbsp;
-                      <span style={{ color: '#8B85FF', fontWeight: 600 }}>{fmtVol(r.annualVol)}</span>
+                      <span style={{ color: 'var(--c-8b85ff)', fontWeight: 600 }}>{fmtVol(r.annualVol)}</span>
                     </div>
                   </div>
                 </button>
@@ -1240,15 +1240,15 @@ function ClustersTab({
                 display: 'flex', alignItems: 'center', gap: 6,
                 padding: '6px 13px', borderRadius: 20, cursor: 'pointer',
                 transition: 'all 0.15s', outline: 'none', whiteSpace: 'nowrap',
-                background: on ? '#6C63FF' : '#13131F',
-                border:     `1px solid ${on ? '#6C63FF' : '#23233A'}`,
-                color:      on ? '#0A0A14' : '#9090B8',
+                background: on ? 'var(--c-6c63ff)' : 'var(--c-13131f)',
+                border:     `1px solid ${on ? 'var(--c-6c63ff)' : 'var(--c-23233a)'}`,
+                color:      on ? 'var(--c-0a0a14)' : 'var(--c-9090b8)',
               }}
-              onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = '#34345A'; }}
-              onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = '#23233A'; }}
+              onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-34345a)'; }}
+              onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-23233a)'; }}
             >
               {item.label}
-              <span style={{ fontSize: 11, fontWeight: 600, color: on ? 'rgba(10,10,20,0.65)' : item.cColor }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: on ? 'var(--ca-10-10-20-0_65)' : item.cColor }}>
                 {item.count}
               </span>
             </button>
@@ -1257,12 +1257,12 @@ function ClustersTab({
         const GlowLine = () => (
           <div style={{
             height: 1,
-            background: 'linear-gradient(to right, rgba(108,99,255,0) 0%, rgba(108,99,255,0.55) 50%, rgba(108,99,255,0) 100%)',
-            boxShadow: '0 0 6px rgba(108,99,255,0.45)',
+            background: 'linear-gradient(to right, var(--ca-108-99-255-0) 0%, var(--ca-108-99-255-0_55) 50%, var(--ca-108-99-255-0) 100%)',
+            boxShadow: '0 0 6px var(--ca-108-99-255-0_45)',
           }} />
         );
         const GroupDivider = () => (
-          <span style={{ width: 1, height: 18, background: '#23233A', margin: '0 4px' }} />
+          <span style={{ width: 1, height: 18, background: 'var(--c-23233a)', margin: '0 4px' }} />
         );
         return (
           <div style={{ margin: '22px 0 20px' }}>
@@ -1277,14 +1277,14 @@ function ClustersTab({
               <GroupDivider />
               {navStages.map(item => <Pill key={item.key} item={item} />)}
               {loadingClaude && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: '#6C63FF', marginLeft: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--c-6c63ff)', marginLeft: 6 }}>
                   <svg style={{ width: 11, height: 11, animation: 'spin 1s linear infinite', flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
                   Refining…
                 </div>
               )}
-              <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3A3A5A', whiteSpace: 'nowrap' }}>
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--c-3a3a5a)', whiteSpace: 'nowrap' }}>
                 {filter === 'all'
                   ? `${topics.length} topics · click a card to expand`
                   : `Showing ${filtered.length} of ${topics.length}`}
@@ -1309,7 +1309,7 @@ function ClustersTab({
       </div>
 
       {filtered.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#404060', fontSize: 13 }}>
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--c-404060)', fontSize: 13 }}>
           {clusters.length === 0
             ? 'No cluster data — run an analysis first.'
             : filter === 'opportunity'
@@ -1414,19 +1414,19 @@ export default function ThemeClustersPanel({
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
 
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 10px', borderBottom: '1px solid #1C1C30', background: '#0D0D18', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px 10px', borderBottom: '1px solid var(--c-1c1c30)', background: 'var(--c-0d0d18)', flexShrink: 0 }}>
         <div>
-          <h2 style={{ fontSize: 13, fontWeight: 600, color: '#D8D8F8', margin: 0 }}>Theme Clusters</h2>
-          <p style={{ fontSize: 11, color: '#404060', margin: '2px 0 0' }}>
+          <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--c-d8d8f8)', margin: 0 }}>Theme Clusters</h2>
+          <p style={{ fontSize: 11, color: 'var(--c-404060)', margin: '2px 0 0' }}>
             {kwLoaded
               ? `${totalKws} keywords · ${topicCnt} topic clusters across ${catCnt} categories · click any card to see keywords`
               : 'Loading clusters…'}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ fontSize: 10, color: '#383858', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span><span style={{ color: '#4ADE80' }}>■</span> Client ranked</span>
-            <span><span style={{ color: '#F59E0B' }}>■</span> Competitor gap</span>
+          <div style={{ fontSize: 10, color: 'var(--c-383858)', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span><span style={{ color: 'var(--c-4ade80)' }}>■</span> Client ranked</span>
+            <span><span style={{ color: 'var(--c-f59e0b)' }}>■</span> Competitor gap</span>
           </div>
           <button
             onClick={() => refreshUploadedKeywords(true)}
@@ -1435,8 +1435,8 @@ export default function ThemeClustersPanel({
             style={{
               display: 'flex', alignItems: 'center', gap: 5,
               fontSize: 10, fontWeight: 600, padding: '4px 10px', borderRadius: 6,
-              background: refreshingKws ? 'rgba(108,99,255,0.15)' : 'rgba(108,99,255,0.08)',
-              border: '1px solid rgba(108,99,255,0.3)', color: '#8B85FF',
+              background: refreshingKws ? 'var(--ca-108-99-255-0_15)' : 'var(--ca-108-99-255-0_08)',
+              border: '1px solid var(--ca-108-99-255-0_3)', color: 'var(--c-8b85ff)',
               cursor: refreshingKws ? 'default' : 'pointer', transition: 'all 0.15s',
             }}
           >
@@ -1456,15 +1456,15 @@ export default function ThemeClustersPanel({
       </div>
 
       {(refreshingKws || !kwLoaded) && (
-        <div className="animate-pulse" style={{ height: 3, background: 'rgba(108,99,255,0.35)', flexShrink: 0 }} />
+        <div className="animate-pulse" style={{ height: 3, background: 'var(--ca-108-99-255-0_35)', flexShrink: 0 }} />
       )}
 
       {!kwLoaded ? (
         /* ── Skeleton: shown until DB keyword fetch resolves ── */
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center', color: '#404060', fontSize: 13 }}>
+          <div style={{ textAlign: 'center', color: 'var(--c-404060)', fontSize: 13 }}>
             <svg style={{ width: 18, height: 18, animation: 'spin 1s linear infinite', margin: '0 auto 10px', display: 'block' }}
-              fill="none" viewBox="0 0 24 24" stroke="rgba(108,99,255,0.6)">
+              fill="none" viewBox="0 0 24 24" stroke="var(--ca-108-99-255-0_6)">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>

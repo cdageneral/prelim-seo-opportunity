@@ -16,11 +16,11 @@ type RankFilter = 'all' | 'p13' | 'p410' | 'p2' | 'p3p';
 
 // Bucket order is fixed: [1–3, 4–10, Page 2, Page 3+, Unranked/gap]
 const RANK_BUCKETS = [
-  { id: 'p13'  as const, label: '1–3',            color: '#6C63FF' },
-  { id: 'p410' as const, label: '4–10',           color: '#06B6D4' },
-  { id: 'p2'   as const, label: 'Page 2',         color: '#F59E0B' },
-  { id: 'p3p'  as const, label: 'Page 3+',        color: '#EF4444' },
-  { id: 'unr'  as const, label: 'Unranked / gap', color: '#2E2E48' },
+  { id: 'p13'  as const, label: '1–3',            color: 'var(--c-6c63ff)' },
+  { id: 'p410' as const, label: '4–10',           color: 'var(--c-06b6d4)' },
+  { id: 'p2'   as const, label: 'Page 2',         color: 'var(--c-f59e0b)' },
+  { id: 'p3p'  as const, label: 'Page 3+',        color: 'var(--c-ef4444)' },
+  { id: 'unr'  as const, label: 'Unranked / gap', color: 'var(--c-2e2e48)' },
 ];
 
 function bucketIndexOf(position: number | null): number {
@@ -358,9 +358,9 @@ function SortHeader({
     >
       <span
         className="inline-flex items-center gap-1 transition-colors"
-        style={{ color: active ? '#9B96FF' : '#555575' }}
-        onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#8080A8'; }}
-        onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = '#555575'; }}
+        style={{ color: active ? 'var(--c-9b96ff)' : 'var(--c-555575)' }}
+        onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = 'var(--c-8080a8)'; }}
+        onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = 'var(--c-555575)'; }}
       >
         {align === 'right' && (
           <span style={{ fontSize: '8px', opacity: active ? 1 : 0.35, lineHeight: 1 }}>
@@ -902,13 +902,13 @@ export default function KeywordsPanel({
     <div className="flex-1 min-h-0 overflow-y-auto animate-fade-in">
 
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: '#0D0D18' }}>
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: 'var(--c-0d0d18)' }}>
           <div>
             <h2 className="text-orbit-primary font-semibold text-sm">Keyword Landscape</h2>
             <p className="text-orbit-tertiary text-[11px] mt-0.5">
               {dbLoaded
                 ? <>{visibleRows.length.toLocaleString()} total &nbsp;·&nbsp; {ranked.toLocaleString()} ranked &nbsp;·&nbsp; {gap} gap</>
-                : <span style={{ color: '#333350' }}>Loading keywords…</span>
+                : <span style={{ color: 'var(--c-333350)' }}>Loading keywords…</span>
               }
             </p>
           </div>
@@ -917,7 +917,7 @@ export default function KeywordsPanel({
             <label
               className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
               title="Upload CSV (columns: keyword, search_volume, type)"
-              style={{ color: '#7070A0', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}
+              style={{ color: 'var(--c-7070a0)', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
@@ -931,7 +931,7 @@ export default function KeywordsPanel({
               <button
                 onClick={() => setShowClearConfirm(true)}
                 className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-                style={{ color: '#7070A0' }}
+                style={{ color: 'var(--c-7070a0)' }}
                 title="Remove all uploaded/custom keywords and unblock any hidden Semrush keywords"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -943,31 +943,31 @@ export default function KeywordsPanel({
 
             {/* Clear All — inline confirm */}
             {showClearConfirm && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)' }}>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--ca-239-68-68-0_3)', background: 'var(--ca-239-68-68-0_06)' }}>
                 {clearLoading ? (
                   <>
-                    <svg className="animate-spin shrink-0" style={{ width: 12, height: 12, color: '#f87171' }} fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin shrink-0" style={{ width: 12, height: 12, color: 'var(--c-f87171)' }} fill="none" viewBox="0 0 24 24">
                       <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                       <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
                     </svg>
-                    <span className="text-[11px] font-medium" style={{ color: '#f87171' }}>{clearStep}</span>
+                    <span className="text-[11px] font-medium" style={{ color: 'var(--c-f87171)' }}>{clearStep}</span>
                   </>
                 ) : (
                   <>
-                    <span className="text-[11px]" style={{ color: '#f87171' }}>
+                    <span className="text-[11px]" style={{ color: 'var(--c-f87171)' }}>
                       Clear all keywords (uploads + Semrush analysis)?
                     </span>
                     <button
                       onClick={handleClearAll}
                       className="text-[11px] font-semibold px-2 py-0.5 rounded"
-                      style={{ background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
+                      style={{ background: 'var(--ca-239-68-68-0_15)', color: 'var(--c-f87171)' }}
                     >
                       Yes, clear
                     </button>
                     <button
                       onClick={() => setShowClearConfirm(false)}
                       className="text-[11px] px-2 py-0.5 rounded"
-                      style={{ color: '#6060A0' }}
+                      style={{ color: 'var(--c-6060a0)' }}
                     >
                       Cancel
                     </button>
@@ -981,9 +981,9 @@ export default function KeywordsPanel({
             {/* Result toast */}
             {csvStatus && !csvProgress && (
               <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
-                background:  csvStatus.type === 'success' ? 'rgba(52,211,153,0.08)' : 'rgba(239,68,68,0.08)',
-                color:       csvStatus.type === 'success' ? '#34d399' : '#f87171',
-                borderColor: csvStatus.type === 'success' ? 'rgba(52,211,153,0.25)' : 'rgba(239,68,68,0.25)',
+                background:  csvStatus.type === 'success' ? 'var(--ca-52-211-153-0_08)' : 'var(--ca-239-68-68-0_08)',
+                color:       csvStatus.type === 'success' ? 'var(--c-34d399)' : 'var(--c-f87171)',
+                borderColor: csvStatus.type === 'success' ? 'var(--ca-52-211-153-0_25)' : 'var(--ca-239-68-68-0_25)',
               }}>
                 {csvStatus.msg}
               </span>
@@ -994,9 +994,9 @@ export default function KeywordsPanel({
             onClick={() => { setShowAdd(v => !v); setAddError(''); }}
             className="text-xs border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
             style={{
-              color: showAdd ? '#8B85FF' : '#7070A0',
-              borderColor: showAdd ? 'rgba(108,99,255,0.5)' : '',
-              background:  showAdd ? 'rgba(108,99,255,0.08)' : '',
+              color: showAdd ? 'var(--c-8b85ff)' : 'var(--c-7070a0)',
+              borderColor: showAdd ? 'var(--ca-108-99-255-0_5)' : '',
+              background:  showAdd ? 'var(--ca-108-99-255-0_08)' : '',
             }}
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1048,8 +1048,8 @@ export default function KeywordsPanel({
         }> = [
           {
             id: 'all', label: 'All Keywords', count: kwSummary.allCount, vol: kwSummary.allVol,
-            accent: '#9B96FF', activeBg: 'rgba(108,99,255,0.10)', activeBdr: 'rgba(108,99,255,0.45)',
-            dimBg: 'rgba(108,99,255,0.04)', dimBdr: 'rgba(108,99,255,0.15)',
+            accent: 'var(--c-9b96ff)', activeBg: 'var(--ca-108-99-255-0_10)', activeBdr: 'var(--ca-108-99-255-0_45)',
+            dimBg: 'var(--ca-108-99-255-0_04)', dimBdr: 'var(--ca-108-99-255-0_15)',
             icon: 'ti-list',
             subtitle: dbLoaded
               ? `${kwSummary.clientCount.toLocaleString()} client + ${(kwSummary.allCount - kwSummary.clientCount).toLocaleString()} gap`
@@ -1057,25 +1057,25 @@ export default function KeywordsPanel({
           },
           {
             id: 'branded', label: 'Branded', count: kwSummary.brandedCount, vol: kwSummary.brandedVol,
-            accent: '#C882FF', activeBg: 'rgba(200,130,255,0.10)', activeBdr: 'rgba(200,130,255,0.45)',
-            dimBg: 'rgba(200,130,255,0.04)', dimBdr: 'rgba(200,130,255,0.15)',
+            accent: 'var(--c-c882ff)', activeBg: 'var(--ca-200-130-255-0_10)', activeBdr: 'var(--ca-200-130-255-0_45)',
+            dimBg: 'var(--ca-200-130-255-0_04)', dimBdr: 'var(--ca-200-130-255-0_15)',
             icon: 'ti-tag', subtitle: 'Client or competitor brand',
           },
           {
             id: 'nonBranded', label: 'Non-branded', count: kwSummary.nonBrandCount, vol: kwSummary.nonBrandVol,
-            accent: '#38BDF8', activeBg: 'rgba(56,189,248,0.10)', activeBdr: 'rgba(56,189,248,0.45)',
-            dimBg: 'rgba(56,189,248,0.04)', dimBdr: 'rgba(56,189,248,0.15)',
+            accent: 'var(--c-38bdf8)', activeBg: 'var(--ca-56-189-248-0_10)', activeBdr: 'var(--ca-56-189-248-0_45)',
+            dimBg: 'var(--ca-56-189-248-0_04)', dimBdr: 'var(--ca-56-189-248-0_15)',
             icon: 'ti-search', subtitle: 'Generic / category terms',
           },
           {
             id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,
-            accent: '#F59E0B', activeBg: 'rgba(245,158,11,0.10)', activeBdr: 'rgba(245,158,11,0.45)',
-            dimBg: 'rgba(245,158,11,0.04)', dimBdr: 'rgba(245,158,11,0.15)',
+            accent: 'var(--c-f59e0b)', activeBg: 'var(--ca-245-158-11-0_10)', activeBdr: 'var(--ca-245-158-11-0_45)',
+            dimBg: 'var(--ca-245-158-11-0_04)', dimBdr: 'var(--ca-245-158-11-0_15)',
             icon: 'ti-arrows-diff', subtitle: 'Competitor ranks, client doesn\'t',
           },
         ];
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid #111120', background: '#0A0A14', flexShrink: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
             {KW_CARDS.map(card => {
               const active = filter === card.id;
               return (
@@ -1114,20 +1114,20 @@ export default function KeywordsPanel({
 
                   {/* Count */}
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginBottom: 6 }}>
-                    <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : '#E8E8FF' }}>
+                    <span style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, letterSpacing: '-1px', color: active ? card.accent : 'var(--c-e8e8ff)' }}>
                       {dbLoaded ? card.count.toLocaleString() : '—'}
                     </span>
-                    <span style={{ fontSize: 12, color: '#9090B8' }}>keywords</span>
+                    <span style={{ fontSize: 12, color: 'var(--c-9090b8)' }}>keywords</span>
                   </div>
 
                   {/* Annual volume */}
                   <div style={{ fontSize: 14, fontWeight: 600, color: card.accent, marginBottom: 3 }}>
                     {dbLoaded ? fmtVol(card.vol) : '—'}
-                    <span style={{ fontSize: 11, color: '#8080A8', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
+                    <span style={{ fontSize: 11, color: 'var(--c-8080a8)', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
 
                   {/* Subtitle */}
-                  <div style={{ fontSize: 11, color: '#7070A0', marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: 'var(--c-7070a0)', marginTop: 2 }}>
                     {card.subtitle}
                   </div>
                 </button>
@@ -1160,7 +1160,7 @@ export default function KeywordsPanel({
       {/* ── Add keyword form ── */}
 
       {showAdd && (
-        <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: '#0B0B16' }}>
+        <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: 'var(--c-0b0b16)' }}>
           <div className="flex items-center gap-2">
             <input
               autoFocus
@@ -1210,37 +1210,37 @@ export default function KeywordsPanel({
 
       {/* ── Upload progress bar ── */}
       {clearLoading && (
-        <div className="animate-pulse" style={{ height: 3, background: 'rgba(239,68,68,0.45)', flexShrink: 0 }} />
+        <div className="animate-pulse" style={{ height: 3, background: 'var(--ca-239-68-68-0_45)', flexShrink: 0 }} />
       )}
 
       {csvProgress && (
-        <div style={{ background: '#0D0D18', borderBottom: '1px solid #1A1A30', padding: '10px 20px 14px' }}>
+        <div style={{ background: 'var(--c-0d0d18)', borderBottom: '1px solid var(--c-1a1a30)', padding: '10px 20px 14px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <svg style={{ width: 13, height: 13, animation: 'spin 1s linear infinite', flexShrink: 0, color: '#6C63FF' }} fill="none" viewBox="0 0 24 24">
+              <svg style={{ width: 13, height: 13, animation: 'spin 1s linear infinite', flexShrink: 0, color: 'var(--c-6c63ff)' }} fill="none" viewBox="0 0 24 24">
                 <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
                 <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
               </svg>
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#8888C8', letterSpacing: '0.01em' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-8888c8)', letterSpacing: '0.01em' }}>
                 Uploading keywords
               </span>
             </div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: '#6060A0', fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-6060a0)', fontVariantNumeric: 'tabular-nums' }}>
               {csvProgress.current} <span style={{ opacity: 0.45, fontWeight: 400 }}>/ {csvProgress.total}</span>
             </span>
           </div>
-          <div style={{ height: 5, borderRadius: 3, background: '#14142A', overflow: 'hidden' }}>
+          <div style={{ height: 5, borderRadius: 3, background: 'var(--c-14142a)', overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 3,
-              background: 'linear-gradient(90deg, #5A52E8, #8B85FF)',
+              background: 'linear-gradient(90deg, var(--c-5a52e8), var(--c-8b85ff))',
               width: csvProgress.total > 0 ? `${Math.round((csvProgress.current / csvProgress.total) * 100)}%` : '0%',
               transition: 'width 0.25s ease',
-              boxShadow: '0 0 10px rgba(108,99,255,0.7)',
+              boxShadow: '0 0 10px var(--ca-108-99-255-0_7)',
             }} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
-            <span style={{ fontSize: 10, color: '#4040608' }} />
-            <span style={{ fontSize: 10, color: '#4A4A70' }}>
+            <span style={{ fontSize: 10, color: 'var(--c-404060)' }} />
+            <span style={{ fontSize: 10, color: 'var(--c-4a4a70)' }}>
               {csvProgress.total > 0 ? Math.round((csvProgress.current / csvProgress.total) * 100) : 0}%
             </span>
           </div>
@@ -1251,9 +1251,9 @@ export default function KeywordsPanel({
       {/* Segments live on the summary cards above; these pills filter by rank
           bucket WITHIN the active segment — both the category breakdown and
           the keyword table below respond. */}
-      <div className="flex items-center gap-2 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: '#111120', background: '#0A0A14' }}>
-        <span className="text-[9px] font-semibold uppercase tracking-widest mr-1" style={{ color: '#252545' }}>Rank filter</span>
-        {([{ id: 'all' as RankFilter, label: 'All ranks', color: '#8B85FF' },
+      <div className="flex items-center gap-2 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: 'var(--c-111120)', background: 'var(--c-0a0a14)' }}>
+        <span className="text-[9px] font-semibold uppercase tracking-widest mr-1" style={{ color: 'var(--c-252545)' }}>Rank filter</span>
+        {([{ id: 'all' as RankFilter, label: 'All ranks', color: 'var(--c-8b85ff)' },
            ...RANK_BUCKETS.slice(0, 4).map(b => ({ id: b.id as RankFilter, label: `Ranks ${b.label}`, color: b.color }))
         ]).map(p => {
           const active = rankFilter === p.id;
@@ -1263,9 +1263,9 @@ export default function KeywordsPanel({
               onClick={() => setRankFilter(p.id)}
               className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
               style={{
-                background:   active ? 'rgba(108,99,255,0.12)' : 'transparent',
-                borderColor:  active ? p.color                  : '#3A3A5C',
-                color:        active ? p.color                  : '#8888B0',
+                background:   active ? 'var(--ca-108-99-255-0_12)' : 'transparent',
+                borderColor:  active ? p.color                  : 'var(--c-3a3a5c)',
+                color:        active ? p.color                  : 'var(--c-8888b0)',
               }}
             >
               {p.id !== 'all' && (
@@ -1276,28 +1276,28 @@ export default function KeywordsPanel({
           );
         })}
         {rankFilter !== 'all' && (
-          <span className="ml-auto text-[9px]" style={{ color: '#4A4A70' }}>
+          <span className="ml-auto text-[9px]" style={{ color: 'var(--c-4a4a70)' }}>
             showing only {RANK_BUCKETS[{ p13: 0, p410: 1, p2: 2, p3p: 3 }[rankFilter]].label} within {FILTER_META[filter].label}
           </span>
         )}
         {rankFilter === 'all' && filter === 'competitorGap' && (
-          <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
+          <span className="ml-auto text-[9px]" style={{ color: 'var(--c-252545)' }}>
             from competitor · client not ranking
           </span>
         )}
       </div>
 
       {/* ── SERP feature coverage strip (v7.81) ── */}
-      <div className="flex items-center gap-3 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: '#111120', background: '#0A0A14' }}>
-        <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: '#252545' }}>SERP features</span>
-        <span className="text-[10px]" style={{ color: '#7070A0', fontVariantNumeric: 'tabular-nums' }}>
+      <div className="flex items-center gap-3 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: 'var(--c-111120)', background: 'var(--c-0a0a14)' }}>
+        <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: 'var(--c-252545)' }}>SERP features</span>
+        <span className="text-[10px]" style={{ color: 'var(--c-7070a0)', fontVariantNumeric: 'tabular-nums' }}>
           {serpCoverage.scanned.toLocaleString()} of {serpCoverage.total.toLocaleString()} keywords scanned
         </span>
         {/* coverage mini-bar */}
-        <div style={{ width: 90, height: 4, borderRadius: 2, background: '#14142A', overflow: 'hidden' }}>
+        <div style={{ width: 90, height: 4, borderRadius: 2, background: 'var(--c-14142a)', overflow: 'hidden' }}>
           <div style={{
             width: serpCoverage.total > 0 ? `${(serpCoverage.scanned / serpCoverage.total) * 100}%` : '0%',
-            height: '100%', background: '#6C63FF', borderRadius: 2, transition: 'width 0.4s ease',
+            height: '100%', background: 'var(--c-6c63ff)', borderRadius: 2, transition: 'width 0.4s ease',
           }} />
         </div>
         {serpCoverage.remaining > 0 ? (
@@ -1314,9 +1314,9 @@ export default function KeywordsPanel({
                 disabled={busy}
                 className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
                 style={{
-                  borderColor: busy ? '#3A3A5C' : 'rgba(108,99,255,0.5)',
-                  color:       busy ? '#55557A' : '#9B96FF',
-                  background:  busy ? 'transparent' : 'rgba(108,99,255,0.08)',
+                  borderColor: busy ? 'var(--c-3a3a5c)' : 'var(--ca-108-99-255-0_5)',
+                  color:       busy ? 'var(--c-55557a)' : 'var(--c-9b96ff)',
+                  background:  busy ? 'transparent' : 'var(--ca-108-99-255-0_08)',
                   cursor:      busy ? 'default' : 'pointer',
                 }}
                 title={useGlobal
@@ -1342,14 +1342,14 @@ export default function KeywordsPanel({
             );
           })()
         ) : (
-          <span className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'rgba(52,211,153,0.3)', background: 'rgba(52,211,153,0.08)', color: '#34D399' }}>
+          <span className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'var(--ca-52-211-153-0_3)', background: 'var(--ca-52-211-153-0_08)', color: 'var(--c-34d399)' }}>
             ✓ full coverage
           </span>
         )}
         {scanError && (
-          <span className="text-[10px]" style={{ color: '#f87171' }}>{scanError}</span>
+          <span className="text-[10px]" style={{ color: 'var(--c-f87171)' }}>{scanError}</span>
         )}
-        <span className="ml-auto text-[9px]" style={{ color: '#252545' }}>
+        <span className="ml-auto text-[9px]" style={{ color: 'var(--c-252545)' }}>
           feeds AIO / PAA / Video pills + SERP Features panel
         </span>
       </div>
@@ -1372,7 +1372,7 @@ export default function KeywordsPanel({
         )}
 
         <table className="w-full text-sm">
-          <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: '#0D0D18' }}>
+          <thead className="sticky top-0 z-10 border-b border-orbit-border" style={{ background: 'var(--c-0d0d18)' }}>
             <tr>
               <SortHeader label="Keyword"           col="keyword"    activeCol={sortCol} dir={sortDir} align="left"  width="30%" onClick={handleSort} />
               <SortHeader label="Competitor"        col="competitor" activeCol={sortCol} dir={sortDir} align="left"             onClick={handleSort} />
@@ -1465,7 +1465,7 @@ export default function KeywordsPanel({
           </tbody>
         </table>
         {visibleRows.length > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-orbit-border" style={{ background: '#0D0D18' }}>
+          <div className="flex items-center justify-between px-4 py-3 border-t border-orbit-border" style={{ background: 'var(--c-0d0d18)' }}>
             <span className="text-[11px] text-orbit-tertiary">
               Showing {(safePage * PAGE_SIZE + 1).toLocaleString()}–{Math.min((safePage + 1) * PAGE_SIZE, visibleRows.length).toLocaleString()} of {visibleRows.length.toLocaleString()}
             </span>
@@ -1481,7 +1481,7 @@ export default function KeywordsPanel({
       </div>
 
       {/* ── Footer legend ── */}
-      <div className="px-5 py-2.5 border-t border-orbit-border shrink-0 flex items-center gap-3 flex-wrap" style={{ background: '#0D0D18' }}>
+      <div className="px-5 py-2.5 border-t border-orbit-border shrink-0 flex items-center gap-3 flex-wrap" style={{ background: 'var(--c-0d0d18)' }}>
         <span className="text-[10px] text-orbit-tertiary">Semrush ranked + gap · SERP features from SerpAPI · custom rows via Add or CSV upload</span>
         <span className="text-[10px] bg-green-500/10 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded-full">✓ AIO = client cited</span>
         <span className="text-[10px] bg-orbit-muted border border-orbit-border text-orbit-tertiary px-1.5 py-0.5 rounded-full">AIO = feature exists, not cited</span>
@@ -1528,10 +1528,10 @@ interface KwCatAgg {
 // Category Breakdown's "Annual Demand" convention just below.
 
 const RANK_DIST_BANDS = [
-  { key: '1-3',   label: '1–3',     color: '#6C63FF' },
-  { key: '4-10',  label: '4–10',    color: '#06B6D4' },
-  { key: '11-20', label: 'Page 2',  color: '#F59E0B' },
-  { key: '21+',   label: 'Page 3+', color: '#EF4444' },
+  { key: '1-3',   label: '1–3',     color: 'var(--c-6c63ff)' },
+  { key: '4-10',  label: '4–10',    color: 'var(--c-06b6d4)' },
+  { key: '11-20', label: 'Page 2',  color: 'var(--c-f59e0b)' },
+  { key: '21+',   label: 'Page 3+', color: 'var(--c-ef4444)' },
 ] as const;
 
 function distTotal(dist: Record<string, number> | null): number {
@@ -1564,11 +1564,11 @@ function RankDistBars({
                 <span style={{ width: 7, height: 7, borderRadius: 2, background: b.color, display: 'inline-block' }} />
                 {b.label}
               </span>
-              <span style={{ fontSize: 11, color: '#8080B0', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                {c.toLocaleString()} kw{volMode && vols ? <> · {v > 0 ? fmtKwAnn(v) : '—'}</> : null} · <span style={{ color: '#C8C8F0' }}>{pct.toFixed(1)}%</span>
+              <span style={{ fontSize: 11, color: 'var(--c-8080b0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                {c.toLocaleString()} kw{volMode && vols ? <> · {v > 0 ? fmtKwAnn(v) : '—'}</> : null} · <span style={{ color: 'var(--c-c8c8f0)' }}>{pct.toFixed(1)}%</span>
               </span>
             </div>
-            <div style={{ height: 8, background: '#111120', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ height: 8, background: 'var(--c-111120)', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${barW}%`, background: b.color, borderRadius: 3, transition: 'width 0.3s ease' }} />
             </div>
           </div>
@@ -1630,15 +1630,15 @@ function RankDistributionSplit({
   const compP1Pct     = compMetTot > 0 ? (compP1 / compMetTot) * 100 : 0;
 
   const cardBase = {
-    background: '#0A0A14', border: '1px solid #1A1A30', borderRadius: 8, padding: '12px 14px',
+    background: 'var(--c-0a0a14)', border: '1px solid var(--c-1a1a30)', borderRadius: 8, padding: '12px 14px',
   };
   const p1Label = volMode ? 'Page 1 share (vol)' : 'Page 1 share';
 
   return (
-    <div style={{ borderBottom: '1px solid #111120', background: '#07070F', padding: '12px 14px 14px', flexShrink: 0 }}>
+    <div style={{ borderBottom: '1px solid var(--c-111120)', background: 'var(--c-07070f)', padding: '12px 14px 14px', flexShrink: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: '#9090C0', letterSpacing: '.04em' }}>Rank Distribution</span>
-        <span style={{ fontSize: 9, color: '#3A3A5C', letterSpacing: '.04em' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-9090c0)', letterSpacing: '.04em' }}>Rank Distribution</span>
+        <span style={{ fontSize: 9, color: 'var(--c-3a3a5c)', letterSpacing: '.04em' }}>
           {volMode ? 'kw · annual vol · % of footprint vol · shared scale' : 'kw · % of footprint · shared scale'}
         </span>
       </div>
@@ -1647,16 +1647,16 @@ function RankDistributionSplit({
         {/* Client card */}
         <div style={cardBase}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-            <i className="ti ti-user-search" style={{ fontSize: 13, color: '#8B85FF' }} aria-hidden="true" />
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#C8C8F0' }}>Client</span>
+            <i className="ti ti-user-search" style={{ fontSize: 13, color: 'var(--c-8b85ff)' }} aria-hidden="true" />
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-c8c8f0)' }}>Client</span>
           </div>
-          <div style={{ fontSize: 11, color: '#6060A0', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-6060a0)', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {extractBrand(clientDomain) || clientDomain || '—'} · {clientCount.toLocaleString()} kw{volMode ? <> · {fmtKwAnn(clientMetTot)} vol</> : null}
           </div>
           <RankDistBars counts={positionDist} vols={positionVol} volMode={volMode} sharedMax={sharedMax} />
-          <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid #14142A', display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 11, color: '#55557A' }}>{p1Label}</span>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#8B85FF', fontVariantNumeric: 'tabular-nums' }}>{clientP1Pct.toFixed(1)}%</span>
+          <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid var(--c-14142a)', display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 11, color: 'var(--c-55557a)' }}>{p1Label}</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-8b85ff)', fontVariantNumeric: 'tabular-nums' }}>{clientP1Pct.toFixed(1)}%</span>
           </div>
         </div>
 
@@ -1664,8 +1664,8 @@ function RankDistributionSplit({
         <div style={cardBase}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-              <i className="ti ti-users-group" style={{ fontSize: 13, color: '#F59E0B' }} aria-hidden="true" />
-              <span style={{ fontSize: 11, fontWeight: 600, color: '#C8C8F0' }}>Competitor</span>
+              <i className="ti ti-users-group" style={{ fontSize: 13, color: 'var(--c-f59e0b)' }} aria-hidden="true" />
+              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-c8c8f0)' }}>Competitor</span>
             </div>
             {compDomains.length > 1 && (
               <select
@@ -1673,17 +1673,17 @@ function RankDistributionSplit({
                 onChange={e => setSelDomain(e.target.value)}
                 title="Choose competitor"
                 style={{
-                  fontSize: 10, color: '#C8C8F0', background: '#111120', border: '1px solid #2A2A45',
+                  fontSize: 10, color: 'var(--c-c8c8f0)', background: 'var(--c-111120)', border: '1px solid var(--c-2a2a45)',
                   borderRadius: 5, padding: '2px 6px', maxWidth: 130, outline: 'none', cursor: 'pointer',
                 }}
               >
                 {compDomains.map(d => (
-                  <option key={d} value={d} style={{ background: '#0A0A14' }}>{extractBrand(d) || d}</option>
+                  <option key={d} value={d} style={{ background: 'var(--c-0a0a14)' }}>{extractBrand(d) || d}</option>
                 ))}
               </select>
             )}
           </div>
-          <div style={{ fontSize: 11, color: '#6060A0', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <div style={{ fontSize: 11, color: 'var(--c-6060a0)', marginBottom: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {hasComp
               ? <>{extractBrand(activeDomain) || activeDomain} · {compCount.toLocaleString()} kw{volMode && compVol ? <> · {fmtKwAnn(compMetTot)} vol</> : null}</>
               : <>competitor footprint</>}
@@ -1692,23 +1692,23 @@ function RankDistributionSplit({
           {hasComp ? (
             <>
               <RankDistBars counts={compDist!} vols={compVol} volMode={volMode && !!compVol} sharedMax={sharedMax} />
-              <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid #14142A', display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, color: '#55557A' }}>{volMode && compVol ? 'Page 1 share (vol)' : 'Page 1 share'}</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#F59E0B', fontVariantNumeric: 'tabular-nums' }}>{compP1Pct.toFixed(1)}%</span>
+              <div style={{ marginTop: 12, paddingTop: 9, borderTop: '1px solid var(--c-14142a)', display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 11, color: 'var(--c-55557a)' }}>{volMode && compVol ? 'Page 1 share (vol)' : 'Page 1 share'}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-f59e0b)', fontVariantNumeric: 'tabular-nums' }}>{compP1Pct.toFixed(1)}%</span>
               </div>
               {competitorFromFallback && (
-                <div style={{ marginTop: 7, fontSize: 9, color: '#3A3A5C', lineHeight: 1.4 }}>
+                <div style={{ marginTop: 7, fontSize: 9, color: 'var(--c-3a3a5c)', lineHeight: 1.4 }}>
                   computed from competitor keywords already on file · 0 Semrush units
                 </div>
               )}
             </>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 6, padding: '20px 8px', minHeight: 120 }}>
-              <i className="ti ti-refresh" style={{ fontSize: 18, color: '#3A3A5C' }} aria-hidden="true" />
-              <span style={{ fontSize: 11, color: '#6060A0', lineHeight: 1.5 }}>
+              <i className="ti ti-refresh" style={{ fontSize: 18, color: 'var(--c-3a3a5c)' }} aria-hidden="true" />
+              <span style={{ fontSize: 11, color: 'var(--c-6060a0)', lineHeight: 1.5 }}>
                 Re-run the analysis to populate the<br />competitor rank distribution.
               </span>
-              <span style={{ fontSize: 9, color: '#3A3A5C' }}>computed from data already pulled · 0 extra Semrush units</span>
+              <span style={{ fontSize: 9, color: 'var(--c-3a3a5c)' }}>computed from data already pulled · 0 extra Semrush units</span>
             </div>
           )}
         </div>
@@ -1773,18 +1773,18 @@ function KwCategorySection({
     list.map(cat => <KwCatRow key={cat.name} cat={cat} selIdx={selIdx} maxVol={maxVol} dimmed={dimmed} />);
 
   return (
-    <div style={{ borderBottom: '1px solid #111120', background: '#07070F' }}>
+    <div style={{ borderBottom: '1px solid var(--c-111120)', background: 'var(--c-07070f)' }}>
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px 6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: '11px', fontWeight: 600, color: '#9090C0', letterSpacing: '.04em' }}>Category Breakdown</span>
-          <span style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'rgba(108,99,255,0.1)', border: '1px solid rgba(108,99,255,0.25)', color: '#8080C0' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-9090c0)', letterSpacing: '.04em' }}>Category Breakdown</span>
+          <span style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'var(--ca-108-99-255-0_1)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-8080c0)' }}>
             {overallShare.toFixed(1)}% page 1 capture · {segmentLabel}
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {RANK_BUCKETS.map(b => (
-            <span key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '9px', color: b.id === 'unr' ? '#55557A' : b.color }}>
+            <span key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: '9px', color: b.id === 'unr' ? 'var(--c-55557a)' : b.color }}>
               <span style={{ width: 6, height: 6, borderRadius: 1, background: b.color, display: 'inline-block' }} />
               {b.label}
             </span>
@@ -1793,7 +1793,7 @@ function KwCategorySection({
       </div>
 
       {/* Table header */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '4px 20px 4px', borderBottom: '1px solid #0E0E1E' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '4px 20px 4px', borderBottom: '1px solid var(--c-0e0e1e)' }}>
         {[
           { label: 'Category',       align: 'left'   },
           { label: 'Annual Demand',  align: 'right'  },
@@ -1802,7 +1802,7 @@ function KwCategorySection({
           { label: 'Avg Pos',        align: 'right'  },
           { label: 'Keywords',       align: 'center' },
         ].map(h => (
-          <span key={h.label} style={{ fontSize: '9px', fontWeight: 500, color: '#404060', textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: h.align as any }}>
+          <span key={h.label} style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-404060)', textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: h.align as any }}>
             {h.label}
           </span>
         ))}
@@ -1811,15 +1811,15 @@ function KwCategorySection({
       {/* Procedure rows */}
       {procedureCats.length > 0 && (
         <div style={{ padding: '4px 20px 2px' }}>
-          <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Procedure Lines</span>
+          <span style={{ fontSize: '8px', fontWeight: 600, color: 'var(--c-383858)', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Procedure Lines</span>
         </div>
       )}
       {renderRows(procedureCats, false)}
 
       {/* Brand & navigation rows */}
       {navCats.length > 0 && (
-        <div style={{ padding: '6px 20px 2px', borderTop: '1px solid #0E0E1E', marginTop: 2 }}>
-          <span style={{ fontSize: '8px', fontWeight: 600, color: '#383858', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Brand &amp; Navigation</span>
+        <div style={{ padding: '6px 20px 2px', borderTop: '1px solid var(--c-0e0e1e)', marginTop: 2 }}>
+          <span style={{ fontSize: '8px', fontWeight: 600, color: 'var(--c-383858)', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Brand &amp; Navigation</span>
         </div>
       )}
       {renderRows(navCats, true)}
@@ -1828,16 +1828,16 @@ function KwCategorySection({
       {renderRows(otherCats, true)}
 
       {/* Overall rollup */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid #111120' }}>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8' }}>
-          Overall{selIdx !== null && <span style={{ fontWeight: 400, color: '#55557A' }}> · {RANK_BUCKETS[selIdx].label} only</span>}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid var(--c-111120)' }}>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-a0a0c8)' }}>
+          Overall{selIdx !== null && <span style={{ fontWeight: 400, color: 'var(--c-55557a)' }}> · {RANK_BUCKETS[selIdx].label} only</span>}
         </span>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#A0A0C8', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tVol > 0 ? fmtKwAnn(tVol) : '—'}</span>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: '#8B85FF', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tP1 > 0 ? fmtKwAnn(tP1) : '—'}</span>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: '#6C63FF', textAlign: 'right' }}>{tVol > 0 ? `${overallShare.toFixed(1)}%` : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-a0a0c8)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tVol > 0 ? fmtKwAnn(tVol) : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-8b85ff)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tP1 > 0 ? fmtKwAnn(tP1) : '—'}</span>
+        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-6c63ff)', textAlign: 'right' }}>{tVol > 0 ? `${overallShare.toFixed(1)}%` : '—'}</span>
         <span />
         <span style={{ textAlign: 'center' }}>
-          <span style={{ fontSize: '11px', fontWeight: 600, color: balanced ? '#34D399' : '#8080C0', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: balanced ? 'var(--c-34d399)' : 'var(--c-8080c0)', fontVariantNumeric: 'tabular-nums' }}>
             {tKw.toLocaleString()}{balanced ? ' ✓' : ''}
           </span>
         </span>
@@ -1882,14 +1882,14 @@ function KwCatRow({
         gridTemplateColumns: '1fr 105px 80px 52px 60px 100px',
         alignItems: 'center',
         padding: '5px 20px',
-        borderBottom: '1px solid rgba(255,255,255,0.03)',
+        borderBottom: '1px solid var(--ca-255-255-255-0_03)',
         opacity: dimmed ? 0.6 : 1,
       }}
     >
       {/* Category name + stacked rank-bucket bar */}
       <div style={{ minWidth: 0, paddingRight: 10 }}>
-        <span style={{ fontSize: '12px', color: dimmed ? '#9090B8' : '#D0D0F0', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
-        <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: '#111120', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
+        <span style={{ fontSize: '12px', color: dimmed ? 'var(--c-9090b8)' : 'var(--c-d0d0f0)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
+        <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: 'var(--c-111120)', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
           {cat.vol.map((v, i) => {
             if (cat.totVol === 0 || v === 0) return null;
             const dim = selIdx !== null && i !== selIdx;
@@ -1910,29 +1910,29 @@ function KwCatRow({
         </div>
       </div>
       {/* Annual demand (bucket-aware) */}
-      <span style={{ fontSize: '11px', color: '#7070A0', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: '11px', color: 'var(--c-7070a0)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
         {dispVol > 0 ? fmtKwAnn(dispVol) : '—'}
       </span>
       {/* Page 1 (bucket-aware) */}
-      <span style={{ fontSize: '11px', fontWeight: p1Disp > 0 ? 600 : 400, color: p1Disp > 0 ? (dimmed ? '#505070' : '#8B85FF') : '#333350', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: '11px', fontWeight: p1Disp > 0 ? 600 : 400, color: p1Disp > 0 ? (dimmed ? 'var(--c-505070)' : 'var(--c-8b85ff)') : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
         {p1Disp > 0 ? fmtKwAnn(p1Disp) : '—'}
       </span>
       {/* Share of category demand */}
-      <span style={{ fontSize: '12px', fontWeight: 600, color: share > 0 ? (dimmed ? '#505070' : '#E0E0FF') : '#333350', textAlign: 'right' }}>
+      <span style={{ fontSize: '12px', fontWeight: 600, color: share > 0 ? (dimmed ? 'var(--c-505070)' : 'var(--c-e0e0ff)') : 'var(--c-333350)', textAlign: 'right' }}>
         {share > 0 ? `${share.toFixed(1)}%` : '—'}
       </span>
       {/* Avg position */}
-      <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? '#333350' : avgPos <= 3 ? '#6C63FF' : avgPos <= 10 ? '#06B6D4' : avgPos <= 20 ? '#F59E0B' : '#EF4444' }}>
+      <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? 'var(--c-333350)' : avgPos <= 3 ? 'var(--c-6c63ff)' : avgPos <= 10 ? 'var(--c-06b6d4)' : avgPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)' }}>
         {avgPos !== null ? avgPos.toFixed(1) : '—'}
       </span>
       {/* Keyword count (bucket-aware) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
         {dispKw > 0 ? (
-          <span style={{ fontSize: '11px', fontWeight: 600, color: '#8080C0', background: '#0F0F1E', border: '1px solid #1E1E30', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-8080c0)', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e30)', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
             {dispKw.toLocaleString()}
           </span>
         ) : (
-          <span style={{ fontSize: '10px', color: '#282838' }}>—</span>
+          <span style={{ fontSize: '10px', color: 'var(--c-282838)' }}>—</span>
         )}
       </div>
     </div>

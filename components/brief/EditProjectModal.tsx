@@ -99,8 +99,8 @@ export default function EditProjectModal({
   function SectionLabel({ label }: { label: string }) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-        <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#4A4A72', textTransform: 'uppercase' }}>{label}</span>
-        <div style={{ flex: 1, height: '1px', background: '#1A1A30' }} />
+        <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: 'var(--c-4a4a72)', textTransform: 'uppercase' }}>{label}</span>
+        <div style={{ flex: 1, height: '1px', background: 'var(--c-1a1a30)' }} />
       </div>
     );
   }
@@ -113,29 +113,29 @@ export default function EditProjectModal({
         className="relative animate-fade-in"
         style={{
           width: '100%', maxWidth: '680px',
-          background: '#0C0C18',
-          border: '1px solid #1E1E35',
+          background: 'var(--c-0c0c18)',
+          border: '1px solid var(--c-1e1e35)',
           borderRadius: '14px',
           maxHeight: '90vh',
           display: 'flex', flexDirection: 'column',
-          boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+          boxShadow: '0 24px 80px var(--ca-0-0-0-0_7)',
         }}
       >
         {/* ── Modal header ── */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid #1A1A2E', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px 16px', borderBottom: '1px solid var(--c-1a1a2e)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'rgba(108,99,255,0.12)', border: '1px solid rgba(108,99,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <i className="ti ti-settings" style={{ fontSize: '14px', color: '#8B85FF' }} aria-hidden="true" />
+            <div style={{ width: '30px', height: '30px', borderRadius: '8px', background: 'var(--ca-108-99-255-0_12)', border: '1px solid var(--ca-108-99-255-0_25)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className="ti ti-settings" style={{ fontSize: '14px', color: 'var(--c-8b85ff)' }} aria-hidden="true" />
             </div>
             <div>
-              <h2 style={{ fontSize: '15px', fontWeight: 600, color: '#E8E8FF', margin: 0 }}>Edit Project</h2>
-              <p style={{ fontSize: '11px', color: '#555575', margin: '2px 0 0' }}>Project info &amp; market</p>
+              <h2 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--c-e8e8ff)', margin: 0 }}>Edit Project</h2>
+              <p style={{ fontSize: '11px', color: 'var(--c-555575)', margin: '2px 0 0' }}>Project info &amp; market</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#505070', padding: '4px' }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-505070)', padding: '4px' }}
           >
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -194,22 +194,22 @@ export default function EditProjectModal({
                 {MARKETS.map(m => <option key={m.code} value={m.code}>{m.flag} {m.label}</option>)}
               </select>
             </FieldWrap>
-            <p style={{ fontSize: '10px', color: '#505070', marginTop: '4px', lineHeight: 1.5 }}>
+            <p style={{ fontSize: '10px', color: 'var(--c-505070)', marginTop: '4px', lineHeight: 1.5 }}>
               Which country&apos;s Google to analyze — sets the Semrush keyword database and the country for SERP feature scans. Changing this requires a full re-analysis; existing data stays from the previous market until then.
             </p>
           </div>
 
           {/* v7.101: pointer to the new Competitors manager */}
-          <p style={{ fontSize: '10px', color: '#505070', margin: '0 0 22px', lineHeight: 1.5 }}>
-            Looking for competitors or keyword volume thresholds? They moved to the <strong style={{ color: '#F59E0B' }}>Competitors</strong> button in the top bar.
+          <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '0 0 22px', lineHeight: 1.5 }}>
+            Looking for competitors or keyword volume thresholds? They moved to the <strong style={{ color: 'var(--c-f59e0b)' }}>Competitors</strong> button in the top bar.
           </p>
 
           {/* Feedback messages */}
           {error && (
-            <p style={{ fontSize: '12px', color: '#F87171', marginBottom: '12px' }}>{error}</p>
+            <p style={{ fontSize: '12px', color: 'var(--c-f87171)', marginBottom: '12px' }}>{error}</p>
           )}
           {success && (
-            <p style={{ fontSize: '12px', color: '#4ADE80', marginBottom: '12px' }}>✓ Project saved successfully.</p>
+            <p style={{ fontSize: '12px', color: 'var(--c-4ade80)', marginBottom: '12px' }}>✓ Project saved successfully.</p>
           )}
 
           {/* ── Footer actions ── */}
@@ -220,8 +220,8 @@ export default function EditProjectModal({
               style={{
                 flex: 1, padding: '10px', borderRadius: '8px',
                 background: 'transparent',
-                border: '1px solid #2A2A48',
-                color: '#8080A8', fontSize: '13px', cursor: 'pointer',
+                border: '1px solid var(--c-2a2a48)',
+                color: 'var(--c-8080a8)', fontSize: '13px', cursor: 'pointer',
                 transition: 'all 0.12s',
               }}
             >
@@ -232,9 +232,9 @@ export default function EditProjectModal({
               disabled={saving || !clientName.trim() || !websiteUrl.trim()}
               style={{
                 flex: 2, padding: '10px', borderRadius: '8px',
-                background: saving ? '#3D3D8A' : '#6C63FF',
+                background: saving ? 'var(--c-3d3d8a)' : 'var(--c-6c63ff)',
                 border: 'none',
-                color: '#FFF', fontSize: '13px', fontWeight: 600,
+                color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600,
                 cursor: saving ? 'not-allowed' : 'pointer',
                 transition: 'background 0.12s',
                 opacity: (!clientName.trim() || !websiteUrl.trim()) ? 0.4 : 1,
@@ -253,11 +253,11 @@ export default function EditProjectModal({
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  background: '#111120',
-  border: '1px solid #1E1E35',
+  background: 'var(--c-111120)',
+  border: '1px solid var(--c-1e1e35)',
   borderRadius: '8px',
   padding: '9px 12px',
-  color: '#F0F0FF',
+  color: 'var(--c-f0f0ff)',
   fontSize: '13px',
   outline: 'none',
   boxSizing: 'border-box',
@@ -266,7 +266,7 @@ const inputStyle: React.CSSProperties = {
 function FieldWrap({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: '#7070A0', letterSpacing: '.05em', marginBottom: '6px', textTransform: 'uppercase' }}>
+      <label style={{ display: 'block', fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', letterSpacing: '.05em', marginBottom: '6px', textTransform: 'uppercase' }}>
         {label}
       </label>
       {children}

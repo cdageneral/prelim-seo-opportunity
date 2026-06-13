@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.185 — 2026-06-13 · Global dark/light theme toggle
+
+**What changed:** a dark/light switch now lives in the global header (both the project view and the dashboard). The app stays dark by default; flip the switch and the entire UI recolors to a light theme. Your choice is remembered per browser and applied before the page paints, so there's no flash on reload.
+
+**How light mode is built (and why it's defensible):** the app had ~1,800 color literals scattered inline across all 23 panels plus the Tailwind `orbit-*` palette. Every color is now a theme token, and the light value of each is computed by **HSL lightness inversion** — hue and saturation are preserved, only lightness flips (1 − L). Because inversion preserves the lightness *distance* between any two colors, the contrast and visual hierarchy already tuned for dark mode are mathematically preserved in light mode. Vivid mid-lightness accents (green/cyan/purple) are darkened just enough to stay legible on white. Google brand colors (the logo) are deliberately left fixed. The Tailwind `orbit-*` classes and the inline tokens share the *same* inversion, so both styling systems always agree for a given source color.
+
+**Mechanics:**
+- `tailwind.config.ts` — `orbit-*` colors now resolve to `rgb(var(--orbit-*) / <alpha-value>)`, so the classes follow the active theme while keeping opacity modifiers (e.g. `bg-orbit-card/50`) working.
+- `app/globals.css` — defines every theme token under `:root` (dark, default) and `:root[data-theme="light"]`; switching the attribute swaps all colors live, with a smooth transition.
+- `app/layout.tsx` — a tiny inline script sets `data-theme` from `localStorage('orbitiq-theme')` before first paint (no flash; default dark).
+- `components/ThemeToggle.tsx` — new client component (sun/moon switch) wired into the project header and the dashboard nav.
+- All inline `#hex` / `rgba()` / SVG `fill=`/`stroke=` literals across `app/` + `components/` converted to theme tokens (SVG attributes moved to `style` so `var()` resolves reliably).
+
+**Verification (own debugging agent):** TypeScript AST scan of all 52 `.tsx`/`.ts` files — **0 syntax errors, 0 duplicate attributes** (the only structural change, attribute→`style`, introduced none). `tsc` at **ES5** (project default target) clean on the new `ThemeToggle.tsx` and the rewritten `tailwind.config.ts`. Tailwind CLI compile confirms `orbit-*` utilities emit `rgb(var(--orbit-…) / α)` with opacity modifiers intact. Render `orbitiq-v7.185-RENDER.html` (SAMPLE, flagged) renders the real header + sidebar + panel using the exact shipped token values in both themes. No data/logic changed — this release is purely presentational.
+
 ## v7.184 — 2026-06-13 · Local Search — visible Scan setup, location priority, All toggles
 
 **What changed:** the scan controls were easy to miss and didn't explain themselves, and there was no defensible answer to "which locations get scanned when I cap below my total."
