@@ -20,7 +20,8 @@
  * COST (SerpAPI search credits): 1 discovery + (scannedKeywords × locationsUsed).
  * dryRun:true returns the plan + estimated credits without spending any.
  *
- * Body: { maxKeywords?: number (def 25, cap 60), maxLocations?: number (def 6, cap 12), dryRun?: boolean }
+ * Body: { maxSeeds?: number (def 8, cap 20), maxLocations?: number (def 25, cap 200), dryRun?: boolean }
+ *        v7.183: scan = service seeds × locations grid ("{service} {city}" map-pack per location).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -30,20 +31,21 @@ import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool } from '@/lib/utils/kwVolume';
-import { classifyLocalKeywords, buildClientRelevance } from '@/lib/local/detect';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
-  pickLocationSitemap, geoVocabFromLocations, type KmlLocation,
+  pickLocationSitemap, type KmlLocation,
 } from '@/lib/local/sitemap';
-import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan } from '@/lib/local/build';
+import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
+import { buildServiceSeeds, gridKeyword } from '@/lib/local/seeds';
 
 export const maxDuration = 300;
 
-const DEFAULT_MAX_KW   = 25;
-const MAX_MAX_KW       = 60;
-const DEFAULT_MAX_LOC  = 6;
-const MAX_MAX_LOC      = 12;
-const CONCURRENCY      = 4;
+// v7.183 location-grid model: scan = service seeds × locations.
+const DEFAULT_MAX_SEEDS = 8;
+const MAX_MAX_SEEDS     = 20;
+const DEFAULT_MAX_LOC   = 25;     // Wayne sets this per run; default covers the top metros
+const MAX_MAX_LOC       = 200;    // enough for every location of a large brand
+const CONCURRENCY       = 5;
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -178,8 +180,8 @@ export async function POST(
 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
-  const maxKeywords  = Math.min(Math.max(parseInt(body?.maxKeywords, 10)  || DEFAULT_MAX_KW,  1), MAX_MAX_KW);
-  const maxLocations = Math.min(Math.max(parseInt(body?.maxLocations, 10) || DEFAULT_MAX_LOC, 1), MAX_MAX_LOC);
+  const maxSeeds     = Math.min(Math.max(parseInt(body?.maxSeeds, 10)     || DEFAULT_MAX_SEEDS, 1), MAX_MAX_SEEDS);
+  const maxLocations = Math.min(Math.max(parseInt(body?.maxLocations, 10) || DEFAULT_MAX_LOC,   1), MAX_MAX_LOC);
   const dryRun = body?.dryRun === true;
 
   if (!process.env.SERP_API_KEY) {
@@ -223,18 +225,6 @@ export async function POST(
     competitorVolMin:  (project as any).kwVolThresholdCompetitor ?? 0,
   });
 
-  // client-relevance vocabulary (v7.179): category names + brand + the client's
-  // OWN ranking keywords (pool rows with no competitor = client-ranked), with geo
-  // words excluded. Keeps off-topic competitor-gap keywords out of the local
-  // universe (the "march madness locations" / "houston rockets" class).
-  const clientRankedKeywords: string[] = (pool as any[])
-    .filter(k => !k.competitor)
-    .map(k => String(k.keyword || ''));
-  const relevanceTokens = buildClientRelevance(
-    (analysis.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
-    clientDomain, manualCompetitorDomains, clientRankedKeywords,
-  );
-
   const isClientPlace = (p: MapsPlace): boolean => {
     const w = normalizeDomain(p.website);
     if (w && clientDomain && w === clientDomain) return true;
@@ -256,7 +246,7 @@ export async function POST(
         // NOTE: do NOT emit a progress event during a dryRun — the dryRun reply is
         // read with `r.json()` (single-object parse), so the stream must be exactly
         // ONE JSON line (v7.178 fix).
-        if (!dryRun) send({ type: 'progress', done: 0, total: maxKeywords, phase: 'Discovering locations from sitemap…' });
+        if (!dryRun) send({ type: 'progress', done: 0, total: 0, phase: 'Discovering locations from sitemap…' });
 
         let listings: LocalListing[] = [];
         let source = 'none';
@@ -287,32 +277,38 @@ export async function POST(
         const clientPlaceIds: Record<string, boolean> = {};
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
 
-        // geo vocab from discovered locations (city + state) → adapts the detector.
-        const geoVocab: string[] = geoVocabFromLocations(
-          listings.map(l => ({ name: l.title, address: l.address, city: l.city, state: '', zip: '', phone: l.phone, url: '', lat: l.lat, lng: l.lng })),
-        );
+        // ── 2. Service seeds (the grid's columns) ──────────────────────────────
+        // Brand + top service categories, with real volumes from the client pool.
+        const seeds: ScanSeed[] = buildServiceSeeds({
+          categories: (analysis.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+          brand:        brandQuery,
+          clientDomain,
+          pool:         pool as any,
+          maxSeeds,
+        });
 
-        // ── 2. Detect local keywords (geo-aware + relevance-gated) ─────────────
-        const allLocal = classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
-        const scanList = allLocal.slice(0, maxKeywords);
+        // Locations to scan: those with coordinates, capped per run (Wayne sets the cap).
+        const scannableLocs = listings.filter(l => l.lat != null && l.lng != null);
+        const geoLocs = scannableLocs.slice(0, maxLocations);
 
-        // Locations to scan from: discovered locations with coordinates (cap maxLocations).
-        const geoLocs = listings.filter(l => l.lat != null && l.lng != null).slice(0, maxLocations);
-        const locUnits = geoLocs.length > 0
-          ? geoLocs.map(l => ({ ll: `@${l.lat},${l.lng},13z`, placeId: l.placeId, city: l.city || l.title }))
-          : [{ ll: '', placeId: '', city: '' }]; // no coords → single national read
-
-        const estCalls = (source === 'maps' ? 1 : 0) + scanList.length * locUnits.length;
+        const potentialCells = seeds.length * scannableLocs.length;   // full grid (all scannable locations)
+        const cellsToScan    = seeds.length * geoLocs.length;
+        const estCalls = (source === 'maps' ? 1 : 0) + cellsToScan;
 
         if (dryRun) {
           send({
             type: 'done',
             dryRun: true,
             plan: {
-              localTotal:    allLocal.length,
-              willScan:      scanList.length,
-              locations:     listings.length,
-              locationsUsed: locUnits.length,
+              model:              'grid',
+              seeds:              seeds.length,
+              seedList:           seeds.map(s => s.term),
+              locations:          listings.length,
+              locationsScannable: scannableLocs.length,
+              locationsUsed:      geoLocs.length,
+              cells:              cellsToScan,
+              willScan:           cellsToScan,
+              potentialCells,
               estCalls,
               source,
             },
@@ -321,73 +317,70 @@ export async function POST(
           return;
         }
 
-        send({ type: 'start', total: scanList.length });
+        if (seeds.length === 0 || geoLocs.length === 0) {
+          send({ type: 'error', error: seeds.length === 0
+            ? 'No service seeds could be derived from the client. Check that the analysis has content categories or keywords.'
+            : 'No client locations with map coordinates were found to scan. The sitemap/KML may be missing coordinates.' });
+          controller.close();
+          return;
+        }
 
-        // ── 3. Map-pack scan per keyword across locations ─────────────────────
-        const out: LocalKeywordScan[] = new Array(scanList.length);
-        // Real GBP rating/reviews backfill: captured when the CLIENT appears in a
-        // pack at a given location's GPS — keyed by that location's city. No extra
-        // SerpAPI calls (it reuses the pack reads). Keep the highest review count.
+        // ── 3. Grid scan: every service × location ("{service} {city}") ────────
+        const flatCells: Array<{ seed: ScanSeed; loc: LocalListing }> = [];
+        for (let s = 0; s < seeds.length; s++) {
+          for (let l = 0; l < geoLocs.length; l++) flatCells.push({ seed: seeds[s], loc: geoLocs[l] });
+        }
+
+        send({ type: 'start', total: flatCells.length });
+
+        const out: LocalKeywordScan[] = new Array(flatCells.length);
+        // Real GBP rating/reviews backfill from packs the client appears in — keyed
+        // by city, no extra SerpAPI calls. Keep the highest review count seen.
         const gbpByCity: Record<string, { rating: number | null; reviews: number }> = {};
         let next = 0, done = 0;
         const worker = async (): Promise<void> => {
-          while (next < scanList.length) {
+          while (next < flatCells.length) {
             const i = next++;
-            const lk = scanList[i];
-            let bestRank: number | null = null;
-            let bestPack: LocalPackMember[] = [];
-            let bestCity = '';
-            let bestPlaceId: string | null = null;
-            let anyPack = false;
-            for (let u = 0; u < locUnits.length; u++) {
-              const unit = locUnits[u];
-              let res: { packPresent: boolean; places: MapsPlace[] };
-              try { res = await getLocalPack(lk.keyword, market, unit.ll || undefined); }
-              catch { res = { packPresent: false, places: [] }; }
-              callsUsed++;
-              if (res.packPresent) anyPack = true;
-              const members: LocalPackMember[] = res.places.map(p => ({
-                position: p.position,
-                title:    p.title,
-                placeId:  p.placeId,
-                rating:   p.rating,
-                reviews:  p.reviews,
-                isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
-              }));
-              const mine = members.find(m => m.isClient);
-              if (mine) {
-                // backfill this location's real GBP rating/reviews from the pack
-                const key = (unit.city || '').toLowerCase();
-                const prev = gbpByCity[key];
-                if (!prev || mine.reviews > prev.reviews) gbpByCity[key] = { rating: mine.rating, reviews: mine.reviews };
-              }
-              if (mine && (bestRank == null || mine.position < bestRank)) {
-                bestRank = mine.position;
-                bestPack = members;
-                bestCity = unit.city;
-                bestPlaceId = unit.placeId || null;
-              }
-              // keep a pack to show even if client absent (first one seen)
-              if (bestPack.length === 0 && members.length > 0) { bestPack = members; bestCity = unit.city; bestPlaceId = unit.placeId || null; }
+            const cell = flatCells[i];
+            const city = cell.loc.city || cell.loc.title;
+            const kw = gridKeyword(cell.seed.term, city);
+            const ll = `@${cell.loc.lat},${cell.loc.lng},13z`;
+            let res: { packPresent: boolean; places: MapsPlace[] };
+            try { res = await getLocalPack(kw, market, ll); }
+            catch { res = { packPresent: false, places: [] }; }
+            callsUsed++;
+            const members: LocalPackMember[] = res.places.map(p => ({
+              position: p.position, title: p.title, placeId: p.placeId,
+              rating: p.rating, reviews: p.reviews,
+              isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
+            }));
+            const mine = members.find(m => m.isClient);
+            if (mine) {
+              const key = city.toLowerCase();
+              const prev = gbpByCity[key];
+              if (!prev || mine.reviews > prev.reviews) gbpByCity[key] = { rating: mine.rating, reviews: mine.reviews };
             }
-            const leader = bestPack.find(m => m.position === 1);
+            const leader = members.find(m => m.position === 1);
             out[i] = {
-              keyword:          lk.keyword,
-              searchVolume:     lk.searchVolume,
-              intent:           lk.intent,
-              matchedTerm:      lk.matchedTerm,
-              packPresent:      anyPack,
-              clientBestRank:   bestRank,
-              bestLocationId:   bestPlaceId,
-              bestLocationCity: bestCity,
+              keyword:          kw,
+              searchVolume:     cell.seed.volume,
+              intent:           'geo-modifier',
+              matchedTerm:      city,
+              packPresent:      res.packPresent,
+              clientBestRank:   mine ? mine.position : null,
+              bestLocationId:   cell.loc.placeId || null,
+              bestLocationCity: city,
               packLeader:       leader ? leader.title : '',
-              pack:             bestPack,
+              pack:             members,
+              seed:             cell.seed.term,
+              seedKind:         cell.seed.kind,
+              city,
             };
             done++;
-            send({ type: 'progress', done, total: scanList.length, seed: lk.keyword });
+            send({ type: 'progress', done, total: flatCells.length, seed: kw });
           }
         };
-        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, scanList.length || 1) }, () => worker()));
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, flatCells.length || 1) }, () => worker()));
 
         // Apply the real GBP rating/reviews backfill to the matching locations.
         listings.forEach(l => {
@@ -409,17 +402,20 @@ export async function POST(
           locations:    listings,
           keywords:     out.filter(Boolean),
           builtAt:      new Date().toISOString(),
-          scannedCount: scanList.length,
-          localTotal:   allLocal.length,
+          scannedCount: flatCells.length,
+          localTotal:   potentialCells,
           callsUsed,
           source,
+          seeds,
+          model:        'grid',
+          locationsScanned: geoLocs.length,
         };
 
         await db.update(analyses)
           .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: localScan } as any })
           .where(eq(analyses.id, analysis.id));
 
-        console.log(`[OrbitIQ] Local scan stored: ${listings.length} listings, ${scanList.length} kw, ${callsUsed} credits`);
+        console.log(`[OrbitIQ] Local grid scan stored: ${listings.length} listings, ${seeds.length} seeds × ${geoLocs.length} locations = ${flatCells.length} cells, ${callsUsed} credits`);
         send({ type: 'done', localScan });
         controller.close();
       } catch (err) {

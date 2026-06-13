@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { buildKwPool } from '@/lib/utils/kwVolume';
-import { classifyLocalKeywords, localIntentCounts, buildClientRelevance, type LocalKeyword } from '@/lib/local/detect';
+import { buildServiceSeeds, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
   buildLocalOpportunities, buildLocalIndex,
@@ -86,7 +86,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [scanning, setScanning]     = useState(false);
   const [progress, setProgress]     = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
-  const [plan, setPlan]             = useState<{ localTotal: number; willScan: number; locations: number; locationsUsed: number; estCalls: number; source?: string } | null>(null);
+  const [plan, setPlan]             = useState<{ seeds: number; seedList?: string[]; cells: number; willScan: number; locations: number; locationsScannable: number; locationsUsed: number; potentialCells: number; estCalls: number; source?: string; model?: string } | null>(null);
+  // per-run caps (Wayne sets these each scan): how many locations & service seeds
+  const [capLoc, setCapLoc]         = useState<number>(25);
+  const [capSeeds, setCapSeeds]     = useState<number>(8);
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -100,14 +103,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
   const competitorDomains = useMemo(() => (competitors ?? []).map(c => c.domain).filter(Boolean), [competitors]);
 
-  // geo vocab from a prior scan's discovered locations (adapts detection)
-  const geoVocab = useMemo(() => {
-    const v: string[] = [];
-    (scan?.locations ?? []).forEach(l => { if (l.city) v.push(l.city.toLowerCase()); });
-    return v;
-  }, [scan]);
-
-  // canonical keyword pool (same as KeywordsPanel) — client + competitor sources
+  // canonical keyword pool (same as KeywordsPanel) — used to read real service volumes
   const pool = useMemo(() => {
     if (!analysis?.semrushSnapshot) return [] as any[];
     return buildKwPool({
@@ -120,27 +116,20 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     }) as any[];
   }, [analysis, dbKeywords, domain, competitorDomains]);
 
-  // client-relevance vocabulary (v7.179): categories + brand + the client's OWN
-  // ranking keywords (pool rows with no competitor), geo words excluded. Keeps
-  // off-topic competitor-gap keywords out of the local universe.
-  const relevanceTokens = useMemo(
-    () => buildClientRelevance(
-      (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
-      domain, competitorDomains,
-      pool.filter(k => !k.competitor).map(k => String(k.keyword || '')),
-    ),
-    [analysis, domain, competitorDomains, pool],
+  // v7.183 — service seeds: the client's brand + top service categories, scanned
+  // as "{service} {city}" across every location. Real volumes from the pool.
+  const seeds: ServiceSeed[] = useMemo(
+    () => buildServiceSeeds({
+      categories: (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+      brand:        projectName,
+      clientDomain: domain,
+      pool:         pool as any,
+      maxSeeds:     Math.max(1, capSeeds),
+    }),
+    [analysis, projectName, domain, pool, capSeeds],
   );
-
-  // client-side local keyword universe (real Semrush volume; no scan needed)
-  const local: LocalKeyword[] = useMemo(() => {
-    if (!analysis?.semrushSnapshot) return [];
-    return classifyLocalKeywords(pool as any, { geoVocab, relevanceTokens });
-  }, [analysis, pool, geoVocab, relevanceTokens]);
-
-  const counts = useMemo(() => localIntentCounts(local), [local]);
-  const clientLocalCount = useMemo(() => local.filter(l => !l.competitor && (l.position != null || !l.isGap)).length, [local]);
-  const compLocalCount = useMemo(() => local.filter(l => !!l.competitor || l.isGap).length, [local]);
+  const hasSeeds = seeds.length > 0;
+  const seedVolume = useMemo(() => seeds.reduce((s, x) => s + (x.volume || 0), 0), [seeds]);
 
   // rollups from a completed scan
   const roll = useMemo(() => {
@@ -160,20 +149,22 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     setScanError(null);
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: true }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: true, maxLocations: capLoc, maxSeeds: capSeeds }),
       });
       const d = await r.json();
       if (!r.ok) { setScanError(d?.error ?? `Could not estimate (${r.status})`); return; }
       setPlan(d.plan ?? null);
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
-  }, [projectId]);
+  }, [projectId, capLoc, capSeeds]);
 
   const runScan = useCallback(async () => {
     setPlan(null); setScanError(null); setScanning(true);
     setProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ maxLocations: capLoc, maxSeeds: capSeeds }),
       });
       if (!r.ok || !r.body) {
         let msg = `Scan failed (${r.status})`;
@@ -208,14 +199,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       }
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
     finally { setScanning(false); setProgress(null); }
-  }, [projectId, analysis]);
+  }, [projectId, analysis, capLoc, capSeeds]);
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const eta = progress && progress.total > 0 && progress.done > 0 && progress.done < progress.total
     ? fmtEta((progress.total - progress.done) * (((Date.now() - progress.startedAt) / 1000) / progress.done)) : '';
 
-  const hasLocal = local.length > 0;
+  const hasLocal = hasSeeds;
   const scanDate = scan?.builtAt ? new Date(scan.builtAt).toLocaleDateString() : null;
 
   // ── render ──
@@ -232,12 +223,24 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <p className="text-orbit-secondary text-sm mt-1">Map Pack · Google Reviews · Locations · Local Competition · Opportunities</p>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {scanDate && <span className="badge-soft">Last local scan: {scanDate}</span>}
-              {scan && <span className="badge-soft">{scan.scannedCount} kw · {scan.callsUsed} credits</span>}
+              {scanDate && <span className="badge-soft">Last scan: {scanDate}</span>}
+              {scan && <span className="badge-soft">{fmt(scan.scannedCount)} cells · {scan.callsUsed} credits</span>}
               {!scanning && (
-                <button onClick={() => (plan ? runScan() : requestPlan())} className="orbit-btn-sm">
-                  {scan ? '↻ Re-run local scan' : '▸ Run local scan'}
-                </button>
+                <>
+                  <label className="cap-ctl" title="How many locations to scan this run">
+                    Locations
+                    <input type="number" min={1} max={200} value={capLoc}
+                      onChange={e => setCapLoc(Math.max(1, Math.min(200, parseInt(e.target.value, 10) || 1)))} />
+                  </label>
+                  <label className="cap-ctl" title="How many service seeds (scanned per location)">
+                    Services
+                    <input type="number" min={1} max={20} value={capSeeds}
+                      onChange={e => setCapSeeds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))} />
+                  </label>
+                  <button onClick={() => (plan ? runScan() : requestPlan())} className="orbit-btn-sm">
+                    {scan ? '↻ Re-run scan' : '▸ Run local scan'}
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -248,7 +251,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
                 <span style={{ fontSize: 11, color: '#9090b8' }}>
                   <i className="ti ti-loader-2" style={{ marginRight: 5, color: '#22d3ee' }} />
-                  {(!progress || progress.total === 0) ? (progress?.seed || 'Starting — discovering listings…') : `Keyword ${progress.done} of ${progress.total}${progress.seed ? ` · ${progress.seed}` : ''}`}
+                  {(!progress || progress.total === 0) ? (progress?.seed || 'Starting — discovering locations…') : `Cell ${progress.done} of ${progress.total}${progress.seed ? ` · ${progress.seed}` : ''}`}
                 </span>
                 <span style={{ fontSize: 11, color: '#6A6A90', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{progress && progress.total > 0 ? `${pct}%` : ''}{eta ? ` · ${eta}` : ''}</span>
               </div>
@@ -264,11 +267,17 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
           {/* confirm plan */}
           {plan && !scanning && (
             <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid rgba(108,99,255,.3)', background: 'rgba(108,99,255,.06)', maxWidth: 560 }}>
-              <div style={{ fontSize: 12.5, color: '#cfccff', fontWeight: 600 }}>Ready to scan local map packs</div>
+              <div style={{ fontSize: 12.5, color: '#cfccff', fontWeight: 600 }}>Ready to scan the map-pack grid</div>
               <div style={{ fontSize: 11.5, color: '#9090b8', marginTop: 5 }}>
-                {plan.willScan} top local keyword{plan.willScan !== 1 ? 's' : ''} × {plan.locationsUsed} location{plan.locationsUsed !== 1 ? 's' : ''} · {plan.locations} location{plan.locations !== 1 ? 's' : ''} found ·
-                <b style={{ color: '#f6c061' }}> ~{plan.estCalls} SerpAPI credits</b>
+                <b style={{ color: '#cfccff' }}>{plan.seeds}</b> service{plan.seeds !== 1 ? 's' : ''} × <b style={{ color: '#cfccff' }}>{plan.locationsUsed}</b> of {plan.locationsScannable} location{plan.locationsScannable !== 1 ? 's' : ''} = <b style={{ color: '#cfccff' }}>{fmt(plan.cells)}</b> map-pack checks ·
+                <b style={{ color: '#f6c061' }}> ~{fmt(plan.estCalls)} SerpAPI credits</b>
               </div>
+              {plan.seedList && plan.seedList.length > 0 && (
+                <div style={{ fontSize: 10.5, color: '#9090b8', marginTop: 4 }}>Services: {plan.seedList.join(' · ')}</div>
+              )}
+              {plan.locationsUsed < plan.locationsScannable && (
+                <div style={{ fontSize: 10.5, color: '#f6c061', marginTop: 4 }}>Scanning the first {plan.locationsUsed} of {plan.locationsScannable} locations — raise the Locations cap to cover more (higher cost).</div>
+              )}
               {(plan.source === 'kml' || plan.source === 'sitemap-pages') && (
                 <div style={{ fontSize: 10.5, color: '#5ee68f', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
               )}
@@ -287,8 +296,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             <div style={{ width: 30, height: 30, borderRadius: 8, background: hasLocal ? 'rgba(6,182,212,.18)' : '#1a1a2a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📍</div>
             <div style={{ flex: 1, fontSize: 12.5, color: '#c8c8e0' }}>
               {hasLocal
-                ? <><b>Local intent detected — panel active.</b> <span className="text-orbit-secondary"> {fmt(counts.total)} of the keyword set carry local intent ({counts.nearMe} near-me · {counts.geo} geo-modifier · {counts.implicit} implicit-local), {fmt(counts.totalVolume)} searches/mo.</span></>
-                : <><b>No local intent detected.</b> <span className="text-orbit-secondary"> This client's keywords show no near-me, geo-modifier, or implicit-local signals — the Local panel stays dormant for non-local businesses.</span></>}
+                ? <><b>Local panel active — {seeds.length} service{seeds.length !== 1 ? 's' : ''} tracked.</b> <span className="text-orbit-secondary"> Each service is checked in the Google map pack as "{`{service} {city}`}" from every location's GPS{scan ? <> — last grid scanned {fmt(scan.scannedCount)} service×city cells across {fmt(scan.locationsScanned ?? 0)} locations.</> : <>. Run a scan to map your rank city by city.</>}</span></>
+                : <><b>No services detected yet.</b> <span className="text-orbit-secondary"> Couldn't derive service seeds from this client's categories/keywords — confirm the analysis ran with keyword data.</span></>}
             </div>
           </div>
         )}
@@ -324,7 +333,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
             {/* SUBNAV */}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-              <TabBtn id="kw"   cur={tab} set={setTab} icon="🔎" label="Local Keywords" cnt={counts.total} />
+              <TabBtn id="kw"   cur={tab} set={setTab} icon="🔎" label="Services" cnt={seeds.length} />
               <TabBtn id="loc"  cur={tab} set={setTab} icon="📌" label="Locations" cnt={scan ? clientLocations.length : undefined} />
               <TabBtn id="pack" cur={tab} set={setTab} icon="🗺️" label="Map Pack" cnt={scan ? scan.scannedCount : undefined} />
               <TabBtn id="rev"  cur={tab} set={setTab} icon="⭐" label="Reviews" cnt={scan ? clientLocations.length : undefined} />
@@ -332,40 +341,35 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <TabBtn id="opp"  cur={tab} set={setTab} icon="🎯" label="Opportunities" cnt={roll ? roll.opps.opportunities.length : undefined} />
             </div>
 
-            {/* ===== LOCAL KEYWORDS (no scan needed) ===== */}
+            {/* ===== SERVICES (the grid seeds — no scan needed) ===== */}
             {tab === 'kw' && (
               <div className="orbit-card p-5">
-                <div style={{ fontSize: 13, fontWeight: 700 }}>Local-intent keyword universe</div>
-                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>From the same client + competitor keyword pool as the Keywords panel, filtered to local intent and gated to the client's business vocabulary. Every row shows the literal term that classified it. Volume = real Semrush.</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 14 }}>
-                  <MiniStat k="LOCAL KEYWORDS" v={String(counts.total)} />
-                  <MiniStat k="LOCAL VOLUME / MO" v={fmt(counts.totalVolume)} color="#a9a3ff" />
-                  <MiniStat k="CLIENT-RANKED" v={String(clientLocalCount)} color="#5ee68f" />
-                  <MiniStat k="COMPETITOR GAP" v={String(compLocalCount)} color="#f6c061" />
-                  <MiniStat k="NEAR-ME" v={String(counts.nearMe)} color="#46cce0" />
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Services tracked per location</div>
+                <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Your brand + top service categories, derived from the client's own footprint. Each is scanned in the Google map pack as <b style={{ color: '#c8c8e0' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
+                  <MiniStat k="SERVICES" v={String(seeds.length)} />
+                  <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="#46cce0" />
+                  <MiniStat k="GRID CELLS" v={scan ? fmt(scan.scannedCount) : `${seeds.length} × locations`} color="#a9a3ff" />
+                  <MiniStat k="SERVICE VOL / MO" v={fmt(seedVolume)} color="#a9a3ff" />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
-                    <thead><tr><th>Keyword</th><th>Source</th><th>Intent</th><th>Matched term</th><th style={{ textAlign: 'right' }}>Volume</th><th>Client rank</th></tr></thead>
+                    <thead><tr><th>Service</th><th>Type</th><th style={{ textAlign: 'right' }}>Base volume / mo</th><th>Scanned as</th></tr></thead>
                     <tbody>
-                      {local.slice(0, 60).map((l, i) => {
-                        const isComp = !!l.competitor || l.isGap;
-                        return (
+                      {seeds.map((s, i) => (
                         <tr key={i}>
-                          <td style={{ fontWeight: 600 }}>{l.keyword}</td>
-                          <td>{isComp
-                            ? <span className="ipill" style={{ background: 'rgba(245,158,11,.13)', color: '#f6c061', border: '1px solid rgba(245,158,11,.28)' }} title={l.competitor || 'competitor gap'}>competitor</span>
-                            : <span className="ipill" style={{ background: 'rgba(34,197,94,.14)', color: '#5ee68f', border: '1px solid rgba(34,197,94,.28)' }}>client</span>}</td>
-                          <td><span className="ipill" style={intentClass(l.intent)}>{INTENT_LABEL[l.intent]}</span></td>
-                          <td style={{ color: '#8888AA' }}>"{l.matchedTerm}"</td>
-                          <td style={{ textAlign: 'right' }}>{fmt(l.searchVolume)}</td>
-                          <td>{l.position != null ? <span className="rchip" style={rankChip(l.position <= 3 ? 1 : 2)}>{l.position}</span> : <span style={{ color: '#555570' }}>—</span>}</td>
+                          <td style={{ fontWeight: 600 }}>{s.term}</td>
+                          <td>{s.kind === 'brand'
+                            ? <span className="ipill" style={{ background: 'rgba(108,99,255,.15)', color: '#a9a3ff', border: '1px solid rgba(108,99,255,.3)' }}>brand</span>
+                            : <span className="ipill" style={{ background: 'rgba(34,197,94,.14)', color: '#5ee68f', border: '1px solid rgba(34,197,94,.28)' }}>service</span>}</td>
+                          <td style={{ textAlign: 'right' }}>{s.volume > 0 ? fmt(s.volume) : <span style={{ color: '#555570' }}>—</span>}</td>
+                          <td style={{ color: '#8888AA' }}>"{s.term} {`{city}`}"</td>
                         </tr>
-                      );})}
+                      ))}
                     </tbody>
                   </table>
                 </div>
-                {local.length > 60 && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Showing 60 of {local.length}.</div>}
+                <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Adjust the <b>Services</b> and <b>Locations</b> caps at the top, then run a scan to see map-pack rank per city in the Map Pack tab.</div>
               </div>
             )}
 
@@ -419,26 +423,33 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                   <MiniCard k="PACKS FOUND" v={`${roll.pack.withPack}/${roll.pack.scanned}`} d="queries with a 3-pack" />
                 </div>
                 <div className="orbit-card p-5">
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Map-pack rank by keyword</div>
-                  <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Your position in Google's local 3-pack, checked from each location's GPS. Real SerpAPI local results.</div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Map-pack rank by service × location</div>
+                  <div style={{ fontSize: 11.5, color: '#8888AA', marginBottom: 12 }}>Your position in Google's local 3-pack for each service in each city, checked from that location's GPS. Real SerpAPI local results — {fmt(scan.scannedCount)} cells across {fmt(scan.locationsScanned ?? 0)} locations.</div>
                   <div style={{ overflowX: 'auto' }}>
                     <table className="local-tbl">
-                      <thead><tr><th>Keyword</th><th>Intent</th><th style={{ textAlign: 'right' }}>Volume</th><th>Pack?</th><th>Your rank</th><th>Pack leader</th><th>Nearest</th></tr></thead>
+                      <thead><tr><th>Service</th><th>City</th><th style={{ textAlign: 'right' }}>Base vol</th><th>Pack?</th><th>Your rank</th><th>Pack leader</th></tr></thead>
                       <tbody>
-                        {scan.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).map((s, i) => (
+                        {scan.keywords.slice().sort((a, b) => {
+                          // group by service (seed) then put your gaps (no rank) first within a service
+                          const sa = (a.seed || a.keyword), sb = (b.seed || b.keyword);
+                          if (sa !== sb) return sa < sb ? -1 : 1;
+                          const ra = a.clientBestRank == null ? 99 : a.clientBestRank;
+                          const rb = b.clientBestRank == null ? 99 : b.clientBestRank;
+                          return rb - ra;
+                        }).slice(0, 400).map((s, i) => (
                           <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{s.keyword}</td>
-                            <td><span className="ipill" style={intentClass(s.intent)}>{INTENT_LABEL[s.intent]}</span></td>
-                            <td style={{ textAlign: 'right' }}>{fmt(s.searchVolume)}</td>
+                            <td style={{ fontWeight: 600 }}>{s.seed || s.keyword}</td>
+                            <td style={{ color: '#c8c8e0' }}>{s.city || s.bestLocationCity || '—'}</td>
+                            <td style={{ textAlign: 'right' }}>{s.searchVolume > 0 ? fmt(s.searchVolume) : <span style={{ color: '#555570' }}>—</span>}</td>
                             <td>{s.packPresent ? '✓' : <span style={{ color: '#555570' }}>—</span>}</td>
                             <td><span className="rchip" style={rankChip(s.clientBestRank)}>{s.clientBestRank ?? '—'}</span></td>
                             <td style={{ color: '#8888AA' }}>{s.pack.find(m => m.isClient && m.position === s.clientBestRank) ? 'You' : (s.packLeader || '—')}</td>
-                            <td style={{ color: '#8888AA' }}>{s.bestLocationCity || '—'}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+                  {scan.keywords.length > 400 && <div style={{ fontSize: 11, color: '#8888AA', marginTop: 10 }}>Showing 400 of {fmt(scan.keywords.length)} cells.</div>}
                 </div>
               </>
             )}
@@ -553,6 +564,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
         .orbit-btn-sm{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid #3D3880;background:linear-gradient(180deg,rgba(108,99,255,.25),rgba(108,99,255,.12));color:#cfccff;cursor:pointer}
         .orbit-btn-sm:hover{border-color:#6C63FF}
         .orbit-btn-ghost{font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:9px;border:1px solid #1E1E2E;background:#13131d;color:#8888AA;cursor:pointer}
+        .cap-ctl{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#7777a0;background:#0F0F1E;border:1px solid #1E1E35;border-radius:8px;padding:4px 8px}
+        .cap-ctl input{width:46px;background:#07070e;border:1px solid #2a2a3d;border-radius:5px;color:#cfccff;font-size:12px;font-weight:700;padding:3px 5px;text-align:center}
         .local-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
         .local-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#555570;font-weight:600;padding:9px 10px;border-bottom:1px solid #1E1E2E}
         .local-tbl td{padding:10px;border-bottom:1px solid #15151f;vertical-align:middle}

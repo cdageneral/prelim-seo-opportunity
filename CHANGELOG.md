@@ -1,5 +1,29 @@
 # OrbitIQ Changelog
 
+## v7.183 — 2026-06-13 · Local Search — per-location map-pack GRID (services × cities)
+
+**What changed:** the Local panel now models local visibility the way a multi-location brand actually competes — a **grid of services × locations**, not a flat list of ~25 national keywords. For each of the client's core services (and brand), it checks the Google map-pack rank **from every location's GPS**, city by city ("liposuction austin", "sono bello dallas", …). With 138 locations and several services, that's hundreds of real, per-location rank checks instead of 25 aggregate ones.
+
+**Why:** the previous model surfaced only the local-intent subset of the Semrush footprint (≈30 national keywords) and ignored the per-location dimension entirely — so "Map Pack 25" was just a scan cap, unrelated to your locations. It couldn't answer "how does my Austin location rank for liposuction."
+
+**New pieces:**
+- **Service seeds** (`lib/local/seeds.ts`): brand + top service categories, derived from the client's own footprint, each with its real base Semrush volume. Geo/noise excluded; competitor-gap keywords never seed it (v7.182 fix carried through).
+- **Grid scan** (route): seeds × locations → "{service} {city}" map-pack check from each location's GPS; records your rank, the pack leader, and pack members per cell. Location ratings still backfill from the packs (no extra calls).
+- **Per-run caps**: set how many **Locations** and **Services** to scan right in the panel header; the dry-run shows the exact grid size ("N services × M locations = K checks") and credit estimate before spending. Sitemap discovery stays free.
+- **UI**: "Services" tab lists the seeds tracked per location (with how each is scanned); the **Map Pack** tab is now the grid — Service · City · base volume · in-pack? · your rank · leader.
+
+**Defensibility:** every cell is a real SerpAPI local-pack read from a real GPS; service volume is the base term's real Semrush figure (labeled as such — per-"{service} {city}" long-tail volumes aren't fabricated).
+
+**Verification (own debugging agent):** seeds harness **9/9** (brand-first, real volumes from pool, noise/junk excluded, gridKeyword); route grid harness **15/15** (dry-run grid estimate respects caps: 3 services × 2 locations = 6 checks; full scan produces seeds×locations cells each keyed "{seed} {city}", seeds persisted, rank from pack); `tsc` at ES5 clean on all new/changed files; jsdom render **9/9** (Services tab seeds, caps inputs, Map Pack grid with Service+City columns and rank chips). Render snapshot `orbitiq-v7.183-RENDER.html` (SAMPLE, flagged). NEW `lib/local/seeds.ts`; edited `lib/local/build.ts`, `app/api/projects/[id]/local-scan/route.ts`, `components/brief/LocalSearchSection.tsx`.
+
+## v7.182 — 2026-06-13 · Local Search — fix relevance-vocabulary poisoning (off-topic keywords)
+
+**What changed:** off-topic keywords ("delaware state football", "march madness locations", "houston rockets", "buffalo hump", "ponce city market atlanta") were still appearing as competitor keywords. Root cause found by simulating the gate against Sono Bello's real Semrush data: the client-relevance vocabulary is built from the client's own ranking keywords, selected with `competitor == null` — but a competitor **gap** keyword can carry `competitor = null` (the per-keyword competitor domain isn't always recorded) while still being flagged `isGap = true`. Those gap keywords were leaking into the *client* vocabulary, so their off-topic tokens ("football", "rockets", "market", "madness", "hump"…) ended up whitelisting other junk.
+
+**Fix:** the client vocabulary is now built from genuinely client-ranked rows only — `!competitor && !isGap` — in both the panel and the scan route. Competitor gap keywords no longer seed the client's business vocabulary, so off-topic terms have nothing to match against and are excluded.
+
+**Verification (own debugging agent):** simulated the gate on Sono Bello's **real** Semrush keyword set (280 keywords) — every junk term from both screenshots drops, real local keywords stay; route harness **7/7** (junk gap rows with `competitor=null, isGap=true` now drop; "sono bello near me", "liposuction houston" kept); `tsc` at ES5 clean; jsdom render **7/7**. Render snapshot `orbitiq-v7.182-RENDER.html` (SAMPLE, flagged). Files: `components/brief/LocalSearchSection.tsx`, `app/api/projects/[id]/local-scan/route.ts`.
+
 ## v7.181 — 2026-06-13 · Local Search — location badge on opportunity cards
 
 **What changed:** each Local Opportunity card now shows a prominent **📍 location badge** in its header, so you can see at a glance which location the opportunity targets (e.g. "📍 East Syracuse"). The location was previously only in the card's prose and a small chip at the bottom; the redundant lower "Location" chip was removed now that the badge carries it. Display-only change in `components/brief/LocalSearchSection.tsx` (no data/logic change).

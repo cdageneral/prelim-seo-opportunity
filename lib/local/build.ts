@@ -45,7 +45,7 @@ export interface LocalPackMember {
 
 export interface LocalKeywordScan {
   keyword:        string;
-  searchVolume:   number;        // real Semrush volume
+  searchVolume:   number;        // real Semrush volume (grid cell = base service term's volume)
   intent:         LocalIntent;
   matchedTerm:    string;
   packPresent:    boolean;       // Google showed a local 3-pack for this query
@@ -54,18 +54,33 @@ export interface LocalKeywordScan {
   bestLocationCity: string;
   packLeader:     string;        // title of the rank-1 place in the best pack
   pack:           LocalPackMember[]; // the 3-pack at the best location
+  // ── v7.183 location-grid cell fields (one row per service × city) ───────────
+  seed?:          string;        // the service/brand seed, e.g. "liposuction"
+  seedKind?:      'brand' | 'service';
+  city?:          string;        // the location city this cell was checked for
+}
+
+// v7.183: the service seeds scanned across every location (the grid's columns).
+export interface ScanSeed {
+  term:   string;
+  kind:   'brand' | 'service';
+  volume: number;                // base term's real Semrush volume
 }
 
 export interface LocalScan {
   domain:        string;
   market:        string;
   locations:     LocalListing[];
-  keywords:      LocalKeywordScan[];
+  keywords:      LocalKeywordScan[];   // grid cells (v7.183) — one per service × city
   builtAt:       string;
-  scannedCount:  number;         // number of local keywords actually scanned
-  localTotal:    number;         // total local-intent keywords detected (may exceed scannedCount)
+  scannedCount:  number;         // number of grid cells actually scanned
+  localTotal:    number;         // potential grid size (seeds × locations) before caps
   callsUsed:     number;         // SerpAPI calls spent (audit)
   source?:       string;         // how locations were discovered: 'kml' | 'sitemap-pages' | 'maps' | 'none' (v7.179)
+  // ── v7.183 grid metadata ────────────────────────────────────────────────────
+  seeds?:        ScanSeed[];     // service seeds tracked per location
+  model?:        string;         // 'grid' (v7.183) | undefined (legacy footprint-subset scan)
+  locationsScanned?: number;     // how many locations were covered in this scan
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
