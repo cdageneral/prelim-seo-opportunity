@@ -1507,14 +1507,231 @@ function fmtKwAnn(monthly: number): string {
 
 const RANK_SEL_INDEX: Record<Exclude<RankFilter, 'all'>, number> = { p13: 0, p410: 1, p2: 2, p3p: 3 };
 
-interface KwCatAgg {
-  name:   string;
-  type:   'procedure' | 'brand' | 'location';
-  kw:     number[];   // keyword counts per bucket [1–3, 4–10, P2, P3+, unranked]
-  vol:    number[];   // monthly volume per bucket
-  posSum: number[];   // sum of positions per bucket (ranked buckets only)
-  totKw:  number;
-  totVol: number;
+// ─── Category hierarchy (v7.191) ─────────────────────────────────────────────
+// Wayne: turn the flat Category Breakdown into a parent → child → … tree, derived
+// ENTIRELY from the keyword data (no hardcoded vertical word list — the v7.187
+// rule). Two independent, data-driven mechanisms, collapsed by default:
+//   • SUB-CATEGORIES (depth ↓): within a procedure category, recurring distinctive
+//     keyword modifiers (adjacent bigrams, then unigrams; each in ≥2 keywords)
+//     become child rows, RECURSIVELY, after stripping the parent's own head words.
+//     A "— general" remainder child holds the rest, so every node's totals are the
+//     EXACT sum of its descendants — nothing invented, nothing lost (defensible).
+//   • FAMILIES (depth ↑): procedure categories that share the SAME trailing product
+//     noun (e.g. "Personal Loans" + "Auto Loans" → "Loans") nest under a derived
+//     parent named from that shared noun. Categories with a unique noun stay top-
+//     level. A semantic super-group ("Lending") whose word is NOT in the data can
+//     only come from the LLM grouping pass — never fabricated here.
+// Brand/location categories stay flat (navigational, not product lines).
+
+const CAT_STOP = new Set<string>([
+  'the','and','for','with','without','your','you','our','their','this','that','these','those',
+  'what','whats','which','who','whom','how','why','when','where','are','was','were','being','been',
+  'does','did','can','could','will','would','should','about','near','vs','versus','its','get','getting',
+  'got','use','using','need','want','much','many','best','top','online','app','from','into','out',
+]);
+
+function catStem(w: string): string { return w.endsWith('s') ? w.slice(0, -1) : w; }
+
+function catModTokens(text: string, head: Set<string>): string[] {
+  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !head.has(w) && !/^\d+$/.test(w));
+}
+
+function catHeadTokens(name: string): Set<string> {
+  const h = new Set<string>();
+  for (const w of name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)) {
+    if (w.length >= 3) { h.add(w); h.add(catStem(w)); h.add(catStem(w) + 's'); }
+  }
+  return h;
+}
+
+function catTitle(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+interface SubSeed { key: string; label: string; tokens: string[]; gram: number; }
+
+// Recurring distinctive modifiers among a node's keywords. Bigrams (order-
+// independent) first, then unigrams; each must recur in ≥2 keywords.
+function deriveSubSeeds(kws: KeywordRow[], head: Set<string>): SubSeed[] {
+  const uni = new Map<string, number>();
+  const bi  = new Map<string, number>();
+  const biLabel = new Map<string, Map<string, number>>();
+  for (const k of kws) {
+    const toks = catModTokens(k.keyword, head);
+    const seen = new Set<string>();
+    for (const t of toks) if (!seen.has(t)) { uni.set(t, (uni.get(t) ?? 0) + 1); seen.add(t); }
+    for (let i = 0; i < toks.length - 1; i++) {
+      const a = toks[i], b = toks[i + 1];
+      if (a === b) continue;
+      const key  = [a, b].slice().sort().join(' ');
+      const orig = a + ' ' + b;
+      bi.set(key, (bi.get(key) ?? 0) + 1);
+      let lm = biLabel.get(key); if (!lm) { lm = new Map(); biLabel.set(key, lm); }
+      lm.set(orig, (lm.get(orig) ?? 0) + 1);
+    }
+  }
+  const MIN = 2;
+  const seeds: SubSeed[] = [];
+  for (const [key, n] of Array.from(bi.entries())) {
+    if (n < MIN) continue;
+    const parts = key.split(' ');
+    let label = key, lbest = -1;
+    for (const [orig, c] of Array.from((biLabel.get(key) ?? new Map<string, number>()).entries())) if (c > lbest) { lbest = c; label = orig; }
+    seeds.push({ key: 'b:' + key, label: catTitle(label), tokens: parts, gram: 2 });
+  }
+  for (const [u, n] of Array.from(uni.entries())) {
+    if (n < MIN) continue;
+    seeds.push({ key: 'u:' + u, label: catTitle(u), tokens: [u], gram: 1 });
+  }
+  return seeds.sort((a, b) => b.gram - a.gram);
+}
+
+// Best modifier seed for a keyword: multi-token seeds need ALL tokens present.
+function bestSubSeed(kw: KeywordRow, head: Set<string>, seeds: SubSeed[]): SubSeed | null {
+  const toks = new Set<string>(catModTokens(kw.keyword, head));
+  let best: SubSeed | null = null, bestScore = 0;
+  for (const s of seeds) {
+    let shared = 0;
+    for (const t of s.tokens) if (toks.has(t)) shared++;
+    if (shared === 0) continue;
+    if (s.tokens.length > 1 && shared < s.tokens.length) continue;
+    const score = shared * 10 + s.gram;
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  return best;
+}
+
+interface CatNode {
+  id:       string;
+  name:     string;
+  type:     'procedure' | 'brand' | 'location';
+  depth:    number;
+  derived:  boolean;          // true = family/sub we derived; false = real LLM category
+  kw:       number[];
+  vol:      number[];
+  posSum:   number[];
+  totKw:    number;
+  totVol:   number;
+  own:      KeywordRow[];      // keywords held directly here (leaf / remainder)
+  children: CatNode[];
+}
+
+function emptyCatNode(id: string, name: string, type: CatNode['type'], depth: number, derived: boolean): CatNode {
+  return { id, name, type, depth, derived, kw: [0,0,0,0,0], vol: [0,0,0,0,0], posSum: [0,0,0,0,0], totKw: 0, totVol: 0, own: [], children: [] };
+}
+
+// Roll a node's metrics up from its OWN keywords + all child aggregates. Because
+// every keyword lands in exactly one node, a parent's totals are the exact sum of
+// its descendants — the rollup is arithmetic, never modeled.
+function aggregateCatNode(node: CatNode): void {
+  node.kw = [0,0,0,0,0]; node.vol = [0,0,0,0,0]; node.posSum = [0,0,0,0,0]; node.totKw = 0; node.totVol = 0;
+  for (const r of node.own) {
+    const b = bucketIndexOf(r.position);
+    node.kw[b]++; node.vol[b] += r.searchVolume;
+    if (r.position !== null && b < 4) node.posSum[b] += r.position;
+    node.totKw++; node.totVol += r.searchVolume;
+  }
+  for (const c of node.children) {
+    for (let i = 0; i < 5; i++) { node.kw[i] += c.kw[i]; node.vol[i] += c.vol[i]; node.posSum[i] += c.posSum[i]; }
+    node.totKw += c.totKw; node.totVol += c.totVol;
+  }
+}
+
+const CAT_MAX_DEPTH = 5;   // safety cap; real trees are 2–3 deep
+const CAT_SPLIT_MIN = 6;   // only split a node holding at least this many keywords
+
+// Recursively split a category's keywords into data-derived sub-categories.
+function buildSubTree(id: string, name: string, type: CatNode['type'], kws: KeywordRow[], head: Set<string>, depth: number, derived: boolean): CatNode {
+  const node = emptyCatNode(id, name, type, depth, derived);
+  let seeds: SubSeed[] = [];
+  if (type === 'procedure' && kws.length >= CAT_SPLIT_MIN && depth < CAT_MAX_DEPTH) {
+    seeds = deriveSubSeeds(kws, head);
+  }
+  if (seeds.length === 0) { node.own = kws; aggregateCatNode(node); return node; }
+
+  const groups = new Map<string, KeywordRow[]>();
+  const remainder: KeywordRow[] = [];
+  for (const kw of kws) {
+    const s = bestSubSeed(kw, head, seeds);
+    if (!s) { remainder.push(kw); continue; }
+    let g = groups.get(s.key); if (!g) { g = []; groups.set(s.key, g); }
+    g.push(kw);
+  }
+  const seedByKey = new Map(seeds.map(s => [s.key, s] as const));
+  const childKeys = Array.from(groups.keys()).filter(k => (groups.get(k) as KeywordRow[]).length >= 2);
+  for (const k of Array.from(groups.keys())) if ((groups.get(k) as KeywordRow[]).length < 2) remainder.push(...(groups.get(k) as KeywordRow[]));
+
+  // a single child group covering everything is just the parent renamed → don't split
+  if (childKeys.length === 0 || (childKeys.length === 1 && remainder.length === 0)) {
+    node.own = kws; aggregateCatNode(node); return node;
+  }
+
+  for (const k of childKeys) {
+    const seed = seedByKey.get(k) as SubSeed;
+    const childHead = new Set(head);
+    for (const t of seed.tokens) { childHead.add(t); childHead.add(catStem(t)); childHead.add(catStem(t) + 's'); }
+    node.children.push(buildSubTree(id + '/' + k, seed.label, type, groups.get(k) as KeywordRow[], childHead, depth + 1, true));
+  }
+  if (remainder.length > 0) {
+    const rest = emptyCatNode(id + '/__rest__', `${name} — general`, type, depth + 1, true);
+    rest.own = remainder; aggregateCatNode(rest);
+    node.children.push(rest);
+  }
+  node.children.sort((a, b) => b.totVol - a.totVol);
+  aggregateCatNode(node);
+  return node;
+}
+
+function bumpDepth(node: CatNode, delta: number): void {
+  node.depth += delta;
+  for (const c of node.children) bumpDepth(c, delta);
+}
+
+// Group top-level procedure category nodes under a derived parent when ≥2 share the
+// same trailing product noun. Members nest (depth +1); unique-noun categories stay
+// top-level. Family name = the most common surface form of the shared noun.
+function buildFamilies(leaves: CatNode[]): CatNode[] {
+  const trailing = (name: string): { stem: string; surface: string } | null => {
+    const toks = name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+      .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !/^\d+$/.test(w));
+    if (!toks.length) return null;
+    const last = toks[toks.length - 1];
+    return { stem: catStem(last), surface: last };
+  };
+  const byStem = new Map<string, CatNode[]>();
+  const surfaceVote = new Map<string, Map<string, number>>();
+  for (const lf of leaves) {
+    const t = trailing(lf.name);
+    if (!t) continue;
+    let arr = byStem.get(t.stem); if (!arr) { arr = []; byStem.set(t.stem, arr); }
+    arr.push(lf);
+    let sv = surfaceVote.get(t.stem); if (!sv) { sv = new Map(); surfaceVote.set(t.stem, sv); }
+    sv.set(t.surface, (sv.get(t.surface) ?? 0) + 1);
+  }
+  const out: CatNode[] = [];
+  const used = new Set<CatNode>();
+  for (const [stem, members] of Array.from(byStem.entries())) {
+    if (members.length < 2) continue;
+    const sv = surfaceVote.get(stem) ?? new Map<string, number>();
+    let surface = stem, vbest = -1;
+    for (const [s, c] of Array.from(sv.entries())) if (c > vbest) { vbest = c; surface = s; }
+    const parent = emptyCatNode('fam:' + stem, catTitle(surface), 'procedure', 0, true);
+    for (const m of members) { used.add(m); bumpDepth(m, 1); parent.children.push(m); }
+    parent.children.sort((a, b) => b.totVol - a.totVol);
+    aggregateCatNode(parent);
+    out.push(parent);
+  }
+  for (const lf of leaves) if (!used.has(lf)) out.push(lf);
+  return out;
+}
+
+// Flatten a tree to the rows currently visible given the expanded set (DFS).
+function flattenVisible(nodes: CatNode[], expanded: Set<string>, acc: CatNode[]): void {
+  for (const n of nodes) {
+    acc.push(n);
+    if (n.children.length > 0 && expanded.has(n.id)) flattenVisible(n.children, expanded, acc);
+  }
 }
 
 // ─── Rank distribution split (v7.136) ───────────────────────────────────────
@@ -1730,38 +1947,54 @@ function KwCategorySection({
   segmentLabel:  string;
   expectedCount: number;
 }) {
-  // ── Aggregate segment rows into categories ──
-  const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
-  for (const c of cb.categories) typeByName[c.name] = c.type;
+  // ── Expand/collapse state — collapsed by default (parents only). Hooks run
+  //    unconditionally before any early return (rules of hooks). ──
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
-  const aggMap = new Map<string, KwCatAgg>();
-  for (const row of rows) {
-    const catName = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
-    let agg = aggMap.get(catName);
-    if (!agg) {
-      agg = { name: catName, type: typeByName[catName] ?? 'procedure', kw: [0,0,0,0,0], vol: [0,0,0,0,0], posSum: [0,0,0,0,0], totKw: 0, totVol: 0 };
-      aggMap.set(catName, agg);
+  // ── Build the hierarchy: a sub-category tree per LLM category, then nest
+  //    procedure categories into derived families. Every metric rolls up
+  //    arithmetically (aggregateCatNode) so a parent === the exact sum of its
+  //    descendants — defensible, nothing modeled. ──
+  const { procedureTop, navTop, otherTop } = useMemo(() => {
+    const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
+    for (const c of cb.categories) typeByName[c.name] = c.type;
+
+    const catRows = new Map<string, KeywordRow[]>();
+    for (const row of rows) {
+      const catName = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
+      let arr = catRows.get(catName); if (!arr) { arr = []; catRows.set(catName, arr); }
+      arr.push(row);
     }
-    const b = bucketIndexOf(row.position);
-    agg.kw[b]++;
-    agg.vol[b]  += row.searchVolume;
-    if (row.position !== null && b < 4) agg.posSum[b] += row.position;
-    agg.totKw++;
-    agg.totVol  += row.searchVolume;
-  }
-  if (aggMap.size === 0) return null;
 
-  const cats = Array.from(aggMap.values());
-  const procedureCats = cats.filter(c => c.name !== 'Other' && c.type === 'procedure').sort((a, b) => b.totVol - a.totVol);
-  const navCats       = cats.filter(c => c.name !== 'Other' && (c.type === 'brand' || c.type === 'location')).sort((a, b) => b.totVol - a.totVol);
-  const otherCats     = cats.filter(c => c.name === 'Other');
+    const procLeaves: CatNode[] = [], navLeaves: CatNode[] = [], otherLeaves: CatNode[] = [];
+    for (const [name, kws] of Array.from(catRows.entries())) {
+      const type: CatNode['type'] = name === 'Other' ? 'procedure' : (typeByName[name] ?? 'procedure');
+      const node = buildSubTree('cat:' + name, name, type, kws, catHeadTokens(name), 0, false);
+      if (name === 'Other') otherLeaves.push(node);
+      else if (type === 'brand' || type === 'location') navLeaves.push(node);
+      else procLeaves.push(node);
+    }
+    const proc = buildFamilies(procLeaves).sort((a, b) => b.totVol - a.totVol);
+    navLeaves.sort((a, b) => b.totVol - a.totVol);
+    return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
+  }, [rows, cb]);
 
-  const maxVol = Math.max(...cats.map(c => c.totVol), 1);
+  const allTop = procedureTop.concat(navTop, otherTop);
+  if (allTop.length === 0) return null;
+
+  const maxVol = Math.max(...allTop.map(n => n.totVol), 1);
   const selIdx = rankFilter === 'all' ? null : RANK_SEL_INDEX[rankFilter];
 
-  // ── Overall rollup (respects rank filter) ──
+  const toggle = (id: string) => setExpanded(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // ── Overall rollup (respects rank filter). Summing the TOP-LEVEL nodes counts
+  //    each keyword exactly once (families already sum their members). ──
   let tKw = 0, tVol = 0, tP1 = 0;
-  for (const c of cats) {
+  for (const c of allTop) {
     tKw  += selIdx === null ? c.totKw  : c.kw[selIdx];
     tVol += selIdx === null ? c.totVol : c.vol[selIdx];
     tP1  += selIdx === null ? c.vol[0] + c.vol[1] : (selIdx <= 1 ? c.vol[selIdx] : 0);
@@ -1769,8 +2002,23 @@ function KwCategorySection({
   const overallShare = tVol > 0 ? (tP1 / tVol) * 100 : 0;
   const balanced     = selIdx === null && tKw === expectedCount;
 
-  const renderRows = (list: KwCatAgg[], dimmed: boolean) =>
-    list.map(cat => <KwCatRow key={cat.name} cat={cat} selIdx={selIdx} maxVol={maxVol} dimmed={dimmed} />);
+  const renderTree = (nodes: CatNode[], dimmed: boolean) => {
+    const flat: CatNode[] = [];
+    flattenVisible(nodes, expanded, flat);
+    return flat.map(n => (
+      <KwCatRow
+        key={n.id}
+        cat={n}
+        depth={n.depth}
+        hasChildren={n.children.length > 0}
+        expanded={expanded.has(n.id)}
+        onToggle={() => toggle(n.id)}
+        selIdx={selIdx}
+        maxVol={maxVol}
+        dimmed={dimmed}
+      />
+    ));
+  };
 
   return (
     <div style={{ borderBottom: '1px solid var(--c-111120)', background: 'var(--c-07070f)' }}>
@@ -1808,24 +2056,24 @@ function KwCategorySection({
         ))}
       </div>
 
-      {/* Procedure rows */}
-      {procedureCats.length > 0 && (
+      {/* Procedure rows (tree: families → categories → sub-categories) */}
+      {procedureTop.length > 0 && (
         <div style={{ padding: '4px 20px 2px' }}>
           <span style={{ fontSize: '8px', fontWeight: 600, color: 'var(--c-383858)', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Procedure Lines</span>
         </div>
       )}
-      {renderRows(procedureCats, false)}
+      {renderTree(procedureTop, false)}
 
       {/* Brand & navigation rows */}
-      {navCats.length > 0 && (
+      {navTop.length > 0 && (
         <div style={{ padding: '6px 20px 2px', borderTop: '1px solid var(--c-0e0e1e)', marginTop: 2 }}>
           <span style={{ fontSize: '8px', fontWeight: 600, color: 'var(--c-383858)', letterSpacing: '.08em', textTransform: 'uppercase' as const }}>Brand &amp; Navigation</span>
         </div>
       )}
-      {renderRows(navCats, true)}
+      {renderTree(navTop, true)}
 
       {/* Other / uncategorized — always last */}
-      {renderRows(otherCats, true)}
+      {renderTree(otherTop, true)}
 
       {/* Overall rollup */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid var(--c-111120)' }}>
@@ -1851,11 +2099,19 @@ function KwCatRow({
   selIdx,
   maxVol,
   dimmed,
+  depth = 0,
+  hasChildren = false,
+  expanded = false,
+  onToggle,
 }: {
-  cat:    KwCatAgg;
-  selIdx: number | null;   // null = all ranks; 0–3 = selected bucket
-  maxVol: number;
-  dimmed: boolean;
+  cat:          CatNode;
+  selIdx:       number | null;   // null = all ranks; 0–3 = selected bucket
+  maxVol:       number;
+  dimmed:       boolean;
+  depth?:       number;          // v7.191: tree depth (0 = top-level parent/category)
+  hasChildren?: boolean;
+  expanded?:    boolean;
+  onToggle?:    () => void;
 }) {
   const p1Vol   = cat.vol[0] + cat.vol[1];
   const dispKw  = selIdx === null ? cat.totKw  : cat.kw[selIdx];
@@ -1875,8 +2131,18 @@ function KwCatRow({
   // Stacked bar: length = category demand vs largest category; segments = rank mix
   const barW = Math.max((cat.totVol / maxVol) * 100, 2);
 
+  // v7.191: tree presentation — top-level rows (depth 0) read as parents (bold);
+  // deeper derived sub-rows are lighter and indented. A disclosure chevron toggles
+  // children; the whole row is the click target when it has any.
+  const isParent  = depth === 0;
+  const nameWeight = isParent ? 600 : 400;
+  const nameColor  = dimmed
+    ? 'var(--c-9090b8)'
+    : isParent ? 'var(--c-e6e6ff)' : 'var(--c-b0b0d8)';
+
   return (
     <div
+      onClick={hasChildren ? onToggle : undefined}
       style={{
         display: 'grid',
         gridTemplateColumns: '1fr 105px 80px 52px 60px 100px',
@@ -1884,29 +2150,46 @@ function KwCatRow({
         padding: '5px 20px',
         borderBottom: '1px solid var(--ca-255-255-255-0_03)',
         opacity: dimmed ? 0.6 : 1,
+        cursor: hasChildren ? 'pointer' : 'default',
+        userSelect: hasChildren ? 'none' : 'auto',
+        background: depth > 0 ? 'var(--ca-255-255-255-0_02)' : 'transparent',
       }}
     >
-      {/* Category name + stacked rank-bucket bar */}
-      <div style={{ minWidth: 0, paddingRight: 10 }}>
-        <span style={{ fontSize: '12px', color: dimmed ? 'var(--c-9090b8)' : 'var(--c-d0d0f0)', display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cat.name}</span>
-        <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: 'var(--c-111120)', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
-          {cat.vol.map((v, i) => {
-            if (cat.totVol === 0 || v === 0) return null;
-            const dim = selIdx !== null && i !== selIdx;
-            return (
-              <span
-                key={i}
-                style={{
-                  display: 'inline-block',
-                  height: '100%',
-                  width: `${(v / cat.totVol) * 100}%`,
-                  background: RANK_BUCKETS[i].color,
-                  opacity: dim ? 0.15 : 1,
-                  transition: 'opacity 0.2s ease',
-                }}
-              />
-            );
-          })}
+      {/* Disclosure chevron + category name + stacked rank-bucket bar */}
+      <div style={{ minWidth: 0, paddingRight: 10, paddingLeft: depth * 16, display: 'flex', alignItems: 'center', gap: 6 }}>
+        {hasChildren ? (
+          <i
+            className="ti ti-chevron-right"
+            style={{ fontSize: 12, color: 'var(--c-6060a0)', flex: '0 0 auto', transition: 'transform .15s ease', transform: expanded ? 'rotate(90deg)' : 'none' }}
+            aria-hidden="true"
+          />
+        ) : (
+          <span style={{ width: 12, flex: '0 0 auto' }} aria-hidden="true" />
+        )}
+        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+          <span style={{ fontSize: '12px', fontWeight: nameWeight, color: nameColor, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {cat.name}
+            {hasChildren && <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.children.length}</span>}
+          </span>
+          <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: 'var(--c-111120)', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
+            {cat.vol.map((v, i) => {
+              if (cat.totVol === 0 || v === 0) return null;
+              const dim = selIdx !== null && i !== selIdx;
+              return (
+                <span
+                  key={i}
+                  style={{
+                    display: 'inline-block',
+                    height: '100%',
+                    width: `${(v / cat.totVol) * 100}%`,
+                    background: RANK_BUCKETS[i].color,
+                    opacity: dim ? 0.15 : 1,
+                    transition: 'opacity 0.2s ease',
+                  }}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
       {/* Annual demand (bucket-aware) */}
