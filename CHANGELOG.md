@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.189 — 2026-06-14 · Audience Journey — per-topic multi-step journeys (replaces hub-and-spoke)
+
+**The problem (Wayne):** in the journey map, all the good upper-level topics routed into one single page — and that page was an unrelated topic ("everything → Monitoring Precious Metals"). And a topic like *improve credit score* was a single node with nothing under it, instead of a real journey (what a good score is, why it matters, what moves it, how to improve it, the bureaus, etc.).
+
+**Root cause (two bugs):**
+1. *Footprint view:* the edge fallback `stageOrderEdges` linked **every** node in a funnel column to **every** node in the next column. When one theme happened to sit alone in the decision column, it collected an arrow from every other topic — the "everything → one page" mesh.
+2. *Deep-journey view:* the old model collapsed each topic to a single node and bridged them all into a product "core," so a topic had no internal depth.
+
+**What changed:**
+- **Each topic is now its own multi-step journey.** Sourced from the deep-journey demand universe, a topic's real Semrush keywords are split into ordered steps — **What it is → Why it matters → What affects it → How to do it → Compare options → Take action** — one node per occupied step, chained in journey order. *Improve credit score* now reads: *what is a good credit score* (60.5K) → *what is the max / considered good* → *how to improve / build / raise / fix* (368K) → *best credit score*.
+- **Topics only connect on real overlap.** A faint "related topic" link is drawn between two topics only when a single demand keyword carries both topic seeds (co-searched) or they share ≥2 distinctive tokens — never by arbitrary funnel position.
+- **New swimlane map** (`TopicJourneyMap`): one row per topic, steps flowing left→right, color-coded by coverage (existing / competitor / missing). Click a step to focus that topic's whole journey (plus directly-related topics) and dim the rest; Esc or empty-click to exit.
+- **Footprint view de-meshed.** Until the deep journey is built, themes are independent nodes linked only on real shared keywords — no more false convergence.
+
+**Defensibility:** every keyword and monthly volume is the real Semrush demand row; the step facet is a deterministic classification of each keyword's own wording (topic-name words are stripped first so topic vocabulary — e.g. "yield" in *high yield savings* — never acts as an intent signal). No number is invented. The Content panel's rollup (`lib/journey/contentPlan`) is intentionally left on the prior builder and is unchanged.
+
+**Verification (own debugging agent):** strict `tsc` on `graph.ts` + `contentPlan.ts` + `JourneySection.tsx` — **0 errors**. Facet classification tested on **real, live-pulled Semrush keywords** (credit-score + high-yield-savings) — **23/23**. `buildTopicJourneyGraph` structure test — **34/34**: per-topic step chains in journey order, max in-edge degree ≤ 1 (no convergence hub), data-derived cross-topic links, client-rank coverage overlay, real (un-invented) volumes, plan rollup. React-SSR render of the shipped `TopicJourneyMap` — **14/14**: topic rows, all six step headers, real volumes, dashed related links, node bodies, topic-scoped focus dimming. Render `orbitiq-v7.189-RENDER.html` built from the exact component using **real Semrush data for four sample topics** (coverage colors illustrative). Edited: `lib/journey/graph.ts`, `components/brief/JourneySection.tsx`. No files added or removed (88-file manifest unchanged).
+
 ## v7.188 — 2026-06-14 · Audience Journey — clickable cluster detail + connected-journey focus
 
 **What changed:** clicking a cluster in the journey now does two things it didn't before.

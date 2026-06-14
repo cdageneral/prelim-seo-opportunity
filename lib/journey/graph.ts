@@ -36,8 +36,16 @@ export type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retenti
 export type JourneyLane  = 'pre-product' | 'product';
 export type NodeState    = 'existing' | 'missing' | 'competitor';
 export type NodeKind     = 'problem' | 'core' | 'support';
-export type EdgeKind     = 'co' | 'bridge' | 'support';
+export type EdgeKind     = 'co' | 'bridge' | 'support' | 'next' | 'related';
 export type SupportType  = 'core' | 'cost' | 'recovery' | 'safety' | 'results' | 'comparison';
+
+// v7.189: a topic's journey is broken into ordered STEP FACETS — the distinct
+// stages a searcher moves through while learning ONE topic (e.g. for "improve
+// credit score": what it is → why it matters → what affects it → how to do it →
+// compare options → take action). Derived deterministically from each keyword's
+// own wording; the keywords + volumes are real Semrush, only the facet LABEL is a
+// fixed category. Used by buildTopicJourneyGraph (the per-topic journey view).
+export type StepFacet = 'understand' | 'why' | 'factors' | 'howto' | 'evaluate' | 'act';
 
 export interface DemandTopic {
   keyword:      string;
@@ -77,6 +85,13 @@ export interface GraphNode {
   keywords:    TopicKeyword[];          // v7.176: full member keyword list (for the keyword/content panels)
   competitor:  string | null;           // v7.176: competitor domain that ranks for this topic (gap rows)
   clientCovPct: number;                 // v7.176: % of topic demand the client already ranks for
+  // v7.189: per-topic journey-step model (only set by buildTopicJourneyGraph; the
+  // legacy buildJourneyGraph leaves these undefined, so the content-plan rollup is
+  // unaffected). A topic seed expands into one node per occupied step facet.
+  step?:       StepFacet;               // which journey step this node represents
+  stepOrder?:  number;                  // 0..N order of the step along the topic's journey
+  topicSeed?:  string;                  // the topic (seed) this step belongs to
+  topicLabel?: string;                  // display label of the parent topic
 }
 
 export interface TopicKeyword {
@@ -389,4 +404,257 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
     nodes, edges,
     plan: { total: nodes.length, optimize, build, preBuild, prodBuild },
   };
+}
+
+// ─── v7.189: per-topic journey model ────────────────────────────────────────────
+//
+// The legacy buildJourneyGraph (above) renders ONE node per theme and links themes
+// across funnel columns — which, when a funnel column has a single occupant, makes
+// every topic appear to "route" to that one page (Wayne's "everything → precious
+// metals" report). It also gives a topic no internal depth ("one topic, then
+// nothing").
+//
+// buildTopicJourneyGraph instead treats each TOPIC (seed) as its own multi-step
+// journey: the topic's demand keywords are split into ordered STEP facets, one node
+// per occupied step, chained in journey order ('next' edges). Topics only connect
+// to each other when there is REAL overlap — a demand keyword that carries both
+// topic seeds (co-surfaced), or ≥2 shared distinctive tokens ('related' edges).
+// Nothing is invented: every keyword + volume is the Semrush demand row; the step
+// facet is a deterministic classification of the keyword's own wording.
+
+export const STEP_ORDER: StepFacet[] = ['understand', 'why', 'factors', 'howto', 'evaluate', 'act'];
+
+export const STEP_LABEL: Record<StepFacet, string> = {
+  understand: 'What it is',
+  why:        'Why it matters',
+  factors:    'What affects it',
+  howto:      'How to do it',
+  evaluate:   'Compare options',
+  act:        'Take action',
+};
+
+const STEP_STAGE: Record<StepFacet, JourneyStage> = {
+  understand: 'awareness', why: 'awareness', factors: 'consideration',
+  howto: 'consideration', evaluate: 'consideration', act: 'decision',
+};
+
+// Signal sets, evaluated in this order. Order matters where phrases overlap:
+//  • 'howto' first so "how to lower fees" is an action step, not a cost step.
+//    NOTE: "how do " carries a TRAILING SPACE so it does NOT swallow "how does"
+//    (which belongs to 'factors' — how it works).
+//  • 'evaluate' before 'act' so "best … rates" reads as a comparison, while a bare
+//    "… rates" (no best/vs) is an action step.
+//  • 'factors' before 'understand' so "what is the max" / "what is considered good"
+//    (how-it-works) beat the generic "what is" definition bucket.
+const STEP_SIGNALS: Array<[StepFacet, string[]]> = [
+  ['howto', [
+    'how to', 'how do ', 'how do i', 'how do you', 'how can', 'how long', 'how fast',
+    'how quickly', 'ways to', 'steps to', 'step by step', 'guide to', 'improve', 'increase',
+    'raise', 'boost', 'build ', 'building', 'fix ', 'fixing', 'reduce', 'lower ', 'pay off',
+    'pay down', 'consolidate', 'set up', 'setup', 'start ', 'starting', 'grow ', 'tips',
+  ]],
+  ['evaluate', [
+    'best ', 'top ', ' vs ', 'versus', 'compare', 'comparison', 'alternative', 'alternatives',
+    'review', 'reviews', 'which ', 'rating', 'ratings', 'highest', 'types of', ' or ',
+  ]],
+  // NOTE: deliberately NO 'yield'/'apy'/'apr' here — those are TOPIC vocabulary
+  // (e.g. "high YIELD savings account"), not intent signals; including them tagged
+  // every keyword in such a topic as an action step. Topic-name words are also
+  // stripped per-topic in buildTopicJourneyGraph before classification.
+  ['act', [
+    'cost', 'price', 'pricing', 'fee', 'fees', ' rate', 'rates', 'interest rate',
+    'calculator', 'near me', 'apply', 'application', 'open an', 'open a ', 'sign up', 'sign-up',
+    'login', 'log in', 'get a ', 'get the ', 'how much', 'minimum', 'online', 'free ', 'promo',
+    'bonus', 'offer', 'deal', 'discount', 'coupon',
+  ]],
+  ['factors', [
+    'what affects', 'what affect', 'what lowers', 'what raises', 'what hurts', 'what helps',
+    'what builds', 'what causes', 'what determines', 'factor', 'factors', 'how does', 'how do they',
+    'requirement', 'rules', 'what is the max', 'maximum', 'what is considered', 'what constitutes',
+    'what counts', 'eligibility', 'qualify',
+  ]],
+  ['why', [
+    'why ', 'benefit', 'benefits', 'importance', 'important', 'worth it', 'worth ', 'reasons',
+    'pros and cons', 'advantages', 'should i', 'do i need', 'do you need', 'is it good',
+  ]],
+  ['understand', [
+    'what is', 'what are', 'whats ', "what's", 'meaning', 'definition', 'define', 'explained',
+    'explain', 'overview', 'basics', '101', 'mean ',
+  ]],
+];
+
+// Optional seedTokens: whole words belonging to the topic itself, blanked out
+// before matching so topic vocabulary (e.g. "yield", "savings") can never read as
+// an intent signal. A keyword left with no signal defaults to the discovery step.
+export function classifyStep(keyword: string, seedTokens?: Set<string>): StepFacet {
+  let kw = keyword.toLowerCase();
+  if (seedTokens && seedTokens.size) {
+    kw = kw.replace(/[a-z0-9]+/g, (w: string) => (seedTokens.has(w) ? ' ' : w));
+  }
+  for (let i = 0; i < STEP_SIGNALS.length; i++) {
+    const sigs = STEP_SIGNALS[i][1];
+    for (let j = 0; j < sigs.length; j++) if (kw.indexOf(sigs[j]) >= 0) return STEP_SIGNALS[i][0];
+  }
+  return 'understand';   // default: an unqualified / entity term is a discovery touch
+}
+
+/**
+ * Build the per-topic journey graph (v7.189). Same JourneyGraph shape as
+ * buildJourneyGraph so the detail panel + content-plan summary can consume it, but
+ * the nodes are TOPIC × STEP and the edges are within-topic 'next' chains plus
+ * data-derived cross-topic 'related' links.
+ */
+export function buildTopicJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}): JourneyGraph {
+  const clientRanked      = opts.clientRanked      ?? new Set<string>();
+  const competitorRanked  = opts.competitorRanked  ?? new Set<string>();
+  const urlByKeyword       = opts.urlByKeyword       ?? {};
+  const rankByKeyword      = opts.rankByKeyword      ?? {};
+  const competitorByKeyword = opts.competitorByKeyword ?? {};
+  const activeBucketId     = opts.activeBucketId     ?? null;
+  const seedBucket         = opts.seedBucket         ?? new Map<string, string>();
+  const themeLabels        = opts.themeLabels        ?? {};
+
+  const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
+  const topics = universe.topics ?? [];
+
+  // ── 1. Group every topic under its theme seed (the "topic") ──────────────────
+  interface TGrp { seed: string; lane: JourneyLane; topics: DemandTopic[]; }
+  const grps = new Map<string, TGrp>();
+  for (let ti = 0; ti < topics.length; ti++) {
+    const t = topics[ti];
+    const seedsLc = (t.seeds ?? []).map((s: string) => s.toLowerCase());
+    const isProduct = t.laneHint === 'product' || seedsLc.some((s: string) => productSet.has(s));
+    const lane: JourneyLane = isProduct ? 'product' : 'pre-product';
+    let themeSeed = '';
+    for (let i = 0; i < seedsLc.length; i++) {
+      if (productSet.has(seedsLc[i]) === isProduct) { themeSeed = seedsLc[i]; break; }
+    }
+    if (!themeSeed) themeSeed = seedsLc[0] ?? 'other';
+    if (activeBucketId) {
+      const b = seedBucket.get(themeSeed) ?? SHARED_BUCKET;
+      if (b !== activeBucketId) continue;
+    }
+    let g = grps.get(themeSeed);
+    if (!g) { g = { seed: themeSeed, lane, topics: [] }; grps.set(themeSeed, g); }
+    g.topics.push(t);
+  }
+
+  // ── 2. Per topic, one node per occupied STEP facet, chained in journey order ──
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+  const grpArr = Array.from(grps.values());
+  for (let gi = 0; gi < grpArr.length; gi++) {
+    const g = grpArr[gi];
+    const topicLabel = themeLabels[g.seed] ?? titleCase(g.seed);
+    // topic-name words are not intent signals — strip them before classifying.
+    const seedToks = new Set(tokensOf(g.seed).concat(tokensOf(topicLabel)));
+    const byFacet = new Map<StepFacet, DemandTopic[]>();
+    for (let i = 0; i < g.topics.length; i++) {
+      const f = classifyStep(g.topics[i].keyword, seedToks);
+      if (!byFacet.has(f)) byFacet.set(f, []);
+      byFacet.get(f)!.push(g.topics[i]);
+    }
+    const stepNodes: GraphNode[] = [];
+    for (let si = 0; si < STEP_ORDER.length; si++) {
+      const facet = STEP_ORDER[si];
+      const mem = byFacet.get(facet);
+      if (!mem || !mem.length) continue;
+      let totalVol = 0, clientVol = 0, compVol = 0;
+      let url: string | null = null;
+      const memberKws: TopicKeyword[] = [];
+      const compTally = new Map<string, number>();
+      const sorted = mem.slice().sort((a, b) => b.searchVolume - a.searchVolume);
+      for (let k = 0; k < mem.length; k++) {
+        const t = mem[k];
+        const kwLc = t.keyword.toLowerCase();
+        totalVol += t.searchVolume;
+        const isClient = clientRanked.has(kwLc);
+        const isComp = !isClient && competitorRanked.has(kwLc);
+        if (isClient) clientVol += t.searchVolume;
+        else if (isComp) compVol += t.searchVolume;
+        if (!url && urlByKeyword[kwLc]) url = urlByKeyword[kwLc];
+        const comp = competitorByKeyword[kwLc];
+        if (!isClient && comp) compTally.set(comp, (compTally.get(comp) ?? 0) + t.searchVolume);
+        memberKws.push({ keyword: t.keyword, searchVolume: t.searchVolume, state: isClient ? 'existing' : (isComp || comp ? 'competitor' : 'missing'), rank: (isClient && rankByKeyword[kwLc] != null) ? rankByKeyword[kwLc] : null });
+      }
+      memberKws.sort((a, b) => b.searchVolume - a.searchVolume);
+      const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 || compTally.size > 0 ? 'competitor' : 'missing');
+      let competitor: string | null = null;
+      if (state !== 'existing') {
+        let bestC = ''; let bestV = 0;
+        const ents = Array.from(compTally.entries());
+        for (let e = 0; e < ents.length; e++) if (ents[e][1] > bestV) { bestV = ents[e][1]; bestC = ents[e][0]; }
+        competitor = bestC || null;
+      }
+      const clientCovPct = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
+      const stage = STEP_STAGE[facet];
+      const node: GraphNode = {
+        id: 'tj::' + g.seed + '::' + facet,
+        name: topicLabel + ' — ' + STEP_LABEL[facet],
+        lane: g.lane, kind: g.lane === 'pre-product' ? 'problem' : 'core', supportType: 'core',
+        stage, col: STAGE_COL[stage], seed: g.seed, state,
+        action: state === 'existing' ? 'optimize' : 'build',
+        url, totalVol, clientVol, compVol,
+        kwCount: mem.length,
+        sampleKws: sorted.slice(0, 8).map((t) => t.keyword),
+        keywords: memberKws,
+        competitor, clientCovPct,
+        step: facet, stepOrder: si, topicSeed: g.seed, topicLabel,
+      };
+      stepNodes.push(node); nodes.push(node);
+    }
+    // within-topic journey: each occupied step → the next occupied step
+    for (let s = 0; s < stepNodes.length - 1; s++) {
+      edges.push({ from: stepNodes[s].id, to: stepNodes[s + 1].id, kind: 'next', why: 'next step' });
+    }
+  }
+
+  // ── 3. Cross-topic 'related' links (REAL overlap only) ───────────────────────
+  // Entry node of a topic = its earliest occupied step (where a cross-link lands).
+  const entryBySeed = new Map<string, GraphNode>();
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const cur = entryBySeed.get(n.seed);
+    if (!cur || (n.stepOrder ?? 0) < (cur.stepOrder ?? 0)) entryBySeed.set(n.seed, n);
+  }
+  const presentSeeds = new Set(grpArr.map((g) => g.seed));
+  const relSeen = new Set<string>();
+  // (a) co-surfaced: a single demand keyword carries two present topic seeds.
+  for (let ti = 0; ti < topics.length; ti++) {
+    const seedsLc = (topics[ti].seeds ?? []).map((s: string) => s.toLowerCase()).filter((s) => presentSeeds.has(s));
+    const uniq = Array.from(new Set(seedsLc));
+    for (let a = 0; a < uniq.length; a++) for (let b = a + 1; b < uniq.length; b++) {
+      const key = [uniq[a], uniq[b]].sort().join('|');
+      if (relSeen.has(key)) continue; relSeen.add(key);
+      const na = entryBySeed.get(uniq[a]); const nb = entryBySeed.get(uniq[b]);
+      if (na && nb && na.id !== nb.id) edges.push({ from: na.id, to: nb.id, kind: 'related', why: 'related topic' });
+    }
+  }
+  // (b) vocabulary fallback: ≥2 shared distinctive tokens (kept sparse, deduped).
+  const seedArr = Array.from(presentSeeds);
+  const toksBySeed = new Map<string, Set<string>>();
+  for (let i = 0; i < seedArr.length; i++) {
+    const lbl = themeLabels[seedArr[i]] ?? seedArr[i];
+    toksBySeed.set(seedArr[i], new Set(tokensOf(seedArr[i]).concat(tokensOf(lbl))));
+  }
+  for (let a = 0; a < seedArr.length; a++) for (let b = a + 1; b < seedArr.length; b++) {
+    const key = [seedArr[a], seedArr[b]].sort().join('|');
+    if (relSeen.has(key)) continue;
+    const ta = toksBySeed.get(seedArr[a])!; const tb = Array.from(toksBySeed.get(seedArr[b])!);
+    let sh = 0; for (let k = 0; k < tb.length; k++) if (ta.has(tb[k])) sh++;
+    if (sh >= 2) {
+      relSeen.add(key);
+      const na = entryBySeed.get(seedArr[a]); const nb = entryBySeed.get(seedArr[b]);
+      if (na && nb && na.id !== nb.id) edges.push({ from: na.id, to: nb.id, kind: 'related', why: 'related topic' });
+    }
+  }
+
+  // ── 4. Content-plan rollup (same shape as buildJourneyGraph) ─────────────────
+  let optimize = 0, build = 0, preBuild = 0, prodBuild = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].action === 'optimize') optimize++;
+    else { build++; if (nodes[i].lane === 'pre-product') preBuild++; else prodBuild++; }
+  }
+
+  return { nodes, edges, plan: { total: nodes.length, optimize, build, preBuild, prodBuild } };
 }

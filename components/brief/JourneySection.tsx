@@ -2,11 +2,14 @@
 
 import { useMemo, useState, useEffect, useRef, useLayoutEffect } from 'react';
 import {
-  buildJourneyGraph,
+  buildTopicJourneyGraph,
+  STEP_ORDER,
+  STEP_LABEL,
   SUPPORT_LABEL,
   type JourneyGraph as JGraph,
   type GraphNode as JGNode,
   type EdgeKind as JEdgeKind,
+  type StepFacet,
 } from '@/lib/journey/graph';
 
 // SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
@@ -685,6 +688,10 @@ function clusterToNode(c: ThemeCluster): JourneyNode {
 
 // Deterministic fallback when AI edge inference is unavailable: link every node
 // to all nodes in the next OCCUPIED funnel column (awareness → … → retention).
+// v7.189: RETIRED as the fallback — this all-to-all column mesh is exactly what
+// made every footprint topic appear to route into a lone decision-stage theme
+// ("everything → precious metals"). Kept only for reference; sharedThemeEdges is
+// the fallback now.
 function stageOrderEdges(nodes: JourneyNode[]): [string, string][] {
   const byCol: Record<number, JourneyNode[]> = {};
   nodes.forEach((n: JourneyNode) => { (byCol[n.col] = byCol[n.col] || []).push(n); });
@@ -694,6 +701,27 @@ function stageOrderEdges(nodes: JourneyNode[]): [string, string][] {
     for (const a of byCol[cols[i]]) for (const b of byCol[cols[i + 1]]) edges.push([a.id, b.id]);
   }
   return edges;
+}
+
+// v7.189: footprint themes are independent subjects. Link two themes ONLY on REAL
+// overlap — a shared member keyword, or ≥2 shared distinctive name tokens — so a
+// theme that happens to sit alone in the decision column no longer collects a false
+// arrow from every other topic. Most distinct themes end up with no edge, which is
+// correct: in footprint mode each topic is its own node until the deep journey is
+// built (which expands each into a full multi-step journey).
+function sharedThemeEdges(nodes: JourneyNode[]): [string, string][] {
+  const out: [string, string][] = [];
+  const kwsets = nodes.map((n: JourneyNode) => new Set(n.keywords.map((k: NodeKw) => k.keyword.toLowerCase())));
+  const toksets = nodes.map((n: JourneyNode) => new Set(tokensOf(n.name)));
+  for (let a = 0; a < nodes.length; a++) for (let b = a + 1; b < nodes.length; b++) {
+    let shareKw = false;
+    const ka = Array.from(kwsets[a]);
+    for (let i = 0; i < ka.length; i++) if (kwsets[b].has(ka[i])) { shareKw = true; break; }
+    let shTok = 0;
+    if (!shareKw) { const tb = Array.from(toksets[b]); for (let i = 0; i < tb.length; i++) if (toksets[a].has(tb[i])) shTok++; }
+    if (shareKw || shTok >= 2) out.push([nodes[a].id, nodes[b].id]);
+  }
+  return out;
 }
 
 function initialsOf(name: string): string {
@@ -1396,9 +1424,173 @@ export function buildConnector(g: ConnGeom): { line: string; brace: string; tipX
 // problem→solution), support (purple, core→supporting). Every node shows its
 // content action — optimise an existing page or build a net-new one.
 
-const EDGE_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)' };
-const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)' };
+const EDGE_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)', next: 'var(--c-22d3ee)', related: 'var(--c-a78bfa)' };
+const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)', next: 'var(--c-22d3ee)', related: 'var(--c-a78bfa)' };
 const CM_STAGES: JourneyStage[] = ['awareness', 'consideration', 'decision'];
+
+// ─── v7.189: Per-topic journey swimlanes ────────────────────────────────────────
+// One ROW per topic; that topic's steps flow left→right in journey order
+// (What it is → Why it matters → What affects it → How to do it → Compare → Act).
+// 'next' edges chain a topic's own steps; 'related' edges arc faintly between rows
+// only where two topics share real demand (co-searched keyword or shared tokens).
+// Selecting a node focuses its whole connected journey and dims the rest.
+const STEP_STAGE_TINT: Record<StepFacet, JourneyStage> = {
+  understand: 'awareness', why: 'awareness', factors: 'consideration',
+  howto: 'consideration', evaluate: 'consideration', act: 'decision',
+};
+
+export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
+  graph:      JGraph;
+  onSelect:   (n: JGNode) => void;
+  onClear:    () => void;
+  selectedId: string | null;
+}) {
+  const [hover, setHover] = useState<string | null>(null);
+  const LABEL_W = 168, NCOLS = STEP_ORDER.length, NODE_H = 50, ROW_GAP = 16, HEAD_H = 24, PAD = 12;
+  const W = 900;
+  const colW = (W - LABEL_W) / NCOLS;
+  const NODE_W = colW - 14;
+
+  const rows = useMemo(() => {
+    const bySeed = new Map<string, JGNode[]>();
+    for (const n of graph.nodes) {
+      const s = n.topicSeed ?? n.seed;
+      if (!bySeed.has(s)) bySeed.set(s, []);
+      bySeed.get(s)!.push(n);
+    }
+    const arr = Array.from(bySeed.entries()).map(([seed, ns]: [string, JGNode[]]) => {
+      const steps = ns.slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
+      const totalVol = steps.reduce((s: number, n: JGNode) => s + n.totalVol, 0);
+      const clientVol = steps.reduce((s: number, n: JGNode) => s + n.clientVol, 0);
+      const covPct = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
+      return { seed, label: steps[0]?.topicLabel ?? steps[0]?.name ?? seed, steps, totalVol, covPct };
+    });
+    arr.sort((a, b) => b.totalVol - a.totalVol);
+    return arr;
+  }, [graph]);
+
+  const pos = useMemo(() => {
+    const m: Record<string, { x: number; y: number }> = {};
+    rows.forEach((row, r: number) => {
+      const y = HEAD_H + PAD + r * (NODE_H + ROW_GAP) + NODE_H / 2;
+      row.steps.forEach((n: JGNode) => {
+        const so = Math.min(NCOLS - 1, Math.max(0, n.stepOrder ?? 0));
+        m[n.id] = { x: LABEL_W + so * colW + colW / 2, y };
+      });
+    });
+    return m;
+  }, [rows, colW]);
+  const H = HEAD_H + PAD * 2 + rows.length * (NODE_H + ROW_GAP);
+
+  if (!graph.nodes.length) {
+    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
+  }
+
+  const byId = new Map(graph.nodes.map((n: JGNode) => [n.id, n] as [string, JGNode]));
+  // Topic-scoped focus: the selected node's WHOLE topic journey (all its steps) plus
+  // any directly-related topics (1 hop along edges). Not the full transitive closure
+  // — otherwise one 'related' link would light up the entire map.
+  const focusOf = (id: string): Set<string> => {
+    const s = new Set<string>([id]);
+    const node = byId.get(id);
+    const seed = node?.topicSeed ?? node?.seed;
+    if (seed) for (const n of graph.nodes) if ((n.topicSeed ?? n.seed) === seed) s.add(n.id);
+    for (const e of graph.edges) { if (e.from === id) s.add(e.to); if (e.to === id) s.add(e.from); }
+    return s;
+  };
+  const neighbors = (id: string): Set<string> => {
+    const s = new Set<string>([id]);
+    for (const e of graph.edges) { if (e.from === id) s.add(e.to); if (e.to === id) s.add(e.from); }
+    return s;
+  };
+  const focus = selectedId ? focusOf(selectedId) : null;
+  const nb = hover ? neighbors(hover) : null;
+  const validEdges = graph.edges.filter((e) => pos[e.from] && pos[e.to]);
+
+  const edgePath = (a: { x: number; y: number }, b: { x: number; y: number }): string => {
+    if (Math.abs(a.y - b.y) < 1) return `M${a.x} ${a.y} L${b.x} ${b.y}`;   // same row: straight step link
+    const my = (a.y + b.y) / 2;                                            // cross-row: vertical S-curve
+    return `M${a.x} ${a.y} C ${a.x} ${my} ${b.x} ${my} ${b.x} ${b.y}`;
+  };
+
+  const ordered = graph.nodes.slice().sort((a, b) => {
+    const pri = (n: JGNode) => (n.id === hover ? 2 : n.id === selectedId ? 1 : 0);
+    return pri(a) - pri(b);
+  });
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', marginTop: 8 }} role="img"
+        onClick={() => { if (focus) onClear(); }}
+        aria-label="Per-topic journeys: each row is one topic broken into the steps a searcher moves through, left to right, with related topics linked where they share real demand.">
+        {/* stage tint bands behind the step columns */}
+        {STEP_ORDER.map((f: StepFacet, i: number) => (
+          <rect key={f} x={LABEL_W + i * colW} y={HEAD_H} width={colW} height={H - HEAD_H} fill={STAGE_COLORS[STEP_STAGE_TINT[f]].bg} opacity={0.6} />
+        ))}
+        {/* column dividers + step headers */}
+        {STEP_ORDER.map((f: StepFacet, i: number) => (
+          <g key={'h' + f}>
+            {i > 0 && <line x1={LABEL_W + i * colW} y1={HEAD_H} x2={LABEL_W + i * colW} y2={H} style={{ stroke: 'var(--c-13132a)' }} strokeWidth={1} />}
+            <text x={LABEL_W + i * colW + colW / 2} y={15} textAnchor="middle" fontSize={9.5} fontWeight={700} letterSpacing="0.03em" style={{ fill: STAGE_COLORS[STEP_STAGE_TINT[f]].text }} opacity={0.85}>{STEP_LABEL[f]}</text>
+          </g>
+        ))}
+        <line x1={LABEL_W} y1={HEAD_H} x2={LABEL_W} y2={H} style={{ stroke: 'var(--c-1a1a30)' }} strokeWidth={1} />
+        {/* edges */}
+        {validEdges.map((e, i: number) => {
+          const inFocus = focus ? (focus.has(e.from) && focus.has(e.to)) : null;
+          const inc = focus ? !!inFocus : (hover === e.from || hover === e.to);
+          const color = EDGE_COLOR[e.kind];
+          const isRel = e.kind === 'related';
+          const opacity = focus ? (inFocus ? 0.95 : 0.04) : (hover ? (inc ? 0.95 : 0.06) : (isRel ? 0.3 : 0.6));
+          return (
+            <path key={i} d={edgePath(pos[e.from], pos[e.to])} fill="none"
+              stroke={inc ? color : (isRel ? 'var(--c-33335c)' : 'var(--c-2a4a5a)')}
+              strokeWidth={inc ? 2.2 : 1.4}
+              strokeDasharray={isRel ? '5 4' : undefined}
+              opacity={opacity} />
+          );
+        })}
+        {/* row labels */}
+        {rows.map((row, r: number) => {
+          const y = HEAD_H + PAD + r * (NODE_H + ROW_GAP) + NODE_H / 2;
+          const dimRow = focus ? !row.steps.some((n: JGNode) => focus.has(n.id)) : false;
+          const label = row.label.length > 24 ? row.label.slice(0, 23) + '…' : row.label;
+          return (
+            <g key={'l' + row.seed} opacity={dimRow ? 0.3 : 1}>
+              <text x={8} y={y - 3} fontSize={11} fontWeight={700} style={{ fill: 'var(--c-d8d8f0)' }}><title>{row.label}</title>{label}</text>
+              <text x={8} y={y + 12} fontSize={8.5} fontFamily="monospace" style={{ fill: 'var(--c-6a6a90)' }}>{fmtVol(row.totalVol)}/mo · {row.covPct}% covered</text>
+            </g>
+          );
+        })}
+        {/* nodes */}
+        {ordered.map((n: JGNode) => {
+          const p = pos[n.id]; if (!p) return null;
+          const col = STATE_COLOR[n.state];
+          const scale = n.id === hover ? 1.06 : 1;
+          const sel = n.id === selectedId;
+          const dim = focus ? !focus.has(n.id) : (nb ? !nb.has(n.id) : false);
+          const stepLbl = n.step ? STEP_LABEL[n.step] : n.name;
+          return (
+            <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
+              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={(e) => { e.stopPropagation(); onSelect(n); }}>
+              <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
+                <rect width={NODE_W} height={NODE_H} rx={8} style={{ fill: 'var(--c-0d0d22)' }} stroke={col} strokeWidth={sel ? 2.3 : 1.4} />
+                <rect width={4} height={NODE_H} rx={2} fill={col} />
+                <text x={11} y={18} style={{ fill: 'var(--c-d8d8f0)' }} fontSize={10} fontWeight={600} fontFamily="inherit">{stepLbl}</text>
+                <text x={11} y={32} style={{ fill: 'var(--c-7a7aa0)' }} fontSize={8.5} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
+                <g transform={`translate(11 ${NODE_H - 14})`}>
+                  <rect width={n.action === 'optimize' ? 50 : 54} height={11} rx={3} fill={`${col}22`} stroke={`${col}55`} strokeWidth={0.8} />
+                  <text x={6} y={8.5} fill={col} fontSize={7.5} fontWeight={700} fontFamily="inherit">{n.action === 'optimize' ? 'Existing' : 'Build new'}</text>
+                </g>
+                <circle cx={NODE_W - 11} cy={NODE_H - 8} r={3.2} fill={col} />
+              </g>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 function ConnectedMap({ graph, onSelect, onClear, selectedId }: {
   graph:      JGraph;
@@ -1592,7 +1784,9 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
   const rels = graph.edges
     .filter((e) => e.from === node.id || e.to === node.id)
     .map((e) => { const otherId = e.from === node.id ? e.to : e.from; return { why: e.why, kind: e.kind, name: byId.get(otherId)?.name ?? otherId }; });
-  const kindLabel = node.kind === 'problem' ? 'Pre-product · problem' : node.kind === 'core' ? 'Product · core' : `Product · ${SUPPORT_LABEL[node.supportType].toLowerCase()}`;
+  const kindLabel = node.step
+    ? `Step ${(node.stepOrder ?? 0) + 1} · ${STEP_LABEL[node.step]}`
+    : (node.kind === 'problem' ? 'Pre-product · problem' : node.kind === 'core' ? 'Product · core' : `Product · ${SUPPORT_LABEL[node.supportType].toLowerCase()}`);
   const rec = node.action === 'optimize'
     ? 'You already rank here — keep this page linked into the paths above and refresh it.'
     : node.state === 'competitor'
@@ -1605,7 +1799,7 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
     <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{node.kind === 'core' ? '★ ' : ''}{node.name}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{(!node.step && node.kind === 'core') ? '★ ' : ''}{node.name}</div>
           <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 3, fontFamily: 'monospace' }}>
             {fmtVol(node.totalVol)} searches/mo · {node.kwCount} keywords · {kindLabel}
           </div>
@@ -1828,11 +2022,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     return m;
   }, [demandUniverse, problemAssignments]);
 
-  // v7.175: the connected journey graph — problem topics + product core/supporting,
-  // co-search / bridge / support edges, and a content action per node. One shared
-  // builder (lib/journey/graph) feeds both this panel and the Content panel.
+  // v7.189: the per-topic JOURNEY graph — each topic (seed) expands into ordered
+  // step nodes (what it is → why → what affects it → how to → compare → act) chained
+  // by 'next' edges, with cross-topic 'related' links only on real overlap. Replaces
+  // the v7.175 problem→core→support model that collapsed each topic to a single node
+  // and meshed topics into one hub. The Content panel still uses buildJourneyGraph
+  // (via lib/journey/contentPlan) — that rollup is intentionally left unchanged.
   const graph = useMemo<JGraph | null>(
-    () => demandMode ? buildJourneyGraph(demandUniverse as any, {
+    () => demandMode ? buildTopicJourneyGraph(demandUniverse as any, {
       clientRanked: footprint.client, competitorRanked: footprint.competitor,
       urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels,
     }) : null,
@@ -1956,8 +2153,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
   // Demand mode: within-theme stage edges (no cross-theme hub). Footprint mode:
   // AI-inferred edges with the stage-order fallback (v7.152 behavior).
-  const preEdges  = demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : stageOrderEdges(fpPreNodes));
-  const prodEdges = demand ? demand.prodEdges : (edges.product.length    ? edges.product    : stageOrderEdges(fpProdNodes));
+  const preEdges  = demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : sharedThemeEdges(fpPreNodes));
+  const prodEdges = demand ? demand.prodEdges : (edges.product.length    ? edges.product    : sharedThemeEdges(fpProdNodes));
 
   // v7.170: in demand mode the personas + a "Shared / all personas" bucket are an
   // exclusive partition of the journey topics, so they sum to the combined total.
@@ -2175,27 +2372,24 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
                   <i className="ti ti-sitemap" style={{ color: 'var(--c-22d3ee)', fontSize: 14 }} />
                 </div>
                 <div>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>Connected Journey</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>Topic Journeys</span>
                   <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 1 }}>
-                    Life problem &rarr; discovers the solution &rarr; decides. Every link is real search behavior.
+                    Each topic is its own journey &mdash; what it is &rarr; how to do it &rarr; how to choose &rarr; act. Every step&rsquo;s keywords + volumes are real Semrush demand.
                   </p>
                 </div>
               </div>
               {/* relationship legend */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
-                {([['co', 'Co-searched'], ['bridge', 'Discovers solution'], ['support', 'Needs to decide']] as [JEdgeKind, string][]).map(([k, l]: [JEdgeKind, string]) => (
+                {([['next', 'Journey step'], ['related', 'Related topic']] as [JEdgeKind, string][]).map(([k, l]: [JEdgeKind, string]) => (
                   <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--c-8080a0)' }}>
-                    <svg width={26} height={8}><line x1={0} y1={4} x2={26} y2={4} stroke={EDGE_COLOR[k]} strokeWidth={2.4} strokeDasharray={k === 'bridge' ? '4 3' : undefined} /></svg>{l}
+                    <svg width={26} height={8}><line x1={0} y1={4} x2={26} y2={4} stroke={EDGE_COLOR[k]} strokeWidth={2.4} strokeDasharray={k === 'related' ? '4 3' : undefined} /></svg>{l}
                   </span>
                 ))}
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, color: 'var(--c-8080a0)' }}>
-                  <span style={{ color: 'var(--c-a78bfa)' }}>&#9733;</span> Core product
-                </span>
               </div>
             </div>
             {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="var(--c-22d3ee)" />}
             {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
-            <ConnectedMap graph={graph} onSelect={setSelectedGraphNode} onClear={() => setSelectedGraphNode(null)} selectedId={selectedGraphNode?.id ?? null} />
+            <TopicJourneyMap graph={graph} onSelect={setSelectedGraphNode} onClear={() => setSelectedGraphNode(null)} selectedId={selectedGraphNode?.id ?? null} />
           </div>
 
           <div ref={detailRef}>
