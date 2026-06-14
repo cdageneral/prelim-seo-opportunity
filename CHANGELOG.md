@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.191 — 2026-06-14 · Theme Clusters — no duplicate categories, clean parent→sub-topic hierarchy
+
+**The problem (Wayne):** on a financial project the table read like it had duplicate categories. A theme that didn't split into products (e.g. *401k & Retirement Planning*) showed its own name as the "product" on every stage row, so the same name appeared three times. And the upstream breakdown emitted near-duplicate parents — *529 College Savings Plans* and *529 Education Savings Plans* — as two separate categories.
+
+**What changed:**
+- **Near-duplicate parent categories are merged.** In-panel, two categories collapse into one parent when their words match (identical, or sharing ≥2 distinctive tokens and differing by at most one — singularised, connectors dropped). The higher-volume name is kept and the keywords are combined. *529 College* + *529 Education* → one parent; exact-duplicate categories also collapse.
+- **A sub-topic is never its parent.** When a category has no real product split, its sub-topics are now labelled by **intent** (General / Informational / Commercial / Transactional) instead of repeating the category name.
+- **The table is grouped by parent.** Each parent category appears once as a header (with its topic count and volume); its sub-topics are nested beneath it. Sorting by any other column flattens the view and shows the parent as context on each row.
+
+**Verified (own debugging agent):** isolated strict `tsc` = 0 errors. Behavioral test through the real `buildThemeClusters` path on REAL Semrush data (US, 2026-06-14): the two 529 categories merged to one parent (higher-volume name kept), an exact-duplicate 401k category collapsed, no sub-topic equals its parent, non-split categories labelled by intent, distinct parents == cluster count, and Credit Cards still split into its products (8/8 assertions). Shipped `TopicTable` server-rendered in grouped mode → `orbitiq-v7.191-RENDER.html`. Only `components/brief/ThemeClustersPanel.tsx` changed; 88-file manifest unchanged.
+
+
 ## v7.190 — 2026-06-14 · Theme Clusters — sub-product topics + sortable table
 
 **The problem (Wayne):** the cluster panel was hard to read and far too shallow. A whole theme like *Credit Cards* showed only **2 topics** (Awareness · Informational and Decision · Transactional) — every card product (balance transfer, secured, cash back, travel, business, each of the client's actual card pages) was flattened into those same two intent buckets. The client's site has a separate page for each card, and each deserves to be its own topic cluster with its own upper-funnel and consideration stages.
