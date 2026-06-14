@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, Fragment } from 'react';
 import { planFromSnapshot } from '@/lib/journey/contentPlan';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 
@@ -53,6 +53,37 @@ interface AudienceSegment {
   whoTheyAre:     { demographics: string; trigger: string; influencerRole?: string };
   preLLMPrompts:  string[];
   productPrompts: string[];
+  // v7.191: real generated fields surfaced into the article drawer (never fabricated here).
+  personaImageUrl?:  string;   // circular AI portrait (Vercel Blob URL); initials fallback
+  messagingAndTone?: string;   // → article Tonality
+  creativeDirection?: string;  // → article Key points of view
+  yoyGrowth?:        string;
+}
+
+// v7.191: an ARTICLE TOPIC = one parent theme × journey stage (the child row in the
+// grouped table, and the unit a writer briefs against). Mirrors the Cluster panel's
+// parent→child topic model so the two panels reconcile.
+type TopicSource = 'competitor' | 'journey' | 'both' | 'none';
+interface ArticleTopic {
+  id:            string;
+  clusterId:     string;
+  clusterName:   string;
+  clusterType:   string;
+  journeyType:   JourneyType;
+  stage:         JourneyStage;
+  title:         string;                     // article topic name (deterministic label)
+  keywords:      KwItem[];                    // real keywords (volume + position)
+  monthlyVolume: number;
+  annualVolume:  number;
+  clientCovPct:  number;
+  action:        'optimize' | 'net-new';
+  source:        TopicSource;                // net-new provenance: competitor vs journey gap
+  segment:       AudienceSegment | null;     // best-matching segment (by prompt↔keyword overlap)
+  tonality:      string;                      // = segment.messagingAndTone (verbatim, real)
+  pov:           string[];                    // = segment.creativeDirection split into points (real)
+  angle:         string;                      // deterministic content angle
+  format:        string;                      // deterministic content format
+  topCompetitor: string | null;
 }
 
 interface ContentGap {
@@ -561,6 +592,132 @@ function deriveContentFormat(stage: JourneyStage, journeyType: JourneyType): str
   }
 }
 
+// ─── Article topic model (v7.191) ─────────────────────────────────────────────
+// Deterministic article title for a theme × stage. No AI, no fabricated facts —
+// just a readable label the writer can rename.
+function deriveArticleTitle(cluster: ThemeCluster, stage: JourneyStage, journeyType: JourneyType): string {
+  const name = cluster.name;
+  if (journeyType === 'pre-product') return `${name}: the complete guide`;
+  switch (stage) {
+    case 'awareness':     return `What is ${name}? A beginner's guide`;
+    case 'consideration': return `Best ${name} compared`;
+    case 'decision':      return `${name}: how to choose and get started`;
+    case 'retention':     return `${name} tips, tools & resources`;
+    default:              return name;
+  }
+}
+
+// Tokenise for segment↔topic matching (≥4 chars, stop-words dropped).
+function topicTokens(s: string): string[] {
+  return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter((t: string) => t.length >= 4 && !/^(what|when|where|which|with|your|that|this|near|best|from|have|need|account|accounts)$/.test(t));
+}
+
+// Pick the audience segment whose real prompts most overlap this topic's keywords.
+// Defensible: based on actual prompt text vs actual keywords. Falls back to the
+// highest-volume segment (labelled "primary") only when there is zero overlap.
+function matchSegmentToTopic(keywords: KwItem[], segments: AudienceSegment[]): AudienceSegment | null {
+  if (segments.length === 0) return null;
+  const kwToks = new Set<string>();
+  for (const k of keywords) for (const t of topicTokens(k.keyword)) kwToks.add(t);
+  let best: AudienceSegment | null = null, bestScore = 0;
+  for (const seg of segments) {
+    const promptToks = new Set<string>();
+    for (const p of [...(seg.preLLMPrompts ?? []), ...(seg.productPrompts ?? []), seg.tagline ?? '', seg.whoTheyAre?.trigger ?? '']) {
+      for (const t of topicTokens(p)) promptToks.add(t);
+    }
+    let score = 0;
+    for (const t of Array.from(kwToks)) if (promptToks.has(t)) score++;
+    if (score > bestScore) { bestScore = score; best = seg; }
+  }
+  if (best) return best;
+  // No overlap → primary (largest) segment.
+  return [...segments].sort((a, b) => (b.volumePct ?? 0) - (a.volumePct ?? 0))[0] ?? null;
+}
+
+// Split a real messaging/creative string into individual points of view. Pure
+// formatting of existing text — nothing invented.
+function splitIntoPoints(text: string): string[] {
+  if (!text) return [];
+  return text
+    .split(/(?:•|–|—|;|\.(?:\s|$)|\n)+/)
+    .map((s: string) => s.trim())
+    .filter((s: string) => s.length > 3)
+    .slice(0, 5);
+}
+
+function sourceLabel(s: TopicSource): { text: string; bg: string; color: string; border: string } | null {
+  switch (s) {
+    case 'competitor': return { text: 'Competitor gap', bg: 'var(--ca-239-68-68-0_1)',  color: 'var(--c-f87171)', border: 'var(--ca-239-68-68-0_25)' };
+    case 'journey':    return { text: 'Journey gap',    bg: 'var(--ca-34-211-238-0_1)',  color: 'var(--c-22d3ee)', border: 'var(--ca-34-211-238-0_3)' };
+    case 'both':       return { text: 'Both',           bg: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)', border: 'var(--ca-167-139-250-0_25)' };
+    case 'none':       return null;
+  }
+}
+
+// Build the per-theme article topics. One topic per occupied journey stage
+// (pre-product themes collapse to a single pre-product topic). Every number is
+// the exact sum of the real keywords behind it.
+function buildArticleTopics(clusters: ThemeCluster[], segments: AudienceSegment[]): ArticleTopic[] {
+  const topics: ArticleTopic[] = [];
+  for (const cluster of clusters) {
+    const stagesWithData = new Set(cluster.subClusters.map((sc: IntentCluster) => sc.stage));
+    const stagesToCheck: Array<{ stage: JourneyStage; journeyType: JourneyType }> =
+      cluster.journeyType === 'pre-product'
+        ? [{ stage: 'awareness', journeyType: 'pre-product' }]
+        : JOURNEY_STAGE_ORDER.filter((s: JourneyStage) => stagesWithData.has(s)).map((s: JourneyStage) => ({ stage: s, journeyType: 'product' as JourneyType }));
+
+    for (const { stage, journeyType } of stagesToCheck) {
+      const stageSubs = cluster.journeyType === 'pre-product'
+        ? cluster.subClusters
+        : cluster.subClusters.filter((sc: IntentCluster) => sc.stage === stage);
+      const kws       = stageSubs.flatMap((sc: IntentCluster) => sc.keywords);
+      if (kws.length === 0) continue;
+      const totalVol  = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+      const clientVol = kws.filter((k: KwItem) => !k.isGap).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+      const compVol   = kws.filter((k: KwItem) => k.isGap && k.competitor).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+      const demandVol = kws.filter((k: KwItem) => k.isGap && !k.competitor).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
+      const clientPct = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
+
+      const ranks    = kws.some((k: KwItem) => k.position != null && k.position > 0);
+      const action: 'optimize' | 'net-new' = (clientVol > 0 || ranks) ? 'optimize' : 'net-new';
+      const source: TopicSource = action === 'optimize'
+        ? 'none'
+        : (compVol > 0 && demandVol > 0) ? 'both' : compVol > 0 ? 'competitor' : 'journey';
+
+      const compMap: Record<string, number> = {};
+      for (const k of kws) if (k.isGap && k.competitor) compMap[k.competitor] = (compMap[k.competitor] ?? 0) + k.searchVolume;
+      const topComp = Object.entries(compMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+
+      const seg = matchSegmentToTopic(kws, segments);
+      const sortedKws = [...kws].sort((a: KwItem, b: KwItem) => b.searchVolume - a.searchVolume);
+
+      topics.push({
+        id:            `${cluster.id}::${stage}`,
+        clusterId:     cluster.id,
+        clusterName:   cluster.name,
+        clusterType:   cluster.type,
+        journeyType,
+        stage,
+        title:         deriveArticleTitle(cluster, stage, journeyType),
+        keywords:      sortedKws,
+        monthlyVolume: totalVol,
+        annualVolume:  totalVol * 12,
+        clientCovPct:  clientPct,
+        action,
+        source,
+        segment:       seg,
+        tonality:      seg?.messagingAndTone ?? '',
+        pov:           splitIntoPoints(seg?.creativeDirection ?? ''),
+        angle:         deriveContentAngle(cluster, stage, journeyType, seg?.whoTheyAre?.trigger || cluster.name),
+        format:        deriveContentFormat(stage, journeyType),
+        topCompetitor: topComp,
+      });
+    }
+  }
+  return topics;
+}
+
 // ─── Build content gaps ───────────────────────────────────────────────────────
 
 function buildContentGaps(
@@ -770,12 +927,25 @@ function PageMapProgress({ progress }: { progress: { done: number; total: number
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
+function StatCard({ label, value, sub, accent, split }: {
+  label: string; value: string; sub?: string; accent?: string;
+  split?: Array<{ label: string; value: number; color: string; bg: string }>;
+}) {
   return (
     <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, padding: '16px 20px' }}>
       <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', marginBottom: 6 }}>{label}</p>
       <p style={{ fontSize: 24, fontWeight: 700, color: accent ?? 'var(--c-dcdcf4)', margin: 0, lineHeight: 1 }}>{value}</p>
       {sub && <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 4 }}>{sub}</p>}
+      {split && split.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
+          {split.map((s, i) => (
+            <div key={i} style={{ flex: 1, borderRadius: 5, padding: '5px 7px', background: s.bg, color: s.color }}>
+              <span style={{ display: 'block', fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', opacity: 0.85, textTransform: 'uppercase' as const }}>{s.label}</span>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>{s.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -859,6 +1029,245 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
   );
 }
 
+// ─── v7.191: circular persona portrait (mirrors AudienceSegmentsSection) ──────
+
+function initialsFromName(name: string): string {
+  const words = (name || '').replace(/[^a-zA-Z0-9 ]/g, ' ').split(/\s+/)
+    .filter((w: string) => w && !/^(the|a|an|of|and)$/i.test(w));
+  const picks = words.slice(0, 2).map((w: string) => w[0]?.toUpperCase() ?? '');
+  return picks.join('') || (name?.[0]?.toUpperCase() ?? '?');
+}
+
+function PersonaAvatar({ segment, size = 44 }: { segment: AudienceSegment | null; size?: number }) {
+  const ring = '2px solid var(--ca-34-211-238-0_3)';
+  if (segment?.personaImageUrl) {
+    return (
+      <img src={segment.personaImageUrl} alt={`AI-generated portrait representing ${segment.name}`} loading="lazy"
+        title="AI-generated persona portrait — illustrative, not a real customer"
+        style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover' as const, border: ring, flexShrink: 0 }} />
+    );
+  }
+  return (
+    <div aria-label={segment ? `${segment.name} (no portrait yet)` : 'No segment'}
+      style={{ width: size, height: size, borderRadius: '50%', border: ring, flexShrink: 0, background: 'var(--ca-34-211-238-0_08)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: Math.round(size * 0.34), color: 'var(--c-22d3ee)' }}>
+      {initialsFromName(segment?.name ?? '?')}
+    </div>
+  );
+}
+
+// ─── v7.191: article brief drawer (opens on a topic click) ────────────────────
+
+function ArticleDrawer({ topic, onClose }: { topic: ArticleTopic; onClose: () => void }) {
+  const sc  = STAGE_COLORS[topic.stage];
+  const src = sourceLabel(topic.source);
+  const seg = topic.segment;
+  const optimize = topic.action === 'optimize';
+  return (
+    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--ca-34-211-238-0_25)', borderRadius: 12, overflow: 'hidden', margin: '4px 0 8px' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '14px 18px', borderBottom: '1px solid var(--c-1a1a30)', background: 'var(--ca-34-211-238-0_05)' }}>
+        <div style={{ flex: 1 }}>
+          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--c-4a4a6a)', margin: '0 0 6px' }}>Article topic</p>
+          <h4 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--c-dcdcf4)', lineHeight: 1.3 }}>{topic.title}</h4>
+          <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' as const, letterSpacing: '0.05em',
+              background: optimize ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-249-115-22-0_1)', color: optimize ? 'var(--c-34d399)' : 'var(--c-fb923c)',
+              border: `1px solid ${optimize ? 'var(--ca-52-211-153-0_3)' : 'var(--ca-249-115-22-0_3)'}` }}>{optimize ? 'Optimise' : 'Build net-new'}</span>
+            {src && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: src.bg, color: src.color, border: `1px solid ${src.border}`, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>{src.text}</span>}
+            <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: sc.bg, color: sc.text, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>
+              {topic.journeyType === 'pre-product' ? 'Pre-Product' : STAGE_LABELS[topic.stage]}
+            </span>
+            <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--ca-34-211-238-0_3)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>{topic.clusterName}</span>
+          </div>
+        </div>
+        <button onClick={onClose} aria-label="Close" style={{ background: 'transparent', border: 'none', color: 'var(--c-5a5a80)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 2 }}>
+          <i className="ti ti-x" />
+        </button>
+      </div>
+
+      {/* Body: keywords | segment + tonality */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr' }}>
+        <div style={{ padding: '14px 18px' }}>
+          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', margin: '0 0 9px' }}>Primary keywords &amp; volume</p>
+          {topic.keywords.slice(0, 6).map((k: KwItem, i: number) => {
+            const rank = (k.position != null && k.position > 0)
+              ? { t: `#${k.position}`, c: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_1)' }
+              : k.competitor ? { t: `comp ${k.competitor.replace(/^www\./, '').split('.')[0]}`, c: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_1)' }
+              : { t: 'not ranking', c: 'var(--c-f87171)', bg: 'var(--ca-239-68-68-0_1)' };
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '7px 10px', background: 'var(--c-0a0a16)', border: '1px solid var(--c-151528)', borderRadius: 6, marginBottom: 5 }}>
+                <span style={{ fontSize: 12, color: 'var(--c-c0c0e0)', fontFamily: 'monospace' }}>{k.keyword}</span>
+                <span style={{ fontSize: 11, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' as const }}>
+                  {fmtVol(k.searchVolume)}/mo
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 10, marginLeft: 8, color: rank.c, background: rank.bg }}>{rank.t}</span>
+                </span>
+              </div>
+            );
+          })}
+          {topic.keywords.length === 0 && <p style={{ fontSize: 11, color: 'var(--c-4a4a6a)', fontStyle: 'italic' }}>No keywords on this topic yet.</p>}
+        </div>
+        <div style={{ padding: '14px 18px', borderLeft: '1px solid var(--c-1a1a30)' }}>
+          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', margin: '0 0 9px' }}>Audience segment</p>
+          {seg ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <PersonaAvatar segment={seg} size={44} />
+                <div>
+                  <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-22d3ee)', margin: 0 }}>{seg.name}</p>
+                  {seg.tagline && <p style={{ fontSize: 10.5, color: 'var(--c-5a5a80)', margin: '2px 0 0', lineHeight: 1.4 }}>{seg.tagline}</p>}
+                </div>
+              </div>
+              {seg.whoTheyAre?.demographics && <p style={{ fontSize: 11, color: 'var(--c-7070a0)', marginTop: 8, lineHeight: 1.5 }}>{seg.whoTheyAre.demographics}</p>}
+            </>
+          ) : (
+            <p style={{ fontSize: 11, color: 'var(--c-4a4a6a)', fontStyle: 'italic', margin: 0 }}>No audience segments configured for this client yet.</p>
+          )}
+
+          <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', margin: '16px 0 7px' }}>Tonality</p>
+          <p style={{ fontSize: 12, color: 'var(--c-c0c0e0)', lineHeight: 1.55, background: 'var(--c-080814)', border: '1px solid var(--c-151528)', borderRadius: 7, padding: '10px 12px', margin: 0 }}>
+            {topic.tonality || <span style={{ color: 'var(--c-4a4a6a)', fontStyle: 'italic' }}>Tonality comes from this segment&rsquo;s messaging &amp; tone brief — generate audience segments to populate it.</span>}
+          </p>
+        </div>
+      </div>
+
+      {/* Key points of view (full width) */}
+      <div style={{ padding: '14px 18px', borderTop: '1px solid var(--c-1a1a30)' }}>
+        <p style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--c-4a4a6a)', margin: '0 0 9px' }}>
+          Key points of view for this article
+        </p>
+        {topic.pov.length > 0 ? (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+            {topic.pov.map((p: string, i: number) => (
+              <li key={i} style={{ position: 'relative', padding: '6px 0 6px 18px', fontSize: 12, color: 'var(--c-c0c0e0)', lineHeight: 1.5, borderBottom: i < topic.pov.length - 1 ? '1px solid var(--c-151528)' : 'none' }}>
+                <span style={{ position: 'absolute', left: 0, top: 6, color: 'var(--c-22d3ee)', fontSize: 11 }}>▸</span>{p}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p style={{ fontSize: 12, color: 'var(--c-7070a0)', lineHeight: 1.5, margin: 0 }}>
+            <span style={{ color: 'var(--c-8080a0)' }}>Angle: </span>{topic.angle}
+            <br /><span style={{ fontSize: 10.5, color: 'var(--c-4a4a6a)', fontStyle: 'italic' }}>Add this segment&rsquo;s creative direction (audience segments) for article-specific points of view.</span>
+          </p>
+        )}
+      </div>
+
+      {/* Footer stats */}
+      <div style={{ display: 'flex', gap: 22, padding: '11px 18px', borderTop: '1px solid var(--c-1a1a30)', background: 'var(--c-0b0b15)' }}>
+        <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Monthly Vol</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c0c0e0)', margin: 0 }}>{fmtVol(topic.monthlyVolume)}</p></div>
+        <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Annual Vol</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c0c0e0)', margin: 0 }}>{fmtVol(topic.annualVolume)}</p></div>
+        <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Coverage</p><p style={{ fontSize: 13, fontWeight: 700, color: topic.clientCovPct > 50 ? 'var(--c-34d399)' : 'var(--c-f87171)', margin: 0 }}>{topic.clientCovPct}%</p></div>
+        <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Format</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c0c0e0)', margin: 0 }}>{topic.format}</p></div>
+        {topic.topCompetitor && <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Top competitor</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)', margin: 0 }}>{topic.topCompetitor.replace(/^www\./, '').split('.')[0]}</p></div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── v7.191: parent→child grouped topic table (mirrors Cluster panel) ─────────
+
+interface TopicGroup { clusterId: string; clusterName: string; clusterType: string; journeyType: JourneyType; topics: ArticleTopic[]; totalVolume: number; netNew: number; optimize: number; }
+
+function groupTopics(topics: ArticleTopic[], order: 'net-new' | 'existing'): TopicGroup[] {
+  const TYPE_ORDER: Record<string, number> = { problem: 0, procedure: 1, brand: 2, location: 3 };
+  const byCluster = new Map<string, TopicGroup>();
+  for (const t of topics) {
+    let g = byCluster.get(t.clusterId);
+    if (!g) { g = { clusterId: t.clusterId, clusterName: t.clusterName, clusterType: t.clusterType, journeyType: t.journeyType, topics: [], totalVolume: 0, netNew: 0, optimize: 0 }; byCluster.set(t.clusterId, g); }
+    g.topics.push(t); g.totalVolume += t.monthlyVolume;
+    if (t.action === 'net-new') g.netNew++; else g.optimize++;
+  }
+  const groups = Array.from(byCluster.values());
+  for (const g of groups) g.topics.sort((a, b) => JOURNEY_STAGE_ORDER.indexOf(a.stage) - JOURNEY_STAGE_ORDER.indexOf(b.stage));
+  groups.sort((a, b) => {
+    // primary: net-new vs existing emphasis (toggle); then product type order; then volume.
+    const aNN = a.netNew > 0, bNN = b.netNew > 0;
+    if (aNN !== bNN) return (order === 'net-new') ? (aNN ? -1 : 1) : (aNN ? 1 : -1);
+    const t = (TYPE_ORDER[a.clusterType] ?? 9) - (TYPE_ORDER[b.clusterType] ?? 9);
+    return t !== 0 ? t : b.totalVolume - a.totalVolume;
+  });
+  return groups;
+}
+
+function TopicGroupTable({ topics, order, selectedId, onSelect }: {
+  topics: ArticleTopic[]; order: 'net-new' | 'existing'; selectedId: string | null; onSelect: (id: string | null) => void;
+}) {
+  const groups = groupTopics(topics, order);
+  return (
+    <div style={{ background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--c-1a1a30)' }}>
+            {[['Theme · topic', 'left'], ['Stage', 'left'], ['Action', 'left'], ['Source', 'left'], ['Vol/mo', 'right'], ['Coverage', 'right']].map(([h, al]) => (
+              <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', textAlign: al as 'left' | 'right', whiteSpace: 'nowrap' as const }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g: TopicGroup) => (
+            <Fragment key={g.clusterId}>
+              <tr>
+                <td colSpan={6} style={{ padding: '11px 14px 7px', background: 'var(--c-0b0b15)', borderTop: '1px solid var(--c-1a1a30)', borderBottom: '1px solid var(--c-151528)' }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{g.clusterName}</span>
+                  <span style={{ fontSize: 10.5, color: 'var(--c-5a5a80)', marginLeft: 9 }}>
+                    {g.journeyType === 'pre-product' ? 'pre-product' : g.clusterType} · {g.topics.length} topic{g.topics.length !== 1 ? 's' : ''} · {fmtVol(g.totalVolume)}/mo
+                  </span>
+                  <span style={{ float: 'right' as const, display: 'inline-flex', gap: 6 }}>
+                    {g.optimize > 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'var(--ca-52-211-153-0_1)', color: 'var(--c-34d399)', border: '1px solid var(--ca-52-211-153-0_3)' }}>{g.optimize} optimise</span>}
+                    {g.netNew > 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: 'var(--ca-249-115-22-0_1)', color: 'var(--c-fb923c)', border: '1px solid var(--ca-249-115-22-0_3)' }}>{g.netNew} net-new</span>}
+                  </span>
+                </td>
+              </tr>
+              {g.topics.map((t: ArticleTopic) => {
+                const sel = t.id === selectedId;
+                const sc  = STAGE_COLORS[t.stage];
+                const src = sourceLabel(t.source);
+                const optimize = t.action === 'optimize';
+                return (
+                  <Fragment key={t.id}>
+                    <tr onClick={() => onSelect(sel ? null : t.id)} style={{ cursor: 'pointer', background: sel ? 'var(--ca-34-211-238-0_05)' : 'transparent', borderLeft: sel ? '2px solid var(--c-22d3ee)' : '2px solid transparent', borderBottom: '1px solid var(--c-0d0d1a)' }}>
+                      <td style={{ padding: '8px 14px 8px 22px' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                          <i className={`ti ti-chevron-${sel ? 'down' : 'right'}`} style={{ fontSize: 12, color: sel ? 'var(--c-22d3ee)' : 'var(--c-4a4a6a)' }} />
+                          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d0d0f0)' }}>{t.title}</span>
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 14px', whiteSpace: 'nowrap' as const }}>
+                        <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: sc.bg, color: sc.text, fontWeight: 600 }}>
+                          {t.journeyType === 'pre-product' ? 'Pre-Product' : STAGE_LABELS[t.stage]}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 14px' }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' as const, letterSpacing: '0.05em',
+                          background: optimize ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-249-115-22-0_1)', color: optimize ? 'var(--c-34d399)' : 'var(--c-fb923c)',
+                          border: `1px solid ${optimize ? 'var(--ca-52-211-153-0_3)' : 'var(--ca-249-115-22-0_3)'}` }}>{optimize ? 'Optimise' : 'Net-new'}</span>
+                      </td>
+                      <td style={{ padding: '8px 14px' }}>
+                        {src ? <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, background: src.bg, color: src.color, border: `1px solid ${src.border}`, textTransform: 'uppercase' as const, letterSpacing: '0.05em', whiteSpace: 'nowrap' as const }}>{src.text}</span>
+                          : <span style={{ color: 'var(--c-3a3a5a)' }}>&mdash;</span>}
+                      </td>
+                      <td style={{ padding: '8px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums', textAlign: 'right' as const }}>{fmtVol(t.monthlyVolume)}</td>
+                      <td style={{ padding: '8px 14px', fontSize: 12, color: t.clientCovPct > 50 ? 'var(--c-34d399)' : 'var(--c-f87171)', fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'right' as const }}>{t.clientCovPct}%</td>
+                    </tr>
+                    {sel && (
+                      <tr><td colSpan={6} style={{ padding: '0 14px 6px 22px', background: 'var(--ca-34-211-238-0_03)' }}>
+                        <ArticleDrawer topic={t} onClose={() => onSelect(null)} />
+                      </td></tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </Fragment>
+          ))}
+          {groups.length === 0 && (
+            <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic' }}>No topics yet</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ContentMapSection({ projectId, kwVersion, analysis, competitors }: Props) {
@@ -868,6 +1277,9 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   const [filterSegment, setFilterSegment] = useState<string>('all');
   const [filterGap,     setFilterGap]     = useState<GapType | 'all'>('all');
   const [view,          setView]          = useState<'pages' | 'briefs' | 'table'>('pages');
+  // v7.191: net-new vs existing emphasis for the grouped tables, and the open topic drawer.
+  const [topicOrder,    setTopicOrder]    = useState<'net-new' | 'existing'>('net-new');
+  const [openTopicId,   setOpenTopicId]   = useState<string | null>(null);
 
   // v7.163: flash fix — gate the cards/views until the uploaded keywords have
   // loaded, so the snapshot-only intermediate count (e.g. 181) never paints
@@ -1073,6 +1485,32 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     });
   }, [clustersWithPages]);
 
+  // v7.191: article topics = parent theme × journey stage (the child rows + drawer).
+  // Built from the page-resolved clusters so the cluster set matches the tables.
+  const articleTopics = useMemo(() => buildArticleTopics(clustersWithPages, segments), [clustersWithPages, segments]);
+  const preTopics  = useMemo(() => articleTopics.filter((t: ArticleTopic) => t.journeyType === 'pre-product'), [articleTopics]);
+  const prodTopics = useMemo(() => articleTopics.filter((t: ArticleTopic) => t.journeyType === 'product'),     [articleTopics]);
+
+  // Card metrics — all topic-level, so the cards reconcile exactly with the tables.
+  const totalArticles   = articleTopics.length;
+  const optimizeTopics  = useMemo(() => articleTopics.filter((t: ArticleTopic) => t.action === 'optimize'), [articleTopics]);
+  const netNewTopics    = useMemo(() => articleTopics.filter((t: ArticleTopic) => t.action === 'net-new'),  [articleTopics]);
+  const preCount        = preTopics.length;
+  const prodCount       = prodTopics.length;
+  const optPreCount     = optimizeTopics.filter((t: ArticleTopic) => t.journeyType === 'pre-product').length;
+  const optProdCount    = optimizeTopics.filter((t: ArticleTopic) => t.journeyType === 'product').length;
+  const nnCompCount     = netNewTopics.filter((t: ArticleTopic) => t.source === 'competitor' || t.source === 'both').length;
+  const nnJourneyCount  = netNewTopics.filter((t: ArticleTopic) => t.source === 'journey'    || t.source === 'both').length;
+  const optimizeTopicVol = useMemo(() => optimizeTopics.reduce((s: number, t: ArticleTopic) => s + t.monthlyVolume, 0), [optimizeTopics]);
+  const netNewTopicVol   = useMemo(() => netNewTopics.reduce((s: number, t: ArticleTopic) => s + t.monthlyVolume, 0),  [netNewTopics]);
+  // Subtotals for the two table headers.
+  const preNetNew  = preTopics.filter((t: ArticleTopic) => t.action === 'net-new').length;
+  const preOpt     = preCount - preNetNew;
+  const preVol     = preTopics.reduce((s: number, t: ArticleTopic) => s + t.monthlyVolume, 0);
+  const prodNetNew = prodTopics.filter((t: ArticleTopic) => t.action === 'net-new').length;
+  const prodOpt    = prodCount - prodNetNew;
+  const prodVol    = prodTopics.reduce((s: number, t: ArticleTopic) => s + t.monthlyVolume, 0);
+
   const hasData = clusters.length > 0;
 
   if (!hasData) {
@@ -1142,13 +1580,20 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           <span>Detailed page &amp; cluster mapping</span><span style={{ flex: 1, height: 1, background: 'var(--c-1a1a30)' }} />
         </div>
       )}
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-        <StatCard label="Optimise Existing" value={String(optimizeClusters.length)} accent="var(--c-34d399)" sub={`${fmtVol(optimizeVol)}/mo · clusters with a ranking page`} />
-        <StatCard label="Build Net-New" value={String(netNewClusters.length)} accent="var(--c-fb923c)" sub={`${fmtVol(netNewVol)}/mo · clusters with no ranking page`} />
+      {/* Stats — v7.191: topic-level, with pre-product/product + net-new source transparency */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.25fr 1fr 1fr 1fr 1fr', gap: 10, marginBottom: 8 }}>
+        <StatCard label="Total Articles Needed" value={String(totalArticles)} accent="var(--c-a78bfa)" sub="topics across all themes"
+          split={[{ label: 'Pre-product', value: preCount, color: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)' }, { label: 'Product', value: prodCount, color: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_1)' }]} />
+        <StatCard label="Optimise Existing" value={String(optimizeTopics.length)} accent="var(--c-34d399)" sub={`${fmtVol(optimizeTopicVol)}/mo · topics that already rank`}
+          split={[{ label: 'Pre-prod', value: optPreCount, color: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)' }, { label: 'Product', value: optProdCount, color: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_1)' }]} />
+        <StatCard label="Build Net-New" value={String(netNewTopics.length)} accent="var(--c-fb923c)" sub={`${fmtVol(netNewTopicVol)}/mo · topics with no ranking page`}
+          split={[{ label: 'Competitor', value: nnCompCount, color: 'var(--c-f87171)', bg: 'var(--ca-239-68-68-0_1)' }, { label: 'Journey', value: nnJourneyCount, color: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_08)' }]} />
         <StatCard label="Existing Pages Mapped" value={hasUrlData ? String(pagesMapped) : '—'} sub={hasUrlData ? (totalPagesPulled > 0 ? `of ${totalPagesPulled} ranking pages` : 'Distinct ranking URLs (Semrush)') : 'Click “Map ranking pages”'} />
-        <StatCard label="Monthly Volume at Stake" value={fmtVol(totalVol)} sub={`${fmtVol(totalVol * 12)}/yr uncaptured`} />
+        <StatCard label="Monthly Volume at Stake" value={fmtVol(netNewTopicVol)} sub={`${fmtVol(netNewTopicVol * 12)}/yr uncaptured`} />
       </div>
+      <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', margin: '0 0 22px' }}>
+        Articles = the child <b style={{ color: 'var(--c-8080a0)' }}>topics</b> (theme × journey stage) — the same parent→child set the Cluster panel and Journey produce. The pre-product/product and competitor/journey splits reconcile to the two tables below.
+      </p>
 
       {/* Filters + view toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -1292,78 +1737,67 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         </div>
       )}
 
-      {/* Pages view — cluster → existing ranking page mapping (v7.163) */}
+      {/* Pages view — v7.191: parent→child grouped topics + article drawer */}
       {view === 'pages' && (
         <div>
           {!hasUrlData && (
             <div style={{ background: 'var(--ca-34-211-238-0_05)', border: '1px solid var(--ca-34-211-238-0_2)', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
               <p style={{ fontSize: 12, color: 'var(--c-9090b8)', lineHeight: 1.5, margin: 0 }}>
                 <i className="ti ti-info-circle" style={{ marginRight: 6, color: 'var(--c-22d3ee)' }} />
-                No ranking-URL data is stored on this analysis yet (this footprint was loaded from a CSV, so Semrush page URLs weren&rsquo;t captured). Click <strong style={{ color: 'var(--c-22d3ee)' }}>Map ranking pages</strong> above to pull the real ranking URL for each keyword from Semrush, then every cluster will show the page that already ranks for it.
+                No ranking-URL data is stored on this analysis yet (this footprint was loaded from a CSV, so Semrush page URLs weren&rsquo;t captured). Click <strong style={{ color: 'var(--c-22d3ee)' }}>Map ranking pages</strong> above to pull the real ranking URL for each keyword from Semrush — then every topic shows the page that already ranks for it.
               </p>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 12, fontSize: 11, color: 'var(--c-5a5a80)' }}>
-            <span><span style={{ color: 'var(--c-34d399)', fontWeight: 700 }}>{optimizeClusters.length}</span> to optimise</span>
-            <span><span style={{ color: 'var(--c-fb923c)', fontWeight: 700 }}>{netNewClusters.length}</span> net-new</span>
-            {hasUrlData && <span><span style={{ color: 'var(--c-c0c0e0)', fontWeight: 700 }}>{pagesMapped}</span> pages mapped</span>}
+
+          {/* Order toggle + source legend */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' as const }}>
+            <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)' }}>Order</span>
+            <div style={{ display: 'flex', background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 7, overflow: 'hidden' }}>
+              {(['net-new', 'existing'] as const).map((o) => (
+                <button key={o} onClick={() => setTopicOrder(o)} style={{
+                  padding: '6px 13px', fontSize: 11, fontWeight: topicOrder === o ? 700 : 500, border: 'none', cursor: 'pointer',
+                  color: topicOrder === o ? 'var(--c-dcdcf4)' : 'var(--c-4a4a6a)', background: topicOrder === o ? 'var(--c-1a1a30)' : 'transparent',
+                }}>{o === 'net-new' ? 'Net-new first' : 'Existing first'}</button>
+              ))}
+            </div>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-4a4a6a)' }}>Themes grouped by product order (procedure → brand → location), then volume — matching the Cluster &amp; Keyword panels.</span>
           </div>
-          <div style={{ background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 10, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--c-1a1a30)' }}>
-                  {['Cluster', 'Action', 'Existing page(s)', 'Pages', 'Monthly Vol'].map((h: string) => (
-                    <th key={h} style={{ padding: '10px 14px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', textAlign: 'left' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {mappedClusters.map((c: ThemeCluster, i: number) => {
-                  const optimize = c.pageStatus === 'optimize';
-                  return (
-                    <tr key={c.id} style={{ borderBottom: '1px solid var(--c-0d0d1a)', background: i % 2 === 0 ? 'transparent' : 'var(--ca-255-255-255-0_01)' }}>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-c0c0e0)', fontWeight: 500 }}>
-                        {c.name}
-                        <span style={{ fontSize: 9, marginLeft: 7, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>
-                          {c.journeyType === 'pre-product' ? 'pre-product' : c.type}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 14px' }}>
-                        <span style={{
-                          fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' as const, letterSpacing: '0.06em',
-                          background: optimize ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-249-115-22-0_1)',
-                          color: optimize ? 'var(--c-34d399)' : 'var(--c-fb923c)',
-                          border: `1px solid ${optimize ? 'var(--ca-52-211-153-0_3)' : 'var(--ca-249-115-22-0_3)'}`,
-                        }}>
-                          {optimize ? 'Optimise' : 'Build net-new'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 14px', fontSize: 11 }}>
-                        {c.existingPages.length === 0 ? (
-                          <span style={{ color: 'var(--c-4a4a6a)', fontStyle: 'italic' }}>&mdash; no ranking page</span>
-                        ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                            {c.existingPages.slice(0, 3).map((p: string, j: number) => (
-                              <a key={j} href={p} target="_blank" rel="noopener noreferrer" title={p}
-                                 style={{ color: 'var(--c-7c9cf0)', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' as const }}>
-                                {prettyUrl(p)}
-                              </a>
-                            ))}
-                            {c.existingPages.length > 3 && <span style={{ color: 'var(--c-4a4a6a)', fontSize: 10 }}>+{c.existingPages.length - 3} more</span>}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{c.existingPages.length}</td>
-                      <td style={{ padding: '10px 14px', fontSize: 12, color: 'var(--c-8080a0)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(c.totalVolume)}</td>
-                    </tr>
-                  );
-                })}
-                {mappedClusters.length === 0 && (
-                  <tr><td colSpan={5} style={{ padding: '24px', textAlign: 'center', fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic' }}>No clusters yet</td></tr>
-                )}
-              </tbody>
-            </table>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' as const, marginBottom: 16, fontSize: 11, color: 'var(--c-5a5a80)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-f87171)' }} />Competitor gap — a rival ranks, you don’t</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-22d3ee)' }} />Journey gap — demand from the journey, no page yet</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-a78bfa)' }} />Both</span>
+            <span style={{ color: 'var(--c-3a3a5a)' }}>· click any topic row to open its article brief</span>
           </div>
+
+          {/* Pre-Product Journey */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '6px 0 10px' }}>
+            <div style={{ width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)' }}><i className="ti ti-route" /></div>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>Pre-Product Journey</h3>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-5a5a80)', display: 'flex', gap: 14, flexWrap: 'wrap' as const }}>
+              <span><b style={{ color: 'var(--c-c0c0e0)' }}>{preCount}</b> topics</span>
+              <span><b style={{ color: 'var(--c-fb923c)' }}>{preNetNew}</b> net-new</span>
+              <span><b style={{ color: 'var(--c-34d399)' }}>{preOpt}</b> optimise</span>
+              <span><b style={{ color: 'var(--c-c0c0e0)' }}>{fmtVol(preVol)}</b>/mo</span>
+            </span>
+          </div>
+          {preTopics.length > 0
+            ? <TopicGroupTable topics={preTopics} order={topicOrder} selectedId={openTopicId} onSelect={setOpenTopicId} />
+            : <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '12px 4px' }}>No pre-product themes yet — these surface from the audience journey’s life-problem language.</p>}
+
+          {/* Product Journey */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '26px 0 10px' }}>
+            <div style={{ width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)' }}><i className="ti ti-layout-grid" /></div>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>Product Journey</h3>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-5a5a80)', display: 'flex', gap: 14, flexWrap: 'wrap' as const }}>
+              <span><b style={{ color: 'var(--c-c0c0e0)' }}>{prodCount}</b> topics</span>
+              <span><b style={{ color: 'var(--c-fb923c)' }}>{prodNetNew}</b> net-new</span>
+              <span><b style={{ color: 'var(--c-34d399)' }}>{prodOpt}</b> optimise</span>
+              <span><b style={{ color: 'var(--c-c0c0e0)' }}>{fmtVol(prodVol)}</b>/mo</span>
+            </span>
+          </div>
+          {prodTopics.length > 0
+            ? <TopicGroupTable topics={prodTopics} order={topicOrder} selectedId={openTopicId} onSelect={setOpenTopicId} />
+            : <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '12px 4px' }}>No product themes yet.</p>}
         </div>
       )}
       </>

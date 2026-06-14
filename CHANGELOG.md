@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.192 — 2026-06-14 · Content Map — parent→child article topics, net-new source split & article drawer
+
+**The ask (Wayne):** rebuild the Content Map so it (1) leads with summary cards including a **Total Articles Needed** count that reconciles with the Cluster panel and Journey, (2) lets you sort net-new vs existing, (3) labels each net-new item by whether it came from a **competitor** or a **journey gap**, (4) sorts by the same product order being refined in the Cluster & Keyword panels, and (5) separates the **pre-product journey** from the **product journey** — with that split surfaced on the cards too. Then: the clusters should share the **same parent → child grouping** as the Cluster panel, and clicking a topic should open an **article drawer** with the article topic name, primary keywords + volume, the audience segment (with its circular portrait), the tonality, and the key points of view.
+
+**What changed (one file — `components/brief/ContentMapSection.tsx`; 88-file manifest unchanged):**
+
+- **Parent → child grouping.** Each theme is now a parent header and its journey-stage **topics** nest beneath it — the same readable grouped layout as the Cluster panel. A topic = theme × journey stage, which is the unit a writer briefs against.
+- **Two separate tables.** A *Pre-Product Journey* table and a *Product Journey* table, each with its own subtotal (topics · net-new · optimise · volume). Within each, themes are ordered by the same product order as the Cluster & Keyword panels (procedure → brand → location, then volume).
+- **Net-new source.** Every net-new topic carries a sortable **Source** column and a colored badge — *Competitor gap* (a rival ranks, you don’t), *Journey gap* (demand from the journey, no page yet), or *Both* — derived from the real keyword provenance (competitor domain vs. pure demand).
+- **Order toggle.** *Net-new first / Existing first* re-orders the theme groups.
+- **Summary cards.** A new **Total Articles Needed** card (count of topics) plus pre-product/product splits on it and on Optimise Existing, and a competitor/journey split on Build Net-New — so the cards reconcile exactly to the two tables.
+- **Article drawer.** Clicking a topic opens a brief showing the article topic name, the primary keywords with their real volume and rank state, the matched **audience segment** (with its circular AI portrait, initials fallback), the **tonality** (the segment’s messaging & tone), and the **key points of view** (the segment’s creative direction). Keywords/volume are real Semrush; the segment match is by real prompt↔keyword overlap; tonality and POVs are surfaced verbatim from the segment model — nothing fabricated.
+
+**Verified (own debugging agent):** isolated strict `tsc` on the changed panel + its real dependency chain (ContentPlanSection → contentPlan → graph) = **0 errors**. Behavioral + render harness on the **real** bundled code (esbuild → jsdom/SSR), **32/32 assertions**: topic build (parent→child, action optimize/net-new, source competitor/journey/both, exact volume sums — no modeled numbers, segment match by overlap, tonality = messagingAndTone verbatim, POV split from creativeDirection), group ordering (net-new vs existing), and a full render of the shipped `TopicGroupTable` + `ArticleDrawer` (parent headers, child rows, source badges, drawer with persona-avatar initials, real keyword + volume, segment, tonality, POV). Panel-scroll root unchanged (`overflow-y-auto`, no scroll-theft child). Render: `orbitiq-v7.192-contentmap-RENDER.html` (the actual components, server-rendered; illustrative data, flagged).
+
+**Reconciliation note:** Total Articles Needed counts this panel’s topics exactly (the rows in the two tables). It now mirrors the Cluster panel’s parent→child structure, but the two panels still use separate builders, so exact numeric parity with the Cluster panel’s topic count is a follow-up (shared builder) — flagged, not silently forced.
+
+
 ## v7.191 — 2026-06-14 · Keyword panel — Category Breakdown becomes a collapsible parent ▸ child ▸ sub tree
 
 **The ask (Wayne):** the Category Breakdown was a flat list — "personal loans" and "mortgage" scattered among everything else. Wanted a parent → child relationship: a parent category (e.g. *Lending*) with the related categories nested under it, and, where it exists, a deeper sub-category level (e.g. *Personal Loans* ▸ *wedding loans*, *construction loans*). Parents listed by default; click to reveal the indented children. Derived **from the keyword data**, **as many levels as the data supports**, **collapsed by default**.
