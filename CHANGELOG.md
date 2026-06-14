@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.190 — 2026-06-14 · Theme Clusters — sub-product topics + sortable table
+
+**The problem (Wayne):** the cluster panel was hard to read and far too shallow. A whole theme like *Credit Cards* showed only **2 topics** (Awareness · Informational and Decision · Transactional) — every card product (balance transfer, secured, cash back, travel, business, each of the client's actual card pages) was flattened into those same two intent buckets. The client's site has a separate page for each card, and each deserves to be its own topic cluster with its own upper-funnel and consideration stages.
+
+**What changed:**
+- **Each theme now splits into PRODUCTS, then funnel stages.** A broad procedure theme is divided into product sub-clusters mined entirely from the data — never a hardcoded vertical word list (the v7.187 rule):
+  1. **Client pages first** — every keyword's real ranking-page URL slug is a product page; the product is named from the client's own slug (e.g. *Cash Secured Credit Card*, *Business Solutions Credit Card*).
+  2. **Keyword modifiers** — recurring distinctive words / order-independent bigrams left after stripping the theme's own head words and generic question/intent words (e.g. *Balance Transfer*, *Cash Back*, *Travel*, *Travel Rewards*). Catches products that have no matched page yet.
+  3. **Core** — keywords with no distinctive modifier stay in a Core row so nothing is lost.
+  Each product is then split by intent into its funnel stages, so one product yields up to one row per stage.
+- **Readable, sortable table.** The card grid is replaced by a single table — Theme · product / Stage / Keywords / Vol-per-mo / Coverage / Best rank / Status — sortable by any column (default groups product then funnel stage). Click a row to expand its keywords. Coverage and best rank are computed from the client's real Semrush positions.
+- **Hybrid deep-journey feedback.** Deep-journey demand keywords flow through the same product matcher, so "Build deep journeys" deepens the right product automatically (a balance-transfer demand keyword lands on the Balance Transfer product, not a generic bucket).
+
+**Verified (own debugging agent):** isolated strict `tsc` on the changed panel + its real dependency = 0 errors. Behavioral test on REAL Semrush data (US, 2026-06-14) for the credit-card product lines: the splitter turned one broad theme into **6 products / 14 topic rows with zero keyword loss**, named the two client-page products from their real slugs, kept no catch-all bucket, and placed every topic in exactly one funnel stage (10/10 assertions). Shipped `TopicTable` server-rendered over that real data → `orbitiq-v7.190-RENDER.html` (static; keywords + volumes real, ownership/rank illustrative).
+
+**Scope note:** in-panel products are surfaced from keywords + the page slugs that already rank. Surfacing a client product page that has **no** keyword yet (the "awaiting demand" rows) comes from the deep-journey / sitemap side of the hybrid and fills in when you build deep journeys. Only `components/brief/ThemeClustersPanel.tsx` changed — 88-file manifest unchanged.
+
+
 ## v7.189 — 2026-06-14 · Audience Journey — per-topic multi-step journeys (replaces hub-and-spoke)
 
 **The problem (Wayne):** in the journey map, all the good upper-level topics routed into one single page — and that page was an unrelated topic ("everything → Monitoring Precious Metals"). And a topic like *improve credit score* was a single node with nothing under it, instead of a real journey (what a good score is, why it matters, what moves it, how to improve it, the bureaus, etc.).

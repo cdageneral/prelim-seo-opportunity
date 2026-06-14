@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -16,6 +16,7 @@ interface KwItem {
   competitor:   string | null;   // domain that ranks for gap keywords
   origin?:      'footprint' | 'demand';  // v7.162: provenance (demand = deep-journey "missing demand")
   demandSeeds?: string[];        // v7.162: seed(s) that surfaced a demand keyword
+  url?:         string;          // v7.190: client's ranking page URL (for sub-product page detection)
 }
 
 interface IntentCluster {
@@ -188,6 +189,15 @@ function buildThemeClusters(
     includeDemand:    true,
   });
 
+  // v7.190: client ranking-page URL by keyword (from the Semrush footprint) — used
+  // by the sub-product splitter to detect each product PAGE and name a product
+  // from the client's own slug. Real data only; absent for demand/gap keywords.
+  const urlByKeyword = new Map<string, string>();
+  for (const k of (semSnap.topKeywords ?? [])) {
+    const key = (k?.keyword ?? '').toLowerCase();
+    if (key && k?.url && !urlByKeyword.has(key)) urlByKeyword.set(key, k.url);
+  }
+
   // Map to KwItem (ThemeClusters internal type), carrying provenance.
   const pool: KwItem[] = rawPool.map(item => ({
     keyword:      item.keyword,
@@ -197,6 +207,7 @@ function buildThemeClusters(
     competitor:   item.competitor,
     origin:       item.origin,
     demandSeeds:  item.demandSeeds,
+    url:          urlByKeyword.get(item.keyword.toLowerCase()),
   }));
 
   // The RANKING footprint flows through the existing category logic UNCHANGED.
@@ -645,6 +656,9 @@ interface Topic {
   id:            string;
   parentName:    string;
   parentType:    'procedure' | 'brand' | 'location' | 'demand';
+  product:       string;        // v7.190: sub-product name (client page name when matched, else mined modifier, else Core)
+  productKey:    string;        // v7.190: stable product grouping key
+  pageUrl?:      string;        // v7.190: client product-page URL when this product maps to a real page
   intent:        IntentType;
   stage:         JourneyStage;
   contentType:   string;
@@ -662,22 +676,196 @@ interface TopicStat {
   isDemand:          boolean;
 }
 
+// ─── Sub-product splitter (v7.190) — domain-agnostic ──────────────────────────
+// Wayne: a broad theme ("Credit Cards") is really many PRODUCTS — balance transfer,
+// secured, cash back, and each of the client's actual card pages — every one its
+// own topic cluster with its own funnel. We split a procedure theme's keywords into
+// products mined FROM THE DATA ONLY (never a hardcoded vertical word list — the
+// v7.187 rule):
+//   1. CLIENT PAGES first — each client-ranked keyword's real ranking URL slug is a
+//      product page; the slug becomes a product named from the client's own slug.
+//   2. KEYWORD MODIFIERS — distinctive words / adjacent bigrams left after stripping
+//      the theme's own head words + generic question/intent words, kept when they
+//      recur (≥2 keywords). Catches products with no matched page yet.
+//   3. CORE — keywords with no distinctive modifier stay in a "Core" product so
+//      nothing is dropped.
+// Deep-journey demand keywords flow through the SAME matcher, so they deepen the
+// right product automatically — the hybrid feedback loop Wayne asked for.
+
+const KW_STOP = new Set<string>([
+  'the','and','for','with','without','your','you','our','their','this','that','these','those',
+  'what','whats','which','who','whom','how','why','when','where','are','was','were','being','been',
+  'does','did','can','could','will','would','should','about','near','vs','versus','its','get','getting',
+  'got','use','using','need','want','much','many','best','top','online','app','from','into','out',
+]);
+
+function headTokenSet(name: string): Set<string> {
+  const h = new Set<string>();
+  for (const w of name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)) {
+    if (w.length >= 3) { h.add(w); h.add(w.endsWith('s') ? w.slice(0, -1) : w + 's'); }
+  }
+  return h;
+}
+
+function prodTokens(s: string, head: Set<string>): string[] {
+  return s.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length >= 3 && !KW_STOP.has(w) && !head.has(w) && !/^\d+$/.test(w));
+}
+
+function titleCaseWords(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function slugOf(url: string): string {
+  const path = url.replace(/^https?:\/\/[^/]+/, '').split(/[?#]/)[0];
+  const segs = path.split('/').filter(Boolean);
+  return segs.length ? segs[segs.length - 1] : '';
+}
+
+interface ProdSeed { key: string; label: string; tokens: Set<string>; pageUrl?: string; gram: number; }
+
+// Mine product seeds from a theme's keywords: client page slugs first, then
+// recurring keyword modifiers (bigrams before unigrams). Sorted most-specific first.
+function deriveProductSeeds(kws: KwItem[], head: Set<string>): ProdSeed[] {
+  const pageSeeds = new Map<string, ProdSeed>();
+  for (const k of kws) {
+    if (k.origin === 'demand' || k.position === null || !k.url) continue;  // client-ranked footprint pages only
+    const slug = slugOf(k.url);
+    if (!slug) continue;
+    const toks = prodTokens(slug.replace(/[-_]/g, ' '), head);
+    if (toks.length === 0) continue;
+    const key = 'page:' + slug;
+    if (!pageSeeds.has(key)) {
+      pageSeeds.set(key, { key, label: titleCaseWords(slug), tokens: new Set(toks), pageUrl: k.url, gram: toks.length + 2 });
+    }
+  }
+
+  const uni = new Map<string, number>();
+  const bi  = new Map<string, number>();                 // key = the two tokens sorted (order-independent)
+  const biLabel = new Map<string, Map<string, number>>(); // sorted key → original-order phrase → count (pick most common for the label)
+  for (const k of kws) {
+    const toks = prodTokens(k.keyword, head);
+    const seen = new Set<string>();
+    for (const t of toks) if (!seen.has(t)) { uni.set(t, (uni.get(t) ?? 0) + 1); seen.add(t); }
+    for (let i = 0; i < toks.length - 1; i++) {
+      const a = toks[i], b2 = toks[i + 1];
+      if (a === b2) continue;
+      const key  = [a, b2].slice().sort().join(' ');
+      const orig = a + ' ' + b2;
+      bi.set(key, (bi.get(key) ?? 0) + 1);
+      let lm = biLabel.get(key); if (!lm) { lm = new Map(); biLabel.set(key, lm); }
+      lm.set(orig, (lm.get(orig) ?? 0) + 1);
+    }
+  }
+  const MIN = 2;
+  const mined: ProdSeed[] = [];
+  for (const [key, n] of Array.from(bi.entries())) {
+    if (n < MIN) continue;
+    const [t1, t2] = key.split(' ');
+    let label = key, lbest = -1;
+    for (const [orig, c] of Array.from((biLabel.get(key) ?? new Map<string, number>()).entries())) if (c > lbest) { lbest = c; label = orig; }
+    mined.push({ key: 'kw:' + key, label: titleCaseWords(label), tokens: new Set([t1, t2]), gram: 2 });
+  }
+  // Keep unigram seeds too (no subsumption): a kw carrying BOTH tokens of a bigram
+  // is drawn to the more-specific bigram in bestSeed(); a kw with only the single
+  // token still has a home. Empty seeds simply yield no topic.
+  for (const [u, n] of Array.from(uni.entries())) {
+    if (n < MIN) continue;
+    mined.push({ key: 'kw:' + u, label: titleCaseWords(u), tokens: new Set([u]), gram: 1 });
+  }
+
+  return Array.from(pageSeeds.values()).concat(mined).sort((a, b) => b.gram - a.gram);
+}
+
+// Best product seed for a keyword: multi-token seeds need ALL tokens present
+// (precise); unigrams need the token. Most shared tokens wins, then specificity.
+function bestSeed(kw: KwItem, head: Set<string>, seeds: ProdSeed[]): ProdSeed | null {
+  const toks = new Set<string>(prodTokens(kw.keyword, head));
+  if (kw.url) for (const t of prodTokens(slugOf(kw.url).replace(/[-_]/g, ' '), head)) toks.add(t);
+  let best: ProdSeed | null = null;
+  let bestScore = 0;
+  for (const s of seeds) {
+    let shared = 0;
+    for (const t of Array.from(s.tokens)) if (toks.has(t)) shared++;
+    if (shared === 0) continue;
+    if (s.tokens.size > 1 && shared < s.tokens.size) continue;
+    const score = shared * 10 + s.gram;
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  return best;
+}
+
+// v7.190: flatten each theme into PRODUCT × intent topics. Broad procedure themes
+// are product-split; brand/location/demand themes stay one product (= the theme), so
+// they behave exactly as before. Per-keyword intent is read back from the
+// subClusters buildThemeClusters already computed — no re-classification.
 function flattenTopics(clusters: ThemeCluster[]): Topic[] {
   const topics: Topic[] = [];
   for (const c of clusters) {
-    for (const sc of c.subClusters) {
-      if (sc.keywords.length === 0) continue;
-      topics.push({
-        id:          `${c.id}::${sc.intent}`,
-        parentName:  c.name,
-        parentType:  c.type,
-        intent:      sc.intent,
-        stage:       sc.stage,
-        contentType: sc.contentType,
-        contentIcon: sc.contentIcon,
-        keywords:    sc.keywords,
-        totalVolume: sc.totalVolume,
-      });
+    if (c.keywords.length === 0) continue;
+
+    const intentOf = new Map<KwItem, IntentCluster>();
+    for (const sc of c.subClusters) for (const kw of sc.keywords) intentOf.set(kw, sc);
+
+    const head = headTokenSet(c.name);
+    const split = c.type === 'procedure' && c.keywords.length >= 6;
+    const CORE = '__core__';
+
+    const byProduct = new Map<string, { label: string; pageUrl?: string; kws: KwItem[] }>();
+    const place = (key: string, label: string, pageUrl: string | undefined, kw: KwItem) => {
+      let p = byProduct.get(key);
+      if (!p) { p = { label, pageUrl, kws: [] }; byProduct.set(key, p); }
+      if (pageUrl && !p.pageUrl) p.pageUrl = pageUrl;
+      p.kws.push(kw);
+    };
+
+    if (split) {
+      const seeds = deriveProductSeeds(c.keywords, head);
+      for (const kw of c.keywords) {
+        const s = bestSeed(kw, head, seeds);
+        if (s) place(s.key, s.label, s.pageUrl, kw);
+        else   place(CORE, `Core · ${c.name}`, undefined, kw);
+      }
+      // Fold tiny mined products (a single keyword, no page) back into Core so the
+      // table doesn't fragment into one-off rows; page products always stand alone.
+      for (const [key, p] of Array.from(byProduct.entries())) {
+        if (key !== CORE && !p.pageUrl && key.startsWith('kw:') && p.kws.length < 2) {
+          byProduct.delete(key);
+          const core = byProduct.get(CORE) ?? { label: `Core · ${c.name}`, pageUrl: undefined, kws: [] };
+          core.kws.push(...p.kws);
+          byProduct.set(CORE, core);
+        }
+      }
+    } else {
+      for (const kw of c.keywords) place(CORE, c.name, undefined, kw);
+    }
+
+    for (const [pkey, prod] of Array.from(byProduct.entries())) {
+      const intentBuckets = new Map<IntentType, KwItem[]>();
+      for (const kw of prod.kws) {
+        const sc = intentOf.get(kw);
+        const intent = sc ? sc.intent : (detectIntentSignal(kw.keyword) ?? 'unmatched');
+        if (!intentBuckets.has(intent)) intentBuckets.set(intent, []);
+        intentBuckets.get(intent)!.push(kw);
+      }
+      for (const [intent, items] of Array.from(intentBuckets.entries())) {
+        if (items.length === 0) continue;
+        const meta = INTENT_META[intent];
+        topics.push({
+          id:          `${c.id}::${pkey}::${intent}`,
+          parentName:  c.name,
+          parentType:  c.type,
+          product:     prod.label,
+          productKey:  pkey,
+          pageUrl:     prod.pageUrl,
+          intent,
+          stage:       meta.stage,
+          contentType: meta.contentType,
+          contentIcon: meta.contentIcon,
+          keywords:    items,
+          totalVolume: items.reduce((s, k) => s + k.searchVolume, 0),
+        });
+      }
     }
   }
   return topics;
@@ -828,6 +1016,128 @@ function CategorySection({
   );
 }
 
+// ─── Sortable topic table (v7.190) ───────────────────────────────────────────
+type SortKey = 'group' | 'product' | 'stage' | 'kw' | 'vol' | 'coverage' | 'rank' | 'status';
+type RowStatus = 'owned' | 'gap' | 'demand';
+const STATUS_RANK: Record<RowStatus, number> = { owned: 0, gap: 1, demand: 2 };
+const TBL_STATUS: Record<RowStatus, { label: string; color: string; bg: string; bdr: string }> = {
+  owned:  { label: 'Footprint',      color: 'var(--c-4ade80)', bg: 'var(--c-0d2010)', bdr: 'var(--c-1a4020)' },
+  gap:    { label: 'Competitor gap', color: 'var(--c-f59e0b)', bg: 'var(--c-1c1408)', bdr: 'var(--c-342507)' },
+  demand: { label: 'Missing demand', color: 'var(--c-22d3ee)', bg: 'var(--c-062a32)', bdr: 'var(--c-0e4753)' },
+};
+
+interface TopicRow { t: Topic; st: TopicStat; m: { cov: number; best: number | null; status: RowStatus } }
+
+function topicMetrics(t: Topic, st: TopicStat): TopicRow['m'] {
+  const fp     = t.keywords.filter(k => k.origin !== 'demand');
+  const ranked = fp.filter(k => k.position !== null && (k.position as number) <= 20);
+  const cov    = pct(ranked.reduce((s, k) => s + k.searchVolume, 0), t.totalVolume);
+  const best   = ranked.length ? Math.min(...ranked.map(k => k.position as number)) : null;
+  const status: RowStatus = st.isDemand ? 'demand' : st.isClientFootprint ? 'owned' : 'gap';
+  return { cov, best, status };
+}
+
+const TH_BASE: React.CSSProperties = {
+  textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.06em',
+  textTransform: 'uppercase', color: 'var(--c-6a6a90)', borderBottom: '1px solid var(--c-23233a)',
+  cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', position: 'sticky', top: 0,
+  background: 'var(--c-0b0b15)',
+};
+
+function TopicTable({
+  rows, sortKey, sortDir, onSort, expanded, onToggle,
+}: {
+  rows: TopicRow[]; sortKey: SortKey; sortDir: 1 | -1; onSort: (k: SortKey) => void;
+  expanded: Set<string>; onToggle: (id: string) => void;
+}) {
+  const cols: Array<{ k: SortKey; label: string; align: 'left' | 'right' }> = [
+    { k: 'group',    label: 'Theme · product', align: 'left'  },
+    { k: 'stage',    label: 'Stage',           align: 'left'  },
+    { k: 'kw',       label: 'Keywords',        align: 'right' },
+    { k: 'vol',      label: 'Vol/mo',          align: 'right' },
+    { k: 'coverage', label: 'Coverage',        align: 'right' },
+    { k: 'rank',     label: 'Best rank',       align: 'right' },
+    { k: 'status',   label: 'Status',          align: 'left'  },
+  ];
+  return (
+    <div style={{ overflowX: 'auto', border: '1px solid var(--c-1a1a2c)', borderRadius: 10 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead>
+          <tr>
+            {cols.map(c => (
+              <th key={c.k} onClick={() => onSort(c.k)} style={{ ...TH_BASE, textAlign: c.align }}>
+                {c.label}
+                {sortKey === c.k && (
+                  <i className={`ti ti-chevron-${sortDir < 0 ? 'down' : 'up'}`} style={{ fontSize: 12, marginLeft: 4, verticalAlign: -2 }} aria-hidden="true" />
+                )}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ t, m }) => {
+            const stm  = STAGE_META[t.stage];
+            const stt  = TBL_STATUS[m.status];
+            const open = expanded.has(t.id);
+            const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
+            return (
+              <Fragment key={t.id}>
+                <tr
+                  onClick={() => onToggle(t.id)}
+                  style={{ cursor: 'pointer', borderLeft: `2px solid ${stt.color}`, background: open ? 'var(--c-101019)' : 'transparent' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--c-101019)'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = open ? 'var(--c-101019)' : 'transparent'; }}
+                >
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-4a4a6a)', flexShrink: 0 }} aria-hidden="true" />
+                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d8d8f8)' }}>{t.product}</span>
+                      {t.pageUrl && (
+                        <i className="ti ti-link" style={{ fontSize: 11, color: 'var(--c-6c63ff)', flexShrink: 0 }} aria-hidden="true" title={t.pageUrl} />
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--c-5a5a78)', marginLeft: 18, marginTop: 1 }}>{t.parentName} · {INTENT_META[t.intent].label}</div>
+                  </td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', whiteSpace: 'nowrap' }}>
+                    <i className={`ti ${stm.icon}`} style={{ fontSize: 12, color: 'var(--c-6a6a90)', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
+                    <span style={{ color: 'var(--c-b8b8d8)' }}>{stm.label}</span>
+                  </td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{t.keywords.length}</td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.status === 'demand' ? 'var(--c-3a3a5a)' : 'var(--c-c8c8e8)' }}>{m.status === 'demand' ? '—' : `${m.cov}%`}</td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.best === null ? 'var(--c-3a3a5a)' : 'var(--c-9b96ff)' }}>{m.best === null ? '—' : `#${m.best}`}</td>
+                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: stt.bg, border: `1px solid ${stt.bdr}`, color: stt.color, whiteSpace: 'nowrap' }}>{stt.label}</span>
+                  </td>
+                </tr>
+                {open && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: '4px 12px 12px 30px', borderBottom: '1px solid var(--c-15152a)', background: 'var(--c-0c0c16)' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {topKws.map((k, i) => (
+                          <span key={i} style={{
+                            fontSize: 10, color: k.origin === 'demand' ? 'var(--c-22d3ee)' : k.isGap ? 'var(--c-f59e0b)' : 'var(--c-8ab89a)',
+                            background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1c1c2e)', borderRadius: 5, padding: '2px 7px',
+                          }}>
+                            {k.keyword} · {fmtVol(k.searchVolume)}{k.position !== null && (k.position as number) <= 20 ? ` · #${k.position}` : ''}
+                          </span>
+                        ))}
+                        {t.keywords.length > topKws.length && (
+                          <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{t.keywords.length - topKws.length} more</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ClustersTab({
   clusters,
   clientDomain,
@@ -838,6 +1148,15 @@ function ClustersTab({
   loadingClaude: boolean;
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
+  const [sortKey, setSortKey] = useState<SortKey>('group');
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleRow = (id: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const onSort = (k: SortKey) => {
+    if (k === sortKey) { setSortDir(d => (d === 1 ? -1 : 1)); return; }
+    setSortKey(k);
+    setSortDir(k === 'group' || k === 'product' || k === 'stage' ? 1 : -1);
+  };
 
   // ── Flatten categories → TOPICS (the counted unit) + classify each ──────────
   const topics: Topic[] = flattenTopics(clusters);
@@ -916,15 +1235,25 @@ function ClustersTab({
     topicStats;
 
   const filtered: Topic[] = filteredStats.map(s => s.topic);
-  const statByTopicId = new Map(topicStats.map(s => [s.topic.id, s]));
 
-  // Group the filtered topics under their parent category, preserving cluster order.
-  const sections = clusters
-    .map(c => ({
-      cluster: c,
-      topics:  filtered.filter(t => t.parentName === c.name && t.parentType === c.type),
-    }))
-    .filter(s => s.topics.length > 0);
+  // v7.190: build sortable table rows from the filtered topics, then sort.
+  const rows: TopicRow[] = filteredStats.map(st => ({ t: st.topic, st, m: topicMetrics(st.topic, st) }));
+  const sIdx = (s: JourneyStage) => JOURNEY_ORDER.indexOf(s);
+  const sortedRows = rows.slice().sort((a, b) => {
+    let r = 0;
+    switch (sortKey) {
+      case 'group':    r = a.t.parentName.localeCompare(b.t.parentName) || a.t.product.localeCompare(b.t.product) || (sIdx(a.t.stage) - sIdx(b.t.stage)); break;
+      case 'product':  r = a.t.product.localeCompare(b.t.product); break;
+      case 'stage':    r = sIdx(a.t.stage) - sIdx(b.t.stage); break;
+      case 'kw':       r = a.t.keywords.length - b.t.keywords.length; break;
+      case 'vol':      r = a.t.totalVolume - b.t.totalVolume; break;
+      case 'coverage': r = a.m.cov - b.m.cov; break;
+      case 'rank':     r = (a.m.best ?? 9999) - (b.m.best ?? 9999); break;
+      case 'status':   r = STATUS_RANK[a.m.status] - STATUS_RANK[b.m.status]; break;
+    }
+    if (r !== 0) return r * sortDir;
+    return b.t.totalVolume - a.t.totalVolume;   // stable tiebreak: volume desc
+  });
 
   // ── Summary card definitions ───────────────────────────────────────────────
   const SUMMARY_CARDS: Array<{
@@ -1295,18 +1624,17 @@ function ClustersTab({
         );
       })()}
 
-      {/* ── v7.169: two-level — category SECTION → TOPIC cards ───────────────── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {sections.map(sec => (
-          <CategorySection
-            key={`${sec.cluster.type}:${sec.cluster.id}`}
-            cluster={sec.cluster}
-            topics={sec.topics}
-            statById={statByTopicId}
-            clientDomain={clientDomain}
-          />
-        ))}
-      </div>
+      {/* ── v7.190: one sortable table — Theme · product × funnel stage ──────── */}
+      {filtered.length > 0 && (
+        <TopicTable
+          rows={sortedRows}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+          expanded={expanded}
+          onToggle={toggleRow}
+        />
+      )}
 
       {filtered.length === 0 && (
         <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--c-404060)', fontSize: 13 }}>
@@ -1405,9 +1733,9 @@ export default function ThemeClustersPanel({
   useEffect(() => { refreshUploadedKeywords(); }, [refreshUploadedKeywords]);
 
   const totalKws   = baseClusters.reduce((s, c) => s + c.keywords.length, 0);
-  // v7.169: a "cluster" is a topic (theme × intent) — count the sub-clusters, not
-  // the broad categories — so this reconciles with the Audience Journey topic count.
-  const topicCnt   = baseClusters.reduce((s, c) => s + c.subClusters.filter(sc => sc.keywords.length > 0).length, 0);
+  // v7.190: a "topic" is now a PRODUCT × funnel-stage row (broad themes split into
+  // their product sub-clusters), so count the flattened table rows.
+  const topicCnt   = flattenTopics(baseClusters).length;
   const catCnt     = baseClusters.length;
 
   return (
