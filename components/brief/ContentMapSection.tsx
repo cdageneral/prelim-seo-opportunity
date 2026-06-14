@@ -927,6 +927,32 @@ function PageMapProgress({ progress }: { progress: { done: number; total: number
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
+// v7.193: prominent segmented control (high-contrast filled active state).
+function Segmented<T extends string>({ options, value, onChange }: {
+  options: Array<{ v: T; label: string; icon?: string; fill?: string; ink?: string }>;
+  value: T; onChange: (v: T) => void;
+}) {
+  return (
+    <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 9, padding: 3, gap: 3 }}>
+      {options.map((o) => {
+        const active = o.v === value;
+        const fill = o.fill ?? 'var(--c-6c63ff)';
+        const ink  = o.ink  ?? 'var(--c-dcdcf4)';
+        return (
+          <button key={o.v} onClick={() => onChange(o.v)} aria-pressed={active} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 15px', fontSize: 12,
+            fontWeight: active ? 700 : 600, border: 'none', borderRadius: 6, cursor: 'pointer',
+            background: active ? fill : 'transparent', color: active ? ink : 'var(--c-9090b8)', transition: 'all 0.12s',
+          }}>
+            {o.icon && <i className={`ti ${o.icon}`} style={{ fontSize: 14 }} />}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent, split }: {
   label: string; value: string; sub?: string; accent?: string;
   split?: Array<{ label: string; value: number; color: string; bg: string }>;
@@ -1280,6 +1306,8 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   // v7.191: net-new vs existing emphasis for the grouped tables, and the open topic drawer.
   const [topicOrder,    setTopicOrder]    = useState<'net-new' | 'existing'>('net-new');
   const [openTopicId,   setOpenTopicId]   = useState<string | null>(null);
+  // v7.193: which journey table(s) to show.
+  const [journeyScope,  setJourneyScope]  = useState<'both' | 'pre' | 'product'>('both');
 
   // v7.163: flash fix — gate the cards/views until the uploaded keywords have
   // loaded, so the snapshot-only intermediate count (e.g. 181) never paints
@@ -1544,12 +1572,12 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             onClick={buildPageMap}
             disabled={building}
             style={{
-              padding: '7px 14px', fontSize: 11, fontWeight: 700, borderRadius: 7,
-              background: building ? 'var(--c-14142a)' : 'var(--ca-34-211-238-0_1)', color: building ? 'var(--c-5a5a80)' : 'var(--c-22d3ee)',
-              border: '1px solid var(--ca-34-211-238-0_3)', cursor: building ? 'default' : 'pointer', whiteSpace: 'nowrap' as const,
+              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '9px 16px', fontSize: 12, fontWeight: 700, borderRadius: 9,
+              background: building ? 'var(--c-14142a)' : 'var(--c-22d3ee)', color: building ? 'var(--c-9090b8)' : 'var(--c-08080f)',
+              border: `1px solid ${building ? 'var(--c-2a2a45)' : 'var(--c-22d3ee)'}`, cursor: building ? 'default' : 'pointer', whiteSpace: 'nowrap' as const,
             }}
           >
-            <i className={`ti ${building ? 'ti-loader-2' : 'ti-map-pin-search'}`} style={{ marginRight: 6 }} />
+            <i className={`ti ${building ? 'ti-loader-2' : 'ti-map-pin-search'}`} style={{ fontSize: 14 }} />
             {building ? 'Pulling pages…' : hasUrlData ? 'Refresh ranking pages' : 'Map ranking pages'}
           </button>
           <p style={{ fontSize: 10, color: 'var(--c-4a4a6a)', marginTop: 6, lineHeight: 1.4 }}>
@@ -1596,19 +1624,17 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       </p>
 
       {/* Filters + view toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        {/* View toggle */}
-        <div style={{ display: 'flex', background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 7, overflow: 'hidden', marginRight: 8 }}>
-          {(['pages', 'briefs', 'table'] as const).map((v: 'pages' | 'briefs' | 'table') => (
-            <button key={v} onClick={() => setView(v)} style={{
-              padding: '6px 14px', fontSize: 11, fontWeight: view === v ? 700 : 500,
-              color: view === v ? 'var(--c-dcdcf4)' : 'var(--c-4a4a6a)', background: view === v ? 'var(--c-1a1a30)' : 'transparent',
-              border: 'none', cursor: 'pointer', textTransform: 'capitalize' as const,
-            }}>
-              {v === 'pages' ? '🗺 Pages' : v === 'briefs' ? '📄 Briefs' : '📊 Table'}
-            </button>
-          ))}
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+        {/* View toggle (v7.193: prominent segmented) */}
+        <Segmented<'pages' | 'briefs' | 'table'>
+          value={view}
+          onChange={setView}
+          options={[
+            { v: 'pages',  label: 'Pages',  icon: 'ti-map-2' },
+            { v: 'briefs', label: 'Briefs', icon: 'ti-file-text' },
+            { v: 'table',  label: 'Table',  icon: 'ti-table' },
+          ]}
+        />
 
         {view !== 'pages' && (
         <>
@@ -1749,27 +1775,44 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
             </div>
           )}
 
-          {/* Order toggle + source legend */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' as const }}>
-            <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)' }}>Order</span>
-            <div style={{ display: 'flex', background: 'var(--c-0a0a18)', border: '1px solid var(--c-1a1a30)', borderRadius: 7, overflow: 'hidden' }}>
-              {(['net-new', 'existing'] as const).map((o) => (
-                <button key={o} onClick={() => setTopicOrder(o)} style={{
-                  padding: '6px 13px', fontSize: 11, fontWeight: topicOrder === o ? 700 : 500, border: 'none', cursor: 'pointer',
-                  color: topicOrder === o ? 'var(--c-dcdcf4)' : 'var(--c-4a4a6a)', background: topicOrder === o ? 'var(--c-1a1a30)' : 'transparent',
-                }}>{o === 'net-new' ? 'Net-new first' : 'Existing first'}</button>
-              ))}
+          {/* v7.193: prominent control bar — journey scope, order, source legend */}
+          <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1a1a30)', borderRadius: 12, padding: '12px 14px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' as const }}>
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: 'var(--c-8080a0)' }}>Show</span>
+              <Segmented<'both' | 'pre' | 'product'>
+                value={journeyScope}
+                onChange={setJourneyScope}
+                options={[
+                  { v: 'both',    label: 'Both journeys', icon: 'ti-layers-subtract', fill: 'var(--c-6c63ff)', ink: 'var(--c-dcdcf4)' },
+                  { v: 'pre',     label: 'Pre-product',   icon: 'ti-route',           fill: 'var(--c-22d3ee)', ink: 'var(--c-08080f)' },
+                  { v: 'product', label: 'Product',       icon: 'ti-layout-grid',     fill: 'var(--c-a78bfa)', ink: 'var(--c-08080f)' },
+                ]}
+              />
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: 'var(--c-8080a0)', marginLeft: 8 }}>Order</span>
+              <Segmented<'net-new' | 'existing'>
+                value={topicOrder}
+                onChange={setTopicOrder}
+                options={[
+                  { v: 'net-new',  label: 'Net-new first' },
+                  { v: 'existing', label: 'Existing first' },
+                ]}
+              />
             </div>
-            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-4a4a6a)' }}>Themes grouped by product order (procedure → brand → location), then volume — matching the Cluster &amp; Keyword panels.</span>
-          </div>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' as const, marginBottom: 16, fontSize: 11, color: 'var(--c-5a5a80)' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-f87171)' }} />Competitor gap — a rival ranks, you don’t</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-22d3ee)' }} />Journey gap — demand from the journey, no page yet</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--c-a78bfa)' }} />Both</span>
-            <span style={{ color: 'var(--c-3a3a5a)' }}>· click any topic row to open its article brief</span>
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-1a1a30)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' as const }}>
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.09em', color: 'var(--c-8080a0)' }}>Source</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--c-9090b8)' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 6, background: 'var(--ca-239-68-68-0_1)', color: 'var(--c-f87171)', border: '1px solid var(--ca-239-68-68-0_25)' }}>Competitor gap</span>a rival ranks, you don’t
+              </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: 'var(--c-9090b8)' }}>
+                <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 6, background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--ca-34-211-238-0_3)' }}>Journey gap</span>demand from the journey, no page yet
+              </span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 6, background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)', border: '1px solid var(--ca-167-139-250-0_25)' }}>Both</span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-6a6a90)' }}><i className="ti ti-click" style={{ marginRight: 5 }} />click any topic row to open its article brief</span>
+            </div>
           </div>
 
-          {/* Pre-Product Journey */}
+          {/* Pre-Product Journey (v7.193: hidden when scope = product) */}
+          {journeyScope !== 'product' && (<>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '6px 0 10px' }}>
             <div style={{ width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)' }}><i className="ti ti-route" /></div>
             <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>Pre-Product Journey</h3>
@@ -1783,9 +1826,11 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           {preTopics.length > 0
             ? <TopicGroupTable topics={preTopics} order={topicOrder} selectedId={openTopicId} onSelect={setOpenTopicId} />
             : <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '12px 4px' }}>No pre-product themes yet — these surface from the audience journey’s life-problem language.</p>}
+          </>)}
 
-          {/* Product Journey */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '26px 0 10px' }}>
+          {/* Product Journey (v7.193: hidden when scope = pre) */}
+          {journeyScope !== 'pre' && (<>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: journeyScope === 'product' ? '6px 0 10px' : '26px 0 10px' }}>
             <div style={{ width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)' }}><i className="ti ti-layout-grid" /></div>
             <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>Product Journey</h3>
             <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--c-5a5a80)', display: 'flex', gap: 14, flexWrap: 'wrap' as const }}>
@@ -1798,6 +1843,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           {prodTopics.length > 0
             ? <TopicGroupTable topics={prodTopics} order={topicOrder} selectedId={openTopicId} onSelect={setOpenTopicId} />
             : <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '12px 4px' }}>No product themes yet.</p>}
+          </>)}
         </div>
       )}
       </>

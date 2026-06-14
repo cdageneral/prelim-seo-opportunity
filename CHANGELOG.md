@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.193 — 2026-06-14 · Content Map — journey filter + prominent, legible controls
+
+**The ask (Wayne):** give a way to view the **pre-product journey, the product journey, or both**, and make all the CTAs / filter / sort buttons far more visible — they were too dim to see.
+
+**What changed (one file — `components/brief/ContentMapSection.tsx`; 88-file manifest unchanged):**
+
+- **Journey filter.** A new *Both journeys / Pre-product / Product* segmented control. Pre-product shows only the pre-product table, Product shows only the product table, Both shows both. Color-coded (cyan = pre, purple = product, indigo = both).
+- **Prominent controls.** New reusable `Segmented` control — raised container, icons, a **filled active state** (solid accent fill, dark/light ink for contrast) instead of the faint outline, and a clearly-visible medium-grey inactive label (was near-black). The view toggle (Pages / Briefs / Table) and the order toggle (Net-new first / Existing first) both use it.
+- **CTA.** *Map ranking pages* is now a solid filled button, not a dim outline.
+- **Source legend** became actual colored chips (Competitor gap / Journey gap / Both) on its own labeled row, grouped with the other controls in one bordered control bar.
+
+All colors use existing `--c-`/`--ca-` theme tokens (verified present in `globals.css`) so nothing renders invisible, and they adapt to light/dark mode.
+
+**Verified (own debugging agent):** isolated strict `tsc` on the changed panel + real dependency chain = **0 errors**. **48/48 assertions** on the real bundled code (esbuild → jsdom): 32 regression (builders + `TopicGroupTable` + `ArticleDrawer` unchanged), 7 on the new `Segmented` (all labels/icons render, active carries its fill + dark ink, inactive uses visible `9090b8` not near-black, correct `aria-pressed`), and a **9-assertion full client mount** flushing effects — confirms the control bar renders and the journey filter live-toggles which tables show (Both → both; Product → only product, pre hidden; Pre-product → only pre, product hidden). Panel-scroll root unchanged. Render: `orbitiq-v7.193-RENDER.html` (the real `Segmented` + `TopicGroupTable`, server-rendered; illustrative data, flagged).
+
+
 ## v7.192 — 2026-06-14 · Content Map — parent→child article topics, net-new source split & article drawer
 
 **The ask (Wayne):** rebuild the Content Map so it (1) leads with summary cards including a **Total Articles Needed** count that reconciles with the Cluster panel and Journey, (2) lets you sort net-new vs existing, (3) labels each net-new item by whether it came from a **competitor** or a **journey gap**, (4) sorts by the same product order being refined in the Cluster & Keyword panels, and (5) separates the **pre-product journey** from the **product journey** — with that split surfaced on the cards too. Then: the clusters should share the **same parent → child grouping** as the Cluster panel, and clicking a topic should open an **article drawer** with the article topic name, primary keywords + volume, the audience segment (with its circular portrait), the tonality, and the key points of view.
