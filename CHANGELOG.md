@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.188 — 2026-06-14 · Audience Journey — clickable cluster detail + connected-journey focus
+
+**What changed:** clicking a cluster in the journey now does two things it didn't before.
+
+- **It opens a detail panel with real information.** Before, a click gave no visible feedback (the panel rendered below the fold). Now the panel auto-scrolls into view and shows: the topic, total monthly volume and keyword count, a coverage bar (what share of the topic's demand you already rank for), the existing page to optimize with its best rank, and a full **keyword table** — every keyword in the cluster with its search volume and your live SERP rank (`#4` where you rank, "competitor" where only a competitor ranks, "not ranking" otherwise).
+- **It brings the whole connected journey into focus.** Clicking a cluster now lights up the entire path it belongs to — problem → discovers solution → product → decision topics, followed transitively across every link — and dims everything else, so you can trace where the journey goes. A focus banner names the focused journey; click empty space or press Esc to exit. (Previously, clicking only changed the immediate connected lines with no way to see the full path.)
+
+Both behaviors apply to **both** journey views — the deep-journey connected graph and the footprint stage-column view.
+
+**How (and why it's defensible):**
+- Per-keyword rank is threaded from the analysis snapshot (the ranked rows already carry `position`) into the node data: `graph.ts` `TopicKeyword` gains a `rank` field fed by a new `rankByKeyword` option; `JourneyNode` gains a `keywords[]` list (volume + rank) built in `clusterToNode` and `buildDemandNodes`. No rank is invented — a keyword shows a rank only if the client actually ranks for it in the data.
+- Focus = the transitive connected component of the selected node over the journey edges (both directions, all edge kinds). Pure graph traversal, no modeling.
+- New shared `KeywordTable` component renders the keyword list in both panels; a `FocusBanner` shows the focused state and the exit affordance.
+
+**Verification (own debugging agent):** strict `tsc` on `JourneySection.tsx` + `ContentMapSection.tsx` + `graph.ts` — **0 errors**. Data-threading test on the real bundled `buildJourneyGraph` and `buildDemandNodes`: client keywords carry the correct rank (`#4`, `#9`), competitor-only keywords carry a null rank + competitor state — **pass**. Connected-component (focus) unit test on chained and disconnected graphs, for both graph-edge and tuple-edge forms — **pass**. Full **integration test**: mounted the real `JourneySection` in jsdom in deep-journey mode, clicked a node, and confirmed the focus banner appears, the detail panel populates with the keyword table and rank/volume data, and off-path nodes dim — **all pass**. Render `orbitiq-v7.188-RENDER.html` (interactive; opens with a cluster selected). Edited: `lib/journey/graph.ts`, `components/brief/JourneySection.tsx`. No files added or removed.
+
 ## v7.187 — 2026-06-14 · Audience Journey — domain-agnostic clustering (no inherited vertical vocabulary)
 
 **What changed:** "Build deep journey" (and the footprint Journey view) no longer pulls in off-topic clusters from a different vertical. On a financial-services project the journey was showing cosmetic-surgery clusters like **"Chin / Neck"** and **"Arm Concerns"**. Those came from a hardcoded cosmetic vocabulary baked into the clustering engine — not from the current project's specs. The clustering is now derived entirely from **this project's own data**: its audience-segment language (pre-LLM prompts + triggers), its category names, and its brand. It works for any industry.

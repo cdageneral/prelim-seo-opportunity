@@ -83,6 +83,7 @@ export interface TopicKeyword {
   keyword:      string;
   searchVolume: number;
   state:        NodeState;              // existing (client ranks) | competitor | missing
+  rank:         number | null;          // v7.188: client SERP position (1-100) when ranked, else null
 }
 
 export interface GraphEdge {
@@ -184,6 +185,7 @@ export interface BuildOpts {
   clientRanked?:        Set<string>;
   competitorRanked?:    Set<string>;
   urlByKeyword?:        Record<string, string>;
+  rankByKeyword?:       Record<string, number>;    // v7.188: kw(lower) → client SERP position
   competitorByKeyword?: Record<string, string>;   // v7.176: kw(lower) → competitor domain (from gap rows)
   activeBucketId?:      string | null;   // segment partition filter (null = combined)
   seedBucket?:          Map<string, string>;
@@ -199,6 +201,7 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
   const clientRanked     = opts.clientRanked     ?? new Set<string>();
   const competitorRanked = opts.competitorRanked ?? new Set<string>();
   const urlByKeyword       = opts.urlByKeyword       ?? {};
+  const rankByKeyword      = opts.rankByKeyword      ?? {};
   const competitorByKeyword = opts.competitorByKeyword ?? {};
   const activeBucketId     = opts.activeBucketId     ?? null;
   const seedBucket         = opts.seedBucket         ?? new Map<string, string>();
@@ -263,7 +266,7 @@ export function buildJourneyGraph(universe: DemandUniverse, opts: BuildOpts = {}
       if (!url && urlByKeyword[kwLc]) url = urlByKeyword[kwLc];
       const comp = competitorByKeyword[kwLc];
       if (!isClient && comp) compTally.set(comp, (compTally.get(comp) ?? 0) + t.searchVolume);
-      memberKws.push({ keyword: t.keyword, searchVolume: t.searchVolume, state: isClient ? 'existing' : (isComp || comp ? 'competitor' : 'missing') });
+      memberKws.push({ keyword: t.keyword, searchVolume: t.searchVolume, state: isClient ? 'existing' : (isComp || comp ? 'competitor' : 'missing'), rank: (isClient && rankByKeyword[kwLc] != null) ? rankByKeyword[kwLc] : null });
       const st = g.supportType === 'core' ? stageOf(t.keyword) : (g.supportType === 'comparison' ? 'consideration' : 'decision');
       stageVol[st] += t.searchVolume;
     }

@@ -627,6 +627,15 @@ const STATE_LABEL: Record<NodeState, string> = {
   competitor: 'Competitor only',
 };
 
+// v7.188: per-keyword detail carried on each node so the detail panel can show
+// volume + the client's live rank for every keyword in the cluster.
+interface NodeKw {
+  keyword: string;
+  volume:  number;
+  rank:    number | null;   // client SERP position when ranked, else null
+  state:   NodeState;       // existing (client ranks) | competitor | missing
+}
+
 interface JourneyNode {
   id:        string;
   name:      string;
@@ -639,6 +648,7 @@ interface JourneyNode {
   compVol:   number;
   kwCount:   number;
   sampleKws: string[];
+  keywords:  NodeKw[];   // v7.188: full member keyword list (volume + rank), volume-sorted
 }
 
 function clusterDominantStage(c: ThemeCluster): JourneyStage {
@@ -654,15 +664,22 @@ function clusterToNode(c: ThemeCluster): JourneyNode {
   const compVol   = c.subClusters.reduce((s: number, sc: IntentCluster) => s + sc.competitorVolume, 0);
   const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
   const stage = clusterDominantStage(c);
-  const sampleKws = c.keywords.slice()
-    .sort((a: KwItem, b: KwItem) => b.searchVolume - a.searchVolume)
-    .slice(0, 6)
-    .map((k: KwItem) => k.keyword);
+  const sortedKws = c.keywords.slice().sort((a: KwItem, b: KwItem) => b.searchVolume - a.searchVolume);
+  const sampleKws = sortedKws.slice(0, 6).map((k: KwItem) => k.keyword);
+  // v7.188: carry the full keyword list with the client's rank (position) so the
+  // detail panel shows volume + rank per keyword. position<=100 from the footprint;
+  // a gap keyword (competitor-only) has no client rank.
+  const keywords: NodeKw[] = sortedKws.map((k: KwItem) => ({
+    keyword: k.keyword,
+    volume:  k.searchVolume,
+    rank:    (k.position != null && k.position > 0) ? k.position : null,
+    state:   (k.position != null && k.position > 0) ? 'existing' : (k.isGap ? 'competitor' : 'missing'),
+  }));
   return {
     id: c.id, name: c.name, lane: c.journeyType, stage,
     col: JOURNEY_STAGE_ORDER.indexOf(stage), state,
     totalVol: c.totalVolume, clientVol, compVol,
-    kwCount: c.keywords.length, sampleKws,
+    kwCount: c.keywords.length, sampleKws, keywords,
   };
 }
 
@@ -868,6 +885,7 @@ export function buildDemandNodes(
   competitorRanked: Set<string>,
   activeBucketId: string | null = null,
   seedBucket: Map<string, string> = new Map(),
+  rankByKeyword: Record<string, number> = {},   // v7.188: kw(lower) → client position
 ): { preNodes: JourneyNode[]; prodNodes: JourneyNode[]; preEdges: [string, string][]; prodEdges: [string, string][] } {
   const productSet = new Set((universe.productSeeds ?? []).map((s: string) => s.toLowerCase()));
 
@@ -902,11 +920,24 @@ export function buildDemandNodes(
     const clientVol = b.topics.filter((t: DemandTopic) => clientRanked.has(t.keyword.toLowerCase())).reduce((s: number, t: DemandTopic) => s + t.searchVolume, 0);
     const compVol   = b.topics.filter((t: DemandTopic) => !clientRanked.has(t.keyword.toLowerCase()) && competitorRanked.has(t.keyword.toLowerCase())).reduce((s: number, t: DemandTopic) => s + t.searchVolume, 0);
     const state: NodeState = clientVol > 0 ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
-    const sampleKws = b.topics.slice().sort((a: DemandTopic, x: DemandTopic) => x.searchVolume - a.searchVolume).slice(0, 8).map((t: DemandTopic) => t.keyword);
+    const sortedTopics = b.topics.slice().sort((a: DemandTopic, x: DemandTopic) => x.searchVolume - a.searchVolume);
+    const sampleKws = sortedTopics.slice(0, 8).map((t: DemandTopic) => t.keyword);
+    // v7.188: full keyword list with the client's rank for the detail panel.
+    const keywords: NodeKw[] = sortedTopics.map((t: DemandTopic) => {
+      const kwLc = t.keyword.toLowerCase();
+      const isClient = clientRanked.has(kwLc);
+      const rank = (isClient && rankByKeyword[kwLc] != null) ? rankByKeyword[kwLc] : null;
+      return {
+        keyword: t.keyword,
+        volume:  t.searchVolume,
+        rank,
+        state:   (isClient ? 'existing' : (competitorRanked.has(kwLc) ? 'competitor' : 'missing')) as NodeState,
+      };
+    });
     nodes.push({
       id: `${b.lane}::${b.theme}::${b.stage}`, name: b.theme, lane: b.lane, stage: b.stage,
       col: JOURNEY_STAGE_ORDER.indexOf(b.stage), state,
-      totalVol, clientVol, compVol, kwCount: b.topics.length, sampleKws,
+      totalVol, clientVol, compVol, kwCount: b.topics.length, sampleKws, keywords,
     });
   }
 
@@ -917,13 +948,29 @@ export function buildDemandNodes(
 
 // ─── MindMap (v7.152) ───────────────────────────────────────────────────────────
 
-function MindMap({ nodes, edges, onSelect, selectedId }: {
+function MindMap({ nodes, edges, onSelect, onClear, selectedId }: {
   nodes:      JourneyNode[];
   edges:      [string, string][];
   onSelect:   (n: JourneyNode) => void;
+  onClear:    () => void;
   selectedId: string | null;
 }) {
   const [hover, setHover] = useState<string | null>(null);
+
+  // v7.188: the WHOLE connected journey a node belongs to — follow edges in both
+  // directions transitively. Selecting a node focuses this set (everything else dims).
+  const connectedTo = (id: string): Set<string> => {
+    const seen = new Set<string>([id]); const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const [f, t] of edges) {
+        if (f === cur && !seen.has(t)) { seen.add(t); stack.push(t); }
+        if (t === cur && !seen.has(f)) { seen.add(f); stack.push(f); }
+      }
+    }
+    return seen;
+  };
+  const focus = selectedId ? connectedTo(selectedId) : null;
 
   const W = 700, NODE_W = 150, NODE_H = 46, PAD = 18, ROW_GAP = 16;
 
@@ -988,14 +1035,17 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
     <div>
       {header}
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img"
+        onClick={() => { if (focus) onClear(); }}
         aria-label="Mind map of topic clusters across the funnel, color-coded by content coverage">
         {validEdges.map(([f, t]: [string, string], i: number) => {
-          const inc = hover === f || hover === t;
+          const inFocus = focus ? (focus.has(f) && focus.has(t)) : null;
+          const inc = focus ? !!inFocus : (hover === f || hover === t);
           const stroke = inc ? STATE_COLOR[pos[f].n.state] : 'var(--c-33335c)';
+          const opacity = focus ? (inFocus ? 0.95 : 0.05) : (hover ? (inc ? 0.95 : 0.07) : 0.5);
           return (
             <path key={i} d={edgePath(pos[f], pos[t])} fill="none"
               stroke={stroke} strokeWidth={inc ? 2.2 : 1.3}
-              opacity={hover ? (inc ? 0.95 : 0.07) : 0.5} />
+              opacity={opacity} />
           );
         })}
         {ordered.map((n: JourneyNode) => {
@@ -1003,13 +1053,14 @@ function MindMap({ nodes, edges, onSelect, selectedId }: {
           const col = STATE_COLOR[n.state];
           const scale = n.id === hover ? 1.15 : 1;
           const sel = n.id === selectedId;
+          const dim = focus ? !focus.has(n.id) : false;
           const label = n.name.length > 22 ? n.name.slice(0, 21) + '…' : n.name;
           return (
             <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
               onMouseEnter={() => setHover(n.id)}
               onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))}
-              onClick={() => onSelect(n)}>
+              onClick={(e) => { e.stopPropagation(); onSelect(n); }}>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
                 <rect width={NODE_W} height={NODE_H} rx={9} style={{fill:'var(--c-0d0d22)'}} stroke={col} strokeWidth={sel ? 2.4 : 1.6} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
@@ -1155,6 +1206,65 @@ function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; pro
   );
 }
 
+// v7.188: shared keyword table — every keyword in the cluster with its real Semrush
+// volume and the client's live rank. rank set → "#N" (green); competitor-only → purple
+// "competitor"; otherwise red "not ranking". Both detail panels render this.
+interface KwRow { keyword: string; volume: number; rank: number | null; state: NodeState }
+function KeywordTable({ rows }: { rows: KwRow[] }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!rows.length) return null;
+  const CAP = 12;
+  const shown = showAll ? rows : rows.slice(0, CAP);
+  const th = { textAlign: 'left' as const, fontSize: 9.5, letterSpacing: '0.04em', textTransform: 'uppercase' as const, color: 'var(--c-6a6a90)', fontWeight: 600, padding: '7px 9px', borderBottom: '1px solid var(--c-1a1a30)' };
+  const rankCell = (r: KwRow) => {
+    const [label, c] = r.rank != null
+      ? [`#${r.rank}`, STATE_COLOR.existing]
+      : (r.state === 'competitor' ? ['competitor', STATE_COLOR.competitor] : ['not ranking', STATE_COLOR.missing]);
+    return <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 20, padding: '2px 9px', color: c, background: `${c}1a`, border: `1px solid ${c}55`, whiteSpace: 'nowrap' }}>{label}</span>;
+  };
+  return (
+    <div style={{ marginTop: 6, border: '1px solid var(--c-1a1a30)', borderRadius: 8, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, tableLayout: 'fixed' }}>
+        <thead>
+          <tr>
+            <th style={th}>Keyword</th>
+            <th style={{ ...th, textAlign: 'right', width: 78 }}>Volume</th>
+            <th style={{ ...th, textAlign: 'right', width: 96 }}>Your rank</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((r: KwRow, i: number) => (
+            <tr key={i}>
+              <td style={{ padding: '7px 9px', borderBottom: '1px solid var(--c-13132a)', color: 'var(--c-c8c8e8)', fontFamily: 'monospace', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.keyword}>&ldquo;{r.keyword}&rdquo;</td>
+              <td style={{ padding: '7px 9px', borderBottom: '1px solid var(--c-13132a)', color: 'var(--c-9a9ac0)', fontFamily: 'monospace', textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtVol(r.volume)}/mo</td>
+              <td style={{ padding: '7px 9px', borderBottom: '1px solid var(--c-13132a)', textAlign: 'right' }}>{rankCell(r)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length > CAP && (
+        <button onClick={() => setShowAll((v: boolean) => !v)} style={{ width: '100%', background: 'var(--c-0d0d1e)', border: 'none', borderTop: '1px solid var(--c-1a1a30)', color: 'var(--c-8080a0)', cursor: 'pointer', fontSize: 11, padding: '7px 0' }}>
+          {showAll ? 'Show fewer' : `Show all ${rows.length} keywords`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// v7.188: focus banner — appears when a topic is selected so the focused-journey
+// state (and how to leave it) is obvious. The map dims everything off the path.
+function FocusBanner({ name, onExit }: { name: string; onExit: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '8px 12px', background: 'var(--ca-34-211-238-0_06)', border: '1px solid var(--ca-34-211-238-0_2)', borderRadius: 9, fontSize: 12, color: 'var(--c-8080a0)' }}>
+      <i className="ti ti-focus-2" style={{ color: 'var(--c-22d3ee)' }} />
+      <span>Focused journey: <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>{name}</span> — everything off this path is dimmed.</span>
+      <button onClick={onExit} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--c-1f1f3a)', color: 'var(--c-8080a0)', borderRadius: 7, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
+        Show all
+      </button>
+    </div>
+  );
+}
+
 function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () => void }) {
   if (!node) {
     return (
@@ -1199,16 +1309,10 @@ function DetailPanel({ node, onClose }: { node: JourneyNode | null; onClose: () 
         <span style={{ fontSize: 11, color: 'var(--c-8080a0)', minWidth: 96, textAlign: 'right' }}>{clientPct}% client coverage</span>
       </div>
 
-      {node.sampleKws.length > 0 && (
+      {node.keywords.length > 0 && (
         <>
-          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-            {node.sampleKws.map((k: string, i: number) => (
-              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-9a9ac0)', background: 'var(--ca-120-120-160-0_08)', border: '1px solid var(--c-1f1f3a)', borderRadius: 5, padding: '3px 7px' }}>
-                &ldquo;{k}&rdquo;
-              </span>
-            ))}
-          </div>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>KEYWORDS IN THIS CLUSTER</div>
+          <KeywordTable rows={node.keywords.map((k: NodeKw) => ({ keyword: k.keyword, volume: k.volume, rank: k.rank, state: k.state }))} />
         </>
       )}
 
@@ -1296,9 +1400,10 @@ const EDGE_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: '
 const EDGE_WHY_COLOR: Record<JEdgeKind, string> = { co: 'var(--c-22d3ee)', bridge: 'var(--c-7dd3fc)', support: 'var(--c-a78bfa)' };
 const CM_STAGES: JourneyStage[] = ['awareness', 'consideration', 'decision'];
 
-function ConnectedMap({ graph, onSelect, selectedId }: {
+function ConnectedMap({ graph, onSelect, onClear, selectedId }: {
   graph:      JGraph;
   onSelect:   (n: JGNode) => void;
+  onClear:    () => void;
   selectedId: string | null;
 }) {
   const [hover, setHover] = useState<string | null>(null);
@@ -1357,6 +1462,20 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
     return s;
   };
   const nb = hover ? neighbors(hover) : null;
+  // v7.188: the whole connected journey for the selected node (transitive over all
+  // edge kinds). Selecting focuses this set; everything else dims persistently.
+  const connectedTo = (id: string): Set<string> => {
+    const seen = new Set<string>([id]); const stack = [id];
+    while (stack.length) {
+      const cur = stack.pop()!;
+      for (const e of graph.edges) {
+        if (e.from === cur && !seen.has(e.to)) { seen.add(e.to); stack.push(e.to); }
+        if (e.to === cur && !seen.has(e.from)) { seen.add(e.from); stack.push(e.from); }
+      }
+    }
+    return seen;
+  };
+  const focus = selectedId ? connectedTo(selectedId) : null;
   const ordered = graph.nodes.slice().sort((a, b) => {
     const pri = (n: JGNode) => (n.id === hover ? 2 : n.id === selectedId ? 1 : 0);
     return pri(a) - pri(b);
@@ -1374,6 +1493,7 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
         ))}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img"
+        onClick={() => { if (focus) onClear(); }}
         aria-label="Connected audience journey: problem topics link by co-search behaviour, bridge to the product that solves them, and fan into supporting decision topics. Colour shows content coverage.">
         {/* band backgrounds */}
         <rect x={0} y={bandY.preTop - PAD / 2} width={W} height={bandY.preH + PAD} fill="var(--ca-34-211-238-0_025)" rx={8} />
@@ -1384,14 +1504,16 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
         {[1, 2].map((c) => <line key={c} x1={colW * c} y1={0} x2={colW * c} y2={H} style={{stroke:'var(--c-13132a)'}} strokeWidth={1} />)}
         {/* edges */}
         {validEdges.map((e, i: number) => {
-          const inc = hover === e.from || hover === e.to;
+          const inFocus = focus ? (focus.has(e.from) && focus.has(e.to)) : null;
+          const inc = focus ? !!inFocus : (hover === e.from || hover === e.to);
           const color = EDGE_COLOR[e.kind];
+          const opacity = focus ? (inFocus ? 0.95 : 0.04) : (hover ? (inc ? 0.95 : 0.06) : (e.kind === 'bridge' ? 0.45 : 0.42));
           return (
             <path key={i} d={edgePath(pos[e.from], pos[e.to])} fill="none"
               stroke={inc ? color : (e.kind === 'bridge' ? 'var(--c-3a5566)' : 'var(--c-33335c)')}
               strokeWidth={inc ? 2.4 : 1.3}
               strokeDasharray={e.kind === 'bridge' ? '5 4' : undefined}
-              opacity={hover ? (inc ? 0.95 : 0.06) : (e.kind === 'bridge' ? 0.45 : 0.42)} />
+              opacity={opacity} />
           );
         })}
         {/* nodes */}
@@ -1400,12 +1522,12 @@ function ConnectedMap({ graph, onSelect, selectedId }: {
           const col = STATE_COLOR[n.state];
           const scale = n.id === hover ? 1.07 : 1;
           const sel = n.id === selectedId;
-          const dim = nb ? !nb.has(n.id) : false;
+          const dim = focus ? !focus.has(n.id) : (nb ? !nb.has(n.id) : false);
           const label = n.name.length > 24 ? n.name.slice(0, 23) + '…' : n.name;
           const badge = n.action === 'optimize' ? 'Existing' : 'Build new';
           return (
             <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
-              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={() => onSelect(n)}>
+              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={(e) => { e.stopPropagation(); onSelect(n); }}>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
                 <rect width={NODE_W} height={NODE_H} rx={9} style={{fill:'var(--c-0d0d22)'}} stroke={col} strokeWidth={n.kind === 'core' ? 2.3 : (sel ? 2.3 : 1.5)} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
@@ -1476,6 +1598,9 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
     : node.state === 'competitor'
       ? 'A competitor owns this step and you do not — build comparable depth to capture it.'
       : 'No coverage from you or tracked competitors — a net-new page to build.';
+  // v7.188: best (lowest) client rank across the cluster's keywords, for the page CTA.
+  const rankedPositions = node.keywords.map((k) => k.rank).filter((r): r is number => r != null);
+  const bestRank = rankedPositions.length ? Math.min(...rankedPositions) : null;
   return (
     <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
@@ -1504,14 +1629,18 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
         )) : <span style={{ color: 'var(--c-4a4a6a)', fontSize: 11.5 }}>Standalone entry point.</span>}
       </div>
 
-      {node.sampleKws.length > 0 && (
+      <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>YOUR COVERAGE OF THIS TOPIC&rsquo;S DEMAND</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+        <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'var(--c-1a1a30)', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${node.clientCovPct}%`, background: col }} />
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--c-8080a0)', minWidth: 132, textAlign: 'right' }}>{node.clientCovPct}% of {fmtVol(node.totalVol)}/mo ranked</span>
+      </div>
+
+      {node.keywords.length > 0 && (
         <>
-          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>REPRESENTATIVE KEYWORDS</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-            {node.sampleKws.map((k: string, i: number) => (
-              <span key={i} style={{ fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-9a9ac0)', background: 'var(--ca-120-120-160-0_08)', border: '1px solid var(--c-1f1f3a)', borderRadius: 5, padding: '3px 7px' }}>&ldquo;{k}&rdquo;</span>
-            ))}
-          </div>
+          <div style={{ fontSize: 10, letterSpacing: '0.08em', color: 'var(--c-4a4a6a)', marginTop: 14 }}>KEYWORDS IN THIS CLUSTER</div>
+          <KeywordTable rows={node.keywords.map((k) => ({ keyword: k.keyword, volume: k.searchVolume, rank: k.rank, state: k.state }))} />
         </>
       )}
 
@@ -1523,6 +1652,7 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
       {node.url ? (
         <a href={node.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px', textDecoration: 'none' }}>
           <i className="ti ti-external-link" /> Optimize existing page <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>{node.url}</span>
+          {bestRank != null && <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>· best rank #{bestRank}</span>}
         </a>
       ) : (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 12, fontSize: 12, fontWeight: 600, color: col, background: 'transparent', border: `1px solid ${col}55`, borderRadius: 8, padding: '7px 12px' }}>
@@ -1544,6 +1674,19 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
   const [selectedGraphNode, setSelectedGraphNode] = useState<JGNode | null>(null);   // v7.175 connected-map selection
+  // v7.188: scroll the detail panel into view on select (it sits below the map, so a
+  // click otherwise looked like nothing happened) + Esc clears the focused journey.
+  const detailRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected || selectedGraphNode) {
+      detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [selected, selectedGraphNode]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setSelected(null); setSelectedGraphNode(null); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // v7.155: demand universe (persisted on the snapshot once the on-demand build runs)
   const [demandUniverse, setDemandUniverse] = useState<DemandUniverse | null>(
     () => readDemandCache(analysis),   // v7.157: snapshot → localStorage fallback (survives tab remount)
@@ -1624,9 +1767,31 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   );
   // activeTab is 'combined' (→ null, no filter), a segment.id, or SHARED_BUCKET.
   const activeBucketId = activeTab === 'combined' ? null : activeTab;
+
+  // v7.188: keyword → client SERP position (rank), so the detail panel can show the
+  // live rank next to each keyword. Source = the snapshot's ranked rows (topKeywords
+  // carry position) plus any uploaded/CSV rows that carry a position. Declared before
+  // the demand/graph builders that consume it (no temporal-dead-zone).
+  const rankByKeyword = useMemo(() => {
+    const m: Record<string, number> = {};
+    const snap = (analysis?.semrushSnapshot as any) ?? {};
+    for (const k of (snap.topKeywords ?? [])) {
+      const kw = (k.keyword ?? '').toLowerCase().trim();
+      const pos = k.position;
+      if (kw && pos != null && pos > 0 && (m[kw] == null || pos < m[kw])) m[kw] = pos;
+    }
+    for (const k of (uploadedKeywords ?? [])) {
+      if (k.source === 'blocked' || k.type === 'gap') continue;
+      const kw = (k.keyword ?? '').toLowerCase().trim();
+      const pos = k.position;
+      if (kw && pos != null && pos > 0 && (m[kw] == null || pos < m[kw])) m[kw] = pos;
+    }
+    return m;
+  }, [analysis, uploadedKeywords]);
+
   const demand = useMemo(
-    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeBucketId, seedBucket) : null,
-    [demandMode, demandUniverse, footprint, activeBucketId, seedBucket],
+    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeBucketId, seedBucket, rankByKeyword) : null,
+    [demandMode, demandUniverse, footprint, activeBucketId, seedBucket, rankByKeyword],
   );
 
   const preNodes  = demand ? demand.preNodes  : fpPreNodes;
@@ -1669,9 +1834,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const graph = useMemo<JGraph | null>(
     () => demandMode ? buildJourneyGraph(demandUniverse as any, {
       clientRanked: footprint.client, competitorRanked: footprint.competitor,
-      urlByKeyword, activeBucketId, seedBucket, themeLabels,
+      urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels,
     }) : null,
-    [demandMode, demandUniverse, footprint, urlByKeyword, activeBucketId, seedBucket, themeLabels],
+    [demandMode, demandUniverse, footprint, urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels],
   );
 
   // v7.156: consume the route's NDJSON progress stream so the UI shows a
@@ -2030,10 +2195,13 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             </div>
             {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="var(--c-22d3ee)" />}
             {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
-            <ConnectedMap graph={graph} onSelect={setSelectedGraphNode} selectedId={selectedGraphNode?.id ?? null} />
+            <ConnectedMap graph={graph} onSelect={setSelectedGraphNode} onClear={() => setSelectedGraphNode(null)} selectedId={selectedGraphNode?.id ?? null} />
           </div>
 
-          <GraphDetail node={selectedGraphNode} graph={graph} onClose={() => setSelectedGraphNode(null)} />
+          <div ref={detailRef}>
+            {selectedGraphNode && <FocusBanner name={selectedGraphNode.name} onExit={() => setSelectedGraphNode(null)} />}
+            <GraphDetail node={selectedGraphNode} graph={graph} onClose={() => setSelectedGraphNode(null)} />
+          </div>
         </>
       ) : (
         /* Footprint mode (no demand universe yet) — the v7.161 two-lane view. */
@@ -2058,7 +2226,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               </div>
             </div>
             {preLLMPrompts.length > 0 && <PromptStrip prompts={preLLMPrompts} accent="var(--c-22d3ee)" />}
-            <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+            <MindMap nodes={preNodes} edges={preEdges} onSelect={setSelected} onClear={() => setSelected(null)} selectedId={selected?.id ?? null} />
             <CompletenessRow nodes={preNodes} />
           </div>
 
@@ -2075,11 +2243,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               </div>
             </div>
             {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
-            <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} selectedId={selected?.id ?? null} />
+            <MindMap nodes={prodNodes} edges={prodEdges} onSelect={setSelected} onClear={() => setSelected(null)} selectedId={selected?.id ?? null} />
             <CompletenessRow nodes={prodNodes} />
           </div>
 
-          <DetailPanel node={selected} onClose={() => setSelected(null)} />
+          <div ref={detailRef}>
+            {selected && <FocusBanner name={selected.name} onExit={() => setSelected(null)} />}
+            <DetailPanel node={selected} onClose={() => setSelected(null)} />
+          </div>
         </>
       )}
     </div>
