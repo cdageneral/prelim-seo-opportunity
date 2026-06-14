@@ -205,23 +205,50 @@ function matchKeywordToCategory(
 // product; only keywords that name no solution (problem/symptom/desire) are
 // pre-product, grouped into life-problem themes. Kept as a local copy so this
 // panel stays self-contained, consistent with the Journey panel's definition.
-const ANATOMY_WORDS = new Set<string>([
-  'breast','breasts','boob','boobs','chest','nipple','nipples',
-  'stomach','belly','tummy','abdomen','abdominal','waist','waistline','midsection','flank','flanks',
-  'chin','neck','jaw','jawline','face','facial','cheek','cheeks','eye','eyes','eyelid','brow',
-  'arm','arms','thigh','thighs','leg','legs','knee','calf','calves','ankle',
-  'hip','hips','butt','buttock','buttocks','back','bra','love','handle','handles',
-  'skin','fat','cellulite','body','double','area','areas','muffin','top','bulge','bulges',
-]);
+// v7.187: cosmetic ANATOMY_WORDS removed (see JourneySection). Distinctive
+// procedure words are now DERIVED from this project's own data (buildProcWordsByCat).
 const PROC_NAME_NOISE = new Set<string>([
   'with','from','that','this','your','near','best','top',
   'cost','costs','price','prices','pricing','reviews','review',
   'services','service','treatment','treatments','procedure','procedures',
   'clinic','center','centre','before','after','results','recovery','specials','financing',
 ]);
-function procedureWords(name: string): string[] {
-  return name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-    .filter((w: string) => w.length >= 4 && !ANATOMY_WORDS.has(w) && !PROC_NAME_NOISE.has(w));
+const GENERIC_STOP = new Set<string>([
+  'what','whats','when','where','which','will','would','could','should','about',
+  'they','their','them','then','than','this','that','with','from','your','yours',
+  'have','having','need','needs','want','wants','looking','search','searches',
+  'help','tips','does','done','into','over','more','some','very','just','like',
+  'cant','wont','know','make','made','being','been','much','many','good','best',
+  'near','area','areas','using','used','also','around','versus',
+]);
+function tokensOf(text: string): string[] {
+  return ((text ?? '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((w: string) => w.length >= 4 && !GENERIC_STOP.has(w) && !PROC_NAME_NOISE.has(w));
+}
+function tokenMatches(a: string, b: string): boolean {
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+// Distinctive procedure word(s) per procedure category, data-derived (drops words
+// shared by 2+ categories or used in the audience's own problem language).
+function buildProcWordsByCat(
+  categories: Array<{ name: string; type: string }>,
+  problemLangTokens: Set<string>,
+): Map<string, string[]> {
+  const freq = new Map<string, number>();
+  const perCat = new Map<string, string[]>();
+  for (const c of categories) {
+    const words = Array.from(new Set(tokensOf(c.name)));
+    perCat.set(c.name, words);
+    for (const w of words) freq.set(w, (freq.get(w) ?? 0) + 1);
+  }
+  const out = new Map<string, string[]>();
+  for (const c of categories) {
+    if (c.type !== 'procedure') continue;
+    const all = perCat.get(c.name) ?? [];
+    const distinctive = all.filter((w: string) => (freq.get(w) ?? 0) < 2 && !problemLangTokens.has(w));
+    out.set(c.name, distinctive.length ? distinctive : all);
+  }
+  return out;
 }
 function brandTokensOf(clientDomain: string, competitorDomains: string[]): string[] {
   const baseBrands = [clientDomain, ...competitorDomains].map(extractBrand).filter((b: string) => b.length >= 4);
@@ -250,68 +277,93 @@ function namesSolutionFor(
   }
   return procWords.some((w: string) => kwLow.includes(w));
 }
-const PROBLEM_ANCHORS: Array<[string, string]> = [
-  ['love handle', 'Love Handles'], ['muffin top', 'Muffin Top'], ['double chin', 'Double Chin'],
-  ['loose skin', 'Loose / Sagging Skin'], ['saggy', 'Loose / Sagging Skin'], ['sagging', 'Loose / Sagging Skin'],
-  ['belly', 'Belly / Midsection'], ['stomach', 'Belly / Midsection'], ['tummy', 'Belly / Midsection'], ['midsection', 'Belly / Midsection'],
-  ['breast', 'Breast Concerns'], ['boob', 'Breast Concerns'], ['chest', 'Breast Concerns'],
-  ['chin', 'Chin / Neck'], ['neck', 'Chin / Neck'], ['jowl', 'Chin / Neck'],
-  ['thigh', 'Legs / Thighs'], ['leg', 'Legs / Thighs'], ['calf', 'Legs / Thighs'], ['knee', 'Legs / Thighs'],
-  ['arm', 'Arm Concerns'],
-  ['weight', 'Weight Loss'], ['obese', 'Weight Loss'], ['bmi', 'Weight Loss'],
-  ['cellulite', 'Cellulite'], ['wrinkle', 'Aging / Wrinkles'], ['aging', 'Aging / Wrinkles'],
-  ['fat', 'Stubborn Fat'], ['bulge', 'Stubborn Fat'],
+// ─── v7.187: project-spec problem vocabulary (domain-agnostic) ──────────────────
+// Mirrors JourneySection. Problem THEMES and the relevance gate derive from THIS
+// project's audience language + category/brand tokens — no cosmetic vocabulary.
+const PROBLEM_LEAD = [
+  'how much does a','how much does','how much is a','how much is','how much',
+  'how do i','how do you','how can i','how to get rid of','how to lose','how to fix','how to',
+  'what is the best','whats the best','what to do about','what is a','what is','what are',
+  'why cant i','why wont my','why do i','why is my','why is',
+  'best way to','best ways to','ways to','is there a way to','can you','do i need',
+  'help with','i have','i want to','i need to','tips for','tips to',
 ];
-function deterministicProblemTheme(keyword: string): string {
-  const k = keyword.toLowerCase();
-  for (const [needle, theme] of PROBLEM_ANCHORS) { if (k.includes(needle)) return theme; }
-  return 'General Problem Searches';
+const PROBLEM_TAIL = [' fast',' quickly',' naturally',' at home',' on my own',' for good'];
+const PROBLEM_STOP_HEAD = new Set(['the','a','an','my','your','to','of','for','is','are','do','does','will','can','i','it','that','this']);
+
+function conciseSeed(prompt: string): string {
+  let s = (prompt ?? '').toLowerCase().replace(/["“”?.!]/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const lead of PROBLEM_LEAD) { if (s.startsWith(lead + ' ')) { s = s.slice(lead.length).trim(); changed = true; break; } }
+  }
+  for (const tail of PROBLEM_TAIL) { if (s.endsWith(tail)) s = s.slice(0, s.length - tail.length).trim(); }
+  const parts = s.split(' ');
+  while (parts.length > 1 && PROBLEM_STOP_HEAD.has(parts[0])) parts.shift();
+  return parts.slice(0, 5).join(' ').trim();
 }
 
-// ─── v7.173: client-relevance gate (deterministic, defensible) ──────────────────
-// A keyword only enters the pre-product "problem" pool if it is topically
-// relevant to THIS client's demand domain. It must EITHER hit a curated
-// body-problem anchor, OR name a body area (whole-word anatomy term), OR share a
-// distinctive token with the client's own category names or brand. A keyword
-// that names no solution AND matches none of these (e.g. "what is a hurricane",
-// "israel palestine conflict explained", "what about daca") is off-topic noise:
-// it shares zero vocabulary with the client and is dropped from the demand
-// universe BEFORE clustering, so it can never surface as a content brief or roll
-// into the executive summary. No AI and no modeling — every drop is explainable
-// by the keyword having no overlap with the client's anchors, anatomy, category
-// names, or brand. The relevance vocabulary is the same body/aesthetic domain
-// the rest of this panel already uses (PROBLEM_ANCHORS / ANATOMY_WORDS) plus the
-// client's real category and brand tokens.
+interface ProblemVocab { seeds: Array<{ head: string; toks: string[] }>; langTokens: Set<string> }
+
+function deriveProblemVocab(analysis: any): ProblemVocab {
+  const segs: any[] = (analysis?.semrushSnapshot as any)?._audienceSegments ?? [];
+  const prompts: string[] = [];
+  for (const s of segs) {
+    for (const p of (s?.preLLMPrompts ?? [])) prompts.push(String(p ?? ''));
+    prompts.push(String(s?.whoTheyAre?.trigger ?? ''));
+  }
+  const langTokens = new Set<string>();
+  for (const p of prompts) for (const t of tokensOf(p)) langTokens.add(t);
+  const seedMap = new Map<string, string[]>();
+  for (const p of prompts) {
+    const head = conciseSeed(p);
+    if (!head) continue;
+    const toks = tokensOf(head);
+    if (toks.length === 0) continue;
+    if (!seedMap.has(head)) seedMap.set(head, toks);
+  }
+  return { seeds: Array.from(seedMap.entries()).map(([head, toks]) => ({ head, toks })), langTokens };
+}
+
+function titleCaseTheme(s: string): string {
+  return s.replace(/(^|\s)([a-z0-9])/g, (_m: string, sp: string, c: string) => sp + c.toUpperCase());
+}
+
+function deterministicProblemTheme(keyword: string, vocab: ProblemVocab): string {
+  const kt = tokensOf(keyword);
+  if (kt.length === 0) return 'General Problem Searches';
+  let best: string | null = null; let bestScore = 0;
+  for (const seed of vocab.seeds) {
+    let score = 0;
+    for (const w of kt) for (const sw of seed.toks) { if (tokenMatches(w, sw)) { score++; break; } }
+    if (score > bestScore) { bestScore = score; best = seed.head; }
+  }
+  return bestScore > 0 && best ? titleCaseTheme(best) : 'General Problem Searches';
+}
+
+// ─── v7.187: client-relevance gate (deterministic, defensible, project-spec) ─────
+// A keyword enters the pre-product "problem" pool only if it shares a distinctive
+// token with the client's category names, brand, OR its audience's own language.
+// Off-topic noise (no shared token) is dropped before clustering, so it can never
+// surface as a content brief or roll into the executive summary. No AI, no modeling.
 function buildRelevanceTokens(
   categories: Array<{ name: string; type: string }>,
   clientDomain: string,
   competitorDomains: string[],
+  problemLangTokens: Set<string>,
 ): Set<string> {
   const tokens = new Set<string>();
-  for (const c of categories) {
-    const words = c.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter((w: string) => w.length >= 4 && !PROC_NAME_NOISE.has(w));
-    for (const w of words) tokens.add(w);
-  }
-  for (const t of brandTokensOf(clientDomain, competitorDomains)) {
-    if (t.length >= 4) tokens.add(t);
-  }
+  for (const c of categories) for (const w of tokensOf(c.name)) tokens.add(w);
+  for (const t of brandTokensOf(clientDomain, competitorDomains)) { if (t.length >= 4) tokens.add(t); }
+  for (const t of Array.from(problemLangTokens)) tokens.add(t);
   return tokens;
 }
 
 function isClientRelevant(keyword: string, relevanceTokens: Set<string>): boolean {
-  const k = keyword.toLowerCase();
-  // 1) curated body-problem anchor (belly, chin, weight, fat, cellulite, …)
-  for (const [needle] of PROBLEM_ANCHORS) { if (k.includes(needle)) return true; }
-  // 2) names a body area — whole-word anatomy term (avoids 'leg' inside 'legal')
-  for (const raw of k.split(/\s+/)) {
-    const w = raw.replace(/[^a-z0-9]/g, '');
-    if (w && ANATOMY_WORDS.has(w)) return true;
-  }
-  // 3) shares a distinctive token with the client's categories or brand
-  // Array.from: project tsconfig has no `target` -> ES5; iterating a Set directly
-  // needs downlevelIteration. Array.from keeps the build green (v7.174).
-  for (const t of Array.from(relevanceTokens)) { if (k.includes(t)) return true; }
+  const rt = Array.from(relevanceTokens);
+  for (const w of tokensOf(keyword)) for (const t of rt) { if (tokenMatches(w, t)) return true; }
   return false;
 }
 
@@ -388,17 +440,16 @@ function buildClusters(
     });
   }
 
-  // v7.154: route keywords by solution awareness (mirrors JourneySection).
-  const procWordsByCat = new Map<string, string[]>();
-  for (const c of categories) {
-    if (c.type === 'procedure') procWordsByCat.set(c.name, procedureWords(c.name));
-  }
+  // v7.154/v7.187: route keywords by solution awareness (mirrors JourneySection).
+  const vocab = deriveProblemVocab(analysis);
+  const procWordsByCat = buildProcWordsByCat(categories, vocab.langTokens);
 
   const catMap = new Map<string, KwItem[]>();
   categories.forEach((c: { name: string }) => catMap.set(c.name, []));
   const problemPool: KwItem[] = [];
-  // v7.173: vocabulary the client actually owns — drives the relevance gate below.
-  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains);
+  // v7.187: vocabulary the client actually owns (categories + brand + audience
+  // language) — drives the relevance gate below.
+  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
     let cand: string | null = null;
@@ -422,7 +473,7 @@ function buildClusters(
 
   const problemGroups = new Map<string, KwItem[]>();
   for (const kw of problemPool) {
-    const theme = deterministicProblemTheme(kw.keyword);
+    const theme = deterministicProblemTheme(kw.keyword, vocab);
     if (!problemGroups.has(theme)) problemGroups.set(theme, []);
     problemGroups.get(theme)!.push(kw);
   }
@@ -638,12 +689,13 @@ function assignPageToCluster(
   clusterNames: Set<string>,
   clientDomain: string,
   competitorDomains: string[],
+  vocab: ProblemVocab,
 ): string | null {
   const tally = new Map<string, number>();
   for (const kw of pageKeywords) {
     if (!kw) continue;
     let name = matchKeywordToCategory(kw, categories, clientDomain, competitorDomains);
-    if (!name) name = deterministicProblemTheme(kw);
+    if (!name) name = deterministicProblemTheme(kw, vocab);
     if (name) tally.set(name, (tally.get(name) ?? 0) + 1);
   }
   let best: string | null = null, bestN = 0;
@@ -900,10 +952,11 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     const pages = pageMap?.pages ?? [];
     if (!pages.length) return null;   // no page-pull yet → fall back to keyword-url mapping
     const clusterNames = new Set(clusters.map((c: ThemeCluster) => c.name));
+    const vocab = deriveProblemVocab(analysis);   // v7.187: project-spec theme names
     const byCluster = new Map<string, string[]>();
     for (const pg of pages) {
       if (!pg?.url) continue;
-      const name = assignPageToCluster(pg.keywords ?? [], categories, clusterNames, clientDomain, competitors ?? []);
+      const name = assignPageToCluster(pg.keywords ?? [], categories, clusterNames, clientDomain, competitors ?? [], vocab);
       if (!name) continue;
       if (!byCluster.has(name)) byCluster.set(name, []);
       byCluster.get(name)!.push(pg.url);

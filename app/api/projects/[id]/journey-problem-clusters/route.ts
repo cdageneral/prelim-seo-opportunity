@@ -80,9 +80,9 @@ export async function POST(
 
   const prompt = `You are organizing PRE-PRODUCT search queries for a ${industry} website (${domain}).
 
-These searches all share one trait: the person has a LIFE PROBLEM, symptom, or desire, but does NOT name any specific procedure, product, or brand. They do not yet know the solution exists. (Solution-named searches like "breast lift cost" have already been removed — do not expect them here.)
+These searches all share one trait: the person has a LIFE PROBLEM, symptom, goal, or desire, but does NOT name any specific product, service, procedure, or brand. They do not yet know the solution exists. (Solution-named searches have already been removed — do not expect them here.)
 
-Group these queries into 3-7 THEMES named after the LIFE PROBLEM in the searcher's own words — e.g. "Loose Skin After Weight Loss", "Stubborn Belly Fat", "Sagging After Pregnancy". NEVER name a theme after a procedure, product, or brand (no "Liposuction", no "Tummy Tuck"). Keep theme names short (2-5 words) and human.
+Group these queries into 3-7 THEMES named after the PROBLEM or GOAL in the searcher's own words, drawn ONLY from the language of THESE queries and this ${industry} domain — not from any other industry. NEVER name a theme after a product, service, procedure, or brand. Keep theme names short (2-5 words) and human. (For example, for a personal-finance site themes might be "Building An Emergency Fund" or "Where To Park Idle Cash"; for a fitness site, "Losing Belly Fat" — always mirror the actual queries, never a fixed list.)
 
 Assign EVERY query to exactly one theme.
 

@@ -211,18 +211,15 @@ function matchKeywordToCategory(
 // so cluster membership keys off the distinctive PROCEDURE word ("lift",
 // "liposuction", "removal"), never the body part.
 
-// Body-part words that appear in BOTH procedure names and problem searches.
-const ANATOMY_WORDS = new Set<string>([
-  'breast','breasts','boob','boobs','chest','nipple','nipples',
-  'stomach','belly','tummy','abdomen','abdominal','waist','waistline','midsection','flank','flanks',
-  'chin','neck','jaw','jawline','face','facial','cheek','cheeks','eye','eyes','eyelid','brow',
-  'arm','arms','thigh','thighs','leg','legs','knee','calf','calves','ankle',
-  'hip','hips','butt','buttock','buttocks','back','bra','love','handle','handles',
-  'skin','fat','cellulite','body','double','area','areas','muffin','top','bulge','bulges',
-]);
+// v7.187: the hardcoded cosmetic ANATOMY_WORDS list was REMOVED. It existed to
+// strip body parts from procedure names, but it was a single-vertical vocabulary
+// that also leaked into the relevance gate and theme namer below, mislabeling
+// unrelated terms in non-cosmetic projects. The "distinctive procedure word" of a
+// category is now DERIVED from this project's own data (buildProcWordsByCat).
 
 // Commerce/format modifiers that sit inside category names but are not the
-// procedure itself (so they are stripped when deriving the distinctive word).
+// solution itself (so they are stripped when deriving the distinctive word).
+// Industry-neutral.
 const PROC_NAME_NOISE = new Set<string>([
   'with','from','that','this','your','near','best','top',
   'cost','costs','price','prices','pricing','reviews','review',
@@ -230,10 +227,58 @@ const PROC_NAME_NOISE = new Set<string>([
   'clinic','center','centre','before','after','results','recovery','specials','financing',
 ]);
 
-// Distinctive procedure words from a category name (drop anatomy + noise).
-function procedureWords(name: string): string[] {
-  return name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-    .filter((w: string) => w.length >= 4 && !ANATOMY_WORDS.has(w) && !PROC_NAME_NOISE.has(w));
+// Generic stop list for tokenizing client/segment language (industry-neutral —
+// no vertical vocabulary). Used by every derivation below.
+const GENERIC_STOP = new Set<string>([
+  'what','whats','when','where','which','will','would','could','should','about',
+  'they','their','them','then','than','this','that','with','from','your','yours',
+  'have','having','need','needs','want','wants','looking','search','searches',
+  'help','tips','does','done','into','over','more','some','very','just','like',
+  'cant','wont','know','make','made','being','been','much','many','good','best',
+  'near','area','areas','using','used','also','around','versus',
+]);
+
+// Distinctive content tokens of any string (≥4 chars, not generic/commerce noise).
+function tokensOf(text: string): string[] {
+  return ((text ?? '').toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((w: string) => w.length >= 4 && !GENERIC_STOP.has(w) && !PROC_NAME_NOISE.has(w));
+}
+
+// Two tokens "match" if they share a ≥4-char stem (prefix). Lets "invest" match
+// "investing"/"investment" (recall) WITHOUT the cross-word substring false matches
+// the old whole-string includes() caused (e.g. "arm" inside "pharmacy", "chin"
+// inside "matching").
+function tokenMatches(a: string, b: string): boolean {
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+// v7.187: distinctive procedure word(s) per procedure category, DERIVED from this
+// project's data instead of a hardcoded anatomy list. A word qualifies as the
+// distinctive solution signal only if it (a) is a real token of the category name,
+// (b) is NOT shared by 2+ categories (a shared word can't distinguish them), and
+// (c) does NOT appear in the audience's own problem language (so a noun the
+// searcher uses to describe the PROBLEM — a body area, an account type, … — is not
+// mistaken for naming the SOLUTION). Falls back to all category tokens if the
+// filters leave nothing, so the product gate always has a signal.
+function buildProcWordsByCat(
+  categories: Array<{ name: string; type: string }>,
+  problemLangTokens: Set<string>,
+): Map<string, string[]> {
+  const freq = new Map<string, number>();
+  const perCat = new Map<string, string[]>();
+  for (const c of categories) {
+    const words = Array.from(new Set(tokensOf(c.name)));
+    perCat.set(c.name, words);
+    for (const w of words) freq.set(w, (freq.get(w) ?? 0) + 1);
+  }
+  const out = new Map<string, string[]>();
+  for (const c of categories) {
+    if (c.type !== 'procedure') continue;
+    const all = perCat.get(c.name) ?? [];
+    const distinctive = all.filter((w: string) => (freq.get(w) ?? 0) < 2 && !problemLangTokens.has(w));
+    out.set(c.name, distinctive.length ? distinctive : all);
+  }
+  return out;
 }
 
 // Strict (substring-only) brand match for the solution gate. Reuses the brand
@@ -273,69 +318,112 @@ function namesSolutionFor(
   return procWords.some((w: string) => kwLow.includes(w));
 }
 
-// Deterministic pre-product theme (fallback when the AI naming pass is
-// unavailable). Anchors on the most salient body-part/problem token so themes
-// are domain-agnostic; the AI route replaces these with cleaner names.
-const PROBLEM_ANCHORS: Array<[string, string]> = [
-  ['love handle', 'Love Handles'], ['muffin top', 'Muffin Top'], ['double chin', 'Double Chin'],
-  ['loose skin', 'Loose / Sagging Skin'], ['saggy', 'Loose / Sagging Skin'], ['sagging', 'Loose / Sagging Skin'],
-  ['belly', 'Belly / Midsection'], ['stomach', 'Belly / Midsection'], ['tummy', 'Belly / Midsection'], ['midsection', 'Belly / Midsection'],
-  ['breast', 'Breast Concerns'], ['boob', 'Breast Concerns'], ['chest', 'Breast Concerns'],
-  ['chin', 'Chin / Neck'], ['neck', 'Chin / Neck'], ['jowl', 'Chin / Neck'],
-  ['thigh', 'Legs / Thighs'], ['leg', 'Legs / Thighs'], ['calf', 'Legs / Thighs'], ['knee', 'Legs / Thighs'],
-  ['arm', 'Arm Concerns'],
-  ['weight', 'Weight Loss'], ['obese', 'Weight Loss'], ['bmi', 'Weight Loss'],
-  ['cellulite', 'Cellulite'], ['wrinkle', 'Aging / Wrinkles'], ['aging', 'Aging / Wrinkles'],
-  ['fat', 'Stubborn Fat'], ['bulge', 'Stubborn Fat'],
+// ─── v7.187: project-spec problem vocabulary (domain-agnostic) ──────────────────
+// Pre-product problem THEMES and the relevance gate are now derived from THIS
+// project's own audience language (segment pre-LLM prompts + triggers) plus the
+// client's category/brand tokens. The old cosmetic PROBLEM_ANCHORS map ("chin →
+// Chin / Neck", "arm → Arm Concerns", …) and the anatomy relevance path were
+// REMOVED: their substring matching mislabeled unrelated terms in non-cosmetic
+// projects (e.g. "arm" in adjustable-rate mortgage, "chin" inside "matching"). The
+// AI naming route (journey-problem-clusters) still supplies human theme names when
+// available; these deterministic names are only the fallback.
+
+// Reduce a full pre-LLM prompt to a short problem head term (≤5 words) by stripping
+// question scaffolding + generic tails — the SAME reduction the demand-universe
+// route uses for its seeds, so the panel and the deep build agree.
+const PROBLEM_LEAD = [
+  'how much does a','how much does','how much is a','how much is','how much',
+  'how do i','how do you','how can i','how to get rid of','how to lose','how to fix','how to',
+  'what is the best','whats the best','what to do about','what is a','what is','what are',
+  'why cant i','why wont my','why do i','why is my','why is',
+  'best way to','best ways to','ways to','is there a way to','can you','do i need',
+  'help with','i have','i want to','i need to','tips for','tips to',
 ];
-function deterministicProblemTheme(keyword: string): string {
-  const k = keyword.toLowerCase();
-  for (const [needle, theme] of PROBLEM_ANCHORS) { if (k.includes(needle)) return theme; }
-  return 'General Problem Searches';
+const PROBLEM_TAIL = [' fast',' quickly',' naturally',' at home',' on my own',' for good'];
+const PROBLEM_STOP_HEAD = new Set(['the','a','an','my','your','to','of','for','is','are','do','does','will','can','i','it','that','this']);
+
+function conciseSeed(prompt: string): string {
+  let s = (prompt ?? '').toLowerCase().replace(/["“”?.!]/g, '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const lead of PROBLEM_LEAD) { if (s.startsWith(lead + ' ')) { s = s.slice(lead.length).trim(); changed = true; break; } }
+  }
+  for (const tail of PROBLEM_TAIL) { if (s.endsWith(tail)) s = s.slice(0, s.length - tail.length).trim(); }
+  const parts = s.split(' ');
+  while (parts.length > 1 && PROBLEM_STOP_HEAD.has(parts[0])) parts.shift();
+  return parts.slice(0, 5).join(' ').trim();
 }
 
-// ─── v7.173: client-relevance gate (deterministic, defensible) ──────────────────
-// Mirrors ContentMapSection. A keyword only enters the pre-product "problem" pool
-// if it is topically relevant to THIS client's demand domain: it must EITHER hit
-// a curated body-problem anchor, OR name a body area (whole-word anatomy term),
-// OR share a distinctive token with the client's own category names or brand. A
-// keyword that names no solution AND matches none of these (e.g. "what is a
-// hurricane", "israel palestine conflict explained") is off-topic noise: it
-// shares zero vocabulary with the client and is dropped from the demand universe
-// BEFORE clustering. Because this buildClusters is the SAME one the Executive
-// Summary consumes, the drop also keeps the rollup clean. No AI, no modeling —
-// every drop is explainable by zero overlap with the client's anchors, anatomy,
-// category names, or brand.
+interface ProblemVocab { seeds: Array<{ head: string; toks: string[] }>; langTokens: Set<string> }
+
+// Build the project's problem vocabulary from its audience segments.
+function deriveProblemVocab(analysis: any): ProblemVocab {
+  const segs: any[] = (analysis?.semrushSnapshot as any)?._audienceSegments ?? [];
+  const prompts: string[] = [];
+  for (const s of segs) {
+    for (const p of (s?.preLLMPrompts ?? [])) prompts.push(String(p ?? ''));
+    prompts.push(String(s?.whoTheyAre?.trigger ?? ''));
+  }
+  const langTokens = new Set<string>();
+  for (const p of prompts) for (const t of tokensOf(p)) langTokens.add(t);
+
+  const seedMap = new Map<string, string[]>();
+  for (const p of prompts) {
+    const head = conciseSeed(p);
+    if (!head) continue;
+    const toks = tokensOf(head);
+    if (toks.length === 0) continue;
+    if (!seedMap.has(head)) seedMap.set(head, toks);
+  }
+  return { seeds: Array.from(seedMap.entries()).map(([head, toks]) => ({ head, toks })), langTokens };
+}
+
+function titleCaseTheme(s: string): string {
+  return s.replace(/(^|\s)([a-z0-9])/g, (_m: string, sp: string, c: string) => sp + c.toUpperCase());
+}
+
+// Deterministic pre-product theme (fallback when AI naming is unavailable): the
+// project's own problem head term whose words best overlap the keyword. Always
+// THIS client's language; never a vertical vocabulary. Generic bucket if nothing
+// overlaps.
+function deterministicProblemTheme(keyword: string, vocab: ProblemVocab): string {
+  const kt = tokensOf(keyword);
+  if (kt.length === 0) return 'General Problem Searches';
+  let best: string | null = null; let bestScore = 0;
+  for (const seed of vocab.seeds) {
+    let score = 0;
+    for (const w of kt) for (const sw of seed.toks) { if (tokenMatches(w, sw)) { score++; break; } }
+    if (score > bestScore) { bestScore = score; best = seed.head; }
+  }
+  return bestScore > 0 && best ? titleCaseTheme(best) : 'General Problem Searches';
+}
+
+// ─── v7.187: client-relevance gate (deterministic, defensible, project-spec) ─────
+// A keyword enters the pre-product "problem" pool only if it shares a distinctive
+// token with something this client actually owns: its category names, its brand,
+// OR its audience's own language (segment prompts + triggers). A keyword that names
+// no solution AND shares no token (e.g. "what is a hurricane") is off-topic noise:
+// dropped BEFORE clustering. Because this buildClusters is the SAME one the
+// Executive Summary consumes, the drop also keeps the rollup clean. No AI, no
+// modeling — every drop is explainable by zero token overlap with the client.
 function buildRelevanceTokens(
   categories: Array<{ name: string; type: string }>,
   clientDomain: string,
   competitorDomains: string[],
+  problemLangTokens: Set<string>,
 ): Set<string> {
   const tokens = new Set<string>();
-  for (const c of categories) {
-    const words = c.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter((w: string) => w.length >= 4 && !PROC_NAME_NOISE.has(w));
-    for (const w of words) tokens.add(w);
-  }
-  for (const t of brandTokensOf(clientDomain, competitorDomains)) {
-    if (t.length >= 4) tokens.add(t);
-  }
+  for (const c of categories) for (const w of tokensOf(c.name)) tokens.add(w);
+  for (const t of brandTokensOf(clientDomain, competitorDomains)) { if (t.length >= 4) tokens.add(t); }
+  for (const t of Array.from(problemLangTokens)) tokens.add(t);   // the client's own audience language
   return tokens;
 }
 
 function isClientRelevant(keyword: string, relevanceTokens: Set<string>): boolean {
-  const k = keyword.toLowerCase();
-  // 1) curated body-problem anchor (belly, chin, weight, fat, cellulite, …)
-  for (const [needle] of PROBLEM_ANCHORS) { if (k.includes(needle)) return true; }
-  // 2) names a body area — whole-word anatomy term (avoids 'leg' inside 'legal')
-  for (const raw of k.split(/\s+/)) {
-    const w = raw.replace(/[^a-z0-9]/g, '');
-    if (w && ANATOMY_WORDS.has(w)) return true;
-  }
-  // 3) shares a distinctive token with the client's categories or brand
-  // Array.from: project tsconfig has no `target` -> ES5; iterating a Set directly
-  // needs downlevelIteration. Array.from keeps the build green (v7.174).
-  for (const t of Array.from(relevanceTokens)) { if (k.includes(t)) return true; }
+  const rt = Array.from(relevanceTokens);
+  for (const w of tokensOf(keyword)) for (const t of rt) { if (tokenMatches(w, t)) return true; }
   return false;
 }
 
@@ -403,19 +491,20 @@ export function buildClusters(
     });
   }
 
-  // ── Assign keywords by SOLUTION AWARENESS (v7.154) ────────────────────────────
+  // ── Assign keywords by SOLUTION AWARENESS (v7.154 / v7.187) ───────────────────
+  // v7.187: problem vocabulary is derived from THIS project's audience language.
+  const vocab = deriveProblemVocab(analysis);
   // Distinctive procedure word(s) per procedure category, used to decide whether
-  // a keyword actually names the procedure (product) or only the problem.
-  const procWordsByCat = new Map<string, string[]>();
-  for (const c of categories) {
-    if (c.type === 'procedure') procWordsByCat.set(c.name, procedureWords(c.name));
-  }
+  // a keyword actually names the procedure (product) or only the problem. Now
+  // data-derived (drops words shared across categories or used in problem language).
+  const procWordsByCat = buildProcWordsByCat(categories, vocab.langTokens);
 
   const catMap = new Map<string, KwItem[]>();
   categories.forEach((c: { name: string; type: string }) => catMap.set(c.name, []));
   const problemPool: KwItem[] = [];   // keywords that name NO solution -> pre-product
-  // v7.173: vocabulary the client actually owns — drives the relevance gate below.
-  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains);
+  // v7.187: vocabulary the client actually owns (categories + brand + audience
+  // language) — drives the relevance gate below.
+  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
 
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
@@ -441,10 +530,10 @@ export function buildClusters(
   }
 
   // Group the pre-product keywords into life-problem themes. AI names them when
-  // problemAssignments is supplied; otherwise a deterministic anchor is used.
+  // problemAssignments is supplied; otherwise a project-spec deterministic name.
   const problemGroups = new Map<string, KwItem[]>();
   for (const kw of problemPool) {
-    const theme = problemAssignments[kw.keyword.toLowerCase()] ?? deterministicProblemTheme(kw.keyword);
+    const theme = problemAssignments[kw.keyword.toLowerCase()] ?? deterministicProblemTheme(kw.keyword, vocab);
     if (!problemGroups.has(theme)) problemGroups.set(theme, []);
     problemGroups.get(theme)!.push(kw);
   }
@@ -621,6 +710,7 @@ interface DemandUniverse {
   seedCount?:   number;
   database?:    string;
   status?:      string;
+  engine?:      string;   // v7.187: build-engine tag for stale-universe invalidation
 }
 
 function titleCaseSeed(s: string): string {
@@ -633,15 +723,27 @@ function titleCaseSeed(s: string): string {
 // remount the freshly-built universe was lost. Resolve from the server snapshot
 // first (source of truth on a fresh page load), then fall back to a localStorage
 // cache written at build time, mirroring the journey-edges / problem caches.
-const demandCacheKey = (analysis: any): string => `orbitiq-demand-${analysis?.id ?? 'none'}`;
+// v7.187: cache key carries the engine version so a universe built by the old
+// (cosmetic-hardcoded) engine is never re-read from localStorage.
+const DEMAND_ENGINE = 'demand-v2';
+const demandCacheKey = (analysis: any): string => `orbitiq-demand-${DEMAND_ENGINE}-${analysis?.id ?? 'none'}`;
+
+// v7.187: a universe is only valid if it was built by the current engine. Older
+// persisted universes (no engine tag, or a different one) carried another vertical's
+// seeds — we ignore them so the panel falls back to the footprint view and the user
+// can rebuild a clean, project-spec deep journey.
+function isCurrentEngine(u: any): boolean {
+  return !!u && u.engine === DEMAND_ENGINE;
+}
 
 function readDemandCache(analysis: any): DemandUniverse | null {
   const fromSnap = (analysis?.semrushSnapshot as any)?._demandUniverse ?? null;
-  if (fromSnap) return fromSnap;
+  if (isCurrentEngine(fromSnap)) return fromSnap;
   if (typeof window === 'undefined' || !analysis?.id) return null;
   try {
     const c = window.localStorage.getItem(demandCacheKey(analysis));
-    return c ? (JSON.parse(c) as DemandUniverse) : null;
+    const parsed = c ? (JSON.parse(c) as DemandUniverse) : null;
+    return isCurrentEngine(parsed) ? parsed : null;
   } catch { return null; }
 }
 
@@ -1667,7 +1769,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached) as { version?: number; sig?: string; assignments?: Record<string, string> };
-        if (parsed.version === 1 && parsed.sig === sig && parsed.assignments) { setProblemAssignments(parsed.assignments); return; }
+        // v7.187: bump to v2 — invalidates any theme names cached by the old engine.
+        if (parsed.version === 2 && parsed.sig === sig && parsed.assignments) { setProblemAssignments(parsed.assignments); return; }
       }
     } catch {}
     let cancelled = false;
@@ -1679,7 +1782,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
       .then((d: any) => {
         if (cancelled || !d?.assignments || Object.keys(d.assignments).length === 0) return;
         setProblemAssignments(d.assignments);
-        try { localStorage.setItem(cacheKey, JSON.stringify({ version: 1, sig, assignments: d.assignments })); } catch {}
+        try { localStorage.setItem(cacheKey, JSON.stringify({ version: 2, sig, assignments: d.assignments })); } catch {}
       })
       .catch(() => {});
     return () => { cancelled = true; };

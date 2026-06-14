@@ -30,15 +30,19 @@ export const maxDuration = 300;
 const DEFAULT_LINES = 50;
 const MAX_LINES     = 100;
 
-// v7.175: REPEATABLE problem-seed derivation — no hardcoded vertical vocabulary.
-// Problem seeds come from each client's OWN audience language (segment pre-LLM
-// prompts + triggers). Each prompt is a real problem-aware search; we reduce it to
-// a concise head term by stripping the question scaffolding ("how to", "why can't
-// I", "what is", "best way to", …) and a few generic tails, then keep it short
-// (Semrush returns a far richer demand universe from a 2–5 word head term than from
-// a full sentence). Works for ANY industry because every client gets audience
-// segments with pre-LLM prompts. The anchor list below is a quality SUPPLEMENT for
-// verticals we know well — it never gates the generic path.
+// v7.175 / v7.187: REPEATABLE problem-seed derivation — NO hardcoded vertical
+// vocabulary. Problem seeds come exclusively from each client's OWN audience
+// language (segment pre-LLM prompts + triggers). Each prompt is a real
+// problem-aware search; we reduce it to a concise head term by stripping the
+// question scaffolding ("how to", "why can't I", "what is", "best way to", …) and
+// a few generic tails, then keep it short (Semrush returns a far richer demand
+// universe from a 2–5 word head term than from a full sentence). Works for ANY
+// industry because every client gets audience segments with pre-LLM prompts.
+// v7.187: the cosmetic PROBLEM_SEED_ANCHORS supplement and the cosmetic
+// last-resort fallback were REMOVED — they injected another vertical's vocabulary
+// (e.g. "double chin", "arm fat") into unrelated projects (finance, SaaS, …). The
+// pre-product lane now expands from the client's own language or, if that is
+// empty, from the product (procedure-category) seeds only — never a canned list.
 // Longest variants FIRST — the strip loop breaks on first match then re-runs, so a
 // short prefix ('how much') must not pre-empt a longer one ('how much does a').
 const LEAD_SCAFFOLD = [
@@ -71,13 +75,10 @@ function conciseSeed(prompt: string): string {
   return parts.slice(0, 5).join(' ').trim();   // keep a head term (≤5 words)
 }
 
-const PROBLEM_SEED_ANCHORS = [
-  'love handles', 'muffin top', 'double chin', 'loose skin', 'saggy skin', 'excess skin',
-  'stubborn belly fat', 'belly fat', 'stomach fat', 'lower belly fat', 'stubborn fat',
-  'back fat', 'arm fat', 'bra fat', 'thigh fat', 'inner thigh', 'cellulite',
-  'sagging breasts', 'small breasts', 'weight loss plateau', 'cant lose weight',
-  'jowls', 'turkey neck',
-];
+// v7.187: engine tag stamped on every built universe so the client can detect and
+// discard a universe built by the OLD (cosmetic-hardcoded) engine. Bumping this
+// invalidates any stale demand universe persisted before the domain-agnostic fix.
+const DEMAND_ENGINE = 'demand-v2';
 
 const MAX_PROBLEM_SEEDS = 14;   // cap Semrush spend; richest head terms first
 
@@ -102,14 +103,10 @@ function deriveSeeds(analysis: any): { product: string[]; problem: string[] } {
     const seed = conciseSeed(p);
     if (seed && (seed.indexOf(' ') >= 0 || seed.length >= 5)) problemSet.add(seed);
   }
-  // Quality supplement: add any known anchor that literally appears in the language.
-  const allText = prompts.join(' ').toLowerCase();
-  for (const anchor of PROBLEM_SEED_ANCHORS) { if (allText.includes(anchor)) problemSet.add(anchor); }
-
-  // Last-resort fallback so the pre-product lane always expands.
-  if (problemSet.size === 0) {
-    ['stubborn belly fat', 'loose skin', 'double chin', 'love handles', 'cellulite'].forEach(a => problemSet.add(a));
-  }
+  // v7.187: NO canned cosmetic fallback. If the client's own language yields no
+  // problem head terms, the pre-product lane simply expands from the product seeds
+  // (procedure categories) — defensible because those are the client's real
+  // solutions. We never inject another vertical's vocabulary here.
 
   return { product, problem: Array.from(problemSet).slice(0, MAX_PROBLEM_SEEDS) };
 }
@@ -178,6 +175,7 @@ export async function POST(
 
         const demandUniverse = {
           ...universe,
+          engine: DEMAND_ENGINE,   // v7.187: stale-universe invalidation tag
           productSeeds: product,
           problemSeeds: problem,
           topics: universe.topics.map(t => ({

@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.187 — 2026-06-14 · Audience Journey — domain-agnostic clustering (no inherited vertical vocabulary)
+
+**What changed:** "Build deep journey" (and the footprint Journey view) no longer pulls in off-topic clusters from a different vertical. On a financial-services project the journey was showing cosmetic-surgery clusters like **"Chin / Neck"** and **"Arm Concerns"**. Those came from a hardcoded cosmetic vocabulary baked into the clustering engine — not from the current project's specs. The clustering is now derived entirely from **this project's own data**: its audience-segment language (pre-LLM prompts + triggers), its category names, and its brand. It works for any industry.
+
+**Root cause (why the cosmetic clusters appeared):** three places carried a hardcoded body/aesthetic vocabulary left over from an earlier vertical:
+
+- `app/api/projects/[id]/demand-universe/route.ts` — a `PROBLEM_SEED_ANCHORS` list ("double chin", "arm fat", "turkey neck", …) plus a cosmetic last-resort fallback (`"stubborn belly fat", "loose skin", …`) that injected those seeds whenever a project's own language produced none.
+- `components/brief/JourneySection.tsx` and `components/brief/ContentMapSection.tsx` — a `PROBLEM_ANCHORS` map ("chin → Chin / Neck", "arm → Arm Concerns", …) and an `ANATOMY_WORDS` list used both to name pre-product themes and to gate relevance. The matching was naive substring/whole-word, so unrelated finance terms were captured and mislabeled: **"401k matching"** contains the substring "chin" → *Chin / Neck*; **"5/1 ARM"** (adjustable-rate mortgage) matched the anatomy word "arm" → *Arm Concerns*.
+
+**How it's fixed (and why it's defensible):**
+
+- **All hardcoded cosmetic vocabulary removed** (`PROBLEM_SEED_ANCHORS`, the cosmetic fallback, `PROBLEM_ANCHORS`, `ANATOMY_WORDS`).
+- **Relevance gate** is now project-spec: a pre-product keyword is kept only if it shares a ≥4-char stem with the client's category names, brand, or the audience's own language. Matching is stem-based (so "invest" still matches "investing"/"investment") but no longer does cross-word substring matches ("arm" inside "pharmacy", "chin" inside "matching"). Every drop is explainable by zero token overlap with the client.
+- **Deterministic theme names** come from the project's own audience language (each pre-LLM prompt reduced to a short head term — the same reduction the deep-build uses for its seeds). The AI naming route still supplies human theme names when available; these are only the fallback.
+- **Distinctive "procedure word"** for the product lane is now data-derived (a category word that is not shared across categories and not part of the audience's problem language) instead of relying on the cosmetic anatomy list — so problem searches like "tummy fat" don't leak into a "Tummy Tuck" product cluster.
+- **Stale-universe invalidation:** a built demand universe is tagged with an engine version (`demand-v2`); any universe built by the old engine (or cached under the old key / the old problem-theme cache) is ignored, so the project falls back to the footprint view and a clean deep journey can be rebuilt on the current specs.
+
+**Verification (own debugging agent):** isolated `tsc` (strict) on the two rewritten panels — **0 errors**; `esbuild` parse of all four changed files — clean; no dangling references to the removed symbols anywhere in the tree. Behavioral test on the **real shipped `buildClusters()`** with representative inputs (logic test, not live data): financial project yields finance-derived themes ("Invest In Stocks For Beginners", "Building An Emergency Fund", "High-Yield Savings") with **no cosmetic-named cluster**, and "401k matching" / "5/1 arm" are no longer mislabeled; cosmetic project (regression guard) is unchanged — procedures stay in the product lane and "tummy fat" remains a pre-product problem theme. Render `orbitiq-v7.187-RENDER.html` shows both panels. Edited: `app/api/projects/[id]/demand-universe/route.ts`, `app/api/projects/[id]/journey-problem-clusters/route.ts`, `components/brief/JourneySection.tsx`, `components/brief/ContentMapSection.tsx`. No files added or removed.
+
 ## v7.186 — 2026-06-13 · Light mode fixes — stuck dark-blue nav + text contrast
 
 **What changed:** two issues in the v7.185 light theme are fixed.
