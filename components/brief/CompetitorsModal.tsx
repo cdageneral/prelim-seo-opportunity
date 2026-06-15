@@ -203,6 +203,8 @@ export default function CompetitorsModal({
   const [newExTerm,  setNewExTerm]  = useState('');
   const [exState,    setExState]    = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [exUpdatedAt, setExUpdatedAt] = useState<string | null>(initExcludedUpdatedAt);
+  const [exSuggesting, setExSuggesting] = useState(false);
+  const [exSuggestErr, setExSuggestErr] = useState('');
 
   function addExLocal(raw: string) {
     const t = raw.toLowerCase().trim();
@@ -213,6 +215,23 @@ export default function CompetitorsModal({
   function removeExLocal(t: string) {
     setExTerms(prev => prev.filter(x => x !== t));
   }
+  async function suggestExcludedBrandsAI() {
+    if (exSuggesting) return;
+    setExSuggesting(true); setExSuggestErr('');
+    try {
+      const res  = await fetch(`/api/projects/${projectId}/excluded-brands/suggest`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setExSuggestErr(typeof data.error === 'string' ? data.error : 'Could not get suggestions.'); return; }
+      const proposed: string[] = Array.isArray(data.excludedBrands) ? data.excludedBrands : [];
+      if (proposed.length === 0) { setExSuggestErr('No competitor brands detected — add any manually.'); return; }
+      setExTerms(prev => Array.from(new Set([...prev, ...proposed.map(t => t.toLowerCase().trim()).filter(Boolean)])));
+    } catch {
+      setExSuggestErr('Could not reach the suggestion service.');
+    } finally {
+      setExSuggesting(false);
+    }
+  }
+
   async function saveExcludedBrands(next: string[]) {
     setExState('saving');
     try {
@@ -955,11 +974,18 @@ export default function CompetitorsModal({
                 style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--c-1a1a30)', border: '1px solid var(--c-26264a)', color: 'var(--c-fbbf77)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                 Add
               </button>
+              <button type="button" onClick={suggestExcludedBrandsAI} disabled={exSuggesting}
+                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-854f0b)', color: 'var(--c-fbbf77)', fontSize: '12px', fontWeight: 600, cursor: exSuggesting ? 'default' : 'pointer', opacity: exSuggesting ? 0.6 : 1 }}>
+                {exSuggesting ? 'Scanning…' : '✦ Suggest with AI'}
+              </button>
               <button type="button" onClick={() => saveExcludedBrands(exTerms)}
                 style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                 Save excluded brands
               </button>
             </div>
+            {exSuggestErr && (
+              <p style={{ fontSize: '10px', color: 'var(--c-f87171)', margin: '8px 0 0' }}>{exSuggestErr}</p>
+            )}
             <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '10px 0 0' }}>
               {exUpdatedAt
                 ? `Last updated ${new Date(exUpdatedAt).toLocaleString()}`

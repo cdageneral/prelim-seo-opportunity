@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.209 — 2026-06-15 · Brand rule — AI suggests competitor brands to exclude
+
+**The ask (Wayne):** the second half of the v7.208 decision — "auto AI-flag" the competitor/third-party brands so you don't have to spot every one yourself.
+
+**Approach:** mirror the proven client brand-vocabulary suggester (v7.206), inverted. An AI pass scans the client's real footprint + competitor-gap keywords and proposes the NON-client brand names that appear (e.g. "schwab", "vanguard", "fidelity"). It's a **suggestion you review** — it pre-fills the v7.208 blocklist, which is what actually enforces removal. AI only NAMES brands it finds; it never invents a keyword or a number, never auto-applies, and never proposes the client's own brand. (This is the cost-controlled, review-first form of "auto-flag", consistent with the app's existing "✦ Suggest with AI" pattern; a fully automatic on-analysis pass remains an option if you want it.)
+
+**What changed:**
+
+- **AI helper (`lib/claude/excludedBrandVocab.ts`, NEW).** `suggestExcludedBrands({ clientName, domain, competitorDomains, sampleKeywords })` → de-duped lowercase list of non-client brand terms found in the sample. Strict-JSON parse; failures return `[]` (never blocks). Mirrors `brandVocab.ts` exactly (same model, same guard rails), inverted to find competitors instead of the client.
+- **Route (`app/api/projects/[id]/excluded-brands/suggest/route.ts`, NEW).** POST grounds the scan in the latest snapshot's `topKeywords` + `gapKeywords` and the tracked competitor domains, returns `{ excludedBrands }`; does not persist. Mirrors `brand-terms/suggest`.
+- **Manager (`components/brief/CompetitorsModal.tsx`).** The Excluded Competitor / Brand Terms section gains a "✦ Suggest with AI" button (scans, then drops the proposals into the editable chips for review) with its own scanning state + error line. You still click Save to commit — review-first.
+
+**Data integrity:** suggestions are candidates only, never auto-applied; the deterministic v7.208 blocklist remains the enforcement layer (Art I). The client's own brand is excluded from suggestions. No caps (Art I.6).
+
+**Verification (own debugging agent):** isolated `tsc` on `CompetitorsModal` + `ThemeClustersPanel` + `contentPlan` + `JourneySection` + `kwVolume` = **0 errors**. The two new server files (`excludedBrandVocab.ts`, `excluded-brands/suggest/route.ts`) parse clean under esbuild; their `@anthropic-ai/sdk` / next deps are absent from the isolated verify env but they mirror the proven v7.206 suggester byte-for-pattern. jsdom `renderToString` of the REAL `CompetitorsModal` = **6/6**: now shows TWO "Suggest with AI" CTAs (client brand + excluded brands), the blocklist section, chips, and Save all render; existing brand section intact. **Live-data note:** the AI suggestion quality itself is exercised at runtime against the real ANTHROPIC_API_KEY — the deterministic v7.208 blocklist is the safety net regardless of what the AI proposes.
+
+**Scope note:** count reconciliation (option A — refined clusters as the single source of truth for journey + content plan) follows as v7.210.
+
 ## v7.208 — 2026-06-15 · Brand rule — editable competitor-brand blocklist, honored everywhere
 
 **The ask (Wayne):** competitor/third-party brand terms (e.g. "Schwab") must NOT exist in keywords or clusters — a hard rule, whether the term came from a CSV upload or not (Constitution III.1). v7.201 already stripped brands that were configured competitors / Semrush auto-discovered / AI-flagged, but documented a gap: a brand that is none of those (Schwab isn't a tracked competitor here) slips through, even from an upload — and the Content Map / Journey panels had their own separate brand filters.
