@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ interface IntentCluster {
 interface ThemeCluster {
   id:          string;
   name:        string;
-  type:        'procedure' | 'brand' | 'location' | 'demand';  // v7.162: 'demand' = missing-demand cluster
+  type:        'procedure' | 'brand' | 'location' | 'demand' | 'problem';  // v7.162: 'demand' = missing-demand; v7.203: 'problem' = pre-product life-problem theme
   keywords:    KwItem[];
   totalVolume: number;
   subClusters: IntentCluster[];
@@ -200,6 +201,7 @@ function buildThemeClusters(
   uploadedKeywords:    any[] = [],
   clientVolMin:        number = 0,
   competitorVolMin:    number = 0,
+  excludeKeywords?:    Set<string>,   // v7.203: pre-product kws routed to problem themes — drop here so a kw is never counted in both lanes
 ): ThemeCluster[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const cb       = semSnap._categoryBreakdown ?? null;
@@ -221,7 +223,7 @@ function buildThemeClusters(
   // as origin:'demand' ("missing demand"). When no deep journey has been built
   // (`_demandUniverse` absent) this returns the identical footprint pool, so this
   // panel is byte-for-byte unchanged for existing analyses.
-  const rawPool = buildKwPool({
+  let rawPool = buildKwPool({
     semrushSnapshot:  semSnap,
     uploadedKeywords,
     clientDomain,
@@ -230,6 +232,12 @@ function buildThemeClusters(
     competitorVolMin,
     includeDemand:    true,
   });
+  // v7.203: drop pre-product keywords (they live in their own awareness-only problem
+  // clusters) so the same keyword is never counted in both the product and pre-product
+  // lanes. Volumes downstream stay exact real roll-ups of whatever remains.
+  if (excludeKeywords && excludeKeywords.size > 0) {
+    rawPool = rawPool.filter(k => !excludeKeywords.has(k.keyword.toLowerCase()));
+  }
 
   // v7.190: client ranking-page URL by keyword (from the Semrush footprint) — used
   // by the sub-product splitter to detect each product PAGE and name a product
@@ -470,7 +478,7 @@ function buildThemeClusters(
   }
 
   result.sort((a, b) => {
-    const order = { procedure: 0, brand: 1, location: 2, demand: 3 };
+    const order = { procedure: 0, brand: 1, location: 2, demand: 3, problem: 4 };
     const d = order[a.type] - order[b.type];
     return d !== 0 ? d : b.totalVolume - a.totalVolume;
   });
@@ -766,7 +774,7 @@ function dominantStage(c: ThemeCluster): JourneyStage {
 interface Topic {
   id:            string;
   parentName:    string;
-  parentType:    'procedure' | 'brand' | 'location' | 'demand';
+  parentType:    'procedure' | 'brand' | 'location' | 'demand' | 'problem';
   product:       string;        // v7.190: sub-product name (client page name when matched, else mined modifier, else Core)
   productKey:    string;        // v7.190: stable product grouping key
   pageUrl?:      string;        // v7.190: client product-page URL when this product maps to a real page
@@ -1094,6 +1102,74 @@ function nameIntentCluster(c: ThemeCluster, kind: IntentKind, kws: KwItem[], hea
 // are product-split; brand/location/demand themes stay one product (= the theme), so
 // they behave exactly as before. Per-keyword intent is read back from the
 // subClusters buildThemeClusters already computed — no re-classification.
+// ─── v7.203: pre-product (life-problem) clusters ─────────────────────────────────
+// Wayne: view Product journey vs Pre-product journey vs All. The product/pre-product
+// split REUSES the Journey panel's definition (single source of truth, Art II.7): a
+// keyword is pre-product only when it names NO solution (problem/symptom/trigger) yet
+// is still topically relevant to the client — exactly what `buildJourneyClassifier`
+// (extracted from JourneySection.buildClusters) decides. We classify the SAME pooled
+// keywords this panel already builds (footprint + deep-journey demand), peel the
+// pre-product ones into life-problem themes (awareness-only), and return the set of
+// peeled keywords so buildThemeClusters can exclude them from the product lane → a
+// keyword is never double-counted. Off-topic keywords are left in the product lane
+// (this panel shows the full footprint; the Journey panel's relevance gate is its own
+// lens). All volumes are exact real roll-ups — nothing modeled.
+function buildPreProductClusters(
+  analysis:          any,
+  clientDomain:      string,
+  competitorDomains: string[],
+  uploadedKeywords:  any[] = [],
+  clientVolMin:      number = 0,
+  competitorVolMin:  number = 0,
+  problemAssignments: Record<string, string> = {},
+): { clusters: ThemeCluster[]; preProductKws: Set<string> } {
+  const semSnap = analysis?.semrushSnapshot ?? {};
+  const cb      = semSnap._categoryBreakdown ?? null;
+  const preProductKws = new Set<string>();
+  if (!cb?.categories?.length) return { clusters: [], preProductKws };
+
+  const classifier = buildJourneyClassifier(analysis, clientDomain, competitorDomains, problemAssignments);
+  const pool = buildKwPool({
+    semrushSnapshot:  semSnap,
+    uploadedKeywords,
+    clientDomain,
+    competitorDomains,
+    clientVolMin,
+    competitorVolMin,
+    includeDemand:    true,
+  });
+
+  const byTheme = new Map<string, KwItem[]>();
+  for (const kw of pool) {
+    if (classifier.classify(kw.keyword) !== 'pre-product') continue;
+    preProductKws.add(kw.keyword.toLowerCase());
+    const theme = classifier.themeOf(kw.keyword);
+    (byTheme.get(theme) ?? byTheme.set(theme, []).get(theme)!).push(kw);
+  }
+
+  const clusters: ThemeCluster[] = [];
+  for (const [theme, kws] of Array.from(byTheme.entries())) {
+    if (kws.length === 0) continue;
+    const totalVolume      = kws.reduce((s, k) => s + k.searchVolume, 0);
+    const clientVolume     = kws.filter(k => !k.isGap && k.origin !== 'demand').reduce((s, k) => s + k.searchVolume, 0);
+    const competitorVolume = kws.filter(k =>  k.isGap).reduce((s, k) => s + k.searchVolume, 0);
+    // Pre-product is awareness-only: one informational sub-cluster carrying the theme.
+    const sub: IntentCluster = {
+      intent:           'informational',
+      stage:            'awareness',
+      contentType:      INTENT_META.informational.contentType,
+      contentIcon:      INTENT_META.informational.contentIcon,
+      keywords:         kws,
+      totalVolume,
+      clientVolume,
+      competitorVolume,
+    };
+    clusters.push({ id: `problem:${theme}`, name: theme, type: 'problem', keywords: kws, totalVolume, subClusters: [sub] });
+  }
+  clusters.sort((a, b) => b.totalVolume - a.totalVolume);
+  return { clusters, preProductKws };
+}
+
 function flattenTopics(clusters: ThemeCluster[]): Topic[] {
   const topics: Topic[] = [];
   for (const c of clusters) {
@@ -1139,7 +1215,10 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
       // v7.199: an AI group may carry an explicit funnel stage → honour it (and pick a
       // representative intent for the content-type label); else dominant intent by volume.
       const intent: IntentType = g.stage ? (STAGE_INTENT[g.stage] ?? domIntent) : domIntent;
-      const stage: JourneyStage = g.stage ?? INTENT_META[domIntent].stage;
+      // v7.203: pre-product (life-problem) topics are AWARENESS ONLY per the
+      // Constitution (Art III.2a) — the searcher knows only the problem, not the
+      // offering, so there is no Consideration/Decision/Retention to evaluate.
+      const stage: JourneyStage = c.type === 'problem' ? 'awareness' : (g.stage ?? INTENT_META[domIntent].stage);
       const meta = INTENT_META[intent];
 
       topics.push({
@@ -1200,11 +1279,13 @@ function classifyTopic(t: Topic): TopicStat {
 // v7.200: `headBg` = ~20% tint of the category's own type colour, used to band the
 // parent-category header row (card-grid CategorySection + grouped TopicTable header).
 // Theme-aware (each --ca var remaps in light mode) so the band stays on-brand in both.
-const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand', { label: string; color: string; bg: string; bdr: string; headBg: string }> = {
+const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand' | 'problem', { label: string; color: string; bg: string; bdr: string; headBg: string }> = {
   procedure: { label: 'Procedure',     color: 'var(--c-9b96ff)', bg: 'var(--ca-155-150-255-0_10)', bdr: 'var(--ca-155-150-255-0_30)', headBg: 'var(--ca-155-150-255-0_20)' },
   brand:     { label: 'Brand',         color: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_10)',  bdr: 'var(--ca-245-158-11-0_30)', headBg: 'var(--ca-245-158-11-0_2)'   },
   location:  { label: 'Location',      color: 'var(--c-38bdf8)', bg: 'var(--ca-56-189-248-0_10)',  bdr: 'var(--ca-56-189-248-0_30)', headBg: 'var(--ca-56-189-248-0_20)'  },
   demand:    { label: 'Missing demand',color: 'var(--c-22d3ee)', bg: 'var(--c-062a32)',                bdr: 'var(--c-0e4753)', headBg: 'var(--ca-34-211-238-0_2)'   },
+  // v7.203: pre-product life-problem theme (emerald). Awareness-only per the Constitution (Art III.2a).
+  problem:   { label: 'Pre-product',   color: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_2)',   bdr: 'var(--c-34d399)',           headBg: 'var(--ca-52-211-153-0_2)'  },
 };
 
 // ─── Topic card (v7.169) — one card per theme × intent topic ──────────────────
@@ -1496,9 +1577,21 @@ function ClustersTab({
   aiRefined?:       boolean;
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
+  // v7.203: journey scope — All / Product / Pre-product. Slices `clusters` BEFORE the
+  // cards/funnel/pills/grid are computed, so the whole panel adjusts to the selection.
+  const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   const [sortKey, setSortKey] = useState<SortKey>('group');
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Pre-product = the life-problem themes (type 'problem'); product = everything else.
+  const isPreProductCluster = (c: ThemeCluster) => c.type === 'problem';
+  const productClusterCount = clusters.filter(c => !isPreProductCluster(c)).length;
+  const preClusterCount     = clusters.filter(c =>  isPreProductCluster(c)).length;
+  const scopedClusters: ThemeCluster[] =
+    journeyScope === 'product' ? clusters.filter(c => !isPreProductCluster(c)) :
+    journeyScope === 'pre'     ? clusters.filter(c =>  isPreProductCluster(c)) :
+    clusters;
   const toggleRow = (id: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const onSort = (k: SortKey) => {
     if (k === sortKey) { setSortDir(d => (d === 1 ? -1 : 1)); return; }
@@ -1507,9 +1600,9 @@ function ClustersTab({
   };
 
   // ── Flatten categories → TOPICS (the counted unit) + classify each ──────────
-  const topics: Topic[] = flattenTopics(clusters);
+  const topics: Topic[] = flattenTopics(scopedClusters);
   const topicStats: TopicStat[] = topics.map(classifyTopic);
-  const catCount = new Set(clusters.map(c => `${c.type}:${c.name}`)).size;
+  const catCount = new Set(scopedClusters.map(c => `${c.type}:${c.name}`)).size;
 
   const leadingStats  = topicStats.filter(s => !s.isDemand &&  s.isLeading);
   const trailingStats = topicStats.filter(s => !s.isDemand && !s.isLeading);
@@ -1999,6 +2092,61 @@ function ClustersTab({
         </div>
       </div>
 
+      {/* ── v7.203: Journey scope — All / Product / Pre-product. Sits directly  */}
+      {/* below the summary cards; choosing a scope re-slices the clusters so the */}
+      {/* cards, funnel-stage box, filter pills and grid all recompute. Pre-      */}
+      {/* product = life-problem / trigger themes (awareness-only); product =     */}
+      {/* solution-aware, full funnel — the SAME split the Journey & Content Map  */}
+      {/* panels use (single source of truth).                                    */}
+      {(() => {
+        const preTopicsN     = flattenTopics(clusters.filter(c =>  isPreProductCluster(c))).length;
+        const productTopicsN = flattenTopics(clusters.filter(c => !isPreProductCluster(c))).length;
+        const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
+          { key: 'all',     label: 'All journeys',        count: productTopicsN + preTopicsN, hint: 'Product + pre-product topics',           accent: 'var(--c-c8c8e8)' },
+          { key: 'product', label: 'Product journey',     count: productTopicsN,              hint: 'Solution-aware demand · full funnel',    accent: 'var(--c-9b96ff)', dot: true },
+          { key: 'pre',     label: 'Pre-product journey', count: preTopicsN,                  hint: 'Problem / trigger searches · awareness only', accent: 'var(--c-34d399)', dot: true },
+        ];
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 16px', borderTop: '1px solid var(--c-14142a)' }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
+              Journey
+            </span>
+            <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
+              {SCOPES.map(s => {
+                const on = journeyScope === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => { setJourneyScope(s.key); setFilter('all'); }}
+                    title={s.hint}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7,
+                      fontSize: 12, fontWeight: 600, lineHeight: 1,
+                      padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
+                      border: 'none', outline: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s',
+                      background: on ? 'var(--c-1e1e38)' : 'transparent',
+                      boxShadow:  on ? `inset 0 0 0 1px ${s.accent}` : 'none',
+                      color:      on ? s.accent : 'var(--c-9090b8)',
+                    }}
+                    onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-c8c8e8)'; }}
+                    onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-9090b8)'; }}
+                  >
+                    {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
+                    {s.label}
+                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>{s.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>
+              {journeyScope === 'pre'     ? 'Problem / trigger searches · awareness only'
+             : journeyScope === 'product' ? 'Solution-aware demand · full funnel'
+             :                              'Showing both journeys'}
+            </span>
+          </div>
+        );
+      })()}
+
       {/* ── Filter nav (v7.146) — sits between the summary cards and the grid, */}
       {/* doubling as the section separator. Two groups: ownership · funnel     */}
       {/* stage. Shares filter state with the summary + funnel-stage cards.     */}
@@ -2136,13 +2284,29 @@ export default function ThemeClustersPanel({
     };
   }, [analysis, aiRefined]);
 
+  // v7.203: pre-product (life-problem) clusters + the set of keywords they claim,
+  // using the Journey panel's solution-awareness definition (single source of truth).
+  const journeyBuild = useMemo(
+    () => buildPreProductClusters(
+      effectiveAnalysis, clientDomain, competitors, uploadedKeywords ?? [],
+      defaultClientThreshold, defaultCompetitorThreshold,
+    ),
+    [effectiveAnalysis, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
+  );
+
+  // Product-lane clusters — built EXCLUDING the pre-product keywords so a keyword is
+  // never counted in both lanes (Art I.3, no double counting).
   const baseClusters = useMemo(
     () => buildThemeClusters(
       effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? [],
-      defaultClientThreshold, defaultCompetitorThreshold,
+      defaultClientThreshold, defaultCompetitorThreshold, journeyBuild.preProductKws,
     ),
-    [effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
+    [effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold, journeyBuild],
   );
+
+  // Full tagged cluster list (product lane + pre-product problem themes). The journey
+  // scope toggle in ClustersTab slices THIS, and the cards/funnel/pills/grid recompute.
+  const allClusters = useMemo(() => [...baseClusters, ...journeyBuild.clusters], [baseClusters, journeyBuild]);
 
   const runRefine = useCallback(async (force = false) => {
     setRefining(true); setRefineError(null);
@@ -2234,11 +2398,12 @@ export default function ThemeClustersPanel({
 
   useEffect(() => { refreshUploadedKeywords(); }, [refreshUploadedKeywords]);
 
-  const totalKws   = baseClusters.reduce((s, c) => s + c.keywords.length, 0);
+  const totalKws   = allClusters.reduce((s, c) => s + c.keywords.length, 0);
   // v7.190: a "topic" is now a PRODUCT × funnel-stage row (broad themes split into
   // their product sub-clusters), so count the flattened table rows.
-  const topicCnt   = flattenTopics(baseClusters).length;
-  const catCnt     = baseClusters.length;
+  // v7.203: count across both lanes (product + pre-product).
+  const topicCnt   = flattenTopics(allClusters).length;
+  const catCnt     = allClusters.length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -2304,7 +2469,7 @@ export default function ThemeClustersPanel({
         </div>
       ) : (
         <ClustersTab
-          clusters={baseClusters}
+          clusters={allClusters}
           clientDomain={clientDomain}
           loadingClaude={loadingClaude}
           onRefine={runRefine}

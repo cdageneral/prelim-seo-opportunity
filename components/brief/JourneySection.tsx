@@ -434,6 +434,60 @@ function classifyJourneyType(type: string): JourneyType {
   return type === 'problem' ? 'pre-product' : 'product';
 }
 
+// ─── Journey classifier (v7.203) ────────────────────────────────────────────────
+// Exported per-keyword classifier so the Theme Clusters panel can split keywords
+// into product vs pre-product by SOLUTION AWARENESS using the SAME logic as
+// buildClusters' assignment loop (lines below) — the single source of truth, so the
+// two panels never disagree. Returns 'offtopic' for a keyword that names no solution
+// AND is not client-relevant (the identical drop buildClusters applies). `themeOf`
+// names the pre-product life-problem theme (AI assignment if supplied, else the
+// deterministic project-spec name). Pure; no AI, no modeling.
+export type JourneyClass = JourneyType | 'offtopic';
+export function buildJourneyClassifier(
+  analysis: any,
+  clientDomain: string,
+  competitorDomains: string[],
+  problemAssignments: Record<string, string> = {},
+): { classify: (keyword: string) => JourneyClass; themeOf: (keyword: string) => string } {
+  const semSnap = analysis?.semrushSnapshot ?? {};
+  const cb = semSnap._categoryBreakdown ?? null;
+  const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
+    (cb?.categories ?? []).map((c: any) => ({
+      name: c.name,
+      type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
+    }));
+  const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
+  const vocab = deriveProblemVocab(analysis);
+  const procWordsByCat = buildProcWordsByCat(categories, vocab.langTokens);
+  const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
+  const catNames = new Set(categories.map((c) => c.name));
+
+  function classify(keyword: string): JourneyClass {
+    if (categories.length === 0) return 'offtopic';
+    const key = keyword.toLowerCase();
+    // Candidate solution category: trust the server map first, then the name heuristic
+    // (identical order to buildClusters).
+    let cand: string | null = null;
+    const stored = storedMap[key];
+    if (stored && catNames.has(stored)) cand = stored;
+    else {
+      const matched = matchKeywordToCategory(keyword, categories, clientDomain, competitorDomains);
+      if (matched && catNames.has(matched)) cand = matched;
+    }
+    if (cand) {
+      const catType = categories.find((c) => c.name === cand)!.type;
+      const procWords = procWordsByCat.get(cand) ?? [];
+      if (namesSolutionFor(keyword, catType, procWords, clientDomain, competitorDomains)) return 'product';
+    }
+    // Names no solution → pre-product, but only if topically relevant; else off-topic.
+    return isClientRelevant(keyword, relevanceTokens) ? 'pre-product' : 'offtopic';
+  }
+  function themeOf(keyword: string): string {
+    return problemAssignments[keyword.toLowerCase()] ?? deterministicProblemTheme(keyword, vocab);
+  }
+  return { classify, themeOf };
+}
+
 // ─── Build clusters ───────────────────────────────────────────────────────────
 
 // v7.128 — exported so the Executive Summary can derive its "Journeys" signal
