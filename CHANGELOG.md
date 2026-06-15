@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.205 — 2026-06-15 · Clusters — deep nested tree (Category → Stage → topical tree), shared with Keyword Landscape
+
+**The ask (Wayne):** the Keyword Landscape "Category Breakdown" nests beautifully (Loans › Personal Loans › Bad Credit / Calculator / Rates…), but the Theme clusters panel only showed a few coarse groups. Make clusters nest as deeply using the SAME logic — and design it so the upcoming deep-journey work ADDS terms/categories without disrupting or replacing what's here.
+
+**Why they differed (root cause):** the Keyword panel's depth comes from a deterministic, always-on token/seed splitter (`deriveSubSeeds`/`buildSubTree`/`buildFamilies`) with no cost ceiling. The Cluster panel only split each category by funnel intent and otherwise relied on an expensive, budget-gated LLM "intent grouping" pass that is skipped on larger footprints — leaving the coarse Stage-1 categories (or a shallow signal-word heuristic).
+
+**Decision (confirmed with Wayne):** Option B — **Category → Stage → Topics**. Within each category, keywords bucket first by funnel stage (Awareness → Consideration → Decision → Retention; pre-product = Awareness-only per Art III.2a), and inside each stage the SAME shared topical tree splits them into "Personal loans › bad credit / calculator …" depth. Applies to **both** the product and pre-product lanes.
+
+**What changed:**
+
+- **New shared module `lib/cluster/topicTree.ts`** — single source of truth (Art II.7) for the topical-categorization primitives (`catModTokens` / `catHeadTokens` / `deriveSubSeeds` / `bestSubSeed`) plus a generic, metric-agnostic tree builder (`buildTopicTree` / `buildTopicFamilies` / `flattenVisibleNodes` / `collectRows`). Both panels now build their nested trees from exactly these functions.
+- **`components/brief/KeywordsPanel.tsx`** — its local copies of those primitives were deleted and replaced with imports from the shared module. The keyword tree's behaviour is unchanged (identical functions, just relocated).
+- **`components/brief/ThemeClustersPanel.tsx`** — `flattenTopics` rewritten so a "topic" is now a leaf of Category → Stage → topical-tree (one consistent unit the funnel box, filters and summary cards all share). A new `ClusterTree` component renders the nested, expandable hierarchy as the default grouped view; any column-sort still flattens to the existing sortable `TopicTable`. Per-keyword stage = the stage the panel already assigned (subClusters), overridden by an AI intent group's explicit stage; pre-product themes are Awareness-only.
+- **Additive by design (for the deep journey):** the tree is built from the panel's existing pooled keywords (footprint + any deep-journey demand), and demand keywords keep `origin:'demand'` and flow through the SAME splitter — so when the deep journey later adds terms/categories they deepen the existing tree rather than replacing it. No category or term is overwritten.
+
+**Data integrity:** every node is a real grouping of real keyword rows; every count/volume is an exact arithmetic roll-up — verified each keyword lands in exactly one leaf (no loss, no double-count, Art I.3). Nothing modeled or simulated (Art I.1). No caps/limits introduced (Art I.6).
+
+**Verification (own debugging agent):** isolated `tsc` over both changed components + the new lib + their full local import graph (JourneySection, kwVolume, journey/graph) under the project's strict options = **0 errors**. Algorithm harness (esbuild→cjs) on the shared builder: deep ≥2-level nesting forms (Personal Loans › Bad Credit › guaranteed approval / no credit check), every keyword in exactly one leaf, distinct modifier-named leaves — **all pass**. Render harness (`react-dom/server` on the REAL `ClusterTree`, synthetic illustrative data): nested Category → Stage → topical node → leaf renders with status badges and no React error — **all pass**. Panel-scroll invariant (Art IV.1) re-checked — the scroll root (`flex:1; overflowY:auto`) is unchanged; the only added `overflow` is `hidden` on the tree's rounded container (a block child, not a competing scroller). Render: `orbitiq-v7.205-RENDER.html` (illustrative data, flagged).
+
 ## v7.204 — 2026-06-15 · Keywords — Journey scope toggle (All / Product / Pre-product)
 
 **The ask (Wayne):** add the **same** Product journey / Pre-product journey / All journeys segmented control to the **Keyword panel**, placed **directly below the summary cards** — mirroring the v7.203 control on the Clusters panel.

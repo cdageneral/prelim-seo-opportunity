@@ -3,6 +3,13 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
+// v7.205: shared topical-tree categorization (single source of truth, Art II.7) — the
+// Keyword + Cluster panels build their nested trees from the SAME primitives.
+import {
+  CAT_STOP, catStem, catHeadTokens, catTitle,
+  deriveSubSeeds, bestSubSeed, CAT_MAX_DEPTH, CAT_SPLIT_MIN,
+  type SubSeed,
+} from '@/lib/cluster/topicTree';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1634,84 +1641,6 @@ const RANK_SEL_INDEX: Record<Exclude<RankFilter, 'all'>, number> = { p13: 0, p41
 //     only come from the LLM grouping pass — never fabricated here.
 // Brand/location categories stay flat (navigational, not product lines).
 
-const CAT_STOP = new Set<string>([
-  'the','and','for','with','without','your','you','our','their','this','that','these','those',
-  'what','whats','which','who','whom','how','why','when','where','are','was','were','being','been',
-  'does','did','can','could','will','would','should','about','near','vs','versus','its','get','getting',
-  'got','use','using','need','want','much','many','best','top','online','app','from','into','out',
-]);
-
-function catStem(w: string): string { return w.endsWith('s') ? w.slice(0, -1) : w; }
-
-function catModTokens(text: string, head: Set<string>): string[] {
-  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-    .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !head.has(w) && !/^\d+$/.test(w));
-}
-
-function catHeadTokens(name: string): Set<string> {
-  const h = new Set<string>();
-  for (const w of name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)) {
-    if (w.length >= 3) { h.add(w); h.add(catStem(w)); h.add(catStem(w) + 's'); }
-  }
-  return h;
-}
-
-function catTitle(s: string): string {
-  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-interface SubSeed { key: string; label: string; tokens: string[]; gram: number; }
-
-// Recurring distinctive modifiers among a node's keywords. Bigrams (order-
-// independent) first, then unigrams; each must recur in ≥2 keywords.
-function deriveSubSeeds(kws: KeywordRow[], head: Set<string>): SubSeed[] {
-  const uni = new Map<string, number>();
-  const bi  = new Map<string, number>();
-  const biLabel = new Map<string, Map<string, number>>();
-  for (const k of kws) {
-    const toks = catModTokens(k.keyword, head);
-    const seen = new Set<string>();
-    for (const t of toks) if (!seen.has(t)) { uni.set(t, (uni.get(t) ?? 0) + 1); seen.add(t); }
-    for (let i = 0; i < toks.length - 1; i++) {
-      const a = toks[i], b = toks[i + 1];
-      if (a === b) continue;
-      const key  = [a, b].slice().sort().join(' ');
-      const orig = a + ' ' + b;
-      bi.set(key, (bi.get(key) ?? 0) + 1);
-      let lm = biLabel.get(key); if (!lm) { lm = new Map(); biLabel.set(key, lm); }
-      lm.set(orig, (lm.get(orig) ?? 0) + 1);
-    }
-  }
-  const MIN = 2;
-  const seeds: SubSeed[] = [];
-  for (const [key, n] of Array.from(bi.entries())) {
-    if (n < MIN) continue;
-    const parts = key.split(' ');
-    let label = key, lbest = -1;
-    for (const [orig, c] of Array.from((biLabel.get(key) ?? new Map<string, number>()).entries())) if (c > lbest) { lbest = c; label = orig; }
-    seeds.push({ key: 'b:' + key, label: catTitle(label), tokens: parts, gram: 2 });
-  }
-  for (const [u, n] of Array.from(uni.entries())) {
-    if (n < MIN) continue;
-    seeds.push({ key: 'u:' + u, label: catTitle(u), tokens: [u], gram: 1 });
-  }
-  return seeds.sort((a, b) => b.gram - a.gram);
-}
-
-// Best modifier seed for a keyword: multi-token seeds need ALL tokens present.
-function bestSubSeed(kw: KeywordRow, head: Set<string>, seeds: SubSeed[]): SubSeed | null {
-  const toks = new Set<string>(catModTokens(kw.keyword, head));
-  let best: SubSeed | null = null, bestScore = 0;
-  for (const s of seeds) {
-    let shared = 0;
-    for (const t of s.tokens) if (toks.has(t)) shared++;
-    if (shared === 0) continue;
-    if (s.tokens.length > 1 && shared < s.tokens.length) continue;
-    const score = shared * 10 + s.gram;
-    if (score > bestScore) { bestScore = score; best = s; }
-  }
-  return best;
-}
 
 interface CatNode {
   id:       string;
@@ -1749,8 +1678,6 @@ function aggregateCatNode(node: CatNode): void {
   }
 }
 
-const CAT_MAX_DEPTH = 5;   // safety cap; real trees are 2–3 deep
-const CAT_SPLIT_MIN = 6;   // only split a node holding at least this many keywords
 
 // Recursively split a category's keywords into data-derived sub-categories.
 function buildSubTree(id: string, name: string, type: CatNode['type'], kws: KeywordRow[], head: Set<string>, depth: number, derived: boolean): CatNode {
