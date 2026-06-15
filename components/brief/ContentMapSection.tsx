@@ -164,32 +164,63 @@ function extractBrand(domain: string): string {
     .split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function isBranded(keyword: string, clientDomain: string, competitorDomains: string[]): boolean {
+// v7.205: short brand tokens (2–3 chars, e.g. "td") matched on a word boundary;
+// long tokens (≥4) keep the original substring/prefix/fuzzy behaviour. MUST stay
+// byte-identical to isBrandedKeyword in lib/utils/kwVolume.ts (and the copies in
+// KeywordsPanel / JourneySection). See that file for the full rationale.
+function isBranded(keyword: string, clientDomain: string, competitorDomains: string[], brandTerms: string[] = []): boolean {
   if (!keyword) return false;
   const kw = keyword.toLowerCase().trim();
   const kwNorm = kw.replace(/[^a-z0-9]/g, '');
   if (!kwNorm) return false;
-  const baseBrands = [clientDomain, ...competitorDomains].map(extractBrand).filter((b: string) => b.length >= 4);
-  if (!baseBrands.length) return false;
-  const tokenSet = new Set<string>(baseBrands);
-  for (const brand of baseBrands) {
-    const half = Math.floor(brand.length / 2);
-    if (half >= 4) tokenSet.add(brand.slice(0, half));
-    if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
+  const cleanTerms = brandTerms.map(t => (t ?? '').toLowerCase().trim()).filter(Boolean);
+  const brandPhrases = cleanTerms.filter(t => /[\s-]/.test(t));
+  const brandWordRoots = cleanTerms.filter(t => !/[\s-]/.test(t)).map(t => t.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+  if (brandPhrases.length > 0) {
+    const norm = (s: string) => ' ' + s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ') + ' ';
+    const kwSpaced = norm(kw);
+    for (const p of brandPhrases) { const np = norm(p); if (np !== '  ' && kwSpaced.includes(np)) return true; }
   }
-  const allTokens = Array.from(tokenSet);
-  for (const token of allTokens) {
-    if (kwNorm.includes(token)) return true;
-    if (token.includes(kwNorm) && kwNorm.length >= 4) return true;
-    if (token.length >= 5 && kwNorm.length >= 4 && token.startsWith(kwNorm)) return true;
+  const roots = Array.from(new Set([...[clientDomain, ...competitorDomains].map(extractBrand), ...brandWordRoots])).filter((b: string) => b.length >= 2);
+  if (!roots.length) return false;
+  const longRoots  = roots.filter((b: string) => b.length >= 4);
+  const shortRoots = roots.filter((b: string) => b.length >= 2 && b.length <= 3);
+
+  if (shortRoots.length > 0) {
+    const words = kw.split(/\s+/).map((w: string) => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+    for (const token of shortRoots) {
+      for (const w of words) {
+        const i = w.indexOf(token);
+        if (i < 0) continue;
+        if (i === 0) return true;
+        if (i >= 2 && w.length - (i + token.length) >= 2) return true;
+      }
+      const spaced = token.split('').join('\\s+');
+      if (new RegExp(`\\b${spaced}\\b`).test(kw)) return true;
+    }
   }
-  const kwWords = kw.split(/\s+/).map((w: string) => w.replace(/[^a-z0-9]/g, '')).filter((w: string) => w.length >= 4);
-  for (const word of kwWords) {
+
+  if (longRoots.length > 0) {
+    const tokenSet = new Set<string>(longRoots);
+    for (const brand of longRoots) {
+      const half = Math.floor(brand.length / 2);
+      if (half >= 4) tokenSet.add(brand.slice(0, half));
+      if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
+    }
+    const allTokens = Array.from(tokenSet);
     for (const token of allTokens) {
-      const minLen = Math.min(word.length, token.length);
-      const threshold = Math.max(1, Math.floor(minLen / 4));
-      if (Math.abs(word.length - token.length) > threshold + 1) continue;
-      if (editDistance(word, token) <= threshold) return true;
+      if (kwNorm.includes(token)) return true;
+      if (token.includes(kwNorm) && kwNorm.length >= 4) return true;
+      if (token.length >= 5 && kwNorm.length >= 4 && token.startsWith(kwNorm)) return true;
+    }
+    const kwWords = kw.split(/\s+/).map((w: string) => w.replace(/[^a-z0-9]/g, '')).filter((w: string) => w.length >= 4);
+    for (const word of kwWords) {
+      for (const token of allTokens) {
+        const minLen = Math.min(word.length, token.length);
+        const threshold = Math.max(1, Math.floor(minLen / 4));
+        if (Math.abs(word.length - token.length) > threshold + 1) continue;
+        if (editDistance(word, token) <= threshold) return true;
+      }
     }
   }
   return false;

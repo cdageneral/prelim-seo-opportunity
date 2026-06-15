@@ -3,13 +3,6 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
-// v7.205: shared topical-tree categorization (single source of truth, Art II.7) — the
-// Keyword + Cluster panels build their nested trees from the SAME primitives.
-import {
-  CAT_STOP, catStem, catHeadTokens, catTitle,
-  deriveSubSeeds, bestSubSeed, CAT_MAX_DEPTH, CAT_SPLIT_MIN,
-  type SubSeed,
-} from '@/lib/cluster/topicTree';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +75,7 @@ interface Props {
   onKeywordsChanged?: () => void;   // v7.108: fired after any successful keyword mutation here (CSV upload, add, delete/block, clear) so the parent can bump kwVersion and refresh ALL panels (SOV, clusters, etc.)
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
+  brandTerms?: string[];  // v7.206: client brand vocabulary (variants a domain can't yield)
   domain?:     string;    // project websiteUrl — fallback when semrushSnapshot.domain is absent
   defaultClientThreshold?:     number;  // project-level min vol for client ranked keywords
   defaultCompetitorThreshold?: number;  // project-level min vol for competitor gap keywords
@@ -127,6 +121,7 @@ function buildRows(
   clientVolMin: number = 0,
   competitorVolMin: number = 0,
   extraSerp: any[] = [],   // v7.81: freshly scanned batch results (live-merged, no reload)
+  brandTerms: string[] = [],   // v7.206: client brand vocabulary
 ): KeywordRow[] {
   const serpSnap = analysis?.serpApiSnapshot ?? {};
 
@@ -150,6 +145,7 @@ function buildRows(
     competitorDomains,
     clientVolMin,
     competitorVolMin,
+    brandTerms,
     includeDemand:    true,
   });
 
@@ -389,7 +385,7 @@ function SortHeader({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
-  projectId, kwVersion, onKeywordsChanged, analysis, competitors, domain,
+  projectId, kwVersion, onKeywordsChanged, analysis, competitors, brandTerms = [], domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
@@ -456,8 +452,8 @@ export default function KeywordsPanel({
 
   // ── Build merged rows (project-level thresholds applied at build time) ──
   const allRows = useMemo(
-    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned),
-    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned],
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned, brandTerms),
+    [analysis, dbKeywords, clientDomain, competitorDomains, defaultClientThreshold, defaultCompetitorThreshold, mergedScanned, brandTerms],
   );
 
   // ── Full-footprint pool for the summary cards (v7.139) ─────────────────────
@@ -468,8 +464,8 @@ export default function KeywordsPanel({
   // competitorVolMin=0). The table below intentionally stays volume-filtered
   // (allRows), so the cards read higher than the visible table rows — by design.
   const summaryRows = useMemo(
-    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, 0, 0, mergedScanned),
-    [analysis, dbKeywords, clientDomain, competitorDomains, mergedScanned],
+    () => buildRows(analysis, dbKeywords, clientDomain, competitorDomains, 0, 0, mergedScanned, brandTerms),
+    [analysis, dbKeywords, clientDomain, competitorDomains, mergedScanned, brandTerms],
   );
 
   // ── Journey classifier + scope (v7.204) ────────────────────────────────────
@@ -710,7 +706,7 @@ export default function KeywordsPanel({
     setAddError('');
     setAddLoading(true);
     try {
-      const detectedBranded = isBranded(kwTrimmed, clientDomain, competitorDomains);
+      const detectedBranded = isBranded(kwTrimmed, clientDomain, competitorDomains, brandTerms);
       const res = await fetch(`/api/projects/${projectId}/keywords`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -840,7 +836,7 @@ export default function KeywordsPanel({
       const kwType: 'ranked' | 'gap' = typeCol >= 0
         ? ((cols[typeCol] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap')
         : (pos !== null && pos <= 100 ? 'ranked' : 'gap');
-      const branded = isBranded(kwText, clientDomain, competitorDomains);
+      const branded = isBranded(kwText, clientDomain, competitorDomains, brandTerms);
       // v7.103: raw Semrush feature list, e.g. "AI Overview, People also ask, Video"
       const feats   = featCol >= 0 ? ((cols[featCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
       parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded, serpFeatures: feats });
@@ -1641,6 +1637,84 @@ const RANK_SEL_INDEX: Record<Exclude<RankFilter, 'all'>, number> = { p13: 0, p41
 //     only come from the LLM grouping pass — never fabricated here.
 // Brand/location categories stay flat (navigational, not product lines).
 
+const CAT_STOP = new Set<string>([
+  'the','and','for','with','without','your','you','our','their','this','that','these','those',
+  'what','whats','which','who','whom','how','why','when','where','are','was','were','being','been',
+  'does','did','can','could','will','would','should','about','near','vs','versus','its','get','getting',
+  'got','use','using','need','want','much','many','best','top','online','app','from','into','out',
+]);
+
+function catStem(w: string): string { return w.endsWith('s') ? w.slice(0, -1) : w; }
+
+function catModTokens(text: string, head: Set<string>): string[] {
+  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !head.has(w) && !/^\d+$/.test(w));
+}
+
+function catHeadTokens(name: string): Set<string> {
+  const h = new Set<string>();
+  for (const w of name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)) {
+    if (w.length >= 3) { h.add(w); h.add(catStem(w)); h.add(catStem(w) + 's'); }
+  }
+  return h;
+}
+
+function catTitle(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+interface SubSeed { key: string; label: string; tokens: string[]; gram: number; }
+
+// Recurring distinctive modifiers among a node's keywords. Bigrams (order-
+// independent) first, then unigrams; each must recur in ≥2 keywords.
+function deriveSubSeeds(kws: KeywordRow[], head: Set<string>): SubSeed[] {
+  const uni = new Map<string, number>();
+  const bi  = new Map<string, number>();
+  const biLabel = new Map<string, Map<string, number>>();
+  for (const k of kws) {
+    const toks = catModTokens(k.keyword, head);
+    const seen = new Set<string>();
+    for (const t of toks) if (!seen.has(t)) { uni.set(t, (uni.get(t) ?? 0) + 1); seen.add(t); }
+    for (let i = 0; i < toks.length - 1; i++) {
+      const a = toks[i], b = toks[i + 1];
+      if (a === b) continue;
+      const key  = [a, b].slice().sort().join(' ');
+      const orig = a + ' ' + b;
+      bi.set(key, (bi.get(key) ?? 0) + 1);
+      let lm = biLabel.get(key); if (!lm) { lm = new Map(); biLabel.set(key, lm); }
+      lm.set(orig, (lm.get(orig) ?? 0) + 1);
+    }
+  }
+  const MIN = 2;
+  const seeds: SubSeed[] = [];
+  for (const [key, n] of Array.from(bi.entries())) {
+    if (n < MIN) continue;
+    const parts = key.split(' ');
+    let label = key, lbest = -1;
+    for (const [orig, c] of Array.from((biLabel.get(key) ?? new Map<string, number>()).entries())) if (c > lbest) { lbest = c; label = orig; }
+    seeds.push({ key: 'b:' + key, label: catTitle(label), tokens: parts, gram: 2 });
+  }
+  for (const [u, n] of Array.from(uni.entries())) {
+    if (n < MIN) continue;
+    seeds.push({ key: 'u:' + u, label: catTitle(u), tokens: [u], gram: 1 });
+  }
+  return seeds.sort((a, b) => b.gram - a.gram);
+}
+
+// Best modifier seed for a keyword: multi-token seeds need ALL tokens present.
+function bestSubSeed(kw: KeywordRow, head: Set<string>, seeds: SubSeed[]): SubSeed | null {
+  const toks = new Set<string>(catModTokens(kw.keyword, head));
+  let best: SubSeed | null = null, bestScore = 0;
+  for (const s of seeds) {
+    let shared = 0;
+    for (const t of s.tokens) if (toks.has(t)) shared++;
+    if (shared === 0) continue;
+    if (s.tokens.length > 1 && shared < s.tokens.length) continue;
+    const score = shared * 10 + s.gram;
+    if (score > bestScore) { bestScore = score; best = s; }
+  }
+  return best;
+}
 
 interface CatNode {
   id:       string;
@@ -1678,6 +1752,8 @@ function aggregateCatNode(node: CatNode): void {
   }
 }
 
+const CAT_MAX_DEPTH = 5;   // safety cap; real trees are 2–3 deep
+const CAT_SPLIT_MIN = 6;   // only split a node holding at least this many keywords
 
 // Recursively split a category's keywords into data-derived sub-categories.
 function buildSubTree(id: string, name: string, type: CatNode['type'], kws: KeywordRow[], head: Set<string>, depth: number, derived: boolean): CatNode {

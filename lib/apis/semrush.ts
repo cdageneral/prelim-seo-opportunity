@@ -512,16 +512,33 @@ export async function getSemrushSnapshot(
   const clientRankedTexts = new Set(topKeywords.map(k => k.keyword.toLowerCase().trim()));
 
   // Build client brand token to filter out client-branded terms from gap keywords.
-  const clientBrandToken = extractBrandToken(domain);   // e.g. "sonobello"
+  const clientBrandToken = extractBrandToken(domain);   // e.g. "sonobello" / "td"
   const clientHalfLen    = Math.floor(clientBrandToken.length / 2);
   const clientSubTokens  = [
     clientBrandToken,
     ...(clientHalfLen >= 4 ? [clientBrandToken.slice(0, clientHalfLen)] : []),
     ...(clientBrandToken.length - clientHalfLen >= 4 ? [clientBrandToken.slice(clientHalfLen)] : []),
   ].filter(t => t.length >= 4);
+  // v7.205: short client brand (2–3 chars, e.g. "td" from td.com) was previously
+  // dropped by the ≥4 filter, so client-branded gap terms leaked through. Match it
+  // on a WORD BOUNDARY (mirrors isBrandedKeyword's short-token rule) — never the
+  // raw space-stripped substring, which would falsely strip "direct deposit".
+  const clientShortToken = (clientBrandToken.length >= 2 && clientBrandToken.length <= 3)
+    ? clientBrandToken : null;
 
   function isClientBranded(keyword: string): boolean {
-    const norm = keyword.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const kw = keyword.toLowerCase();
+    if (clientShortToken) {
+      const words = kw.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+      for (const w of words) {
+        const i = w.indexOf(clientShortToken);
+        if (i === 0) return true;
+        if (i >= 2 && w.length - (i + clientShortToken.length) >= 2) return true;
+      }
+      const spaced = clientShortToken.split('').join('\\s+');
+      if (new RegExp(`\\b${spaced}\\b`).test(kw)) return true;
+    }
+    const norm = kw.replace(/[^a-z0-9]/g, '');
     return clientSubTokens.some(t => norm.includes(t));
   }
 

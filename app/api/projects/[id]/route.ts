@@ -27,6 +27,12 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS semrush_database TEXT NOT NULL DEFAULT 'us'`);   // v7.99
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_terms JSONB`);                              // v7.206
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_terms_updated_at TIMESTAMP`);              // v7.206
+  } catch { /* already exists */ }
 }
 
 const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];   // v7.99
@@ -41,6 +47,9 @@ const UpdateSchema = z.object({
   kwVolThresholdClient:     z.number().int().min(0).optional(),
   kwVolThresholdCompetitor: z.number().int().min(0).optional(),
   semrushDatabase:          z.enum(marketCodes).optional(),   // v7.99: per-project market
+  // v7.206: client brand vocabulary. Terms are lowercased/trimmed/de-duped and
+  // empties dropped server-side. Editing this stamps brand_terms_updated_at.
+  brandTerms:               z.array(z.string().max(120)).max(1000).optional(),
 }).strict();
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -76,8 +85,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // v7.206: normalise brand terms (lowercase, trim, de-dupe, drop empties) and
+  // stamp the edit time so the UI can show a last-updated label (Art IV.5).
+  const patch: Record<string, unknown> = { ...parsed.data, updatedAt: new Date() };
+  if (parsed.data.brandTerms !== undefined) {
+    patch.brandTerms = Array.from(new Set(
+      parsed.data.brandTerms.map(t => t.toLowerCase().trim()).filter(Boolean),
+    ));
+    patch.brandTermsUpdatedAt = new Date();
+  }
+
   const [updated] = await db.update(projects)
-    .set({ ...parsed.data, updatedAt: new Date() })
+    .set(patch)
     .where(eq(projects.id, params.id))
     .returning();
 

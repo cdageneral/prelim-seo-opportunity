@@ -3,10 +3,6 @@
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
-// v7.205: shared topical-tree categorization — SAME primitives the Keyword panel uses
-// (single source of truth, Art II.7) so the Cluster tree nests as deeply as the
-// Keyword Landscape tree.
-import { buildTopicTree, buildTopicFamilies, catHeadTokens, type TopicTreeNode } from '@/lib/cluster/topicTree';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -788,7 +784,6 @@ interface Topic {
   contentIcon:   string;
   keywords:      KwItem[];
   totalVolume:   number;
-  topicPath:     string[];   // v7.205: ancestor topical-node names (Category → Stage → …) for the nested tree
 }
 
 interface TopicStat {
@@ -1175,102 +1170,74 @@ function buildPreProductClusters(
   return { clusters, preProductKws };
 }
 
-// ─── v7.205: Category → Stage → topical-tree leaves (Wayne's Option B) ───────────
-// ONE definition of "topic" (Art II.7): a category's keywords are bucketed by funnel
-// STAGE (per-keyword — the stage the panel already assigned, overridden by an AI
-// group's stage; pre-product = Awareness-only per Art III.2a), and WITHIN each stage
-// the SAME shared topical tree the Keyword panel uses splits them into
-// "Personal loans › bad credit / calculator …" depth. Each leaf is the counted topic,
-// so the funnel box, filters, summary cards and the nested tree read identical units.
-// Every keyword lands in exactly one leaf (no double-count, Art I.3); all roll-ups are
-// exact arithmetic over real rows (Art I.1) — nothing modeled.
-
-function volOfNode(n: TopicTreeNode<KwItem>): number {
-  let v = 0;
-  for (const r of n.own) v += r.searchVolume;
-  for (const c of n.children) v += volOfNode(c);
-  return v;
-}
-
-// Per-keyword funnel stage for a category. Pre-product (life-problem) categories are
-// Awareness-only (Art III.2a). Otherwise: the stage the panel's subClusters already
-// assigned, overridden by an AI intent group's explicit stage, else a signal scan.
-function makeStageResolver(c: ThemeCluster): (kw: KwItem) => JourneyStage {
-  if (c.type === 'problem') return () => 'awareness';
-  const byKw = new Map<KwItem, JourneyStage>();
-  for (const sc of c.subClusters) for (const kw of sc.keywords) byKw.set(kw, sc.stage);
-  if (c.aiGroups && c.aiGroups.length) {
-    const itemByLow = new Map<string, KwItem>();
-    for (const k of c.keywords) itemByLow.set(k.keyword.toLowerCase().trim(), k);
-    for (const g of c.aiGroups) if (g.stage) for (const kwLow of g.keywords) {
-      const it = itemByLow.get(kwLow); if (it) byKw.set(it, g.stage);
-    }
-  }
-  return (kw: KwItem) => byKw.get(kw) ?? INTENT_META[detectIntentSignal(kw.keyword) ?? 'unmatched'].stage;
-}
-
-// Emit one Topic per LEAF (childless node), tagged with the funnel stage and the
-// ancestor topical-node names so the tree view can rebuild the nesting.
-function emitTopicLeaves(node: TopicTreeNode<KwItem>, path: string[], stage: JourneyStage, c: ThemeCluster, out: Topic[]): void {
-  if (node.children.length === 0) {
-    const kws = node.own;
-    if (kws.length === 0) return;
-    const intent: IntentType = STAGE_INTENT[stage] ?? 'unmatched';
-    const meta = INTENT_META[intent];
-    out.push({
-      id:          node.id,
-      parentName:  c.name,
-      parentType:  c.type,
-      product:     node.name,
-      productKey:  node.id,
-      pageUrl:     kws.find(k => k.position !== null && k.url)?.url,
-      intent,
-      stage,
-      contentType: meta.contentType,
-      contentIcon: meta.contentIcon,
-      keywords:    kws,
-      totalVolume: kws.reduce((s, k) => s + k.searchVolume, 0),
-      topicPath:   path,
-    });
-    return;
-  }
-  for (const ch of node.children) emitTopicLeaves(ch, [...path, node.name], stage, c, out);
-}
-
 function flattenTopics(clusters: ThemeCluster[]): Topic[] {
-  const out: Topic[] = [];
+  const topics: Topic[] = [];
   for (const c of clusters) {
     if (c.keywords.length === 0) continue;
-    const stageOf = makeStageResolver(c);
-    // brand/location stay navigational (never token-split); procedure, pre-product
-    // problem and missing-demand all get the deep topical tree.
-    const splitType: 'procedure' | 'brand' | 'location' =
-      (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure';
 
-    const byStage = new Map<JourneyStage, KwItem[]>();
-    for (const kw of c.keywords) {
-      const st = stageOf(kw);
-      (byStage.get(st) ?? byStage.set(st, []).get(st)!).push(kw);
-    }
+    // per-keyword funnel intent (from the subClusters buildThemeClusters computed)
+    const intentOf = new Map<KwItem, IntentCluster>();
+    for (const sc of c.subClusters) for (const kw of sc.keywords) intentOf.set(kw, sc);
 
-    for (const stage of JOURNEY_ORDER) {
-      const stageKws = byStage.get(stage);
-      if (!stageKws || stageKws.length === 0) continue;
-      const root = buildTopicTree<KwItem>(`${c.id}::${stage}`, c.name, splitType, stageKws, catHeadTokens(c.name), 0, false);
-      let topNodes: TopicTreeNode<KwItem>[];
-      if (root.children.length > 0) {
-        topNodes = buildTopicFamilies(root.children, volOfNode);
-        if (root.own.length > 0) {
-          topNodes.push({ id: `${root.id}/__own__`, name: `${c.name} — general`, type: splitType, depth: 0, derived: true, own: root.own, children: [] });
-        }
-        topNodes.sort((a, b) => volOfNode(b) - volOfNode(a));
-      } else {
-        topNodes = [root];
+    // v7.197: semantic intent clustering applies to PROCEDURE topics (Wayne's case).
+    // Brand / location / demand categories have no clean head entity to anchor topical
+    // names, so they keep the prior behaviour: one parent with intent-labelled children
+    // (General / Informational / …) — unchanged from v7.196.
+    const groupsForCat: IntentGroup[] = c.type === 'procedure'
+      ? buildIntentClusters(c)
+      : (() => {
+          const byIntent = new Map<IntentType, KwItem[]>();
+          for (const kw of c.keywords) {
+            const it = intentOf.get(kw)?.intent ?? detectIntentSignal(kw.keyword) ?? 'unmatched';
+            (byIntent.get(it) ?? byIntent.set(it, []).get(it)!).push(kw);
+          }
+          return Array.from(byIntent.entries()).map(([it, kws]) => ({
+            key: `${CORE_KEY}::${it}`, name: INTENT_META[it].label, kws,
+            pageUrl: kws.find(k => k.position !== null && k.url)?.url,
+          }));
+        })();
+
+    // v7.197: one topic per intent cluster (= one page). Funnel types are merged.
+    for (const g of groupsForCat) {
+      if (g.kws.length === 0) continue;
+
+      // The cluster's single funnel stage = the dominant funnel intent BY VOLUME
+      // (Wayne: "one cluster, dominant stage"). Read each keyword's funnel intent
+      // from the subClusters; fall back to a signal scan.
+      const volByIntent = new Map<IntentType, number>();
+      for (const kw of g.kws) {
+        const it = intentOf.get(kw)?.intent ?? detectIntentSignal(kw.keyword) ?? 'unmatched';
+        volByIntent.set(it, (volByIntent.get(it) ?? 0) + kw.searchVolume);
       }
-      for (const tn of topNodes) emitTopicLeaves(tn, [], stage, c, out);
+      let domIntent: IntentType = 'unmatched';
+      let domVol = -1;
+      for (const [it, v] of Array.from(volByIntent.entries())) if (v > domVol) { domVol = v; domIntent = it; }
+      // v7.199: an AI group may carry an explicit funnel stage → honour it (and pick a
+      // representative intent for the content-type label); else dominant intent by volume.
+      const intent: IntentType = g.stage ? (STAGE_INTENT[g.stage] ?? domIntent) : domIntent;
+      // v7.203: pre-product (life-problem) topics are AWARENESS ONLY per the
+      // Constitution (Art III.2a) — the searcher knows only the problem, not the
+      // offering, so there is no Consideration/Decision/Retention to evaluate.
+      const stage: JourneyStage = c.type === 'problem' ? 'awareness' : (g.stage ?? INTENT_META[domIntent].stage);
+      const meta = INTENT_META[intent];
+
+      topics.push({
+        id:          `${c.id}::${g.key}`,
+        parentName:  c.name,
+        parentType:  c.type,
+        product:     g.name,        // v7.197: topical intent name (e.g. "401k vs IRA")
+        productKey:  g.key,
+        pageUrl:     g.pageUrl,
+        intent,
+        stage,
+        contentType: meta.contentType,
+        contentIcon: meta.contentIcon,
+        keywords:    g.kws,
+        totalVolume: g.kws.reduce((s, k) => s + k.searchVolume, 0),
+      });
     }
   }
-  return out;
+  return topics;
 }
 
 // A topic is "missing demand" (a third lens) when it is a seed demand category OR
@@ -1590,155 +1557,6 @@ function TopicTable({
   );
 }
 
-// ─── v7.205: nested cluster tree (Category → Stage → topical tree → leaf) ────────
-// Rebuilds the nesting from the flat (filtered) topic leaves — the deep view that
-// matches the Keyword Landscape tree's depth, on the SAME topic units the funnel box
-// and filters count. Default-expands categories + stages; topical nodes collapse.
-interface CTNode {
-  id:         string;
-  kind:       'cat' | 'stage' | 'topic' | 'leaf';
-  label:      string;
-  parentType: Topic['parentType'];
-  stage?:     JourneyStage;
-  depth:      number;
-  topicCount: number;
-  vol:        number;
-  leaf?:      Topic;
-  stat?:      TopicStat;
-  children:   CTNode[];
-}
-
-function buildClusterTree(topics: Topic[], statById: Map<string, TopicStat>): CTNode[] {
-  const cats = new Map<string, Topic[]>();
-  for (const t of topics) (cats.get(t.parentName) ?? cats.set(t.parentName, []).get(t.parentName)!).push(t);
-  const catNodes: CTNode[] = [];
-  for (const [catName, catTopics] of Array.from(cats.entries())) {
-    const parentType = catTopics[0].parentType;
-    const catNode: CTNode = { id: `ct:${parentType}:${catName}`, kind: 'cat', label: catName, parentType, depth: 0, topicCount: 0, vol: 0, children: [] };
-    for (const stage of JOURNEY_ORDER) {
-      const stageTopics = catTopics.filter(t => t.stage === stage);
-      if (stageTopics.length === 0) continue;
-      const stageNode: CTNode = { id: `${catNode.id}::${stage}`, kind: 'stage', label: STAGE_META[stage].label, parentType, stage, depth: 1, topicCount: 0, vol: 0, children: [] };
-      for (const t of stageTopics) {
-        let cursor = stageNode;
-        let pathId = stageNode.id;
-        for (const seg of t.topicPath) {
-          pathId += `/${seg}`;
-          let child = cursor.children.find(ch => ch.kind === 'topic' && ch.label === seg);
-          if (!child) { child = { id: pathId, kind: 'topic', label: seg, parentType, stage, depth: cursor.depth + 1, topicCount: 0, vol: 0, children: [] }; cursor.children.push(child); }
-          cursor = child;
-        }
-        cursor.children.push({ id: t.id, kind: 'leaf', label: t.product, parentType, stage, depth: cursor.depth + 1, topicCount: 1, vol: t.totalVolume, leaf: t, stat: statById.get(t.id), children: [] });
-      }
-      catNode.children.push(stageNode);
-    }
-    catNodes.push(catNode);
-  }
-  const roll = (n: CTNode): { count: number; vol: number } => {
-    if (n.kind === 'leaf') { n.topicCount = 1; return { count: 1, vol: n.vol }; }
-    let count = 0, vol = 0;
-    for (const ch of n.children) { const r = roll(ch); count += r.count; vol += r.vol; }
-    n.topicCount = count; n.vol = vol; return { count, vol };
-  };
-  for (const cn of catNodes) roll(cn);
-  catNodes.sort((a, b) => b.vol - a.vol);
-  const sortByVol = (n: CTNode) => {
-    if (n.kind === 'stage' || n.kind === 'topic') n.children.sort((a, b) => b.vol - a.vol);
-    for (const ch of n.children) sortByVol(ch);
-  };
-  for (const cn of catNodes) for (const st of cn.children) sortByVol(st);
-  return catNodes;
-}
-
-function ClusterTree({ topics, statById }: { topics: Topic[]; statById: Map<string, TopicStat> }) {
-  const [toggled, setToggled] = useState<Set<string>>(new Set());
-  const tree = useMemo(() => buildClusterTree(topics, statById), [topics, statById]);
-  const toggle = (id: string) => setToggled(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const defOpen = (n: CTNode) => n.kind === 'cat' || n.kind === 'stage';
-  const isOpen  = (n: CTNode) => (toggled.has(n.id) ? !defOpen(n) : defOpen(n));
-
-  const flat: CTNode[] = [];
-  const walk = (nodes: CTNode[]) => { for (const n of nodes) { flat.push(n); if (n.children.length > 0 && isOpen(n)) walk(n.children); } };
-  walk(tree);
-
-  return (
-    <div style={{ border: '1px solid var(--c-1a1a2c)', borderRadius: 10, overflow: 'hidden' }}>
-      {flat.map(n => <CTRow key={n.id} node={n} open={isOpen(n)} onToggle={() => toggle(n.id)} />)}
-    </div>
-  );
-}
-
-function CTRow({ node, open, onToggle }: { node: CTNode; open: boolean; onToggle: () => void }) {
-  const pad = 10 + node.depth * 16;
-
-  if (node.kind === 'cat') {
-    const tm = TYPE_META[node.parentType];
-    return (
-      <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', paddingLeft: pad, background: tm.headBg, borderLeft: `3px solid ${tm.color}`, borderBottom: '1px solid var(--c-15152a)', cursor: 'pointer' }}>
-        <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-6a6a90)' }} aria-hidden="true" />
-        <span style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{node.label}</span>
-        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: tm.bg, border: `1px solid ${tm.bdr}`, color: tm.color }}>{tm.label}</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: 'var(--c-8a8ab0)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{node.topicCount} topic{node.topicCount === 1 ? '' : 's'} · {fmtVol(node.vol)}/mo</span>
-      </div>
-    );
-  }
-
-  if (node.kind === 'stage') {
-    const sm = STAGE_META[node.stage as JourneyStage];
-    return (
-      <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', paddingLeft: pad, background: 'var(--c-0c0c18)', borderBottom: '1px solid var(--c-15152a)', cursor: 'pointer' }}>
-        <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--c-4a4a6a)' }} aria-hidden="true" />
-        <i className={`ti ${sm.icon}`} style={{ fontSize: 12, color: 'var(--c-8a8ab0)' }} aria-hidden="true" />
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-b8b8d8)' }}>{sm.label}</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{node.topicCount} topic{node.topicCount === 1 ? '' : 's'} · {fmtVol(node.vol)}/mo</span>
-      </div>
-    );
-  }
-
-  if (node.kind === 'topic') {
-    return (
-      <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', paddingLeft: pad, borderBottom: '1px solid var(--c-121224)', cursor: 'pointer' }}>
-        <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--c-4a4a6a)' }} aria-hidden="true" />
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-c8c8e8)' }}>{node.label}</span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10, color: 'var(--c-585878)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{node.topicCount} · {fmtVol(node.vol)}/mo</span>
-      </div>
-    );
-  }
-
-  const t  = node.leaf as Topic;
-  const st = node.stat;
-  const m  = st ? topicMetrics(t, st) : { cov: 0, best: null as number | null, status: 'gap' as RowStatus };
-  const stt = TBL_STATUS[m.status];
-  const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
-  return (
-    <div style={{ borderBottom: '1px solid var(--c-121224)', borderLeft: `2px solid ${stt.color}` }}>
-      <div onClick={onToggle} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', paddingLeft: pad, cursor: 'pointer', background: open ? 'var(--c-101019)' : 'transparent' }}>
-        <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 11, color: 'var(--c-4a4a6a)' }} aria-hidden="true" />
-        <span style={{ fontSize: 12, color: 'var(--c-d8d8f8)' }}>{node.label}</span>
-        {t.pageUrl && <i className="ti ti-link" style={{ fontSize: 11, color: 'var(--c-6c63ff)' }} aria-hidden="true" title={t.pageUrl} />}
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-          {t.keywords.length} kw · {fmtVol(t.totalVolume)}/mo{m.status === 'demand' ? '' : ` · ${m.cov}%`}
-        </span>
-        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: stt.bg, border: `1px solid ${stt.bdr}`, color: stt.color, whiteSpace: 'nowrap' }}>{stt.label}</span>
-      </div>
-      {open && (
-        <div style={{ padding: '2px 12px 10px', paddingLeft: pad + 16, display: 'flex', flexWrap: 'wrap', gap: 5, background: 'var(--c-0c0c16)' }}>
-          {topKws.map((k, i) => (
-            <span key={i} style={{ fontSize: 10, color: k.origin === 'demand' ? 'var(--c-22d3ee)' : k.isGap ? 'var(--c-f59e0b)' : 'var(--c-8ab89a)', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1c1c2e)', borderRadius: 5, padding: '2px 7px' }}>
-              {k.keyword} · {fmtVol(k.searchVolume)}{k.position !== null && (k.position as number) <= 20 ? ` · #${k.position}` : ''}
-            </span>
-          ))}
-          {t.keywords.length > topKws.length && <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{t.keywords.length - topKws.length} more</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ClustersTab({
   clusters,
   clientDomain,
@@ -1784,7 +1602,6 @@ function ClustersTab({
   // ── Flatten categories → TOPICS (the counted unit) + classify each ──────────
   const topics: Topic[] = flattenTopics(scopedClusters);
   const topicStats: TopicStat[] = topics.map(classifyTopic);
-  const statById = new Map(topicStats.map(s => [s.topic.id, s] as const));   // v7.205: leaf stat lookup for the nested tree
   const catCount = new Set(scopedClusters.map(c => `${c.type}:${c.name}`)).size;
 
   const leadingStats  = topicStats.filter(s => !s.isDemand &&  s.isLeading);
@@ -2400,18 +2217,15 @@ function ClustersTab({
       })()}
 
       {/* ── v7.190: one sortable table — Theme · product × funnel stage ──────── */}
-      {/* v7.205: default grouped view = the deep nested tree (Category → Stage → topical
-          tree); any column sort flattens to the sortable table. */}
-      {filtered.length > 0 && (sortKey === 'group'
-        ? <ClusterTree topics={filtered} statById={statById} />
-        : <TopicTable
-            rows={sortedRows}
-            sortKey={sortKey}
-            sortDir={sortDir}
-            onSort={onSort}
-            expanded={expanded}
-            onToggle={toggleRow}
-          />
+      {filtered.length > 0 && (
+        <TopicTable
+          rows={sortedRows}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onSort={onSort}
+          expanded={expanded}
+          onToggle={toggleRow}
+        />
       )}
 
       {filtered.length === 0 && (

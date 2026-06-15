@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -51,6 +51,8 @@ interface Project {
   kwVolThresholdClient:     number;
   kwVolThresholdCompetitor: number;
   semrushDatabase?:         string;   // v7.99: per-project market
+  brandTerms?:              string[] | null;        // v7.206: client brand vocabulary
+  brandTermsUpdatedAt?:     string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -221,6 +223,21 @@ export default function ProjectBriefPage() {
   const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
   const navScores  = calcNavScores(analysis);
+
+  // v7.206: client brand vocabulary. Injected once onto the analysis snapshot as
+  // `_brandTerms` so every panel's buildKwPool picks it up via the snapshot fallback
+  // (single source of truth — no per-panel threading). Also passed explicitly to
+  // the Keyword panel for its CSV-upload / add-keyword branded detection.
+  const brandTerms = useMemo<string[]>(
+    () => (Array.isArray(project?.brandTerms) ? (project!.brandTerms as string[]) : []),
+    [project],
+  );
+  const analysisForPanels = useMemo(
+    () => (analysis
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms } }
+      : analysis),
+    [analysis, brandTerms],
+  );
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -637,6 +654,8 @@ export default function ProjectBriefPage() {
           competitors={project.competitors ?? []}
           kwVolThresholdClient={project.kwVolThresholdClient ?? 0}
           kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
+          brandTerms={project.brandTerms ?? []}
+          brandTermsUpdatedAt={project.brandTermsUpdatedAt ?? null}
           onClose={() => { setShowCompetitors(false); setKwVersion(v => v + 1); }}
           onChanged={fetchProject}
         />
@@ -1221,8 +1240,9 @@ export default function ProjectBriefPage() {
               kwVersion={kwVersion}
               onKeywordsChanged={() => setKwVersion(v => v + 1)}   // v7.108: client kw changes refresh all panels
               projectId={projectId}
-              analysis={analysis}
+              analysis={analysisForPanels}
               competitors={competitorDomains}
+              brandTerms={brandTerms}
               domain={domainDisplay}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
@@ -1236,7 +1256,7 @@ export default function ProjectBriefPage() {
             <ThemeClustersPanel
               kwVersion={kwVersion}
               projectId={projectId}
-              analysis={analysis}
+              analysis={analysisForPanels}
               competitors={competitorDomains}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
@@ -1247,7 +1267,7 @@ export default function ProjectBriefPage() {
           {hasResults && analysis && activeSection === 'overview' && (
             <ExecutiveSummarySection
               kwVersion={kwVersion}
-              analysis={analysis}
+              analysis={analysisForPanels}
               projectId={projectId}
               projectName={project.clientName}
               clientDomain={domainDisplay}
@@ -1262,7 +1282,7 @@ export default function ProjectBriefPage() {
             <ContentMapSection
               kwVersion={kwVersion}
               projectId={projectId}
-              analysis={analysis}
+              analysis={analysisForPanels}
               competitors={competitorDomains}
             />
           )}
@@ -1272,7 +1292,7 @@ export default function ProjectBriefPage() {
             <ContentPlanSection
               kwVersion={kwVersion}
               projectId={projectId}
-              analysis={analysis}
+              analysis={analysisForPanels}
               competitors={competitorDomains}
             />
           )}
@@ -1281,7 +1301,7 @@ export default function ProjectBriefPage() {
           {hasResults && analysis && activeSection === 'serp' && (
             <GoogleSerpSection
               kwVersion={kwVersion}
-              analysis={analysis}
+              analysis={analysisForPanels}
               projectId={projectId}
               projectName={project.clientName}
               domain={domainDisplay}
@@ -1295,7 +1315,7 @@ export default function ProjectBriefPage() {
           {hasResults && analysis && activeSection === 'serpFeatures' && (
             <SerpFeaturesSection
               kwVersion={kwVersion}
-              analysis={analysis}
+              analysis={analysisForPanels}
               competitors={project.competitors}
               clientName={project.clientName}
               websiteUrl={project.websiteUrl}
@@ -1307,14 +1327,14 @@ export default function ProjectBriefPage() {
           {/* ── LLM Visibility ── */}
           {hasResults && analysis && activeSection === 'llm' && (
             <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
-              <LLMVisibilitySection analysis={analysis} />
+              <LLMVisibilitySection analysis={analysisForPanels} />
             </div>
           )}
 
           {/* ── Audience Segments ── */}
           {hasResults && analysis && activeSection === 'audienceSegments' && (
             <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
-              <AudienceSegmentsSection analysis={analysis} />
+              <AudienceSegmentsSection analysis={analysisForPanels} />
             </div>
           )}
 
@@ -1324,7 +1344,7 @@ export default function ProjectBriefPage() {
               <JourneySection
               kwVersion={kwVersion}
                 projectId={projectId}
-                analysis={analysis}
+                analysis={analysisForPanels}
                 competitors={competitorDomains}
               />
             </div>
@@ -1335,7 +1355,7 @@ export default function ProjectBriefPage() {
             <LocalSearchSection
               kwVersion={kwVersion}
               projectId={projectId}
-              analysis={analysis}
+              analysis={analysisForPanels}
               projectName={project.clientName}
               domain={domainDisplay}
               competitors={project.competitors}

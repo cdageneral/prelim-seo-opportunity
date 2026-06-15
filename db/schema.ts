@@ -28,6 +28,14 @@ export const projects = pgTable('projects', {
   // 'ca', 'uk', 'au', …) — also drives SerpAPI gl/google_domain via MARKETS map
   // in lib/utils/markets.ts. NOTE: run `npm run db:push` once after deploying.
   semrushDatabase:          text('semrush_database').default('us').notNull(),
+  // v7.206: client brand vocabulary — the terms that count as BRANDED for this
+  // client (Constitution III.1). Seeded by AI on analysis (domain + the
+  // navigational terms the client ranks for, e.g. TD → "td","toronto-dominion",
+  // "easyweb","ameritrade") and editable in the Competitors/upload manager. The
+  // domain root is always an implicit member; this list adds the variants a
+  // domain string can't yield. NOTE: run `npm run db:push` once after deploying.
+  brandTerms:               jsonb('brand_terms').$type<string[]>(),
+  brandTermsUpdatedAt:      timestamp('brand_terms_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });

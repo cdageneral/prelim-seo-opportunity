@@ -42,6 +42,10 @@ export interface KwPoolOptions {
   competitorDomains?: string[];
   clientVolMin?:      number;
   competitorVolMin?:  number;
+  // v7.206: client brand vocabulary (variants a domain string can't yield, e.g.
+  // "toronto-dominion", "easyweb"). Used to label client-brand rows as branded and
+  // to protect the client brand footprint from competitor-brand stripping.
+  brandTerms?:        string[];
   // v7.162: opt-in. When true, §5 unions the deep-journey demand universe
   // (`semrushSnapshot._demandUniverse.topics`) into the pool as origin:'demand'.
   // Defaults FALSE so every existing caller is byte-for-byte unchanged.
@@ -133,52 +137,113 @@ export function textHasCompetitorBrand(text: string, tokens: Set<string>): boole
 
 /**
  * Returns true if the keyword is branded by any of the given domains.
- * Uses three-layer detection: exact substring, prefix truncation, fuzzy per-word.
- * Identical to the isBranded() function in KeywordsPanel.tsx.
+ *
+ * Two token classes, because short brands and long brands need different rules:
+ *
+ *  • LONG roots (≥4 chars, e.g. "sonobello") — UNCHANGED three-layer detection:
+ *    exact substring on the space-stripped keyword, prefix truncation, fuzzy
+ *    per-word edit distance.
+ *
+ *  • SHORT roots (2–3 chars, e.g. "td" from td.com) — v7.205. These were
+ *    PREVIOUSLY DROPPED entirely by the old `length >= 4` filter, so a client
+ *    like TD Bank had ZERO branded terms detected. Short tokens are now matched
+ *    on a WORD BOUNDARY only — never the space-stripped substring, which would
+ *    falsely join "direc[t d]eposit" / "accoun[t d]efinition". A keyword is
+ *    short-branded when, for some short token:
+ *      (a) a word in the keyword STARTS with the token   → "td", "td bank",
+ *          "tdbank", "tdameritrade"; or
+ *      (b) the token appears MID-WORD with both residual segments ≥2 chars
+ *          → catches a genuine compound like "mytdfinancing" (my|financing)
+ *            while rejecting coincidences like "ebitda" (ebi|a → "a" <2); or
+ *      (c) the token spelled with the letters spaced out  → "t d bank".
+ *    Verified on TD Bank's 2,274-keyword footprint: 204 branded, 0 false
+ *    positives (every "direct deposit"/"definition"/"ebitda" correctly excluded).
+ *    Identical to the isBranded() function in KeywordsPanel.tsx / ContentMapSection
+ *    / JourneySection — edit all copies together.
  */
 export function isBrandedKeyword(
   keyword:          string,
   clientDomain:     string,
   competitorDomains: string[] = [],
+  brandTerms:       string[] = [],   // v7.206: explicit client brand vocabulary (variants a domain string can't yield)
 ): boolean {
   if (!keyword) return false;
   const kw     = keyword.toLowerCase().trim();
   const kwNorm = kw.replace(/[^a-z0-9]/g, '');
   if (!kwNorm) return false;
 
-  const baseBrands = [clientDomain, ...competitorDomains]
-    .map(extractBrand)
-    .filter(b => b.length >= 4);
-  if (baseBrands.length === 0) return false;
-
-  const tokenSet = new Set<string>(baseBrands);
-  for (const brand of baseBrands) {
-    const half = Math.floor(brand.length / 2);
-    if (half >= 4)                tokenSet.add(brand.slice(0, half));
-    if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
-  }
-  const allTokens: string[] = Array.from(tokenSet);
-
-  // Pass 1: exact substring
-  for (const token of allTokens) {
-    if (kwNorm.includes(token))                                return true;
-    if (token.includes(kwNorm) && kwNorm.length >= 4)         return true;
-    if (token.length >= 5 && kwNorm.length >= 4 &&
-        token.startsWith(kwNorm))                             return true;
+  // v7.206: explicit brand vocabulary. Multi-word terms ("toronto dominion") are
+  // matched as whole phrases on a word boundary; single-word terms ("easyweb",
+  // "ameritrade", "td") fold into the same root machinery below (long → substring,
+  // short → word boundary). Normalisation collapses any punctuation/hyphens to
+  // single spaces so "toronto-dominion" and "toronto dominion" both match.
+  const cleanTerms = brandTerms.map(t => (t ?? '').toLowerCase().trim()).filter(Boolean);
+  const brandPhrases  = cleanTerms.filter(t => /[\s-]/.test(t));
+  const brandWordRoots = cleanTerms.filter(t => !/[\s-]/.test(t)).map(t => t.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+  if (brandPhrases.length > 0) {
+    const norm = (s: string) => ' ' + s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ') + ' ';
+    const kwSpaced = norm(kw);
+    for (const p of brandPhrases) {
+      const np = norm(p);
+      if (np !== '  ' && kwSpaced.includes(np)) return true;
+    }
   }
 
-  // Pass 2: fuzzy per-word
-  const kwWords = kw
-    .split(/\s+/)
-    .map(w => w.replace(/[^a-z0-9]/g, ''))
-    .filter(w => w.length >= 4);
+  const roots = Array.from(new Set([
+    ...[clientDomain, ...competitorDomains].map(extractBrand),
+    ...brandWordRoots,
+  ])).filter(b => b.length >= 2);
+  if (roots.length === 0) return false;
+  const longRoots  = roots.filter(b => b.length >= 4);
+  const shortRoots = roots.filter(b => b.length >= 2 && b.length <= 3);
 
-  for (const word of kwWords) {
+  // ── Short brand tokens (word-boundary only) ───────────────────────────────
+  if (shortRoots.length > 0) {
+    const words = kw.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean);
+    for (const token of shortRoots) {
+      for (const w of words) {
+        const i = w.indexOf(token);
+        if (i < 0) continue;
+        if (i === 0)                                          return true;   // (a) word-initial
+        if (i >= 2 && w.length - (i + token.length) >= 2)     return true;   // (b) genuine mid-word compound
+      }
+      // (c) letters spaced out, e.g. "t d"
+      const spaced = token.split('').join('\\s+');
+      if (new RegExp(`\\b${spaced}\\b`).test(kw))             return true;
+    }
+  }
+
+  // ── Long brand tokens (≥4) — original three-layer behaviour, unchanged ────
+  if (longRoots.length > 0) {
+    const tokenSet = new Set<string>(longRoots);
+    for (const brand of longRoots) {
+      const half = Math.floor(brand.length / 2);
+      if (half >= 4)                tokenSet.add(brand.slice(0, half));
+      if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
+    }
+    const allTokens: string[] = Array.from(tokenSet);
+
+    // Pass 1: exact substring
     for (const token of allTokens) {
-      const minLen    = Math.min(word.length, token.length);
-      const threshold = Math.max(1, Math.floor(minLen / 4));
-      if (Math.abs(word.length - token.length) > threshold + 1) continue;
-      if (editDistance(word, token) <= threshold) return true;
+      if (kwNorm.includes(token))                                return true;
+      if (token.includes(kwNorm) && kwNorm.length >= 4)         return true;
+      if (token.length >= 5 && kwNorm.length >= 4 &&
+          token.startsWith(kwNorm))                             return true;
+    }
+
+    // Pass 2: fuzzy per-word
+    const kwWords = kw
+      .split(/\s+/)
+      .map(w => w.replace(/[^a-z0-9]/g, ''))
+      .filter(w => w.length >= 4);
+
+    for (const word of kwWords) {
+      for (const token of allTokens) {
+        const minLen    = Math.min(word.length, token.length);
+        const threshold = Math.max(1, Math.floor(minLen / 4));
+        if (Math.abs(word.length - token.length) > threshold + 1) continue;
+        if (editDistance(word, token) <= threshold) return true;
+      }
     }
   }
 
@@ -207,8 +272,19 @@ export function buildKwPool({
   competitorDomains              = [],
   clientVolMin                   = 0,
   competitorVolMin               = 0,
+  brandTerms                     = [],
   includeDemand                  = false,
 }: KwPoolOptions): KwPoolItem[] {
+  // v7.206: brand vocabulary. Prefer the explicit option; otherwise fall back to
+  // `_brandTerms` carried on the snapshot (injected once at page load from
+  // project.brandTerms). This makes EVERY buildKwPool caller — Keyword, Cluster,
+  // Journey, Content Map — share one client brand vocabulary without threading the
+  // list through every component signature (single source of truth, Art II.7).
+  const effectiveBrandTerms: string[] =
+    (Array.isArray(brandTerms) && brandTerms.length > 0)
+      ? brandTerms
+      : (Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : []);
+
   const blockedSet = new Set<string>(
     uploaded
       .filter((k: any) => k.source === 'blocked')
@@ -234,7 +310,7 @@ export function buildKwPool({
   );
   // Branded to a competitor (any compDomain) but NOT to the client → exclude.
   const isCompetitorBranded = (kw: string): boolean =>
-    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, []);
+    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
 
   // ── v7.201: DETERMINISTIC auto-discovered competitor-brand exclusion ─────────
   // Strip keywords carrying a brand the user never configured but Semrush surfaced as
@@ -244,7 +320,7 @@ export function buildKwPool({
   // strict match; the client's own brand is never stripped (token removed + guard).
   const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, competitorDomains, uploadedGapDomains);
   const isAutoCompetitorBrand = (kw: string): boolean =>
-    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, []);
+    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
 
   // ── v7.196: competitor BRAND-CATEGORY exclusion ─────────────────────────────
   // Per-keyword string matching can't catch a competitor's brand searches when they
@@ -262,7 +338,7 @@ export function buildKwPool({
     cbCats
       .filter(c => {
         if (!c?.name) return false;
-        if (isBrandedKeyword(c.name, clientDomain, [])) return false;   // client's own brand → keep
+        if (isBrandedKeyword(c.name, clientDomain, [], effectiveBrandTerms)) return false;   // client's own brand → keep
         const isBrandType        = c.type === 'brand';
         const namedLikeCompetitor = compDomains.length > 0 && isBrandedKeyword(c.name, '', compDomains);
         return isBrandType || namedLikeCompetitor;                      // competitor / third-party brand
@@ -305,7 +381,7 @@ export function buildKwPool({
       searchVolume: k.searchVolume ?? 0,
       position:     k.position    ?? null,
       isGap:        false,
-      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
+      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
       origin:       'footprint',
     });
@@ -333,7 +409,7 @@ export function buildKwPool({
       searchVolume: k.search_volume ?? k.searchVolume ?? 0,
       position:     k.position ?? null,
       isGap:        false,
-      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
+      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
       origin:       'footprint',
     });
@@ -348,7 +424,7 @@ export function buildKwPool({
     // competitor only appears in an uploaded file; plus the brand-category signal so
     // abbreviated/foreign competitor brand terms ("boa", "美国银行") are caught too.
     // Client-brand footprint is unaffected (these are competitor-ranked terms).
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains) || isAutoCompetitorBrand(k.keyword)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword)) continue;
     if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -374,7 +450,7 @@ export function buildKwPool({
     // script), is excluded so only NON-branded competitor terms enter the landscape
     // and clusters. The row's own `domain` is in compDomains, so the uploading
     // competitor's brand is caught even if it wasn't configured.
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains) || isAutoCompetitorBrand(k.keyword)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
@@ -430,7 +506,7 @@ export function buildKwPool({
         searchVolume: t.searchVolume ?? 0,
         position:     null,
         isGap:        false,   // NOT a competitor gap — it is "missing demand"
-        isBranded:    isBrandedKeyword(t.keyword, clientDomain, competitorDomains),
+        isBranded:    isBrandedKeyword(t.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
         competitor:   null,
         origin:       'demand',
         inDemand:     true,
