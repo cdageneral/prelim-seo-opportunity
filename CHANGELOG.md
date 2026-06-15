@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.210 — 2026-06-15 · Reconciliation — Content plan = one page per cluster (Const III.5)
+
+**The ask (Wayne):** the cluster count (2514), Journey (617) and Content plan (323) didn't agree, but the Constitution says one cluster = one intent = one page (III.4/III.5). Root cause: three separate builders over two different sources — the Cluster panel builds from the keyword pool; the Journey and Content plan each build their own buckets from the demand universe. Wayne chose option A (refined clusters as the single source of truth) and confirmed: Content plan should list one page per cluster (total rises from 323 toward the cluster count), and the Journey should show one node per cluster.
+
+**This release (Content reconciliation):**
+
+- **Canonical source (`components/brief/ThemeClustersPanel.tsx`).** New exported `buildCanonicalClusterTopics(...)` — a thin wrapper over the panel's existing `buildPreProductClusters` + `buildThemeClusters` + `flattenTopics` (zero change to those proven builders). `flattenTopics` already emits exactly one topic per intent group (= one page), so this IS the canonical "one cluster = one intent = one page" list. AI-refined synonym merges flow in automatically when the snapshot carries `_categoryBreakdown.intentGroups`.
+- **One page per cluster (`lib/journey/contentPlan.ts`).** New pure `buildContentPlanFromTopics(topics)` builds exactly one `ContentTopic` per canonical cluster: state = existing (client ranks / has a page) vs competitor vs missing; action = optimize vs build; priority/quick-win/refresh from stage + demand; brief templated from the cluster's own keywords; internal links = sibling clusters in the same theme. Takes a local `CanonicalTopicInput` interface so the lib never imports the client component (no import cycle).
+- **Consumers (`ContentPlanSection.tsx` + `ContentMapSection.tsx`).** Both now build the plan from `buildContentPlanFromTopics(buildCanonicalClusterTopics(...))` instead of the demand-universe-only `planFromSnapshot` (kept as the fallback when no clusters exist). Result: the Content plan and Content map totals reconcile to the cluster count — every cluster maps to exactly one page.
+
+**Data integrity:** the plan is now a recomputed VIEW over the one canonical cluster pool (Const II.7) — no forked topic set. Volumes are exact roll-ups of the clusters' real keyword volumes (verified: plan total volume === sum of cluster volumes). Every cluster maps to exactly one page, no loss or duplication (Art I.3). No caps (Art I.6).
+
+**Verification (own debugging agent):** isolated `tsc` on `ThemeClustersPanel` + `contentPlan` + `ContentPlanSection` + `ContentMapSection` = **0 errors**. Reconciliation harness on the REAL `buildCanonicalClusterTopics` + `buildContentPlanFromTopics` = **8/8**: 1 page per cluster (plan.topics.length === cluster count), scope.total === cluster count, existing + net-new === total, every cluster maps to exactly one page (no loss/dup), URL-backed clusters = optimize, plan total volume === exact sum of cluster volumes. jsdom `renderToString` of the REAL `ContentExplorer` on the cluster-based plan = **3/3** (renders, shows the reconciled total + existing/net-new split).
+
+**Scope note (Journey → v7.211):** Wayne also chose one node per cluster for the Journey. That requires breaking the `ThemeClustersPanel ↔ JourneySection` import cycle (extracting the canonical builder + the journey classifier into neutral libs) and a live-data check that a dense per-cluster graph renders/performs acceptably — so it ships as its own verified release. After v7.211 the Cluster panel, Content plan, Content map AND Journey all reconcile to the same count.
+
 ## v7.209 — 2026-06-15 · Brand rule — AI suggests competitor brands to exclude
 
 **The ask (Wayne):** the second half of the v7.208 decision — "auto AI-flag" the competitor/third-party brands so you don't have to spot every one yourself.

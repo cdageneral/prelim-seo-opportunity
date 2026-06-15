@@ -2,9 +2,10 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import {
-  buildContentPlan, planFromSnapshot, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
+  buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
+import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 
 // ─── palette (matches the app's orbit-* dark theme) ─────────────────────────────
 const COL = {
@@ -291,7 +292,7 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
 // ─── Content Plan sub-nav section (default export) ───────────────────────────────
 interface Props { projectId: string; kwVersion?: number; analysis: any; competitors: string[]; }
 
-export default function ContentPlanSection({ projectId, kwVersion, analysis }: Props) {
+export default function ContentPlanSection({ projectId, kwVersion, analysis, competitors = [] }: Props) {
   const [uploadedKeywords, setUploadedKeywords] = useState<any[]>([]);
   const [kwLoaded, setKwLoaded] = useState(false);
 
@@ -306,7 +307,16 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis }: P
     return () => { cancelled = true; };
   }, [projectId, kwVersion]);
 
-  const plan = useMemo(() => planFromSnapshot(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
+  // v7.210: ONE PAGE PER CLUSTER — build the plan from the canonical cluster topics
+  // (the same source the Cluster panel counts), so content-plan total reconciles to
+  // the cluster count (Const III.5). Falls back to the demand-universe plan only when
+  // no clusters exist yet.
+  const clientDomain = (analysis?.semrushSnapshot?.domain as string) ?? '';
+  const plan = useMemo(() => {
+    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords);
+    if (topics.length > 0) return buildContentPlanFromTopics(topics);
+    return planFromSnapshot(analysis, uploadedKeywords);
+  }, [analysis, clientDomain, competitors, uploadedKeywords]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>

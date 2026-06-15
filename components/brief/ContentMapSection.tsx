@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState, useEffect, Fragment } from 'react';
-import { planFromSnapshot } from '@/lib/journey/contentPlan';
+import { planFromSnapshot, buildContentPlanFromTopics } from '@/lib/journey/contentPlan';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
+import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1488,7 +1489,13 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   // v7.176: the full content plan (topics → optimise/build, priority, briefs,
   // competitive insight) from the SAME shared builder the Content Plan sub-nav uses
   // — so the Content panel, Content Plan, Keyword and Cluster panels all reconcile.
-  const plan = useMemo(() => planFromSnapshot(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
+  // v7.210: build the plan from the canonical cluster topics (one page per cluster,
+  // Const III.5) so Content panel + Content Plan reconcile to the cluster count.
+  const plan = useMemo(() => {
+    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors ?? [], uploadedKeywords);
+    if (topics.length > 0) return buildContentPlanFromTopics(topics);
+    return planFromSnapshot(analysis, uploadedKeywords);
+  }, [analysis, clientDomain, competitors, uploadedKeywords]);
 
   const allGaps = useMemo(() => buildContentGaps(clusters, segments), [clusters, segments]);
 

@@ -240,6 +240,118 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
 export const PRIORITY_LABEL: Record<Priority, string> = { P0: 'Do first', P1: 'Next', P2: 'Later' };
 export { SUPPORT_LABEL };
 
+// ─── v7.210: ONE PAGE PER CLUSTER (Const III.5 reconciliation) ──────────────────
+// Builds the content plan directly from the canonical cluster topics (the Cluster
+// panel's flattened "one cluster = one intent = one page" units) instead of forking
+// a separate demand-universe topic set. Result: content-plan total === cluster count,
+// so 2514 clusters → 2514 pages (or fewer once AI-refine merges synonym intents).
+// The input is structurally a ThemeClustersPanel `Topic` (kept as a local interface
+// so this pure lib never imports the client component — no import cycle).
+export interface CanonicalTopicInput {
+  id:          string;
+  parentName:  string;
+  parentType:  'procedure' | 'brand' | 'location' | 'demand' | 'problem';
+  product:     string;
+  pageUrl?:    string;
+  stage:       GraphNode['stage'];
+  totalVolume: number;
+  keywords: Array<{
+    keyword:     string;
+    searchVolume: number;
+    position:    number | null;
+    isGap:       boolean;
+    competitor?: string | null;
+    origin?:     'footprint' | 'demand';
+  }>;
+}
+
+function topicOutline(lane: GraphNode['lane'], kind: GraphNode['kind']): string[] {
+  if (kind === 'problem') return ['Why this happens', 'What you can try yourself (honest take)', 'Options ranked by effectiveness', 'When to consider a professional solution'];
+  return ['What it is & who it’s for', 'Key options / details compared', 'Cost & considerations', 'How to decide your next step'];
+}
+
+export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): ContentPlan {
+  const vols = topics.map(t => t.totalVolume).slice().sort((a, b) => a - b);
+  const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
+
+  const out: ContentTopic[] = [];
+  for (let i = 0; i < topics.length; i++) {
+    const t = topics[i];
+    const lane: GraphNode['lane'] = t.parentType === 'problem' ? 'pre-product' : 'product';
+    const kind: GraphNode['kind'] = t.parentType === 'problem' ? 'problem' : 'core';
+
+    const footprint = t.keywords.filter(k => k.origin !== 'demand');
+    const clientRanked = footprint.filter(k => !k.isGap && k.position !== null);
+    const gaps = t.keywords.filter(k => k.isGap);
+    const clientVol = clientRanked.reduce((s, k) => s + k.searchVolume, 0);
+    const compVol = gaps.reduce((s, k) => s + k.searchVolume, 0);
+    const hasClient = clientRanked.length > 0 || !!t.pageUrl;
+    const state: NodeState = hasClient ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+    const action: 'optimize' | 'build' = state === 'existing' ? 'optimize' : 'build';
+    const url = t.pageUrl ?? null;
+    const clientCovPct = t.totalVolume > 0 ? Math.round((clientVol / t.totalVolume) * 100) : 0;
+    const competitor = gaps.find(k => k.competitor)?.competitor ?? null;
+
+    const distance = lane === 'product' ? 2 : (t.stage === 'awareness' ? 4 : 3);
+    const highDemand = t.totalVolume >= median && t.totalVolume > 0;
+    const quickWin = state === 'competitor' && distance <= 2 && highDemand;
+    let priority: Priority;
+    if (distance <= 2 && (highDemand || quickWin)) priority = 'P0';
+    else if (distance <= 2 || (distance === 3 && highDemand)) priority = 'P1';
+    else priority = 'P2';
+    const refresh = state === 'existing' && clientCovPct < 60;
+
+    const briefKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 12).map(k => ({
+      keyword: k.keyword, searchVolume: k.searchVolume,
+      state: (k.isGap ? 'competitor' : (k.position !== null ? 'existing' : 'missing')) as NodeState,
+    }));
+    const faqKws = t.keywords.filter(k => isQuestion(k.keyword)).slice(0, 4).map(k => cap(k.keyword) + '?');
+
+    out.push({
+      id: t.id, name: t.product, lane, kind, supportType: 'core',
+      stage: t.stage, state, action, url,
+      totalVol: t.totalVolume, clientVol, clientCovPct, kwCount: t.keywords.length, competitor,
+      distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, quickWin, refresh,
+      brief: {
+        title: cap(t.product),
+        outline: topicOutline(lane, kind),
+        faq: faqKws.length ? faqKws : [cap(t.product) + ' — what should readers know first?'],
+        keywords: briefKws,
+        links: [],
+        serp: serpTargets(t.keywords, t.stage),
+      },
+    });
+  }
+
+  // internal links = sibling topics under the same parent theme (up to 6)
+  const byParent: Record<string, ContentTopic[]> = {};
+  for (let i = 0; i < out.length; i++) { const p = topics[i].parentName; (byParent[p] = byParent[p] || []).push(out[i]); }
+  for (let i = 0; i < out.length; i++) {
+    const siblings = (byParent[topics[i].parentName] || []).filter(s => s.id !== out[i].id).slice(0, 6);
+    out[i].brief.links = siblings.map(s => ({ name: s.name, dir: 'to' as const, why: 'Same theme — cross-link' }));
+  }
+
+  const sum = (arr: ContentTopic[]) => arr.reduce((s, t) => s + t.totalVol, 0);
+  const existing = out.filter(t => t.state === 'existing');
+  const build = out.filter(t => t.state !== 'existing');
+  const qw = out.filter(t => t.quickWin);
+  const p0 = out.filter(t => t.priority === 'P0');
+  const p1 = out.filter(t => t.priority === 'P1');
+  const p2 = out.filter(t => t.priority === 'P2');
+  return {
+    topics: out,
+    scope: {
+      total: out.length, totalVol: sum(out),
+      existing: existing.length, existingVol: sum(existing),
+      build: build.length, buildVol: sum(build),
+      quickWins: qw.length, quickWinVol: sum(qw),
+      p0: p0.length, p0Vol: sum(p0),
+      p1: p1.length, p1Vol: sum(p1),
+      p2: p2.length, p2Vol: sum(p2),
+    },
+  };
+}
+
 // ─── Single wiring point: analysis snapshot → content plan ──────────────────────
 // Both the Content panel and the Content Plan sub-nav call this so they share the
 // EXACT same topic→keyword pool, footprint overlay, and competitor mapping — which

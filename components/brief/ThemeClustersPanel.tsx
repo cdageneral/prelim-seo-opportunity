@@ -9,7 +9,7 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-s
 type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
 type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retention';
 
-interface KwItem {
+export interface KwItem {
   keyword:      string;
   searchVolume: number;
   position:     number | null;   // null = client not ranking
@@ -775,7 +775,7 @@ function dominantStage(c: ThemeCluster): JourneyStage {
 // those — the same unit the Audience Journey uses (theme × funnel-stage node), so
 // the two panels finally line up. Categories become section headers; topics are
 // the cards inside them.
-interface Topic {
+export interface Topic {
   id:            string;
   parentName:    string;
   parentType:    'procedure' | 'brand' | 'location' | 'demand' | 'problem';
@@ -1242,6 +1242,31 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
     }
   }
   return topics;
+}
+
+// ─── v7.210: canonical cluster source (single source of truth, Const II.7) ──────
+// The Cluster panel's flattened topic list IS the canonical "one cluster = one intent
+// = one page" unit (flattenTopics already emits one Topic per intent group). This thin
+// wrapper exposes it so the Content panel + Content plan build ONE page per cluster
+// (Const III.5) instead of forking their own demand-universe topic set — which is what
+// made the cluster / journey / content-plan counts diverge (2514 vs 617 vs 323).
+// It calls the SAME builders the panel uses (no parallel copy); AI-refined intent
+// merges flow in automatically when the snapshot carries `_categoryBreakdown.intentGroups`.
+export function buildCanonicalClusterTopics(
+  analysis: any,
+  clientDomain: string,
+  competitorDomains: string[] = [],
+  uploadedKeywords: any[] = [],
+  clientVolMin = 0,
+  competitorVolMin = 0,
+): Topic[] {
+  const jb = buildPreProductClusters(
+    analysis, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin,
+  );
+  const base = buildThemeClusters(
+    analysis, {}, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin, jb.preProductKws,
+  );
+  return flattenTopics([...base, ...jb.clusters]);
 }
 
 // A topic is "missing demand" (a third lens) when it is a seed demand category OR
