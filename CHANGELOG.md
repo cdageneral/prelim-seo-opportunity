@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.194 — 2026-06-15 · Cluster panel — no duplicate parent names; true parent → child grouping
+
+**The ask (Wayne):** the Cluster panel was showing duplicate cluster names — multiple "401k & Retirement Planning", separate "529 College Savings Plans" and "529 Education Savings Plans", etc. Clusters should be matched by search intent and then grouped by parent → child (category / sub-category) with no duplicate names.
+
+**Two root causes fixed (one file — `components/brief/ThemeClustersPanel.tsx`; 88-file manifest unchanged):**
+
+- **Non-split themes repeated the parent name on every row.** A theme that isn't split into products placed its keywords in a "Core" bucket labelled with the *theme name itself*, so its General / Informational / Transactional rows all showed the same title. Core sub-topics are now labelled by their **intent** (General / Informational / Transactional / …) and never by the parent name.
+- **No parent grouping + near-duplicate parents weren't merged.** The table now renders **one group-header row per parent** (with its topic count and combined monthly volume) and indents the child topic rows beneath it, so a parent name appears exactly once. Near-duplicate upstream categories that describe the same thing — e.g. "529 College Savings Plans" and "529 Education Savings Plans" — are **merged in-panel into a single canonical parent** (the higher-volume name), absorbing the other's keywords. Detection is data-derived from the names' own tokens (shared ≥2 tokens, each side differing by ≤1), so genuinely different categories like "Credit Cards" vs "Debit Cards" are *not* merged.
+
+**Numbers stay a pure roll-up** — merging and re-labelling never drop or double-count a keyword; every parent/topic volume is the exact sum of its members.
+
+**Verification (own debugging agent):** isolated strict `tsc` on the panel + `kwVolume` chain = 0 errors; 17/17 behavioural checks on the real `buildThemeClusters` / `flattenTopics` code (no topic labelled with the parent name, exact volume rollup, no keyword loss, two 529 parents → one canonical "529 College Savings Plans" at exact summed volume, Credit/Debit Cards stay separate). Shipped `TopicTable` server-rendered to `orbitiq-v7.194-RENDER.html` (layout preview; sample volumes flagged illustrative).
+
 ## v7.193 — 2026-06-14 · Content Map — journey filter + prominent, legible controls
 
 **The ask (Wayne):** give a way to view the **pre-product journey, the product journey, or both**, and make all the CTAs / filter / sort buttons far more visible — they were too dim to see.

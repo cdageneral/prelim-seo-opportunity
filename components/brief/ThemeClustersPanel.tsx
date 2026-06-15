@@ -151,6 +151,34 @@ function matchKeywordToCategory(
   return null;
 }
 
+// ─── v7.194: near-duplicate parent-category detection ─────────────────────────
+// Two upstream categories can describe the same thing under slightly different
+// wording ("529 College Savings Plans" vs "529 Education Savings Plans"). We must
+// never show both as separate parents. Detection is data-derived from the names'
+// own tokens (no hardcoded vocabulary): drop connector words, crude-singularise,
+// then treat names as duplicates when their token sets are identical OR they share
+// ≥2 tokens and each differs by at most one token. "Credit Cards"/"Debit Cards"
+// share only {card} (=1) so they are correctly NOT merged.
+const CAT_STOP = new Set(['and', '&', 'the', 'of', 'for', 'a', 'an', 'to', 'in', 'on', 'or', 'with', 'your', 'you']);
+function catTokens(name: string): Set<string> {
+  return new Set(
+    name.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w && !CAT_STOP.has(w))
+      .map(w => (w.length > 3 && w.endsWith('s') ? w.slice(0, -1) : w)),
+  );
+}
+function catsAreDup(a: string, b: string): boolean {
+  const ta = catTokens(a), tb = catTokens(b);
+  if (ta.size === 0 || tb.size === 0) return false;
+  const inter = Array.from(ta).filter(t => tb.has(t)).length;
+  if (ta.size === tb.size && inter === ta.size) return true;          // identical token sets
+  const onlyA = Array.from(ta).filter(t => !tb.has(t)).length;
+  const onlyB = Array.from(tb).filter(t => !ta.has(t)).length;
+  return inter >= 2 && onlyA <= 1 && onlyB <= 1;
+}
+
 // ─── Build theme clusters ─────────────────────────────────────────────────────
 
 function buildThemeClusters(
@@ -233,6 +261,53 @@ function buildThemeClusters(
   if (unassigned.length > 0) {
     const firstProc = categories.find(c => c.type === 'procedure')?.name ?? categories[0]?.name;
     if (firstProc) catMap.get(firstProc)!.push(...unassigned);
+  }
+
+  // ── v7.194: merge near-duplicate parent categories in-panel ─────────────────
+  // After keyword assignment, collapse categories of the SAME type whose names are
+  // near-duplicates (catsAreDup) into a single canonical parent. Canonical = the
+  // bucket with the highest search volume (tie → more keywords → shortest name);
+  // its bucket absorbs the others' keywords. Numbers stay a pure roll-up — no
+  // keyword is dropped or double-counted. Also collapses any exact-name duplicates
+  // (which would otherwise render two parents sharing one bucket).
+  {
+    const volOf = (name: string) => (catMap.get(name) ?? []).reduce((s, k) => s + k.searchVolume, 0);
+    const parentOf = categories.map((_, i) => i);
+    const find = (i: number): number => (parentOf[i] === i ? i : (parentOf[i] = find(parentOf[i])));
+    const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parentOf[ra] = rb; };
+    for (let i = 0; i < categories.length; i++) {
+      for (let j = i + 1; j < categories.length; j++) {
+        if (categories[i].type === categories[j].type && catsAreDup(categories[i].name, categories[j].name)) union(i, j);
+      }
+    }
+    const groups = new Map<number, number[]>();
+    categories.forEach((_, i) => { const r = find(i); (groups.get(r) ?? groups.set(r, []).get(r)!).push(i); });
+    const reduced: typeof categories = [];
+    for (const idxs of Array.from(groups.values())) {
+      if (idxs.length === 1) { reduced.push(categories[idxs[0]]); continue; }
+      let canon = idxs[0];
+      for (const i of idxs) {
+        const vi = volOf(categories[i].name), vc = volOf(categories[canon].name);
+        if (vi > vc) { canon = i; continue; }
+        if (vi === vc) {
+          const ci = (catMap.get(categories[i].name) ?? []).length;
+          const cc = (catMap.get(categories[canon].name) ?? []).length;
+          if (ci > cc || (ci === cc && categories[i].name.length < categories[canon].name.length)) canon = i;
+        }
+      }
+      const canonName = categories[canon].name;
+      const canonBucket = catMap.get(canonName) ?? [];
+      catMap.set(canonName, canonBucket);
+      for (const i of idxs) {
+        if (i === canon) continue;
+        const other = categories[i].name;
+        if (other === canonName) continue;              // exact same-name dup → shared bucket, nothing to move
+        canonBucket.push(...(catMap.get(other) ?? []));
+        catMap.delete(other);
+      }
+      reduced.push(categories[canon]);
+    }
+    categories.splice(0, categories.length, ...reduced);
   }
 
   const result: ThemeCluster[] = [];
@@ -795,6 +870,12 @@ function bestSeed(kw: KwItem, head: Set<string>, seeds: ProdSeed[]): ProdSeed | 
   return best;
 }
 
+// v7.194: shared key for the "Core" (un-split) keyword bucket. A core bucket has
+// NO distinct product, so its sub-topics are labelled by INTENT (General /
+// Informational / …) — never by the parent theme name (which would make every
+// intent row look like a duplicate of the parent). TopicTable keys off this too.
+const CORE_KEY = '__core__';
+
 // v7.190: flatten each theme into PRODUCT × intent topics. Broad procedure themes
 // are product-split; brand/location/demand themes stay one product (= the theme), so
 // they behave exactly as before. Per-keyword intent is read back from the
@@ -809,7 +890,6 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
 
     const head = headTokenSet(c.name);
     const split = c.type === 'procedure' && c.keywords.length >= 6;
-    const CORE = '__core__';
 
     const byProduct = new Map<string, { label: string; pageUrl?: string; kws: KwItem[] }>();
     const place = (key: string, label: string, pageUrl: string | undefined, kw: KwItem) => {
@@ -824,20 +904,23 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
       for (const kw of c.keywords) {
         const s = bestSeed(kw, head, seeds);
         if (s) place(s.key, s.label, s.pageUrl, kw);
-        else   place(CORE, `Core · ${c.name}`, undefined, kw);
+        else   place(CORE_KEY, '', undefined, kw);   // core leftover: labelled by intent at push time
       }
       // Fold tiny mined products (a single keyword, no page) back into Core so the
       // table doesn't fragment into one-off rows; page products always stand alone.
       for (const [key, p] of Array.from(byProduct.entries())) {
-        if (key !== CORE && !p.pageUrl && key.startsWith('kw:') && p.kws.length < 2) {
+        if (key !== CORE_KEY && !p.pageUrl && key.startsWith('kw:') && p.kws.length < 2) {
           byProduct.delete(key);
-          const core = byProduct.get(CORE) ?? { label: `Core · ${c.name}`, pageUrl: undefined, kws: [] };
+          const core = byProduct.get(CORE_KEY) ?? { label: '', pageUrl: undefined, kws: [] };
           core.kws.push(...p.kws);
-          byProduct.set(CORE, core);
+          byProduct.set(CORE_KEY, core);
         }
       }
     } else {
-      for (const kw of c.keywords) place(CORE, c.name, undefined, kw);
+      // Non-split theme: ALL keywords share the parent. Place them under the core
+      // bucket with NO product label so each intent sub-topic is named by its intent
+      // (General / Informational / …), not by repeating the parent theme name.
+      for (const kw of c.keywords) place(CORE_KEY, '', undefined, kw);
     }
 
     for (const [pkey, prod] of Array.from(byProduct.entries())) {
@@ -855,7 +938,9 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
           id:          `${c.id}::${pkey}::${intent}`,
           parentName:  c.name,
           parentType:  c.type,
-          product:     prod.label,
+          // Core bucket has no product → name the sub-topic by its intent so a
+          // non-split theme never repeats the parent name on every row (v7.194).
+          product:     pkey === CORE_KEY ? meta.label : prod.label,
           productKey:  pkey,
           pageUrl:     prod.pageUrl,
           intent,
@@ -1075,63 +1160,101 @@ function TopicTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ t, m }) => {
-            const stm  = STAGE_META[t.stage];
-            const stt  = TBL_STATUS[m.status];
-            const open = expanded.has(t.id);
-            const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
-            return (
-              <Fragment key={t.id}>
-                <tr
-                  onClick={() => onToggle(t.id)}
-                  style={{ cursor: 'pointer', borderLeft: `2px solid ${stt.color}`, background: open ? 'var(--c-101019)' : 'transparent' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--c-101019)'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = open ? 'var(--c-101019)' : 'transparent'; }}
-                >
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-4a4a6a)', flexShrink: 0 }} aria-hidden="true" />
-                      <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d8d8f8)' }}>{t.product}</span>
-                      {t.pageUrl && (
-                        <i className="ti ti-link" style={{ fontSize: 11, color: 'var(--c-6c63ff)', flexShrink: 0 }} aria-hidden="true" title={t.pageUrl} />
-                      )}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--c-5a5a78)', marginLeft: 18, marginTop: 1 }}>{t.parentName} · {INTENT_META[t.intent].label}</div>
-                  </td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', whiteSpace: 'nowrap' }}>
-                    <i className={`ti ${stm.icon}`} style={{ fontSize: 12, color: 'var(--c-6a6a90)', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
-                    <span style={{ color: 'var(--c-b8b8d8)' }}>{stm.label}</span>
-                  </td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{t.keywords.length}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.status === 'demand' ? 'var(--c-3a3a5a)' : 'var(--c-c8c8e8)' }}>{m.status === 'demand' ? '—' : `${m.cov}%`}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.best === null ? 'var(--c-3a3a5a)' : 'var(--c-9b96ff)' }}>{m.best === null ? '—' : `#${m.best}`}</td>
-                  <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: stt.bg, border: `1px solid ${stt.bdr}`, color: stt.color, whiteSpace: 'nowrap' }}>{stt.label}</span>
-                  </td>
-                </tr>
-                {open && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: '4px 12px 12px 30px', borderBottom: '1px solid var(--c-15152a)', background: 'var(--c-0c0c16)' }}>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                        {topKws.map((k, i) => (
-                          <span key={i} style={{
-                            fontSize: 10, color: k.origin === 'demand' ? 'var(--c-22d3ee)' : k.isGap ? 'var(--c-f59e0b)' : 'var(--c-8ab89a)',
-                            background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1c1c2e)', borderRadius: 5, padding: '2px 7px',
-                          }}>
-                            {k.keyword} · {fmtVol(k.searchVolume)}{k.position !== null && (k.position as number) <= 20 ? ` · #${k.position}` : ''}
-                          </span>
-                        ))}
-                        {t.keywords.length > topKws.length && (
-                          <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{t.keywords.length - topKws.length} more</span>
-                        )}
+          {(() => {
+            // v7.194: when sorted by group, render ONE header row per parent theme
+            // and indent its child topic rows beneath it — so a parent name shows
+            // exactly once (no more repeated "401k & Retirement Planning" rows).
+            const grouped = sortKey === 'group';
+            const agg = new Map<string, { n: number; vol: number }>();
+            for (const r of rows) {
+              const a = agg.get(r.t.parentName) ?? { n: 0, vol: 0 };
+              a.n += 1; a.vol += r.t.totalVolume; agg.set(r.t.parentName, a);
+            }
+            const out: React.ReactNode[] = [];
+            let lastParent: string | null = null;
+            rows.forEach(({ t, m }) => {
+              if (grouped && t.parentName !== lastParent) {
+                lastParent = t.parentName;
+                const a = agg.get(t.parentName)!;
+                out.push(
+                  <tr key={`hdr:${t.parentName}`}>
+                    <td colSpan={7} style={{ padding: '9px 12px', background: 'var(--c-0c0c16)', borderTop: '1px solid var(--c-15152a)', borderBottom: '1px solid var(--c-23233a)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
+                        <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                          {a.n} {a.n === 1 ? 'topic' : 'topics'} · {fmtVol(a.vol)}/mo
+                        </span>
                       </div>
                     </td>
+                  </tr>,
+                );
+              }
+              const stm    = STAGE_META[t.stage];
+              const stt    = TBL_STATUS[m.status];
+              const open   = expanded.has(t.id);
+              const isCore = t.productKey === CORE_KEY;
+              const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
+              out.push(
+                <Fragment key={t.id}>
+                  <tr
+                    onClick={() => onToggle(t.id)}
+                    style={{ cursor: 'pointer', borderLeft: `2px solid ${stt.color}`, background: open ? 'var(--c-101019)' : 'transparent' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--c-101019)'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = open ? 'var(--c-101019)' : 'transparent'; }}
+                  >
+                    <td style={{ padding: '8px 10px', paddingLeft: grouped ? 26 : 10, borderBottom: '1px solid var(--c-15152a)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-4a4a6a)', flexShrink: 0 }} aria-hidden="true" />
+                        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d8d8f8)' }}>{t.product}</span>
+                        {t.pageUrl && (
+                          <i className="ti ti-link" style={{ fontSize: 11, color: 'var(--c-6c63ff)', flexShrink: 0 }} aria-hidden="true" title={t.pageUrl} />
+                        )}
+                      </div>
+                      {/* Grouped: parent is in the header → sub-label is just the intent
+                          for product rows, and nothing for core rows (whose big label
+                          IS the intent). Ungrouped: show "parent · intent". */}
+                      {(grouped ? !isCore : true) && (
+                        <div style={{ fontSize: 10, color: 'var(--c-5a5a78)', marginLeft: 18, marginTop: 1 }}>
+                          {grouped ? INTENT_META[t.intent].label : `${t.parentName} · ${INTENT_META[t.intent].label}`}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', whiteSpace: 'nowrap' }}>
+                      <i className={`ti ${stm.icon}`} style={{ fontSize: 12, color: 'var(--c-6a6a90)', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
+                      <span style={{ color: 'var(--c-b8b8d8)' }}>{stm.label}</span>
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{t.keywords.length}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.status === 'demand' ? 'var(--c-3a3a5a)' : 'var(--c-c8c8e8)' }}>{m.status === 'demand' ? '—' : `${m.cov}%`}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.best === null ? 'var(--c-3a3a5a)' : 'var(--c-9b96ff)' }}>{m.best === null ? '—' : `#${m.best}`}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
+                      <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: stt.bg, border: `1px solid ${stt.bdr}`, color: stt.color, whiteSpace: 'nowrap' }}>{stt.label}</span>
+                    </td>
                   </tr>
-                )}
-              </Fragment>
-            );
-          })}
+                  {open && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: '4px 12px 12px 30px', borderBottom: '1px solid var(--c-15152a)', background: 'var(--c-0c0c16)' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {topKws.map((k, i) => (
+                            <span key={i} style={{
+                              fontSize: 10, color: k.origin === 'demand' ? 'var(--c-22d3ee)' : k.isGap ? 'var(--c-f59e0b)' : 'var(--c-8ab89a)',
+                              background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1c1c2e)', borderRadius: 5, padding: '2px 7px',
+                            }}>
+                              {k.keyword} · {fmtVol(k.searchVolume)}{k.position !== null && (k.position as number) <= 20 ? ` · #${k.position}` : ''}
+                            </span>
+                          ))}
+                          {t.keywords.length > topKws.length && (
+                            <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{t.keywords.length - topKws.length} more</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>,
+              );
+            });
+            return out;
+          })()}
         </tbody>
       </table>
     </div>
@@ -1242,7 +1365,15 @@ function ClustersTab({
   const sortedRows = rows.slice().sort((a, b) => {
     let r = 0;
     switch (sortKey) {
-      case 'group':    r = a.t.parentName.localeCompare(b.t.parentName) || a.t.product.localeCompare(b.t.product) || (sIdx(a.t.stage) - sIdx(b.t.stage)); break;
+      case 'group': {
+        // Parent first; within a parent, core (intent-only) sub-topics come first in
+        // funnel order, then each split product group, each in funnel order.
+        r = a.t.parentName.localeCompare(b.t.parentName);
+        if (r === 0) r = (a.t.productKey === CORE_KEY ? 0 : 1) - (b.t.productKey === CORE_KEY ? 0 : 1);
+        if (r === 0 && a.t.productKey !== CORE_KEY) r = a.t.product.localeCompare(b.t.product);
+        if (r === 0) r = sIdx(a.t.stage) - sIdx(b.t.stage);
+        break;
+      }
       case 'product':  r = a.t.product.localeCompare(b.t.product); break;
       case 'stage':    r = sIdx(a.t.stage) - sIdx(b.t.stage); break;
       case 'kw':       r = a.t.keywords.length - b.t.keywords.length; break;
