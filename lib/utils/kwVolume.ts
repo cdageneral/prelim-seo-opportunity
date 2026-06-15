@@ -152,6 +152,10 @@ export function isBrandedKeyword(
  *  - topKeywords:    blocked → skip, dupes → skip, below clientVolMin → skip
  *  - gapKeywords:    blocked → skip, dupes → skip, branded → skip, below competitorVolMin → skip
  *  - uploadedKws:    blocked → skip, dupes → skip, NO threshold
+ *                    (gap uploads also skip COMPETITOR-branded terms — v7.195)
+ *  - demand:         blocked → skip, competitor-branded → skip (v7.195)
+ * Competitor brands are auto-derived from competitor domains + uploaded gap CSV
+ * domains; the client's OWN brand footprint is always kept.
  */
 export function buildKwPool({
   semrushSnapshot:    snap,
@@ -167,6 +171,27 @@ export function buildKwPool({
       .filter((k: any) => k.source === 'blocked')
       .map((k: any) => (k.keyword ?? '').toLowerCase()),
   );
+
+  // ── v7.195: competitor-brand exclusion ──────────────────────────────────────
+  // A keyword branded to a COMPETITOR (e.g. "american express login") must never
+  // enter the keyword landscape or the clusters — a client can't realistically
+  // win a rival's brand term, and it pollutes the demand/opportunity picture.
+  // The client's OWN brand footprint is kept (only competitor brands are removed).
+  // Competitor brands are auto-derived — no manual list — from:
+  //   (a) the configured competitor domains, and
+  //   (b) the `domain` column of every uploaded competitor (gap) CSV row,
+  // so a competitor present only in an upload is still detected. This is applied
+  // to BOTH the auto-detected Semrush gaps (§3) and the uploaded competitor CSV
+  // gaps (§4), and to demand (§5) — but NOT to the client's own rows (§1, §2).
+  const uploadedGapDomains: string[] = uploaded
+    .filter((k: any) => (k.source ?? '') !== 'blocked' && k.type === 'gap' && k.domain)
+    .map((k: any) => String(k.domain));
+  const compDomains: string[] = Array.from(
+    new Set([...competitorDomains, ...uploadedGapDomains].filter(Boolean)),
+  );
+  // Branded to a competitor (any compDomain) but NOT to the client → exclude.
+  const isCompetitorBranded = (kw: string): boolean =>
+    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, []);
 
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
@@ -218,7 +243,11 @@ export function buildKwPool({
   for (const k of (snap?.gapKeywords ?? [])) {
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
-    if (isBrandedKeyword(k.keyword, clientDomain, competitorDomains)) continue;
+    // Drop branded gaps. Uses the augmented competitor-domain set (config + uploaded
+    // CSV domains) so a competitor's own brand term is caught even when that
+    // competitor only appears in an uploaded file. Client-brand footprint is
+    // unaffected here (these are competitor-ranked terms the client does not own).
+    if (isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
     if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -238,6 +267,12 @@ export function buildKwPool({
     if (k.type !== 'gap') continue;                 // client uploads handled in §2
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
+    // v7.195: parse competitor brand terms out of the uploaded competitor CSV at
+    // ingestion. A gap row branded to a competitor (its own brand, e.g. "american
+    // express login") is excluded so only NON-branded competitor terms enter the
+    // landscape and clusters. The row's own `domain` is included in compDomains, so
+    // this catches the uploading competitor's brand even if it wasn't configured.
+    if (isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
@@ -247,7 +282,7 @@ export function buildKwPool({
       // the pool as a client ranking.
       position:     null,
       isGap:        true,
-      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains),
+      isBranded:    false,   // guaranteed by the competitor-brand skip above
       competitor:   k.domain ?? null,
       origin:       'footprint',
     });
@@ -274,6 +309,10 @@ export function buildKwPool({
     for (const t of demandTopics) {
       const kwLow = (t.keyword ?? '').toLowerCase().trim();
       if (!kwLow || blockedSet.has(kwLow)) continue;
+      // v7.195: a competitor brand term must not enter the clusters via the demand
+      // lens either. Drop demand keywords branded to a competitor (but keep the
+      // client's own brand and all non-branded demand).
+      if (isCompetitorBranded(t.keyword)) continue;
       const seeds: string[] = Array.isArray(t.seeds) ? t.seeds : [];
       const existing = byKw.get(kwLow);
       if (existing) {

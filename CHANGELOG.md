@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.195 — 2026-06-15 · Strip competitor brand terms from the keyword landscape & clusters
+
+**The ask (Wayne):** competitor brand terms (e.g. "american express login") were appearing in the clusters / keyword landscape. Only **non-branded** terms from a competitor should be brought in — parsed out at competitor-CSV upload time, or auto-detected.
+
+**What changed (one file — `lib/utils/kwVolume.ts`; 88-file manifest unchanged):** the shared `buildKwPool` (the single source of truth feeding the Keyword Landscape, Clusters, Executive Summary, Journey and Content Map) now excludes competitor brand terms:
+
+- **Uploaded competitor CSV gaps (§4)** — previously these passed straight through, brand terms and all. They now skip any keyword branded to a competitor. *(This was the leak.)*
+- **Auto-detected Semrush gaps (§3)** — already skipped branded terms; the competitor-brand detection is now also fed by the uploaded CSV's `domain` column, so a competitor present only in an upload is still caught.
+- **Demand lens (§5)** — competitor brand terms can no longer enter the clusters via "missing demand" either.
+
+**Scope (per Wayne):** only **competitor** brands are removed — the **client's own brand footprint is kept** (the client brand cluster stays). Competitor brands are **auto-derived** from the configured competitor domains **plus the `domain` column of uploaded competitor CSV rows** — no manual list. Result: the "American Express Brand Searches" cluster loses all its members and disappears; client and generic terms are untouched. Underlying DB rows are left intact (Share-of-Voice math unaffected); the filtering happens at pool-build time so it covers both the CSV-upload and auto-detect paths in one place.
+
+**Known limitation (auto-only detection):** a pure contraction like "amex" that doesn't textually resemble "americanexpress.com" is not auto-caught — full brand names are. Catching contractions/aliases needs the optional manual brand-alias list (not enabled).
+
+**Verification (own debugging agent):** isolated strict `tsc` on `kwVolume.ts` and on the consuming `ThemeClustersPanel.tsx` chain = 0 errors; 12/12 behavioural checks on the real `buildKwPool` (full competitor brand names removed from upload + auto-gap + demand, including a competitor known only via the CSV domain column; client brand and all generic terms kept; gap/footprint counts correct). Before/after proof rendered to `orbitiq-v7.195-RENDER.html`.
+
 ## v7.194 — 2026-06-15 · Cluster panel — no duplicate parent names; true parent → child grouping
 
 **The ask (Wayne):** the Cluster panel was showing duplicate cluster names — multiple "401k & Retirement Planning", separate "529 College Savings Plans" and "529 Education Savings Plans", etc. Clusters should be matched by search intent and then grouped by parent → child (category / sub-category) with no duplicate names.
