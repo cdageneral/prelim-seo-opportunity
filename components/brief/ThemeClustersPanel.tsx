@@ -313,6 +313,12 @@ function buildThemeClusters(
   const result: ThemeCluster[] = [];
 
   for (const cat of categories) {
+    // v7.196: never render a COMPETITOR (non-client) brand category as a cluster.
+    // buildKwPool already strips its keywords, but this is a defensive guard so an
+    // "American Express" / "Bank of America" brand cluster can never appear even if a
+    // stray member keyword slips through. The client's own brand category is kept
+    // (its name contains the client brand).
+    if (cat.type === 'brand' && !isBranded(cat.name, clientDomain, [])) continue;
     const kws = catMap.get(cat.name) ?? [];
     if (kws.length === 0) continue;
     const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);

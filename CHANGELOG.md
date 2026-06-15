@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.196 — 2026-06-15 · Strip competitor brand *categories* (abbreviations & other languages)
+
+**The ask (Wayne):** v7.195 didn't fully fix it — a "Bank of America" cluster still showed competitor brand terms like "boa login online", "bofa credit card customer care number", "bof", and even "美国银行" (Bank of America in Chinese).
+
+**Why v7.195 missed them:** those terms are abbreviations / another language, so they don't textually resemble `bankofamerica.com` — per-keyword string matching can't catch them. But the upstream categoriser already groups them under a **brand-type category named "Bank of America"**, with a keyword→category map. That category is the reliable signal.
+
+**What changed (two files; 88-file manifest unchanged):**
+
+- **`lib/utils/kwVolume.ts`** — `buildKwPool` now also excludes any keyword mapped (via `_categoryBreakdown.keywordCategories`) to a **brand-type category that isn't the client's own brand**. This removes the whole competitor brand cluster regardless of how each member term is spelled (abbreviation, foreign script, anything). Applied to the auto gaps, uploaded competitor gaps, and the demand lens. The earlier v7.195 string + competitor-domain checks remain as a backstop for branded terms that fall outside a brand category.
+- **`components/brief/ThemeClustersPanel.tsx`** — defensive guard: `buildThemeClusters` never renders a non-client brand category as a cluster, even if a stray member keyword slipped through.
+
+**Scope unchanged from v7.195:** only **non-client** brand categories are removed — the **client's own brand category/cluster is kept** (identified by its name containing the client brand). Generic, non-branded terms are untouched.
+
+**Verification (own debugging agent):** strict `tsc` on both files = 0 errors; 15/15 behavioural checks on the real `buildKwPool` + `buildThemeClusters` using a Bank-of-America scenario (abbreviations "boa"/"bofa"/"bof", possessive "bofa's", and the Chinese term all removed from gaps + demand; the "Bank of America" cluster disappears; the client "TD Bank" brand cluster and all generic terms stay). Proof rendered to `orbitiq-v7.196-RENDER.html`.
+
 ## v7.195 — 2026-06-15 · Strip competitor brand terms from the keyword landscape & clusters
 
 **The ask (Wayne):** competitor brand terms (e.g. "american express login") were appearing in the clusters / keyword landscape. Only **non-branded** terms from a competitor should be brought in — parsed out at competitor-CSV upload time, or auto-detected.

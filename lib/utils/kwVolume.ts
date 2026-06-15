@@ -193,6 +193,40 @@ export function buildKwPool({
   const isCompetitorBranded = (kw: string): boolean =>
     isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, []);
 
+  // ── v7.196: competitor BRAND-CATEGORY exclusion ─────────────────────────────
+  // Per-keyword string matching can't catch a competitor's brand searches when they
+  // are written as abbreviations or in another language ("boa", "bofa", "bof",
+  // "美国银行" for Bank of America). But the upstream categoriser already groups them
+  // under a brand-type category named after that brand (e.g. "Bank of America"), with
+  // a keyword→category map. So we exclude every keyword mapped to a brand category
+  // that is NOT the client's own brand. This is the reliable signal — it removes the
+  // whole competitor brand cluster regardless of how each member term is spelled.
+  // The client's own brand category (its name contains the client's brand) is KEPT.
+  const cb = snap?._categoryBreakdown ?? null;
+  const cbCats: Array<{ name: string; type?: string }> = cb?.categories ?? [];
+  const kwCatMap: Record<string, string> = cb?.keywordCategories ?? {};
+  const competitorBrandCats = new Set<string>(
+    cbCats
+      .filter(c => {
+        if (!c?.name) return false;
+        if (isBrandedKeyword(c.name, clientDomain, [])) return false;   // client's own brand → keep
+        const isBrandType        = c.type === 'brand';
+        const namedLikeCompetitor = compDomains.length > 0 && isBrandedKeyword(c.name, '', compDomains);
+        return isBrandType || namedLikeCompetitor;                      // competitor / third-party brand
+      })
+      .map(c => c.name),
+  );
+  const brandCatExcludedKw = new Set<string>();
+  if (competitorBrandCats.size > 0) {
+    for (const [kwLow, catName] of Object.entries(kwCatMap)) {
+      if (competitorBrandCats.has(catName)) brandCatExcludedKw.add(kwLow);
+    }
+  }
+  // Unified competitor-brand test used by the competitor-sourced sections (§3–§5):
+  // a member of a competitor brand category, OR string-branded to a competitor.
+  const dropCompetitorBrand = (kwLow: string, kwRaw: string): boolean =>
+    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw);
+
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
 
@@ -245,9 +279,10 @@ export function buildKwPool({
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     // Drop branded gaps. Uses the augmented competitor-domain set (config + uploaded
     // CSV domains) so a competitor's own brand term is caught even when that
-    // competitor only appears in an uploaded file. Client-brand footprint is
-    // unaffected here (these are competitor-ranked terms the client does not own).
-    if (isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
+    // competitor only appears in an uploaded file; plus the brand-category signal so
+    // abbreviated/foreign competitor brand terms ("boa", "美国银行") are caught too.
+    // Client-brand footprint is unaffected (these are competitor-ranked terms).
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
     if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -267,12 +302,13 @@ export function buildKwPool({
     if (k.type !== 'gap') continue;                 // client uploads handled in §2
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
-    // v7.195: parse competitor brand terms out of the uploaded competitor CSV at
-    // ingestion. A gap row branded to a competitor (its own brand, e.g. "american
-    // express login") is excluded so only NON-branded competitor terms enter the
-    // landscape and clusters. The row's own `domain` is included in compDomains, so
-    // this catches the uploading competitor's brand even if it wasn't configured.
-    if (isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
+    // v7.195/196: parse competitor brand terms out of the uploaded competitor CSV.
+    // A gap row branded to a competitor (its own brand, e.g. "american express
+    // login"), OR mapped to a competitor brand category (catches "boa"/"bofa"/foreign
+    // script), is excluded so only NON-branded competitor terms enter the landscape
+    // and clusters. The row's own `domain` is in compDomains, so the uploading
+    // competitor's brand is caught even if it wasn't configured.
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
@@ -309,10 +345,10 @@ export function buildKwPool({
     for (const t of demandTopics) {
       const kwLow = (t.keyword ?? '').toLowerCase().trim();
       if (!kwLow || blockedSet.has(kwLow)) continue;
-      // v7.195: a competitor brand term must not enter the clusters via the demand
-      // lens either. Drop demand keywords branded to a competitor (but keep the
-      // client's own brand and all non-branded demand).
-      if (isCompetitorBranded(t.keyword)) continue;
+      // v7.195/196: a competitor brand term must not enter the clusters via the
+      // demand lens either. Drop demand keywords branded to a competitor or mapped to
+      // a competitor brand category (keep the client's brand + all non-branded demand).
+      if (dropCompetitorBrand(kwLow, t.keyword)) continue;
       const seeds: string[] = Array.isArray(t.seeds) ? t.seeds : [];
       const existing = byKw.get(kwLow);
       if (existing) {
