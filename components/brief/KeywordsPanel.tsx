@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
+import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -394,6 +395,11 @@ export default function KeywordsPanel({
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
+  // v7.204: journey scope — All / Product / Pre-product. Uses the SAME per-keyword
+  // classifier as the Journey & Cluster panels (Art II.7 single source of truth), so
+  // the split never disagrees across panels. Scopes the summary cards, rank
+  // distribution and table together.
+  const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   // v7.81: incremental SERP feature scanning
   const [serpExtra,   setSerpExtra]   = useState<any[]>([]);
   const [scanLoading, setScanLoading] = useState(false);
@@ -459,6 +465,51 @@ export default function KeywordsPanel({
     [analysis, dbKeywords, clientDomain, competitorDomains, mergedScanned],
   );
 
+  // ── Journey classifier + scope (v7.204) ────────────────────────────────────
+  // Reuses buildJourneyClassifier — the SAME function the Journey & Cluster panels
+  // use — so a keyword's product/pre-product label is identical everywhere (Art
+  // II.7). A keyword is PRE-PRODUCT only when it names no solution (problem /
+  // symptom / trigger) yet is topically relevant; everything else (incl. off-topic)
+  // stays PRODUCT, matching the Cluster panel which keeps the full footprint in the
+  // product lane. No AI, no modeling — pure deterministic classification.
+  const journeyClassifier = useMemo(
+    () => buildJourneyClassifier(analysis, clientDomain, competitorDomains),
+    [analysis, clientDomain, competitorDomains],
+  );
+  const isPreProductKw = useCallback(
+    (kw: string) => journeyClassifier.classify(kw) === 'pre-product',
+    [journeyClassifier],
+  );
+  const inJourneyScope = useCallback((kw: string): boolean => {
+    if (journeyScope === 'all') return true;
+    const pre = isPreProductKw(kw);
+    return journeyScope === 'pre' ? pre : !pre;
+  }, [journeyScope, isPreProductKw]);
+
+  // Scoped pools — the cards (scopedSummaryRows) and the table (scopedAllRows)
+  // both re-slice to the chosen journey. When scope = 'all' these are identity
+  // copies, so default behaviour is unchanged.
+  const scopedAllRows = useMemo(
+    () => journeyScope === 'all' ? allRows : allRows.filter(r => inJourneyScope(r.keyword)),
+    [allRows, journeyScope, inJourneyScope],
+  );
+  const scopedSummaryRows = useMemo(
+    () => journeyScope === 'all' ? summaryRows : summaryRows.filter(r => inJourneyScope(r.keyword)),
+    [summaryRows, journeyScope, inJourneyScope],
+  );
+
+  // Journey counts for the toggle — computed on the UNSCOPED full footprint, on the
+  // SAME population the "All Keywords" card uses (client rows + competitor-gap rows),
+  // so "All journeys" equals the All Keywords count and Product + Pre = All.
+  const journeyCounts = useMemo(() => {
+    let pre = 0, product = 0;
+    for (const r of summaryRows) {
+      if (r.type === 'gap' && !r.competitor) continue;   // mirror kwSummary's gap basis
+      if (isPreProductKw(r.keyword)) pre++; else product++;
+    }
+    return { all: pre + product, product, pre };
+  }, [summaryRows, isPreProductKw]);
+
   // ── SERP feature coverage (v7.81) — scanned keywords vs canonical pool ──
   const serpCoverage = useMemo(() => {
     const set = new Set<string>();
@@ -468,9 +519,9 @@ export default function KeywordsPanel({
     for (const k of mergedScanned) {
       if (k?.keyword) set.add(k.keyword.toLowerCase());
     }
-    const scanned = allRows.filter(r => set.has(r.keyword.toLowerCase())).length;
-    return { scanned, total: allRows.length, remaining: allRows.length - scanned };
-  }, [analysis, mergedScanned, allRows]);
+    const scanned = scopedAllRows.filter(r => set.has(r.keyword.toLowerCase())).length;
+    return { scanned, total: scopedAllRows.length, remaining: scopedAllRows.length - scanned };
+  }, [analysis, mergedScanned, scopedAllRows]);
 
   // ── Scan next batch of unscanned keywords via SerpAPI ──
   async function handleSerpScan() {
@@ -500,8 +551,8 @@ export default function KeywordsPanel({
   // Segment rows: summary-card filter only (no rank filter) — the category
   // breakdown needs ALL rank buckets of the active segment for its stacked bars.
   const segmentRows = useMemo(
-    () => applyFilter(allRows, filter, filter === 'competitorGap' ? volThreshold : 0),
-    [allRows, filter, volThreshold],
+    () => applyFilter(scopedAllRows, filter, filter === 'competitorGap' ? volThreshold : 0),
+    [scopedAllRows, filter, volThreshold],
   );
   const visibleRows = useMemo(
     () => applySort(
@@ -523,7 +574,7 @@ export default function KeywordsPanel({
     [visibleRows, safePage],
   );
   // Reset to page 1 whenever the underlying list changes shape
-  useEffect(() => { setPage(0); }, [filter, rankFilter, sortCol, sortDir, visibleRows.length]);
+  useEffect(() => { setPage(0); }, [filter, rankFilter, sortCol, sortDir, journeyScope, visibleRows.length]);
 
   function handleSort(col: NonNullable<SortCol>) {
     if (sortCol === col) {
@@ -545,8 +596,8 @@ export default function KeywordsPanel({
   // All on the full-footprint basis (summaryRows = no volume floors). The table
   // below stays volume-filtered, so cards can read higher than the visible rows.
   const kwSummary = useMemo(() => {
-    const clientRows   = summaryRows.filter(r => r.type !== 'gap');               // client footprint
-    const gapRows      = summaryRows.filter(r => r.type === 'gap' && !!r.competitor); // competitor gap
+    const clientRows   = scopedSummaryRows.filter(r => r.type !== 'gap');               // client footprint
+    const gapRows      = scopedSummaryRows.filter(r => r.type === 'gap' && !!r.competitor); // competitor gap
     const brandedRows  = clientRows.filter(r =>  r.branded);                      // client branded only
     const nonBrandRows = clientRows.filter(r => !r.branded);                      // client non-branded only
     const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
@@ -561,7 +612,7 @@ export default function KeywordsPanel({
       gapCount,      gapVol,
       clientCount:   brandedCount + nonBrandCount,             // client footprint — for the "N client + M gap" sub-line
     };
-  }, [summaryRows]);
+  }, [scopedSummaryRows]);
 
   // ── Client rank distribution from the REAL keyword pool (v7.141) ───────────
   // Reconciles the chart with the cards. The client side is now built from the
@@ -575,7 +626,7 @@ export default function KeywordsPanel({
     const band = (p: number) => p <= 3 ? '1-3' : p <= 10 ? '4-10' : p <= 20 ? '11-20' : '21+';
     const dist: Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
     const vol:  Record<string, number> = { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 };
-    for (const r of summaryRows) {
+    for (const r of scopedSummaryRows) {
       if (r.type === 'gap') continue;             // client footprint only
       if (r.position == null || r.position <= 0) continue;  // unranked → no rank band
       const k = band(r.position);
@@ -583,7 +634,7 @@ export default function KeywordsPanel({
       vol[k] += r.searchVolume;
     }
     return { dist, vol };
-  }, [summaryRows]);
+  }, [scopedSummaryRows]);
 
   // ── Competitor rank distribution source (v7.139) ───────────────────────────
   // Prefer the full-footprint dists computed at analysis time. When they're
@@ -596,7 +647,11 @@ export default function KeywordsPanel({
     const snap     = analysis?.semrushSnapshot ?? {};
     const snapDist = (snap.competitorPositionDist ?? null) as Record<string, Record<string, number>> | null;
     const snapVol  = (snap.competitorPositionVol  ?? null) as Record<string, Record<string, number>> | null;
-    const snapHas  = !!snapDist && Object.values(snapDist).some(d => distTotal(d) > 0);
+    // v7.204: the precomputed snapshot dists are NOT journey-aware, so when a
+    // journey scope is active we bypass them and bucket from the real gap rows
+    // on the page (filtered by the same classifier) — keeping the competitor side
+    // consistent with the journey-scoped client side. Default ('all') is unchanged.
+    const snapHas  = journeyScope === 'all' && !!snapDist && Object.values(snapDist).some(d => distTotal(d) > 0);
     if (snapHas) return { dist: snapDist, vol: snapVol, fromFallback: false };
 
     const band = (p: number) => p <= 3 ? '1-3' : p <= 10 ? '4-10' : p <= 20 ? '11-20' : '21+';
@@ -605,6 +660,7 @@ export default function KeywordsPanel({
     const seen  = new Set<string>();
     const add = (domain: string | null | undefined, pos: number | null | undefined, v: number, kw: string) => {
       if (!domain) return;
+      if (!inJourneyScope(kw)) return;   // v7.204: respect the active journey scope
       const p = Number(pos);
       if (!p || p <= 0) return;
       const key = `${domain.toLowerCase()}|${kw.toLowerCase().trim()}`;
@@ -630,7 +686,7 @@ export default function KeywordsPanel({
       : { dist: null as Record<string, Record<string, number>> | null,
           vol:  null as Record<string, Record<string, number>> | null,
           fromFallback: false };
-  }, [analysis, dbKeywords]);
+  }, [analysis, dbKeywords, journeyScope, inJourneyScope]);
 
   // ── Category breakdown source ─────────────────────────────────────────────
   // v7.80: cb supplies the category list (names + types) and the complete
@@ -1133,6 +1189,61 @@ export default function KeywordsPanel({
                 </button>
               );
             })}
+          </div>
+        );
+      })()}
+
+      {/* ── v7.204: Journey scope — All / Product / Pre-product. Sits directly  */}
+      {/* below the summary cards (Wayne's placement). Choosing a scope re-slices  */}
+      {/* the cards, the rank distribution and the keyword table together. Pre-    */}
+      {/* product = problem / trigger searches (awareness only); product =         */}
+      {/* solution-aware demand (full funnel) — the SAME split the Journey, Cluster */}
+      {/* and Content Map panels use (single source of truth, Art II.7).           */}
+      {(() => {
+        const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
+          { key: 'all',     label: 'All journeys',        count: journeyCounts.all,     hint: 'Product + pre-product keywords',              accent: 'var(--c-c8c8e8)' },
+          { key: 'product', label: 'Product journey',     count: journeyCounts.product, hint: 'Solution-aware demand · full funnel',          accent: 'var(--c-9b96ff)', dot: true },
+          { key: 'pre',     label: 'Pre-product journey', count: journeyCounts.pre,     hint: 'Problem / trigger searches · awareness only', accent: 'var(--c-34d399)', dot: true },
+        ];
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
+              Journey
+            </span>
+            <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
+              {SCOPES.map(s => {
+                const on = journeyScope === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => { setJourneyScope(s.key); setFilter('all'); setRankFilter('all'); }}
+                    title={s.hint}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7,
+                      fontSize: 12, fontWeight: 600, lineHeight: 1,
+                      padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
+                      border: 'none', outline: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s',
+                      background: on ? 'var(--c-1e1e38)' : 'transparent',
+                      boxShadow:  on ? `inset 0 0 0 1px ${s.accent}` : 'none',
+                      color:      on ? s.accent : 'var(--c-9090b8)',
+                    }}
+                    onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-c8c8e8)'; }}
+                    onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-9090b8)'; }}
+                  >
+                    {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
+                    {s.label}
+                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>
+                      {dbLoaded ? s.count.toLocaleString() : '—'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>
+              {journeyScope === 'pre'     ? 'Problem / trigger searches · awareness only'
+             : journeyScope === 'product' ? 'Solution-aware demand · full funnel'
+             :                              'Showing both journeys'}
+            </span>
           </div>
         );
       })()}

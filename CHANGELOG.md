@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.204 — 2026-06-15 · Keywords — Journey scope toggle (All / Product / Pre-product)
+
+**The ask (Wayne):** add the **same** Product journey / Pre-product journey / All journeys segmented control to the **Keyword panel**, placed **directly below the summary cards** — mirroring the v7.203 control on the Clusters panel.
+
+**Decision / definition (unchanged from v7.203):** the split **reuses the Journey panel's classifier** (single source of truth, Art II.7) — no new heuristic. A keyword is **pre-product** only when it names *no* solution (a problem / symptom / life-trigger) yet is still topically relevant to the client; everything that names a procedure, the brand, or a location — plus off-topic noise — stays **product** (this panel shows the full footprint, so off-topic is kept in the product lane, exactly as the Clusters panel does). This is the solution-awareness rule `JourneySection.buildClusters` already applies; the product journey carries the full funnel and the pre-product journey is Awareness-only (Art III.2a).
+
+**What changed (one file — `components/brief/KeywordsPanel.tsx`):**
+
+- **Imports `buildJourneyClassifier`** from `JourneySection` — the *same* exported classifier the Clusters panel uses (added in v7.203). No new classification logic was written; the Keyword, Cluster, Journey and Content Map panels now all label a keyword identically.
+- **The "Journey" segmented control** sits directly below the summary cards (Wayne's placement): **All journeys · Product journey · Pre-product journey**, each with its live keyword count and the same styling/colour tokens as the Clusters control (product = indigo `--c-9b96ff`, pre-product = emerald `--c-34d399`). Counts are computed on the **unscoped full footprint** on the same population as the "All Keywords" card, so *All journeys = All Keywords* and *Product + Pre = All* by construction.
+- **Selecting a scope re-slices everything together:** the summary cards (`kwSummary`), the client rank distribution (`clientDist`), the competitor rank distribution (`competitorDist`), the keyword table (`segmentRows → visibleRows`, with pagination + exports) and the SERP-coverage line all recompute for the chosen journey. When scope = "All journeys" every derived value is byte-for-byte the previous behaviour (identity pass), so the default view is unchanged. Choosing a scope also resets the ownership + rank filters to "All" so you never land on an empty cross-filter. The competitor rank distribution, whose precomputed snapshot dists are *not* journey-aware, bypasses them when a scope is active and buckets from the real gap rows on the page (filtered by the same classifier) — keeping both sides journey-consistent.
+
+**Data integrity:** the split is 100% the Journey panel's real, deterministic solution-awareness rule — nothing modeled or simulated. Every count/volume is an exact roll-up of real source rows; product and pre-product partition the pool with zero overlap (every keyword is pre-product or not). No caps/limits introduced (Art I.6).
+
+**Verification (own debugging agent):** isolated `tsc --noEmit` on the changed file + its full local import graph (`JourneySection`, `lib/utils/kwVolume`, `lib/journey/graph`) under the project's strict compiler options (`strict`, `moduleResolution bundler`, `@/*` paths) = **0 errors**. jsdom render harness (esbuild→cjs on the REAL `KeywordsPanel` export, `react-dom/server`, synthetic cosmetic-surgery analysis with audience-segment vocab) = **all pass**: panel renders without throw; all three journey buttons present; the control sits **below** the "All Keywords" summary cards and **above** the Rank Distribution; the real shared classifier produces a genuine split (5 product · 2 pre-product) on the sample pool. Panel-scroll invariant (Art IV.1) re-checked — the scroll root (`flex-1 min-h-0 overflow-y-auto`) is unchanged, the new control is a `flexShrink:0` block child, and the file's `overflow-*` count is unchanged. Render: `orbitiq-v7.204-RENDER.html` (illustrative data, flagged).
+
 ## v7.203 — 2026-06-15 · Clusters — Journey scope toggle (All / Product / Pre-product)
 
 **The ask (Wayne):** add a control below the summary cards to view the **Product journey**, the **Pre-product journey**, or **All journeys** — and have the summary cards and everything below adjust accordingly.
