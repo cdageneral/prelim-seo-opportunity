@@ -1860,27 +1860,39 @@ function ClustersTab({
           })}
         </div>
 
-        {/* Right: funnel-stage roll-up as a HALF inverted pyramid (v7.148). */}
-        {/* Pyramid is cut vertically with the flat edge on the right so each  */}
-        {/* stage's label / count / split sits beside its band. Each band is   */}
-        {/* clickable → filter the grid by that dominant stage (toggle to all). */}
+        {/* Right: funnel-stage roll-up as a HALF inverted pyramid. v7.202: the   */}
+        {/* header + description were removed so the funnel fills the full box     */}
+        {/* height and reads larger; a compact client/gap[/demand] legend sits in  */}
+        {/* the upper-right corner instead. Each band is clickable → filter the    */}
+        {/* grid by that dominant stage (toggle back to all); hover shows a ring +  */}
+        {/* filter icon to signal the band is clickable.                           */}
         <div style={{
+          position: 'relative',
           background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e34)', borderRadius: 12,
-          padding: '12px 14px', display: 'flex', flexDirection: 'column',
+          padding: '14px 16px', display: 'flex', flexDirection: 'column',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-            <i className="ti ti-filter" style={{ fontSize: 12, color: 'var(--c-8b85ff)' }} aria-hidden="true" />
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
-              Clusters by funnel stage
+          {/* Legend — small colour dots, upper-right corner */}
+          <div style={{
+            position: 'absolute', top: 11, right: 13, display: 'flex', alignItems: 'center',
+            gap: 11, fontSize: 9, fontWeight: 600, letterSpacing: '.02em', zIndex: 1,
+          }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-6a6a90)' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-4ade80)', flexShrink: 0 }} />
+              client
             </span>
-          </div>
-          <div style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 10, lineHeight: 1.4 }}>
-            Each cluster counted once · stage = its dominant intent ·&nbsp;
-            <span style={{ color: 'var(--c-4ade80)' }}>client</span> ranks for most /&nbsp;
-            <span style={{ color: 'var(--c-f59e0b)' }}>gap</span> = competitors own most · click to filter
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-6a6a90)' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-f59e0b)', flexShrink: 0 }} />
+              gap
+            </span>
+            {stageRollups.some(r => r.demandClusters > 0) && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--c-6a6a90)' }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--c-22d3ee)', flexShrink: 0 }} />
+                demand
+              </span>
+            )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: 1, justifyContent: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, paddingTop: 14 }}>
             {stageRollups.map((r, i) => {
               const meta      = STAGE_META[r.stage];
               const active    = filter === r.stage;
@@ -1894,28 +1906,40 @@ function ClustersTab({
                 <button
                   key={r.stage}
                   onClick={() => setFilter(f => (f === r.stage ? 'all' : r.stage))}
+                  title={`Click to filter by ${meta.label}`}
                   style={{
                     display:    'flex',
                     alignItems: 'stretch',
-                    gap:        10,
+                    gap:        12,
                     width:      '100%',
+                    flex:       1,          // v7.202: bands stretch to fill the full box height
+                    minHeight:  44,
                     background: active ? 'var(--ca-155-150-255-0_08)' : 'transparent',
-                    border:     'none',
-                    borderRadius: 8,
-                    padding:    '3px 4px',
+                    border:     `1px solid ${active ? 'var(--ca-155-150-255-0_30)' : 'transparent'}`,
+                    borderRadius: 9,
+                    padding:    '4px 8px 4px 4px',
                     cursor:     'pointer',
                     textAlign:  'left',
                     outline:    'none',
-                    transition: 'background 0.15s',
+                    transition: 'background 0.15s, border-color 0.15s, box-shadow 0.15s',
                   }}
-                  onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'var(--ca-155-150-255-0_04)'; }}
-                  onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
+                  onMouseEnter={e => {
+                    const b = e.currentTarget as HTMLButtonElement;
+                    if (!active) { b.style.background = 'var(--ca-155-150-255-0_04)'; b.style.borderColor = 'var(--ca-155-150-255-0_30)'; }
+                    b.style.boxShadow = '0 0 0 1px var(--ca-155-150-255-0_30)';
+                    const fic = b.querySelector('[data-fic]') as HTMLElement | null; if (fic) fic.style.opacity = '1';
+                  }}
+                  onMouseLeave={e => {
+                    const b = e.currentTarget as HTMLButtonElement;
+                    if (!active) { b.style.background = 'transparent'; b.style.borderColor = 'transparent'; }
+                    b.style.boxShadow = 'none';
+                    const fic = b.querySelector('[data-fic]') as HTMLElement | null; if (fic) fic.style.opacity = active ? '1' : '0';
+                  }}
                 >
                   {/* Funnel band — flat edge on the right (clip-path trapezoid) */}
                   <div style={{
-                    width:      86,
+                    width:      110,
                     flexShrink: 0,
-                    minHeight:  30,
                     alignSelf:  'stretch',
                     background: bandColor,
                     clipPath:   `polygon(${topInset}% 0, 100% 0, 100% 100%, ${botInset}% 100%)`,
@@ -1924,17 +1948,17 @@ function ClustersTab({
 
                   {/* Stage info — sits beside the pyramid's flat edge */}
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.03em', color: active ? 'var(--c-c8c4ff)' : 'var(--c-c8c8e8)' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: '.02em', color: active ? 'var(--c-c8c4ff)' : 'var(--c-c8c8e8)' }}>
                         {meta.label}
                       </span>
-                      <span style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-.5px', color: active ? 'var(--c-9b96ff)' : 'var(--c-e8e8ff)' }}>
+                      <span style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-.5px', color: active ? 'var(--c-9b96ff)' : 'var(--c-e8e8ff)' }}>
                         {r.total}
                       </span>
-                      <span style={{ fontSize: 9, color: 'var(--c-585878)' }}>topics</span>
+                      <span style={{ fontSize: 11, color: 'var(--c-585878)' }}>topics</span>
                       {active && (
                         <span style={{
-                          marginLeft: 'auto', fontSize: 8, fontWeight: 700,
+                          marginLeft: 8, fontSize: 8, fontWeight: 700,
                           background: 'var(--ca-155-150-255-0_10)', border: '1px solid var(--ca-155-150-255-0_45)',
                           color: 'var(--c-9b96ff)', borderRadius: 20, padding: '1px 6px',
                         }}>
@@ -1942,7 +1966,7 @@ function ClustersTab({
                         </span>
                       )}
                     </div>
-                    <div style={{ fontSize: 9, color: 'var(--c-6a6a90)', marginTop: 2 }}>
+                    <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 3 }}>
                       <span style={{ color: 'var(--c-4ade80)', fontWeight: 600 }}>{r.clientClusters}</span> client
                       &nbsp;·&nbsp;
                       <span style={{ color: 'var(--c-f59e0b)', fontWeight: 600 }}>{r.gapClusters}</span> gap
@@ -1956,6 +1980,18 @@ function ClustersTab({
                       <span style={{ color: 'var(--c-8b85ff)', fontWeight: 600 }}>{fmtVol(r.annualVol)}</span>
                     </div>
                   </div>
+
+                  {/* Clickable affordance — filter icon, fades in on hover */}
+                  <i
+                    className="ti ti-filter"
+                    data-fic
+                    aria-hidden="true"
+                    style={{
+                      alignSelf: 'center', flexShrink: 0, fontSize: 13,
+                      color: active ? 'var(--c-9b96ff)' : 'var(--c-8b85ff)',
+                      opacity: active ? 1 : 0, transition: 'opacity 0.15s',
+                    }}
+                  />
                 </button>
               );
             })}

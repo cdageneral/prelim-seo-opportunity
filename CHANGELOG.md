@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.202 — 2026-06-15 · Clusters — funnel-stage box: full-height funnel, legend dots, hover affordance
+
+**The ask (Wayne):** in the Clusters panel's "Clusters by funnel stage" card, (1) remove the header *"Clusters by funnel stage"* and its description line (*"Each cluster counted once · stage = its dominant intent · client ranks for most / gap = competitors own most · click to filter"*) so the funnel itself fills the full height of the box and reads larger — **without changing the box's outer size**; (2) add a small dot legend defining the colours (client / gap) in the upper-right corner; (3) add a hover state on each funnel band that signals it's clickable.
+
+**What changed (one file — `components/brief/ThemeClustersPanel.tsx`; everything above the funnel block is byte-for-byte identical to v7.201):**
+
+- **Header + description removed.** The "Clusters by funnel stage" title row and the explanatory sub-line are gone. The funnel-band column now stretches to the full box height: each band button is `flex: 1` (was a centred stack with `minHeight: 30`), so the four bands divide the available height evenly and read noticeably larger — band width `86 → 110`, stage label `11 → 14px`, the topic count `15 → 22px`, the client/gap/demand sub-line `9 → 11px`. The container's outer size is unchanged (still the third column of the same `1.15fr / 1fr / 1.2fr` grid, same border/radius/background).
+- **Legend dots, upper-right.** A compact legend sits absolutely positioned in the box's top-right corner: a green dot = **client**, an amber dot = **gap**, and (only when a stage actually has demand clusters) a cyan dot = **demand**. This preserves the colour key that the removed description line used to carry, in a smaller footprint.
+- **Clickable hover affordance.** Hovering a band now (a) draws a 1px focus ring + subtle border (`--ca-155-150-255-0_30`), (b) tints the row background (`--ca-155-150-255-0_04`), and (c) fades in a filter icon (`ti-filter`) on the right edge. Each band also carries a native `title="Click to filter by {stage}"` tooltip. The active (filtered) band keeps the ring/icon shown. Click behaviour is unchanged — toggle the grid filter by that dominant stage.
+
+**Data integrity:** purely presentational. No metric, count, roll-up, or data path was touched — `stageRollups` (client/gap/demand cluster counts and annual volume per stage) is computed exactly as before over the same real keyword pool. Nothing modeled or simulated; the render harness used illustrative numbers only to exercise the markup.
+
+**Verification (own debugging agent):** isolated `tsc` on the changed file + its one local dep (`lib/utils/kwVolume.ts`) under the project's strict low-target guard (`target es5`, `downlevelIteration:false`, `strict`) = **0 errors**. Static render harness (esbuild→cjs, real funnel JSX extracted from the file, synthetic stage data) = **12/12**: header/description gone, legend client+gap dots present, exactly 4 clip-path bands, 4 filter icons, all four stage labels + totals render, `title` tooltip present, band width enlarged to 110. jsdom hover/click harness = **7/7**: 4 clickable band buttons, filter icon hidden at rest, hover sets the ring boxShadow + reveals the icon, mouse-out clears both, click filters by `awareness`. Panel scroll invariant (Art. IV.1) re-checked — the scroll root (`flex:1; overflowY:auto`) is unchanged; the edit is confined to the fixed-size funnel sub-box. Render: `orbitiq-v7.202-RENDER.html`.
+
 ## v7.201 — 2026-06-15 · Clusters — strip auto-discovered competitor brands ("529 Schwab")
 
 **The ask (Wayne):** competitor brand names were *still* showing in the Clusters panel — a cluster literally named **"529 Schwab"** with chips "schwab 529 · 5K" and "charles schwab 529 · 4K", even though Schwab was never added as a competitor.
