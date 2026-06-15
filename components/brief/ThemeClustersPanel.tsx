@@ -996,7 +996,7 @@ function buildIntentClusters(c: ThemeCluster): IntentGroup[] {
 function nameIntentCluster(c: ThemeCluster, kind: IntentKind, kws: KwItem[], head: Set<string>): string {
   const topKw = kws.slice().sort((a, b) => b.searchVolume - a.searchVolume)[0]?.keyword ?? c.name;
   const ef = new Map<string, number>();
-  for (const k of kws) for (const t of new Set(entityTokens(k.keyword))) ef.set(t, (ef.get(t) ?? 0) + 1);
+  for (const k of kws) for (const t of Array.from(new Set(entityTokens(k.keyword)))) ef.set(t, (ef.get(t) ?? 0) + 1);
   const byFreq = Array.from(ef.entries()).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(e => e[0]);
 
   if (kind === 'compare') {

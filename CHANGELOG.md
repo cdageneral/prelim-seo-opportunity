@@ -1,5 +1,13 @@
 # OrbitIQ Changelog
 
+## v7.198 — 2026-06-15 · Build fix — Set iteration (Vercel `next build` type error)
+
+**The problem:** the v7.197 Vercel build failed to compile — `ThemeClustersPanel.tsx:999` iterated a `Set` directly with `for…of` (`for (const t of new Set(...))`), which the project's TypeScript target rejects (`Type 'Set<string>' can only be iterated through when using '--downlevelIteration' or target 'es2015'+`). The rest of the file already uses `Array.from(...)` for this reason; v7.197 broke that convention in one spot.
+
+**The fix (one line in `components/brief/ThemeClustersPanel.tsx`):** wrapped the set in `Array.from(...)`. No behaviour change — purely the iteration form.
+
+**Verification (own debugging agent):** reproduced the exact `next build` failure under a low-target tsconfig (target es5, `downlevelIteration` off) and confirmed it now compiles with **0 errors**; full type-check passes; the v7.197 intent-clustering behavioural test still passes 13/13 (identical grouping/naming output). Going forward, type-checks mirror the project's tsconfig (no `target`) so this class of error is caught before shipping.
+
 ## v7.197 — 2026-06-15 · Clusters grouped by SEARCH INTENT, named by topic (one intent = one page)
 
 **The ask (Wayne):** sub-clusters were named by bare keyword modifiers ("401k", "401k Ira") and the same search intent was fragmented across funnel types (one "401k vs IRA" intent appeared as three separate "401k Ira" rows). A cluster should be a **single search intent → a single page**, named after that intent ("What is a 401k", "401k vs IRA", "401k Withdrawal").
