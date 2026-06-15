@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.197 — 2026-06-15 · Clusters grouped by SEARCH INTENT, named by topic (one intent = one page)
+
+**The ask (Wayne):** sub-clusters were named by bare keyword modifiers ("401k", "401k Ira") and the same search intent was fragmented across funnel types (one "401k vs IRA" intent appeared as three separate "401k Ira" rows). A cluster should be a **single search intent → a single page**, named after that intent ("What is a 401k", "401k vs IRA", "401k Withdrawal").
+
+**What changed (one file — `components/brief/ThemeClustersPanel.tsx`; 88-file manifest unchanged):** `flattenTopics` now groups a **procedure** category's keywords by **semantic search intent** instead of product-modifier × funnel-type:
+
+- **Intent grouping.** Each keyword is classified by the intent behind it — comparison ("vs", "difference between", "advantages over"), definition ("what is", "how does … work"), how-to, cost, amount, best/review, or general — and grouped with the others that share that intent + entities. Comparison keywords like "ira vs 401k", "401k vs ira", "explain the difference between a 401k and an ira", and "ira advantages over 401k" now collapse into **one "401k vs IRA" cluster** instead of three.
+- **Topic-based names.** Comparisons → "{A} vs {B}"; definitions → "What is a {entity}"; general → "{entity} {modifier}" (e.g. "401k Withdrawal"); how-to/amount/best use the clearest representative keyword. No more bare "401k" / "401k Ira" labels.
+- **Funnel types merged; one stage per cluster.** A single intent that spans informational + commercial is one cluster; its displayed funnel **stage = the dominant intent by volume** (your choice). Volumes are an exact roll-up of the member keywords — nothing dropped or double-counted.
+- **Brand / location / demand categories are unchanged** (they have no clean head entity for topical naming, so they keep the v7.196 intent-labelled children).
+
+**Hybrid (your choice):** this is the **heuristic pass that runs now on existing data** — no re-analysis needed. `buildIntentClusters` is the single seam where a later **LLM grouping pass** can take over for borderline semantic cases (e.g. recognising "how to take money out of 401k" ≈ "401k withdrawal"), populating `_categoryBreakdown.keywordIntentClusters`.
+
+**Verification (own debugging agent):** strict `tsc` on the panel + `kwVolume` chain = 0 errors; 13/13 behavioural checks on the real `flattenTopics` using your 401k example (all 5 comparison keywords in ONE "401k vs IRA" cluster, "What is a 401k" groups the definitional terms, "401k Withdrawal" groups withdrawal terms, no duplicate cluster names, exact volume rollup, no keyword loss, dominant stage correct). Shipped `TopicTable` server-rendered to `orbitiq-v7.197-RENDER.html` (before/after + live table; sample volumes flagged illustrative).
+
 ## v7.196 — 2026-06-15 · Strip competitor brand *categories* (abbreviations & other languages)
 
 **The ask (Wayne):** v7.195 didn't fully fix it — a "Bank of America" cluster still showed competitor brand terms like "boa login online", "bofa credit card customer care number", "bof", and even "美国银行" (Bank of America in Chinese).

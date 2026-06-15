@@ -881,6 +881,153 @@ function bestSeed(kw: KwItem, head: Set<string>, seeds: ProdSeed[]): ProdSeed | 
 // Informational / …) — never by the parent theme name (which would make every
 // intent row look like a duplicate of the parent). TopicTable keys off this too.
 const CORE_KEY = '__core__';
+// A "core" topic (brand/location/demand intent bucket) is labelled by its intent and
+// shows no parent sub-label. Procedure intent clusters (cmp|/def|/gen|…) are not core.
+const isCoreKey = (k: string): boolean => k === CORE_KEY || k.startsWith(CORE_KEY + '::');
+
+// ─── v7.197: semantic SEARCH-INTENT clustering ───────────────────────────────
+// Wayne's rule: a cluster represents a SINGLE search intent (one answerable question)
+// mapped to ONE page, and is NAMED after that intent ("What is a 401k", "401k vs
+// IRA", "401k Withdrawal") — NOT the bare keyword modifier, and NEVER fragmented by
+// funnel type. So within a category we group keywords by the intent BEHIND them and
+// merge across funnel types (a comparison may be informational AND commercial → still
+// ONE cluster), then give each cluster a topical name. The cluster's single funnel
+// stage = the dominant intent by volume.
+//
+// HYBRID (Wayne's choice): this heuristic runs NOW on existing data. A later LLM
+// grouping pass can populate `_categoryBreakdown.keywordIntentClusters` (keyword →
+// cluster name) + names; `buildIntentClusters` is the single seam to switch to it.
+type IntentKind = 'compare' | 'define' | 'howto' | 'cost' | 'amount' | 'best' | 'general';
+
+// Words stripped to reveal the ENTITIES a keyword is about (intent markers + glue).
+const INTENT_SIGNAL_WORDS = new Set<string>([
+  'vs','versus','difference','differences','differ','different','compare','compared','comparison',
+  'between','advantage','advantages','alternative','alternatives','better','instead','than','over',
+  'what','whats','is','are','was','were','how','does','do','did','work','works','working','mean','means',
+  'meaning','definition','define','explain','explained','to','guide','step','steps','way','ways','tutorial',
+  'cost','costs','price','prices','pricing','fee','fees','much','many','best','top','review','reviews',
+  'rated','should','need','needs','have','has','get','a','an','the','of','for','in','on','at','by',
+  'my','your','you','i','me','we','it','and','or','with','about','near','can','could','will','would',
+]);
+
+function entityTokens(kw: string): string[] {
+  return kw.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter(w => w.length >= 2 && !INTENT_SIGNAL_WORDS.has(w))
+    .map(w => (w.length > 3 && w.endsWith('s') && !/\d/.test(w) ? w.slice(0, -1) : w));
+}
+
+// Classify the SEMANTIC intent (not the funnel stage). Comparison is tested first so
+// "explain the difference between a 401k and an ira" reads as compare, not define.
+function intentKindOf(kw: string): IntentKind {
+  const s = ' ' + kw.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  const has = (p: string) => s.includes(p);
+  if (has(' vs ') || has(' versus ') || has(' v ') || has('difference') || has('compared to') ||
+      has('comparison') || has('advantage over') || has('advantages over') || has('better than') ||
+      has('alternative to') || has('alternatives to') || has('instead of')) return 'compare';
+  if (has(' what is ') || has(' what are ') || has(' whats ') || has(' what s ') ||
+      (has(' how does ') && has('work')) || (has(' how do ') && has('work')) ||
+      has('meaning') || has('definition') || has(' explained ') || (has('what does') && has('mean'))) return 'define';
+  if (has(' how to ') || has(' how do i ') || has(' how can i ') || has(' how do you ') ||
+      has('steps to') || has('step by step') || has('tutorial') || has(' guide ')) return 'howto';
+  if (has('cost') || has('price') || has('fee')) return 'cost';
+  if (has('how much') || has('how many')) return 'amount';
+  if (has(' best ') || has('top ') || has('review') || has('rated')) return 'best';
+  return 'general';
+}
+
+function smartCaseToken(t: string): string {
+  if (/\d/.test(t)) return t;                          // "401k" stays "401k"
+  if (t.length <= 3) return t.toUpperCase();           // ira→IRA, apr→APR, roi→ROI
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function sentenceCase(kw: string): string {
+  const t = kw.trim().replace(/\s+/g, ' ').replace(/\bi\b/g, 'I');   // standalone "i" → "I"
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
+interface IntentGroup { key: string; name: string; kws: KwItem[]; pageUrl?: string }
+
+// Group ONE category's keywords into single-intent clusters (the new "topics").
+function buildIntentClusters(c: ThemeCluster): IntentGroup[] {
+  const head = headTokenSet(c.name);
+  // category frequency of each non-head entity token → used to pick the distinctive
+  // modifier that anchors a general/howto/etc cluster (e.g. "withdrawal", "rollover").
+  const freq = new Map<string, number>();
+  for (const k of c.keywords) {
+    const seen = new Set<string>();
+    for (const t of entityTokens(k.keyword)) {
+      if (head.has(t) || seen.has(t)) continue;
+      seen.add(t); freq.set(t, (freq.get(t) ?? 0) + 1);
+    }
+  }
+  const bestModifier = (nonHead: string[]): string => {
+    let mod = '', best = -1;
+    for (const t of nonHead) {
+      const f = freq.get(t) ?? 0;
+      if (f > best || (f === best && t.length > mod.length)) { best = f; mod = t; }
+    }
+    return mod;
+  };
+
+  const groups = new Map<string, { kind: IntentKind; kws: KwItem[]; pageUrl?: string }>();
+  for (const kw of c.keywords) {
+    const kind = intentKindOf(kw.keyword);
+    const ents = Array.from(new Set(entityTokens(kw.keyword)));
+    const nonHead = ents.filter(t => !head.has(t));
+    let sig: string;
+    if (kind === 'compare')      sig = 'cmp|' + ents.slice().sort().join(',');
+    else if (kind === 'define')  sig = 'def|' + (ents.filter(t => head.has(t)).sort().join(',') || ents.slice().sort().join(',') || 'core');
+    else if (kind === 'general') sig = 'gen|' + (bestModifier(nonHead) || 'core');
+    else                         sig = kind + '|' + (bestModifier(nonHead) || nonHead.slice().sort().join(',') || 'core');
+    let g = groups.get(sig);
+    if (!g) { g = { kind, kws: [] }; groups.set(sig, g); }
+    g.kws.push(kw);
+    if (!g.pageUrl && kw.position !== null && kw.url) g.pageUrl = kw.url;
+  }
+
+  const out: IntentGroup[] = [];
+  for (const [sig, g] of Array.from(groups.entries())) {
+    out.push({ key: sig, name: nameIntentCluster(c, g.kind, g.kws, head), kws: g.kws, pageUrl: g.pageUrl });
+  }
+  return out;
+}
+
+// Topical NAME for an intent cluster, by intent kind.
+function nameIntentCluster(c: ThemeCluster, kind: IntentKind, kws: KwItem[], head: Set<string>): string {
+  const topKw = kws.slice().sort((a, b) => b.searchVolume - a.searchVolume)[0]?.keyword ?? c.name;
+  const ef = new Map<string, number>();
+  for (const k of kws) for (const t of new Set(entityTokens(k.keyword))) ef.set(t, (ef.get(t) ?? 0) + 1);
+  const byFreq = Array.from(ef.entries()).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length).map(e => e[0]);
+
+  if (kind === 'compare') {
+    const headEnt = byFreq.find(t => head.has(t));
+    const others  = byFreq.filter(t => t !== headEnt);
+    const pair = [headEnt, others[0]].filter(Boolean) as string[];
+    if (pair.length === 2) return `${smartCaseToken(pair[0])} vs ${smartCaseToken(pair[1])}`;
+    return sentenceCase(topKw);
+  }
+  if (kind === 'define') {
+    const wi = kws.map(k => k.keyword).find(k => /\bwhat\s+is\b/i.test(k));
+    if (wi) return sentenceCase(wi);
+    const ent = byFreq.find(t => head.has(t)) ?? byFreq[0];
+    return ent ? `What is a ${smartCaseToken(ent)}` : sentenceCase(topKw);
+  }
+  if (kind === 'howto') {
+    const h = kws.map(k => k.keyword).find(k => /\bhow\s+to\b/i.test(k)) ?? topKw;
+    return sentenceCase(h);
+  }
+  if (kind === 'cost') {
+    const ent = byFreq.find(t => head.has(t)) ?? byFreq[0];
+    return ent ? `${smartCaseToken(ent)} Cost` : sentenceCase(topKw);
+  }
+  if (kind === 'amount' || kind === 'best') return sentenceCase(topKw);
+  // general → "{Head} {Modifier}" (e.g. "401k Withdrawal")
+  const headEnt = byFreq.find(t => head.has(t));
+  const modEnt  = byFreq.find(t => !head.has(t));
+  if (headEnt && modEnt) return `${smartCaseToken(headEnt)} ${smartCaseToken(modEnt)}`;
+  if (headEnt) return smartCaseToken(headEnt);
+  return sentenceCase(topKw);
+}
 
 // v7.190: flatten each theme into PRODUCT × intent topics. Broad procedure themes
 // are product-split; brand/location/demand themes stay one product (= the theme), so
@@ -891,72 +1038,59 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
   for (const c of clusters) {
     if (c.keywords.length === 0) continue;
 
+    // per-keyword funnel intent (from the subClusters buildThemeClusters computed)
     const intentOf = new Map<KwItem, IntentCluster>();
     for (const sc of c.subClusters) for (const kw of sc.keywords) intentOf.set(kw, sc);
 
-    const head = headTokenSet(c.name);
-    const split = c.type === 'procedure' && c.keywords.length >= 6;
+    // v7.197: semantic intent clustering applies to PROCEDURE topics (Wayne's case).
+    // Brand / location / demand categories have no clean head entity to anchor topical
+    // names, so they keep the prior behaviour: one parent with intent-labelled children
+    // (General / Informational / …) — unchanged from v7.196.
+    const groupsForCat: IntentGroup[] = c.type === 'procedure'
+      ? buildIntentClusters(c)
+      : (() => {
+          const byIntent = new Map<IntentType, KwItem[]>();
+          for (const kw of c.keywords) {
+            const it = intentOf.get(kw)?.intent ?? detectIntentSignal(kw.keyword) ?? 'unmatched';
+            (byIntent.get(it) ?? byIntent.set(it, []).get(it)!).push(kw);
+          }
+          return Array.from(byIntent.entries()).map(([it, kws]) => ({
+            key: `${CORE_KEY}::${it}`, name: INTENT_META[it].label, kws,
+            pageUrl: kws.find(k => k.position !== null && k.url)?.url,
+          }));
+        })();
 
-    const byProduct = new Map<string, { label: string; pageUrl?: string; kws: KwItem[] }>();
-    const place = (key: string, label: string, pageUrl: string | undefined, kw: KwItem) => {
-      let p = byProduct.get(key);
-      if (!p) { p = { label, pageUrl, kws: [] }; byProduct.set(key, p); }
-      if (pageUrl && !p.pageUrl) p.pageUrl = pageUrl;
-      p.kws.push(kw);
-    };
+    // v7.197: one topic per intent cluster (= one page). Funnel types are merged.
+    for (const g of groupsForCat) {
+      if (g.kws.length === 0) continue;
 
-    if (split) {
-      const seeds = deriveProductSeeds(c.keywords, head);
-      for (const kw of c.keywords) {
-        const s = bestSeed(kw, head, seeds);
-        if (s) place(s.key, s.label, s.pageUrl, kw);
-        else   place(CORE_KEY, '', undefined, kw);   // core leftover: labelled by intent at push time
+      // The cluster's single funnel stage = the dominant funnel intent BY VOLUME
+      // (Wayne: "one cluster, dominant stage"). Read each keyword's funnel intent
+      // from the subClusters; fall back to a signal scan.
+      const volByIntent = new Map<IntentType, number>();
+      for (const kw of g.kws) {
+        const it = intentOf.get(kw)?.intent ?? detectIntentSignal(kw.keyword) ?? 'unmatched';
+        volByIntent.set(it, (volByIntent.get(it) ?? 0) + kw.searchVolume);
       }
-      // Fold tiny mined products (a single keyword, no page) back into Core so the
-      // table doesn't fragment into one-off rows; page products always stand alone.
-      for (const [key, p] of Array.from(byProduct.entries())) {
-        if (key !== CORE_KEY && !p.pageUrl && key.startsWith('kw:') && p.kws.length < 2) {
-          byProduct.delete(key);
-          const core = byProduct.get(CORE_KEY) ?? { label: '', pageUrl: undefined, kws: [] };
-          core.kws.push(...p.kws);
-          byProduct.set(CORE_KEY, core);
-        }
-      }
-    } else {
-      // Non-split theme: ALL keywords share the parent. Place them under the core
-      // bucket with NO product label so each intent sub-topic is named by its intent
-      // (General / Informational / …), not by repeating the parent theme name.
-      for (const kw of c.keywords) place(CORE_KEY, '', undefined, kw);
-    }
+      let domIntent: IntentType = 'unmatched';
+      let domVol = -1;
+      for (const [it, v] of Array.from(volByIntent.entries())) if (v > domVol) { domVol = v; domIntent = it; }
+      const meta = INTENT_META[domIntent];
 
-    for (const [pkey, prod] of Array.from(byProduct.entries())) {
-      const intentBuckets = new Map<IntentType, KwItem[]>();
-      for (const kw of prod.kws) {
-        const sc = intentOf.get(kw);
-        const intent = sc ? sc.intent : (detectIntentSignal(kw.keyword) ?? 'unmatched');
-        if (!intentBuckets.has(intent)) intentBuckets.set(intent, []);
-        intentBuckets.get(intent)!.push(kw);
-      }
-      for (const [intent, items] of Array.from(intentBuckets.entries())) {
-        if (items.length === 0) continue;
-        const meta = INTENT_META[intent];
-        topics.push({
-          id:          `${c.id}::${pkey}::${intent}`,
-          parentName:  c.name,
-          parentType:  c.type,
-          // Core bucket has no product → name the sub-topic by its intent so a
-          // non-split theme never repeats the parent name on every row (v7.194).
-          product:     pkey === CORE_KEY ? meta.label : prod.label,
-          productKey:  pkey,
-          pageUrl:     prod.pageUrl,
-          intent,
-          stage:       meta.stage,
-          contentType: meta.contentType,
-          contentIcon: meta.contentIcon,
-          keywords:    items,
-          totalVolume: items.reduce((s, k) => s + k.searchVolume, 0),
-        });
-      }
+      topics.push({
+        id:          `${c.id}::${g.key}`,
+        parentName:  c.name,
+        parentType:  c.type,
+        product:     g.name,        // v7.197: topical intent name (e.g. "401k vs IRA")
+        productKey:  g.key,
+        pageUrl:     g.pageUrl,
+        intent:      domIntent,     // dominant funnel intent → stage/contentType
+        stage:       meta.stage,
+        contentType: meta.contentType,
+        contentIcon: meta.contentIcon,
+        keywords:    g.kws,
+        totalVolume: g.kws.reduce((s, k) => s + k.searchVolume, 0),
+      });
     }
   }
   return topics;
@@ -1198,7 +1332,7 @@ function TopicTable({
               const stm    = STAGE_META[t.stage];
               const stt    = TBL_STATUS[m.status];
               const open   = expanded.has(t.id);
-              const isCore = t.productKey === CORE_KEY;
+              const isCore = isCoreKey(t.productKey);
               const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
               out.push(
                 <Fragment key={t.id}>
@@ -1375,8 +1509,8 @@ function ClustersTab({
         // Parent first; within a parent, core (intent-only) sub-topics come first in
         // funnel order, then each split product group, each in funnel order.
         r = a.t.parentName.localeCompare(b.t.parentName);
-        if (r === 0) r = (a.t.productKey === CORE_KEY ? 0 : 1) - (b.t.productKey === CORE_KEY ? 0 : 1);
-        if (r === 0 && a.t.productKey !== CORE_KEY) r = a.t.product.localeCompare(b.t.product);
+        if (r === 0) r = (isCoreKey(a.t.productKey) ? 0 : 1) - (isCoreKey(b.t.productKey) ? 0 : 1);
+        if (r === 0 && !isCoreKey(a.t.productKey)) r = a.t.product.localeCompare(b.t.product);
         if (r === 0) r = sIdx(a.t.stage) - sIdx(b.t.stage);
         break;
       }
