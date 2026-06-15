@@ -13,6 +13,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { groupCategoriesByIntent } from '@/lib/claude/intentGroups';
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
 import { getLLMProbeSnapshotV2, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
@@ -175,6 +176,12 @@ export interface CategoryBreakdownResult {
   page1CaptureRate:        number;
   // v7.34: keyword→category map for ThemeClustersPanel (lowercase keyword → category name)
   keywordCategories:       Record<string, string>;
+  // v7.199: AI search-intent grouping (synonyms merged, topical names) + brand terms
+  // to drop. Populated inline for smaller analyses; large ones use the on-demand
+  // "Refine with AI" button. Optional — absent → panel uses the heuristic grouping.
+  intentGroups?:           Array<{ category: string; name: string; stage: string; keywords: string[] }>;
+  brandKeywords?:          string[];
+  intentEngine?:           string;
 }
 
 // v7.86: with uncapped Semrush pulls a footprint can be 30k+ keywords →
@@ -428,6 +435,43 @@ export async function generateCategoryBreakdown(
     : 0;
 
   console.log(`[OrbitIQ] Category breakdown: ${result.categories.length} categories covering ${Object.keys(result.keywordCategories).length}/${merged.length} keywords`);
+
+  // ── v7.199: AI search-intent grouping (the "automatic" half of Wayne's hybrid) ──
+  // Best-effort + bounded so it can NEVER break an analysis. For large footprints we
+  // skip here (the on-demand "Refine with AI" button handles those) to protect the
+  // 300s Lambda budget. Failures are swallowed — clusters just fall back to heuristic.
+  try {
+    const volByKw = new Map<string, number>();
+    for (const kw of merged) {
+      const k = kw.keyword.toLowerCase();
+      if (!volByKw.has(k)) volByKw.set(k, kw.searchVolume ?? 0);
+    }
+    const procNames = new Set(result.categories.filter(c => c.type === 'procedure').map(c => c.name));
+    const kwByCat = new Map<string, Array<{ keyword: string; searchVolume: number }>>();
+    for (const [kwLow, catName] of Object.entries(result.keywordCategories)) {
+      if (!procNames.has(catName)) continue;
+      const arr = kwByCat.get(catName) ?? [];
+      arr.push({ keyword: kwLow, searchVolume: volByKw.get(kwLow) ?? 0 });
+      kwByCat.set(catName, arr);
+    }
+    const catInputs = Array.from(kwByCat.entries())
+      .filter(([, kws]) => kws.length > 0)
+      .map(([name, keywords]) => ({ name, type: 'procedure' as const, keywords }));
+    const procKwCount = catInputs.reduce((s, c) => s + c.keywords.length, 0);
+
+    // Guard: only run inline when it comfortably fits the analysis time budget.
+    if (catInputs.length > 0 && catInputs.length <= 120 && procKwCount <= 2000) {
+      const ai = await groupCategoriesByIntent(catInputs, domain);
+      result.intentGroups  = ai.intentGroups;
+      result.brandKeywords = ai.brandKeywords;
+      result.intentEngine  = ai.intentEngine;
+      console.log(`[OrbitIQ] Intent grouping (inline): ${ai.intentGroups.length} groups, ${ai.brandKeywords.length} brand terms`);
+    } else {
+      console.log(`[OrbitIQ] Intent grouping skipped inline (${catInputs.length} procedure categories / ${procKwCount} kws) — use "Refine with AI".`);
+    }
+  } catch (err) {
+    console.error('[OrbitIQ] Inline intent grouping failed (non-fatal):', (err as any)?.message ?? err);
+  }
 
   return result;
 }

@@ -42,6 +42,11 @@ interface ThemeCluster {
   // NOT-yet-covered intent becomes its own modifier-titled 'demand' cluster instead.
   demandMergedCount?: number;
   demandMergedVol?:   number;
+  // v7.199: AI intent groups for this category (from the "Refine with AI" pass /
+  // pipeline). When present, buildIntentClusters uses these instead of the heuristic
+  // — they merge synonym intents the heuristic can't ("529 account" ≈ "529 college
+  // plan") and carry an AI-chosen topical name + funnel stage.
+  aiGroups?: Array<{ name: string; stage?: JourneyStage; keywords: string[] }>;
 }
 
 interface Props {
@@ -110,6 +115,12 @@ const INTENT_META: Record<IntentType, {
   transactional: { label: 'Transactional', stage: 'decision',      contentType: 'Service / Landing', contentIcon: 'ti-calendar'    },
   navigational:  { label: 'Navigational',  stage: 'retention',     contentType: 'Brand Page', contentIcon: 'ti-home'               },
   unmatched:     { label: 'General',       stage: 'awareness',     contentType: 'General Content', contentIcon: 'ti-dots'          },
+};
+
+// v7.199: representative funnel intent for a stage (reverse of INTENT_META.stage) —
+// used when an AI intent group supplies a stage directly.
+const STAGE_INTENT: Record<JourneyStage, IntentType> = {
+  awareness: 'informational', consideration: 'commercial', decision: 'transactional', retention: 'navigational',
 };
 
 const JOURNEY_ORDER: JourneyStage[] = ['awareness', 'consideration', 'decision', 'retention'];
@@ -310,6 +321,17 @@ function buildThemeClusters(
     categories.splice(0, categories.length, ...reduced);
   }
 
+  // v7.199: AI intent groups (from "Refine with AI" / pipeline), keyed by category.
+  const aiGroupsByCat = new Map<string, Array<{ name: string; stage?: JourneyStage; keywords: string[] }>>();
+  for (const g of (cb?.intentGroups ?? []) as Array<{ category?: string; name?: string; stage?: JourneyStage; keywords?: string[] }>) {
+    const catName = String(g?.category ?? '');
+    const name    = String(g?.name ?? '').trim();
+    if (!catName || !name || !Array.isArray(g?.keywords)) continue;
+    const arr = aiGroupsByCat.get(catName) ?? [];
+    arr.push({ name, stage: g.stage, keywords: g.keywords!.map(k => String(k).toLowerCase()) });
+    aiGroupsByCat.set(catName, arr);
+  }
+
   const result: ThemeCluster[] = [];
 
   for (const cat of categories) {
@@ -350,7 +372,7 @@ function buildThemeClusters(
       });
     });
 
-    result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters });
+    result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters, aiGroups: aiGroupsByCat.get(cat.name) });
   }
 
   // ── v7.169: Surface every deep-journey demand TOPIC (theme × intent) ─────────
@@ -945,10 +967,41 @@ function sentenceCase(kw: string): string {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
 }
 
-interface IntentGroup { key: string; name: string; kws: KwItem[]; pageUrl?: string }
+interface IntentGroup { key: string; name: string; kws: KwItem[]; pageUrl?: string; stage?: JourneyStage }
 
-// Group ONE category's keywords into single-intent clusters (the new "topics").
+// v7.199: prefer the AI intent groups when this category has them (they merge
+// synonym intents the heuristic can't). Any keyword the AI didn't place falls back
+// to the heuristic so NO keyword is ever lost. Without AI groups → pure heuristic.
 function buildIntentClusters(c: ThemeCluster): IntentGroup[] {
+  if (!c.aiGroups || c.aiGroups.length === 0) return buildIntentClustersHeuristic(c);
+
+  const byKw = new Map<string, KwItem>();
+  for (const k of c.keywords) byKw.set(k.keyword.toLowerCase().trim(), k);
+
+  const out: IntentGroup[] = [];
+  const claimed = new Set<string>();
+  for (const g of c.aiGroups) {
+    const kws: KwItem[] = [];
+    for (const kwLow of g.keywords) {
+      const item = byKw.get(kwLow);
+      if (item && !claimed.has(kwLow)) { kws.push(item); claimed.add(kwLow); }
+    }
+    if (kws.length === 0) continue;
+    out.push({
+      key: 'ai|' + g.name, name: g.name, kws, stage: g.stage,
+      pageUrl: kws.find(k => k.position !== null && k.url)?.url,
+    });
+  }
+  // leftovers (kw not claimed by any AI group) → heuristic, so nothing is dropped
+  const leftover = c.keywords.filter(k => !claimed.has(k.keyword.toLowerCase().trim()));
+  if (leftover.length > 0) {
+    out.push(...buildIntentClustersHeuristic({ ...c, keywords: leftover, aiGroups: undefined }));
+  }
+  return out;
+}
+
+// Group ONE category's keywords into single-intent clusters (heuristic — the new "topics").
+function buildIntentClustersHeuristic(c: ThemeCluster): IntentGroup[] {
   const head = headTokenSet(c.name);
   // category frequency of each non-head entity token → used to pick the distinctive
   // modifier that anchors a general/howto/etc cluster (e.g. "withdrawal", "rollover").
@@ -1075,7 +1128,11 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
       let domIntent: IntentType = 'unmatched';
       let domVol = -1;
       for (const [it, v] of Array.from(volByIntent.entries())) if (v > domVol) { domVol = v; domIntent = it; }
-      const meta = INTENT_META[domIntent];
+      // v7.199: an AI group may carry an explicit funnel stage → honour it (and pick a
+      // representative intent for the content-type label); else dominant intent by volume.
+      const intent: IntentType = g.stage ? (STAGE_INTENT[g.stage] ?? domIntent) : domIntent;
+      const stage: JourneyStage = g.stage ?? INTENT_META[domIntent].stage;
+      const meta = INTENT_META[intent];
 
       topics.push({
         id:          `${c.id}::${g.key}`,
@@ -1084,8 +1141,8 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
         product:     g.name,        // v7.197: topical intent name (e.g. "401k vs IRA")
         productKey:  g.key,
         pageUrl:     g.pageUrl,
-        intent:      domIntent,     // dominant funnel intent → stage/contentType
-        stage:       meta.stage,
+        intent,
+        stage,
         contentType: meta.contentType,
         contentIcon: meta.contentIcon,
         keywords:    g.kws,
@@ -1405,10 +1462,20 @@ function ClustersTab({
   clusters,
   clientDomain,
   loadingClaude,
+  onRefine,
+  refining = false,
+  refineProgress = null,
+  refineError = null,
+  aiRefined = false,
 }: {
   clusters:      ThemeCluster[];
   clientDomain:  string;
   loadingClaude: boolean;
+  onRefine?:        (force?: boolean) => void;
+  refining?:        boolean;
+  refineProgress?:  { done: number; total: number; label: string; startedAt: number } | null;
+  refineError?:     string | null;
+  aiRefined?:       boolean;
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
   const [sortKey, setSortKey] = useState<SortKey>('group');
@@ -1583,6 +1650,58 @@ function ClustersTab({
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
+
+      {/* ── v7.199: Refine with AI — merge synonym intents + strip brand terms ───── */}
+      {onRefine && (() => {
+        const total = refineProgress?.total ?? 0;
+        const done  = refineProgress?.done ?? 0;
+        const frac  = total > 0 ? Math.min(1, done / total) : 0;
+        const elapsed = refineProgress ? (Date.now() - refineProgress.startedAt) / 1000 : 0;
+        const eta = done > 0 && total > done ? Math.round((elapsed / done) * (total - done)) : null;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12,
+                        padding: '10px 12px', background: 'var(--c-0c0c16)', border: '1px solid var(--c-1e1e34)', borderRadius: 10 }}>
+            <button
+              onClick={() => onRefine(aiRefined)}
+              disabled={refining}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 8,
+                border: '1px solid var(--c-22d3ee)', background: refining ? 'var(--c-062a32)' : 'var(--c-22d3ee)',
+                color: refining ? 'var(--c-22d3ee)' : 'var(--c-08080f)', fontSize: 12.5, fontWeight: 700,
+                cursor: refining ? 'default' : 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              <i className={`ti ${refining ? 'ti-loader-2' : 'ti-sparkles'}`} style={{ fontSize: 14 }} aria-hidden="true" />
+              {refining ? 'Refining…' : (aiRefined ? 'Re-run AI refine' : 'Refine clusters with AI')}
+            </button>
+
+            {!refining && !aiRefined && (
+              <span style={{ fontSize: 11.5, color: 'var(--c-8080a8)' }}>
+                Merge synonym intents (e.g. “529 account” = “529 college plan”) and strip brand terms.
+              </span>
+            )}
+            {aiRefined && !refining && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-4ade80)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <i className="ti ti-check" aria-hidden="true" /> AI-refined
+              </span>
+            )}
+
+            {refining && (
+              <div style={{ flex: 1, minWidth: 220, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, height: 6, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.round(frac * 100)}%`, height: '100%', background: 'var(--c-22d3ee)', transition: 'width 0.3s' }} />
+                </div>
+                <span style={{ fontSize: 11, color: 'var(--c-9090b8)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                  {total > 0 ? `${done}/${total} categories` : 'starting…'}{eta !== null ? ` · ~${eta}s left` : ''}
+                </span>
+              </div>
+            )}
+            {refineError && !refining && (
+              <span style={{ fontSize: 11.5, color: 'var(--c-f472b6)' }}>{refineError}</span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Top cards: total hero (left) · group cards (middle) · funnel (right) ── */}
       {/* v7.148: 3-col layout — clickable total hero filters to 'all'; the three  */}
@@ -1939,16 +2058,74 @@ export default function ThemeClustersPanel({
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[] | null>(null);
   const [refreshingKws,     setRefreshingKws]     = useState(false);
 
+  // v7.199: AI intent-grouping ("Refine with AI"). Result is merged into the analysis
+  // used to build clusters + the keyword pool, so the panel updates live (no reload).
+  const [aiRefined, setAiRefined] = useState<{ intentGroups: any[]; brandKeywords: string[] } | null>(null);
+  const [refining,      setRefining]      = useState(false);
+  const [refineProgress, setRefineProgress] = useState<{ done: number; total: number; label: string; startedAt: number } | null>(null);
+  const [refineError,   setRefineError]   = useState<string | null>(null);
+
   // True once the first keywords fetch has resolved (even if empty)
   const kwLoaded = uploadedKeywords !== null;
 
+  // Analysis used for building — overlaid with any AI refine result for a live update.
+  const effectiveAnalysis = useMemo(() => {
+    if (!aiRefined) return analysis;
+    const snap = analysis?.semrushSnapshot ?? {};
+    const cb   = snap._categoryBreakdown ?? {};
+    return {
+      ...analysis,
+      semrushSnapshot: {
+        ...snap,
+        _categoryBreakdown: { ...cb, intentGroups: aiRefined.intentGroups, brandKeywords: aiRefined.brandKeywords, intentEngine: 'intent-ai-v1' },
+      },
+    };
+  }, [analysis, aiRefined]);
+
   const baseClusters = useMemo(
     () => buildThemeClusters(
-      analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? [],
+      effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? [],
       defaultClientThreshold, defaultCompetitorThreshold,
     ),
-    [analysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
+    [effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
   );
+
+  const runRefine = useCallback(async (force = false) => {
+    setRefining(true); setRefineError(null);
+    setRefineProgress({ done: 0, total: 0, label: '', startedAt: Date.now() });
+    try {
+      const resp = await fetch(`/api/projects/${projectId}/refine-clusters`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force }),
+      });
+      if (!resp.ok || !resp.body) {
+        let msg = `Refine failed (HTTP ${resp.status})`;
+        try { const j = await resp.json(); if (j?.error) msg = j.error; } catch { /* non-JSON */ }
+        throw new Error(msg);
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n'); buf = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'start')         setRefineProgress(p => ({ done: 0, total: ev.total ?? 0, label: 'starting…', startedAt: p?.startedAt ?? Date.now() }));
+          else if (ev.type === 'progress') setRefineProgress(p => ({ done: ev.done ?? 0, total: ev.total ?? (p?.total ?? 0), label: ev.label ?? '', startedAt: p?.startedAt ?? Date.now() }));
+          else if (ev.type === 'error')    setRefineError(String(ev.error ?? 'AI refine failed'));
+          else if (ev.type === 'done')     setAiRefined({ intentGroups: ev.intentGroups ?? [], brandKeywords: ev.brandKeywords ?? [] });
+        }
+      }
+    } catch (err) {
+      setRefineError(String((err as any)?.message ?? err));
+    } finally {
+      setRefining(false);
+      setRefineProgress(null);
+    }
+  }, [projectId]);
 
   const runClaudePass = useCallback(async () => {
     const cacheKey = `orbitiq-cluster-assigns-${analysisId}`;
@@ -2072,7 +2249,16 @@ export default function ThemeClustersPanel({
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       ) : (
-        <ClustersTab clusters={baseClusters} clientDomain={clientDomain} loadingClaude={loadingClaude} />
+        <ClustersTab
+          clusters={baseClusters}
+          clientDomain={clientDomain}
+          loadingClaude={loadingClaude}
+          onRefine={runRefine}
+          refining={refining}
+          refineProgress={refineProgress}
+          refineError={refineError}
+          aiRefined={!!aiRefined}
+        />
       )}
     </div>
   );

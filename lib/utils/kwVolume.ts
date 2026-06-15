@@ -222,6 +222,15 @@ export function buildKwPool({
       if (competitorBrandCats.has(catName)) brandCatExcludedKw.add(kwLow);
     }
   }
+  // v7.199: AI-flagged brand terms (from the "Refine with AI" pass). These catch
+  // brand names string/domain matching can't — abbreviations and brands not in the
+  // competitor list ("schwab", "charles schwab 529", "vanguard"). Hard-excluded
+  // everywhere (added to brandCatExcludedKw, which §1–§5 all honour below). The AI is
+  // instructed to flag only NON-client brands, so the client footprint is untouched.
+  for (const k of (cb?.brandKeywords ?? []) as string[]) {
+    const kl = String(k ?? '').toLowerCase().trim();
+    if (kl) brandCatExcludedKw.add(kl);
+  }
   // Unified competitor-brand test used by the competitor-sourced sections (§3–§5):
   // a member of a competitor brand category, OR string-branded to a competitor.
   const dropCompetitorBrand = (kwLow: string, kwRaw: string): boolean =>
@@ -234,6 +243,7 @@ export function buildKwPool({
   for (const k of (snap?.topKeywords ?? [])) {
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
+    if (brandCatExcludedKw.has(kwLow)) continue;   // v7.199: AI/category brand term — never include
     if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -261,6 +271,7 @@ export function buildKwPool({
     if (k.type === 'gap') continue;                 // gap uploads handled in §4
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
+    if (brandCatExcludedKw.has(kwLow)) continue;    // v7.199: AI/category brand term — never include
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,

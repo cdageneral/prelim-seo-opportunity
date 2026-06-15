@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.199 — 2026-06-15 · AI cluster refinement — merge synonym intents + strip brand terms
+
+**The ask (Wayne):** the heuristic couldn't merge synonyms ("529 account" = "529 college plan" = "college savings 529") or recognise arbitrary brand names ("schwab 529", "charles schwab 529") — both need semantic understanding. This is the LLM half of the hybrid. Chosen: run it **both** ways (automatic + on-demand button); no interim heuristic patch.
+
+**What's new:**
+
+- **AI grouping module** (`lib/claude/intentGroups.ts`) — `groupCategoriesByIntent` asks Claude (haiku, batched) to group each procedure category's keywords by true search intent, name each group topically ("What is a 529 Plan", "401k vs IRA"), assign a funnel stage, and flag BRAND keywords to drop. Strict validation: only keywords from the input are kept, anything the model didn't place is left out (the panel heuristics it), so **no keyword is ever lost and volumes stay exact**.
+- **On-demand "Refine clusters with AI" button** in the Clusters panel, backed by a streaming route (`app/api/projects/[id]/refine-clusters/route.ts`) that shows a **determinate progress bar + ETA** (categories done / total), persists the result on the analysis, and re-renders the panel live — no page reload. Resumable (skips already-refined categories; re-run with force).
+- **Automatic in the pipeline** — the analysis's category pass now runs the same grouping inline for smaller footprints (bounded + fault-tolerant so it can never break an analysis; large footprints use the button).
+- **Consumption** — `ThemeClustersPanel.buildIntentClusters` prefers the AI groups when present (heuristic fallback otherwise); `buildKwPool` drops AI-flagged brand terms from **both** the clusters and the Keyword Landscape.
+
+**Defensibility:** the AI only groups / names / flags brands — it never invents a keyword or a number; every group volume is an exact roll-up of real members.
+
+**Verification (own debugging agent):** low-target `tsc` (project settings) on the panel + pool = 0; `tsc` on the new module and route (shimmed) = 0; route + pipeline files parse clean. Behavioural: AI-consumption 10/10 (6 synonyms → one "What is a 529 Plan", exact volume, AI stage honoured, Schwab removed from pool + clusters, no keyword loss); module parse/validation 9/9 (hallucinated keywords dropped, brands captured, progress reported); heuristic fallback still 13/13. Render `orbitiq-v7.199-RENDER.html` (before/after + live table; sample volumes flagged). NOTE: the LLM's grouping *quality* is validated when run against live data with the API key — all deterministic plumbing is machine-verified here.
+
 ## v7.198 — 2026-06-15 · Build fix — Set iteration (Vercel `next build` type error)
 
 **The problem:** the v7.197 Vercel build failed to compile — `ThemeClustersPanel.tsx:999` iterated a `Set` directly with `for…of` (`for (const t of new Set(...))`), which the project's TypeScript target rejects (`Type 'Set<string>' can only be iterated through when using '--downlevelIteration' or target 'es2015'+`). The rest of the file already uses `Array.from(...)` for this reason; v7.197 broke that convention in one spot.
