@@ -1189,11 +1189,14 @@ function classifyTopic(t: Topic): TopicStat {
 }
 
 // ─── Category type badge metadata (v7.169) ────────────────────────────────────
-const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand', { label: string; color: string; bg: string; bdr: string }> = {
-  procedure: { label: 'Procedure',     color: 'var(--c-9b96ff)', bg: 'var(--ca-155-150-255-0_10)', bdr: 'var(--ca-155-150-255-0_30)' },
-  brand:     { label: 'Brand',         color: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_10)',  bdr: 'var(--ca-245-158-11-0_30)' },
-  location:  { label: 'Location',      color: 'var(--c-38bdf8)', bg: 'var(--ca-56-189-248-0_10)',  bdr: 'var(--ca-56-189-248-0_30)' },
-  demand:    { label: 'Missing demand',color: 'var(--c-22d3ee)', bg: 'var(--c-062a32)',                bdr: 'var(--c-0e4753)' },
+// v7.200: `headBg` = ~20% tint of the category's own type colour, used to band the
+// parent-category header row (card-grid CategorySection + grouped TopicTable header).
+// Theme-aware (each --ca var remaps in light mode) so the band stays on-brand in both.
+const TYPE_META: Record<'procedure' | 'brand' | 'location' | 'demand', { label: string; color: string; bg: string; bdr: string; headBg: string }> = {
+  procedure: { label: 'Procedure',     color: 'var(--c-9b96ff)', bg: 'var(--ca-155-150-255-0_10)', bdr: 'var(--ca-155-150-255-0_30)', headBg: 'var(--ca-155-150-255-0_20)' },
+  brand:     { label: 'Brand',         color: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_10)',  bdr: 'var(--ca-245-158-11-0_30)', headBg: 'var(--ca-245-158-11-0_2)'   },
+  location:  { label: 'Location',      color: 'var(--c-38bdf8)', bg: 'var(--ca-56-189-248-0_10)',  bdr: 'var(--ca-56-189-248-0_30)', headBg: 'var(--ca-56-189-248-0_20)'  },
+  demand:    { label: 'Missing demand',color: 'var(--c-22d3ee)', bg: 'var(--c-062a32)',                bdr: 'var(--c-0e4753)', headBg: 'var(--ca-34-211-238-0_2)'   },
 };
 
 // ─── Topic card (v7.169) — one card per theme × intent topic ──────────────────
@@ -1277,16 +1280,21 @@ function CategorySection({
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+      {/* v7.200: parent-category header banded with the category's own type tint (~20%) + left accent */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+        background: tm.headBg, borderLeft: `3px solid ${tm.color}`, borderRadius: 6,
+        padding: '9px 12px',
+      }}>
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--c-e2e2f6)' }}>{cluster.name}</span>
         <span style={{
           fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
           padding: '2px 8px', borderRadius: 20, background: tm.bg, border: `1px solid ${tm.bdr}`, color: tm.color,
         }}>{tm.label}</span>
-        <span style={{ fontSize: 11, color: 'var(--c-5a5a78)' }}>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: 'var(--c-8a8ab0)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
           {topics.length} topic{topics.length === 1 ? '' : 's'} · {fmtVol(shownVol)}/mo
         </span>
-        <div style={{ flex: 1, height: 1, background: 'var(--c-181828)' }} />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         {topics.map(t => {
@@ -1373,12 +1381,14 @@ function TopicTable({
               if (grouped && t.parentName !== lastParent) {
                 lastParent = t.parentName;
                 const a = agg.get(t.parentName)!;
+                // v7.200: band the parent header row with the category's own type tint + left accent
+                const ptm = TYPE_META[t.parentType];
                 out.push(
                   <tr key={`hdr:${t.parentName}`}>
-                    <td colSpan={7} style={{ padding: '9px 12px', background: 'var(--c-0c0c16)', borderTop: '1px solid var(--c-15152a)', borderBottom: '1px solid var(--c-23233a)' }}>
+                    <td colSpan={7} style={{ padding: '9px 12px', background: ptm.headBg, borderLeft: `3px solid ${ptm.color}`, borderTop: '1px solid var(--c-15152a)', borderBottom: '1px solid var(--c-23233a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
-                        <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                           {a.n} {a.n === 1 ? 'topic' : 'topics'} · {fmtVol(a.vol)}/mo
                         </span>
                       </div>

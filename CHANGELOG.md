@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.200 — 2026-06-15 · Clusters — tinted parent-category header rows
+
+**The ask (Wayne):** in the Clusters panel, give the header row of each parent label category a background colour so the parent bands stand out from their topic rows.
+
+**What changed (two files — `components/brief/ThemeClustersPanel.tsx` + `app/globals.css`; 72-file manifest unchanged):**
+
+- **Per-category accent tint (~20%).** Each parent-category header is now banded with a ~20% tint of the category's *own type colour* (Procedure = purple, Brand = amber, Location = blue, Missing demand = cyan — the same colours already used by the type badge), plus a 3px left accent bar in the full type colour. This is the "per-category accent at ~20%" option Wayne approved in the in-chat preview.
+- **Applied in both Clusters views:** the card-grid section header (`CategorySection`) and the grouped-by-theme table header (`TopicTable`). In the card-grid header the topic-count moved to the right edge (flex spacer) so the band reads name-left / count-right, matching the approved mockup; the count colour was lifted (`--c-8a8ab0`) for contrast on the tint.
+- **`TYPE_META` gains a `headBg` field** mapping each type to its 20% tint var. Four theme-aware CSS variables were added in `globals.css` — `--ca-155-150-255-0_20` (purple) and `--ca-56-189-248-0_20` (blue) in *both* the dark `:root` and `:root[data-theme="light"]` blocks (amber `--ca-245-158-11-0_2` and cyan `--ca-34-211-238-0_2` already existed). Because the tint uses the existing `--ca-*` system it remaps correctly in light mode.
+
+**Defensibility / data:** purely presentational — no data path, keyword pool, volume, count, or grouping logic touched. Category names/counts/volumes are unchanged real roll-ups; the only new code is colour styling.
+
+**Verification (own debugging agent):** isolated `tsc` on `ThemeClustersPanel.tsx` (+ its `@/` imports) under project-equivalent strict settings with `target: es5` and `downlevelIteration: false` (the v7.198 build-error guard) = **0 errors**. `globals.css` brace-balanced (21/21); all four `headBg` vars confirmed defined in both theme blocks (2 defs each). Render `orbitiq-v7.200-RENDER.html` shows both views across all four category types using the exact dark-theme token values (sample names/counts/volumes flagged ILLUSTRATIVE).
+
 ## v7.199 — 2026-06-15 · AI cluster refinement — merge synonym intents + strip brand terms
 
 **The ask (Wayne):** the heuristic couldn't merge synonyms ("529 account" = "529 college plan" = "college savings 529") or recognise arbitrary brand names ("schwab 529", "charles schwab 529") — both need semantic understanding. This is the LLM half of the hybrid. Chosen: run it **both** ways (automatic + on-demand button); no interim heuristic patch.
