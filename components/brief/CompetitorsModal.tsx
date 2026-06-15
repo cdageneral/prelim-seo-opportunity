@@ -61,6 +61,8 @@ interface Props {
   kwVolThresholdCompetitor: number;
   brandTerms?:          string[];        // v7.206: client brand vocabulary
   brandTermsUpdatedAt?: string | null;   // v7.206: last edit time (Art IV.5)
+  excludedBrands?:          string[];        // v7.208: competitor-brand blocklist
+  excludedBrandsUpdatedAt?: string | null;   // v7.208: last edit time (Art IV.5)
   onClose:   () => void;
   onChanged: () => void;   // re-fetches the project upstream
 }
@@ -134,6 +136,8 @@ export default function CompetitorsModal({
   kwVolThresholdCompetitor: initCompetitorThresh,
   brandTerms:          initBrandTerms = [],
   brandTermsUpdatedAt: initBrandUpdatedAt = null,
+  excludedBrands:          initExcluded = [],
+  excludedBrandsUpdatedAt: initExcludedUpdatedAt = null,
   onClose,
   onChanged,
 }: Props) {
@@ -190,6 +194,41 @@ export default function CompetitorsModal({
       setSuggestErr('Could not reach the suggestion service.');
     } finally {
       setSuggesting(false);
+    }
+  }
+
+  // ── v7.208: competitor/third-party brand BLOCKLIST (terms that must NOT appear) ──
+  const [exTerms,    setExTerms]    = useState<string[]>(() =>
+    Array.from(new Set((initExcluded ?? []).map(t => t.toLowerCase().trim()).filter(Boolean))));
+  const [newExTerm,  setNewExTerm]  = useState('');
+  const [exState,    setExState]    = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [exUpdatedAt, setExUpdatedAt] = useState<string | null>(initExcludedUpdatedAt);
+
+  function addExLocal(raw: string) {
+    const t = raw.toLowerCase().trim();
+    if (!t) return;
+    setExTerms(prev => Array.from(new Set([...prev, t])));
+    setNewExTerm('');
+  }
+  function removeExLocal(t: string) {
+    setExTerms(prev => prev.filter(x => x !== t));
+  }
+  async function saveExcludedBrands(next: string[]) {
+    setExState('saving');
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ excludedBrands: next }),
+      });
+      if (!res.ok) { setExState('error'); return; }
+      const data = await res.json();
+      setExUpdatedAt(data?.project?.excludedBrandsUpdatedAt ?? new Date().toISOString());
+      setExState('saved');
+      onChanged();   // refetch project → panels drop the blocklisted brands
+      setTimeout(() => setExState('idle'), 2000);
+    } catch {
+      setExState('error');
     }
   }
 
@@ -866,6 +905,64 @@ export default function CompetitorsModal({
             <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '10px 0 0' }}>
               {brandUpdatedAt
                 ? `Last updated ${new Date(brandUpdatedAt).toLocaleString()}`
+                : 'Not yet saved for this client.'}
+            </p>
+          </div>
+
+          {/* ── Section 4: Excluded competitor/brand terms blocklist (v7.208) ── */}
+          <SectionLabel label="Excluded Competitor / Brand Terms" />
+          <div style={{ background: 'var(--c-0f0f1c)', border: '0.5px solid var(--c-1e1e38)', borderRadius: '10px', padding: '16px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '14px' }}>
+              <p style={{ fontSize: '11px', color: 'var(--c-7070a0)', margin: 0, lineHeight: 1.5, flex: 1 }}>
+                Competitor and third-party brand names that must <strong style={{ color: 'var(--c-fbbf77)' }}>never appear</strong> in keywords or clusters (Constitution III.1). Any keyword containing one of these is hard-excluded across the Keyword, Cluster, Journey and Content panels — <strong style={{ color: 'var(--c-fbbf77)' }}>whether it came from Semrush or a CSV upload</strong>. Use this for brands that aren&apos;t tracked competitors and slip through (e.g. <code style={{ background: 'var(--c-1a1a30)', padding: '0 4px', borderRadius: '3px', color: 'var(--c-c08040)' }}>schwab</code>, <code style={{ background: 'var(--c-1a1a30)', padding: '0 4px', borderRadius: '3px', color: 'var(--c-c08040)' }}>vanguard</code>). Multi-word names match as phrases; the client&apos;s own brand is never removed.
+              </p>
+              {exState !== 'idle' && (
+                <span style={{
+                  fontSize: '10px', whiteSpace: 'nowrap', padding: '3px 9px', borderRadius: '10px',
+                  color:      exState === 'error' ? 'var(--c-f87171)' : exState === 'saved' ? 'var(--c-4ade80)' : 'var(--c-8888b0)',
+                  background: exState === 'error' ? 'var(--ca-239-68-68-0_08)' : exState === 'saved' ? 'var(--ca-74-222-128-0_08)' : 'var(--ca-136-136-176-0_08)',
+                  border: '1px solid var(--c-26264a)',
+                }}>
+                  {exState === 'saving' ? 'Saving…' : exState === 'saved' ? '✓ Saved' : 'Save failed — try again'}
+                </span>
+              )}
+            </div>
+
+            {/* Chips */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: exTerms.length ? '14px' : '0' }}>
+              {exTerms.map(t => (
+                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--c-fbbf77)', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-854f0b)', padding: '3px 6px 3px 10px', borderRadius: '999px' }}>
+                  {t}
+                  <button type="button" onClick={() => removeExLocal(t)} title="Remove"
+                    style={{ border: 'none', background: 'transparent', color: 'var(--c-a08040)', cursor: 'pointer', fontSize: '13px', lineHeight: 1, padding: 0 }}>×</button>
+                </span>
+              ))}
+              {exTerms.length === 0 && (
+                <span style={{ fontSize: '10px', color: 'var(--c-505070)' }}>No excluded brands yet — add any competitor/third-party brand that must not appear.</span>
+              )}
+            </div>
+
+            {/* Add + save */}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                value={newExTerm}
+                onChange={e => setNewExTerm(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addExLocal(newExTerm); } }}
+                placeholder="add a brand to exclude…"
+                style={{ flex: '1 1 160px', minWidth: '120px', fontSize: '12px', color: 'var(--c-e8e8ff)', background: 'var(--c-0a0a14)', border: '1px solid var(--c-26264a)', borderRadius: '8px', padding: '7px 10px' }}
+              />
+              <button type="button" onClick={() => addExLocal(newExTerm)}
+                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--c-1a1a30)', border: '1px solid var(--c-26264a)', color: 'var(--c-fbbf77)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                Add
+              </button>
+              <button type="button" onClick={() => saveExcludedBrands(exTerms)}
+                style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                Save excluded brands
+              </button>
+            </div>
+            <p style={{ fontSize: '10px', color: 'var(--c-505070)', margin: '10px 0 0' }}>
+              {exUpdatedAt
+                ? `Last updated ${new Date(exUpdatedAt).toLocaleString()}`
                 : 'Not yet saved for this client.'}
             </p>
           </div>

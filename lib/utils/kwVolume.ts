@@ -135,6 +135,45 @@ export function textHasCompetitorBrand(text: string, tokens: Set<string>): boole
   return false;
 }
 
+// v7.208: USER-MAINTAINED competitor/third-party brand blocklist (Art III.1).
+// v7.201 could only catch brands that were configured competitors, Semrush
+// auto-discovered, or AI-flagged — a brand absent from all three (e.g. "Schwab"
+// when it isn't a tracked competitor) slipped through, even from a CSV upload.
+// This is the deterministic safety net: any term Wayne lists is hard-excluded
+// everywhere. Terms are normalised (lowercase, strip non-alphanumerics, ≥3 chars)
+// and matched with the same normalized-substring test as competitor brands. The
+// list comes from the explicit arg, else `_excludedBrands` carried on the snapshot
+// (injected once at page load from project.excludedBrands) — one source of truth.
+export function buildExcludedBrandTokens(snap: any, explicit: string[] = []): Set<string> {
+  const list: string[] = (Array.isArray(explicit) && explicit.length > 0)
+    ? explicit
+    : (Array.isArray(snap?._excludedBrands) ? snap._excludedBrands : []);
+  const tokens = new Set<string>();
+  for (const t of list) {
+    const norm = String(t ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (norm.length >= 3) tokens.add(norm);
+  }
+  return tokens;
+}
+
+// v7.208: apply the user blocklist to a DEMAND UNIVERSE so the Journey + Content-plan
+// views (which read `snap._demandUniverse.topics`, NOT buildKwPool) also honour it.
+// Returns a shallow copy with brand topics removed; the client's own brand demand is
+// kept (guarded against clientDomain + `_brandTerms`). No-op when the list is empty.
+export function filterUniverseExcludedBrands(universe: any, snap: any): any {
+  if (!universe) return universe;
+  const tokens = buildExcludedBrandTokens(snap);
+  if (tokens.size === 0) return universe;
+  const clientDomain = String(snap?.domain ?? '');
+  const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
+  const keep = (kw: string): boolean =>
+    !(textHasCompetitorBrand(kw, tokens) && !isBrandedKeyword(kw, clientDomain, [], brandTerms));
+  const topics = Array.isArray(universe.topics)
+    ? universe.topics.filter((t: any) => keep(String(t?.keyword ?? '')))
+    : universe.topics;
+  return { ...universe, topics };
+}
+
 /**
  * Returns true if the keyword is branded by any of the given domains.
  *
@@ -285,6 +324,16 @@ export function buildKwPool({
       ? brandTerms
       : (Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : []);
 
+  // v7.208: user-maintained competitor/third-party brand blocklist. Any keyword
+  // carrying an excluded term is dropped everywhere (footprint §1–4 + demand §5),
+  // whether it came from Semrush or a CSV upload — but the client's OWN brand is
+  // never stripped (guarded against effectiveBrandTerms + clientDomain).
+  const excludedBrandTokens = buildExcludedBrandTokens(snap);
+  const isExcludedBrand = (kw: string): boolean =>
+    excludedBrandTokens.size > 0
+    && textHasCompetitorBrand(kw, excludedBrandTokens)
+    && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+
   const blockedSet = new Set<string>(
     uploaded
       .filter((k: any) => k.source === 'blocked')
@@ -363,7 +412,7 @@ export function buildKwPool({
   // Unified competitor-brand test used by the competitor-sourced sections (§3–§5):
   // a member of a competitor brand category, OR string-branded to a competitor.
   const dropCompetitorBrand = (kwLow: string, kwRaw: string): boolean =>
-    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw);
+    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw) || isExcludedBrand(kwRaw);
 
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
@@ -374,6 +423,7 @@ export function buildKwPool({
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     if (brandCatExcludedKw.has(kwLow)) continue;   // v7.199: AI/category brand term — never include
     if (isAutoCompetitorBrand(k.keyword)) continue;   // v7.201: auto-discovered competitor brand (e.g. "schwab 529")
+    if (isExcludedBrand(k.keyword)) continue;   // v7.208: user blocklist (even client-ranked competitor-brand terms)
     if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -403,6 +453,7 @@ export function buildKwPool({
     if (!kwLow || seen.has(kwLow)) continue;
     if (brandCatExcludedKw.has(kwLow)) continue;    // v7.199: AI/category brand term — never include
     if (isAutoCompetitorBrand(k.keyword)) continue; // v7.201: auto-discovered competitor brand
+    if (isExcludedBrand(k.keyword)) continue;       // v7.208: user blocklist (even on client uploads)
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
@@ -424,7 +475,7 @@ export function buildKwPool({
     // competitor only appears in an uploaded file; plus the brand-category signal so
     // abbreviated/foreign competitor brand terms ("boa", "美国银行") are caught too.
     // Client-brand footprint is unaffected (these are competitor-ranked terms).
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword) || isExcludedBrand(k.keyword)) continue;
     if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -450,7 +501,7 @@ export function buildKwPool({
     // script), is excluded so only NON-branded competitor terms enter the landscape
     // and clusters. The row's own `domain` is in compDomains, so the uploading
     // competitor's brand is caught even if it wasn't configured.
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains, effectiveBrandTerms) || isAutoCompetitorBrand(k.keyword) || isExcludedBrand(k.keyword)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,

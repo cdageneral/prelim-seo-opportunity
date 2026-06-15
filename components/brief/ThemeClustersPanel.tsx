@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
-import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand, buildExcludedBrandTokens } from '@/lib/utils/kwVolume';
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -208,6 +208,9 @@ function buildThemeClusters(
   // v7.201: brand tokens from Semrush AUTO-DISCOVERED competitors (+ configured) — used
   // to drop any cluster whose NAME carries a competitor brand (e.g. "529 Schwab").
   const compBrandTokens = buildCompetitorBrandTokens(semSnap, clientDomain, competitorDomains);
+  // v7.208: also drop clusters whose NAME carries a USER-BLOCKLISTED brand (the
+  // deterministic safety net for brands Semrush never auto-discovered, e.g. "Schwab").
+  const excludedBrandTokens = buildExcludedBrandTokens(semSnap);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
     (cb?.categories ?? []).map((c: any) => ({
       name: c.name,
@@ -357,6 +360,7 @@ function buildThemeClusters(
     // "529 Schwab". Belt-and-suspenders with the pool-level keyword stripping above; the
     // client's own brand category is kept (its name contains the client brand).
     if (textHasCompetitorBrand(cat.name, compBrandTokens) && !isBranded(cat.name, clientDomain, [])) continue;
+    if (textHasCompetitorBrand(cat.name, excludedBrandTokens) && !isBranded(cat.name, clientDomain, [])) continue;   // v7.208: user blocklist
     const kws = catMap.get(cat.name) ?? [];
     if (kws.length === 0) continue;
     const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);

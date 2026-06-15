@@ -1,5 +1,25 @@
 # OrbitIQ Changelog
 
+## v7.208 — 2026-06-15 · Brand rule — editable competitor-brand blocklist, honored everywhere
+
+**The ask (Wayne):** competitor/third-party brand terms (e.g. "Schwab") must NOT exist in keywords or clusters — a hard rule, whether the term came from a CSV upload or not (Constitution III.1). v7.201 already stripped brands that were configured competitors / Semrush auto-discovered / AI-flagged, but documented a gap: a brand that is none of those (Schwab isn't a tracked competitor here) slips through, even from an upload — and the Content Map / Journey panels had their own separate brand filters.
+
+**Decision (Wayne):** editable blocklist + auto AI-flag. This release ships the **editable blocklist** — the deterministic safety net that fully enforces the rule. (The auto AI-flag, which pre-populates suspected brands during analysis, is a server/AI-pipeline change that needs verification against live data; it follows as v7.209.)
+
+**What changed:**
+
+- **Single source of truth (`lib/utils/kwVolume.ts`).** New `buildExcludedBrandTokens(snap, explicit)` (normalises terms: lowercase, strip non-alphanumerics, ≥3 chars) and `filterUniverseExcludedBrands(universe, snap)`. In `buildKwPool`, `isExcludedBrand(kw)` = term match AND not the client's own brand (guarded by `clientDomain` + `_brandTerms`); folded into the skip at every pool site — §1 client-ranked, §2 client uploads, §3 crawl gaps, §4 uploaded gaps, and §5 demand (via `dropCompetitorBrand`). So the Keyword and Cluster pools drop blocklisted brands no matter the source.
+- **Cluster names (`components/brief/ThemeClustersPanel.tsx`).** Drops any cluster whose NAME carries a blocklisted brand (mirrors the v7.201 competitor-name drop), so a procedure-typed "529 Schwab" can't survive.
+- **Demand lens (`lib/journey/contentPlan.ts` + `components/brief/JourneySection.tsx`).** Both now run the demand universe through `filterUniverseExcludedBrands` before building nodes — closing the v7.201 OPEN item (these panels read `_demandUniverse`, not `buildKwPool`). The Journey "Topics in journey" count and every Content-plan page now honor the rule too.
+- **Storage (`db/schema.ts` + `app/api/projects/[id]/route.ts`).** New `excluded_brands` (jsonb) + `excluded_brands_updated_at`, auto-migrated at runtime via the existing `ADD COLUMN IF NOT EXISTS` pattern (no manual `db:push`). PATCH normalises (lowercase/trim/de-dupe) and stamps the edit time.
+- **Editable manager (`app/projects/[id]/page.tsx` + `components/brief/CompetitorsModal.tsx`).** `project.excludedBrands` is injected onto the snapshot as `_excludedBrands` (same one-injection pattern as `_brandTerms`), so every panel shares one list (Art II.7). A new "Excluded Competitor / Brand Terms" section in the Competitors/upload modal: add/remove chips, Save, last-updated label (Art IV.5) — the action lives where the data lives (Art IV.4). Saving refetches the project so all panels recompute live.
+
+**Data integrity:** the blocklist only REMOVES (never fabricates); the client's own brand is never stripped (guarded everywhere). Counts stay exact roll-ups of the remaining real rows (Art I). No caps introduced (Art I.6). Works on already-stored analyses with no re-run.
+
+**Verification (own debugging agent):** isolated `tsc` on `kwVolume` + `ThemeClustersPanel` + `contentPlan` + `JourneySection` = **0 errors**. Behavioural harness on the REAL `buildKwPool` + `filterUniverseExcludedBrands` = **12/12**: blocklisting "schwab"+"vanguard" drops them across client-ranked / gap / demand and from the universe, while keeping generic terms, the client's OWN brand, and non-brand demand; empty list is a verified no-op; client-brand GUARD holds (a `schwab.com` client keeps its own brand even when "schwab" is excluded); term normalisation correct. jsdom `renderToString` of the REAL `CompetitorsModal` = **8/8**: the new blocklist section, chips, Save CTA, input, and last-updated label render; the existing brand section is intact. (API/schema/page edits mirror the proven v7.206 brand-terms pattern; their next/zod/drizzle deps are absent from the isolated verify env.)
+
+**Scope note:** the auto AI-flag half of Wayne's choice ships next as v7.209 (auto-suggest competitor brands during analysis — server/AI change, verify vs real data). Count reconciliation (option A) follows as v7.210.
+
 ## v7.207 — 2026-06-15 · Clusters — collapsible parent-category navigation (default collapsed)
 
 **The ask (Wayne):** on the Cluster panel, make the parent topic header rows collapsible/expandable so you can navigate the list easily, and start with every parent collapsed until you expand it.

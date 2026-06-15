@@ -11,6 +11,7 @@ import {
   type EdgeKind as JEdgeKind,
   type StepFacet,
 } from '@/lib/journey/graph';
+import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens
 
 // SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -2030,7 +2031,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // server snapshot first, then the localStorage cache (so an in-session rebuild
   // survives leaving and re-entering this panel; the panel unmounts on tab change).
   useEffect(() => {
-    setDemandUniverse(readDemandCache(analysis));
+    // v7.208: drop blocklisted competitor brands from the demand universe before it
+    // feeds the journey nodes, so "Topics in journey" and every node honour the rule.
+    setDemandUniverse(filterUniverseExcludedBrands(readDemandCache(analysis), (analysis?.semrushSnapshot as any) ?? {}));
     setBuildError(null);
   }, [analysis?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 

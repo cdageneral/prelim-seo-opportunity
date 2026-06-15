@@ -33,6 +33,12 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_terms_updated_at TIMESTAMP`);              // v7.206
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS excluded_brands JSONB`);                          // v7.208
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS excluded_brands_updated_at TIMESTAMP`);          // v7.208
+  } catch { /* already exists */ }
 }
 
 const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];   // v7.99
@@ -50,6 +56,8 @@ const UpdateSchema = z.object({
   // v7.206: client brand vocabulary. Terms are lowercased/trimmed/de-duped and
   // empties dropped server-side. Editing this stamps brand_terms_updated_at.
   brandTerms:               z.array(z.string().max(120)).max(1000).optional(),
+  // v7.208: competitor/third-party brand blocklist. Normalised + stamped server-side.
+  excludedBrands:           z.array(z.string().max(120)).max(1000).optional(),
 }).strict();
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -93,6 +101,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       parsed.data.brandTerms.map(t => t.toLowerCase().trim()).filter(Boolean),
     ));
     patch.brandTermsUpdatedAt = new Date();
+  }
+  // v7.208: same normalisation for the competitor-brand blocklist.
+  if (parsed.data.excludedBrands !== undefined) {
+    patch.excludedBrands = Array.from(new Set(
+      parsed.data.excludedBrands.map(t => t.toLowerCase().trim()).filter(Boolean),
+    ));
+    patch.excludedBrandsUpdatedAt = new Date();
   }
 
   const [updated] = await db.update(projects)

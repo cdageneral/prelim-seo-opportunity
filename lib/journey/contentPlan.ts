@@ -22,6 +22,7 @@
 
 import type { JourneyGraph, GraphNode, GraphEdge, SupportType, NodeState } from './graph';
 import { SUPPORT_LABEL, buildJourneyGraph } from './graph';
+import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';
 
 export type Priority = 'P0' | 'P1' | 'P2';
 
@@ -245,7 +246,9 @@ export { SUPPORT_LABEL };
 // is what makes the volumes reconcile with the Keyword and Cluster panels.
 export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = []): ContentPlan | null {
   const snap = (analysis && analysis.semrushSnapshot) ? analysis.semrushSnapshot : {};
-  const universe = snap._demandUniverse;
+  // v7.208: honour the user competitor-brand blocklist on the demand lens too, so
+  // Content plan + Content map never surface a blocklisted brand (e.g. "Schwab").
+  const universe = filterUniverseExcludedBrands(snap._demandUniverse, snap);
   if (!universe || !(universe.topics && universe.topics.length)) return null;
 
   const client = new Set<string>();

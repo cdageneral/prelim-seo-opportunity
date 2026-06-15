@@ -36,6 +36,12 @@ export const projects = pgTable('projects', {
   // domain string can't yield. NOTE: run `npm run db:push` once after deploying.
   brandTerms:               jsonb('brand_terms').$type<string[]>(),
   brandTermsUpdatedAt:      timestamp('brand_terms_updated_at'),
+  // v7.208: competitor/third-party brand BLOCKLIST (Art III.1). Any term here is
+  // hard-excluded from keywords, clusters, journey and content plan everywhere —
+  // whether the term came from Semrush or a CSV upload. Edited in the same
+  // Competitors/upload manager. Auto-migrated at runtime (ADD COLUMN IF NOT EXISTS).
+  excludedBrands:           jsonb('excluded_brands').$type<string[]>(),
+  excludedBrandsUpdatedAt:  timestamp('excluded_brands_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });

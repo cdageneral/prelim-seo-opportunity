@@ -53,6 +53,8 @@ interface Project {
   semrushDatabase?:         string;   // v7.99: per-project market
   brandTerms?:              string[] | null;        // v7.206: client brand vocabulary
   brandTermsUpdatedAt?:     string | null;
+  excludedBrands?:          string[] | null;        // v7.208: competitor-brand blocklist
+  excludedBrandsUpdatedAt?: string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -232,11 +234,18 @@ export default function ProjectBriefPage() {
     () => (Array.isArray(project?.brandTerms) ? (project!.brandTerms as string[]) : []),
     [project],
   );
+  // v7.208: competitor-brand blocklist. Injected onto the snapshot as `_excludedBrands`
+  // the same way, so buildKwPool + filterUniverseExcludedBrands (Cluster, Keyword,
+  // Journey, Content plan) all honour it from one source of truth.
+  const excludedBrands = useMemo<string[]>(
+    () => (Array.isArray(project?.excludedBrands) ? (project!.excludedBrands as string[]) : []),
+    [project],
+  );
   const analysisForPanels = useMemo(
     () => (analysis
-      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms } }
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands } }
       : analysis),
-    [analysis, brandTerms],
+    [analysis, brandTerms, excludedBrands],
   );
 
   const fetchProject = useCallback(async () => {
@@ -656,6 +665,8 @@ export default function ProjectBriefPage() {
           kwVolThresholdCompetitor={project.kwVolThresholdCompetitor ?? 0}
           brandTerms={project.brandTerms ?? []}
           brandTermsUpdatedAt={project.brandTermsUpdatedAt ?? null}
+          excludedBrands={project.excludedBrands ?? []}
+          excludedBrandsUpdatedAt={project.excludedBrandsUpdatedAt ?? null}
           onClose={() => { setShowCompetitors(false); setKwVersion(v => v + 1); }}
           onChanged={fetchProject}
         />
