@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.201 — 2026-06-15 · Clusters — strip auto-discovered competitor brands ("529 Schwab")
+
+**The ask (Wayne):** competitor brand names were *still* showing in the Clusters panel — a cluster literally named **"529 Schwab"** with chips "schwab 529 · 5K" and "charles schwab 529 · 4K", even though Schwab was never added as a competitor.
+
+**Root cause (verified):** brand stripping only knew (a) the competitors the user **manually configured**, (b) uploaded competitor-CSV domains, and (c) the **AI "Refine with AI"** flags. Schwab was none of these — it was never configured, and the AI brand pass (which only scans `procedure` categories and flags by exact keyword) missed it. Meanwhile Semrush had **auto-discovered** `schwab.com` as a top organic competitor and stored it in `semrushSnapshot.competitors[]` — but the brand filter never looked there. So the client's own ranked terms "schwab 529" / "charles schwab 529" (client footprint, §1) flowed straight into the pool, and the procedure-typed category named "529 Schwab" rendered as a cluster.
+
+**The fix (deterministic — no AI, no re-run; uses real data already in the snapshot):**
+
+- **New shared helpers in `lib/utils/kwVolume.ts`** — `buildCompetitorBrandTokens(snap, clientDomain, …)` derives a brand-token set from `snap.competitors[].domain` (Semrush auto-discovered organic competitors) **plus** any configured/uploaded competitor domains; `textHasCompetitorBrand(text, tokens)` tests a string against it. Tokens are **full domain roots only** (≥4 chars, plain substring) — no fuzzy half-tokens — so generic theme words ("529", "plan", "college") are never matched. The **client's own brand token is removed** from the set, and every strip is additionally guarded by `!isBrandedKeyword(kw, clientDomain, [])`, so the client footprint is never touched.
+- **`buildKwPool` now strips auto-discovered competitor brands from all five sections** (client ranked §1, client uploads §2, crawl gaps §3, uploaded gaps §4, demand §5). This is what removes "schwab 529" / "charles schwab 529" from both the Keyword Landscape and the Clusters pool.
+- **Cluster-NAME guard in `ThemeClustersPanel`** — any cluster whose category name carries a competitor brand (e.g. "529 Schwab") is dropped at render, belt-and-suspenders with the pool-level stripping. The client's own brand category is kept.
+
+**Defensibility / data:** no fabricated brand list — the signal is Semrush's own auto-discovered competitor domains (real data already in every snapshot). Verified that when **no** signal exists (no auto competitors, none configured, no AI flags) the filter does **not** invent brand detection — the term stays — so we never silently drop data we can't defend. Volumes/counts are untouched real roll-ups of whatever survives the filter.
+
+**Verification (own debugging agent):** isolated `tsc` on both changed files under the project's strict low-target guard (`target es5`, `downlevelIteration:false`, `strict`) = **0 errors**. Behavioural harness (esbuild→cjs, synthetic snapshot mirroring the screenshot) = **17/17**: "schwab 529", "charles schwab 529", gap "vanguard 529" removed and no surviving kw contains "schwab"; generic "529 plan"/"529 college savings", client-brand "futurescholar 529", "best 529 plans", "529 vs roth ira" all kept; the "529 Schwab" name-guard fires while "529 Plan Basics" and the client's own brand cluster are kept; control case (no signal → term retained, no fabrication); prefix edge case (`schwabcharitable` client vs `schwab` competitor → client kept, competitor removed). Render `orbitiq-v7.201-RENDER.html` shows the before/after cluster list.
+
+**Note:** this corrects the case for **already-stored** analyses with no re-run, because it reads `snap.competitors` which the analysis already captured. (If a brand is somehow absent from Semrush's auto-competitor list AND unconfigured AND un-flagged by AI, it remains undetectable by design — add it as a competitor or run "Refine with AI".)
+
 ## v7.200 — 2026-06-15 · Clusters — tinted parent-category header rows
 
 **The ask (Wayne):** in the Clusters panel, give the header row of each parent label category a background colour so the parent bands stand out from their topic rows.

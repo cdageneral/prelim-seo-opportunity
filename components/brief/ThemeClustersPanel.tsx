@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
-import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -203,6 +203,9 @@ function buildThemeClusters(
 ): ThemeCluster[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const cb       = semSnap._categoryBreakdown ?? null;
+  // v7.201: brand tokens from Semrush AUTO-DISCOVERED competitors (+ configured) — used
+  // to drop any cluster whose NAME carries a competitor brand (e.g. "529 Schwab").
+  const compBrandTokens = buildCompetitorBrandTokens(semSnap, clientDomain, competitorDomains);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
     (cb?.categories ?? []).map((c: any) => ({
       name: c.name,
@@ -341,6 +344,11 @@ function buildThemeClusters(
     // stray member keyword slips through. The client's own brand category is kept
     // (its name contains the client brand).
     if (cat.type === 'brand' && !isBranded(cat.name, clientDomain, [])) continue;
+    // v7.201: drop any cluster whose NAME carries a competitor brand (auto-discovered by
+    // Semrush or configured) — e.g. a procedure-typed category literally named
+    // "529 Schwab". Belt-and-suspenders with the pool-level keyword stripping above; the
+    // client's own brand category is kept (its name contains the client brand).
+    if (textHasCompetitorBrand(cat.name, compBrandTokens) && !isBranded(cat.name, clientDomain, [])) continue;
     const kws = catMap.get(cat.name) ?? [];
     if (kws.length === 0) continue;
     const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);

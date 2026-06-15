@@ -89,6 +89,49 @@ export function extractBrand(domain: string): string {
 }
 
 /**
+ * v7.201: STRICT competitor brand-token set, derived from a snapshot's AUTO-DISCOVERED
+ * organic competitors (`snap.competitors[].domain`, e.g. "schwab.com") PLUS any
+ * configured competitor domains and uploaded competitor-CSV domains.
+ *
+ * Why this exists: brand stripping previously only knew the competitors the USER typed
+ * plus the AI-flagged terms. A brand the user never configured — but which Semrush
+ * auto-discovered as a top organic competitor — was invisible, so client-ranked terms
+ * like "schwab 529" and a procedure category literally named "529 Schwab" survived. The
+ * auto-discovered list is REAL Semrush data already in the snapshot (no AI, no re-run).
+ *
+ * Tokens are FULL domain brand roots only (≥4 chars) — no fuzzy half-tokens / edit
+ * distance — so generic theme words ("529", "plan", "college") are never matched and
+ * the over-matching that the looser `isBrandedKeyword` path can cause is avoided. The
+ * client's OWN brand token is removed from the set so the client footprint is never
+ * stripped.
+ */
+export function buildCompetitorBrandTokens(
+  snap: any,
+  clientDomain: string,
+  configCompetitorDomains: string[] = [],
+  uploadedGapDomains: string[] = [],
+): Set<string> {
+  const autoCompDomains: string[] = Array.isArray(snap?.competitors)
+    ? snap.competitors.map((c: any) => String(c?.domain ?? '')).filter(Boolean)
+    : [];
+  const all = Array.from(new Set(
+    [...configCompetitorDomains, ...uploadedGapDomains, ...autoCompDomains].filter(Boolean),
+  ));
+  const tokens = new Set<string>(all.map(extractBrand).filter(b => b.length >= 4));
+  // Never strip the client's own brand — drop its token(s) from the competitor set.
+  for (const ct of [clientDomain].map(extractBrand).filter(b => b.length >= 4)) tokens.delete(ct);
+  return tokens;
+}
+
+/** True if `text`, normalised to [a-z0-9], contains any competitor brand token (plain substring). */
+export function textHasCompetitorBrand(text: string, tokens: Set<string>): boolean {
+  const norm = (text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!norm) return false;
+  for (const tok of Array.from(tokens)) if (norm.includes(tok)) return true;
+  return false;
+}
+
+/**
  * Returns true if the keyword is branded by any of the given domains.
  * Uses three-layer detection: exact substring, prefix truncation, fuzzy per-word.
  * Identical to the isBranded() function in KeywordsPanel.tsx.
@@ -193,6 +236,16 @@ export function buildKwPool({
   const isCompetitorBranded = (kw: string): boolean =>
     isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, []);
 
+  // ── v7.201: DETERMINISTIC auto-discovered competitor-brand exclusion ─────────
+  // Strip keywords carrying a brand the user never configured but Semrush surfaced as
+  // a top organic competitor (snap.competitors[].domain — real data already in the
+  // snapshot). Catches client-RANKED competitor-brand terms ("schwab 529") that §1/§2
+  // previously kept because they only checked the AI brandKeywords list. Full-token,
+  // strict match; the client's own brand is never stripped (token removed + guard).
+  const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, competitorDomains, uploadedGapDomains);
+  const isAutoCompetitorBrand = (kw: string): boolean =>
+    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, []);
+
   // ── v7.196: competitor BRAND-CATEGORY exclusion ─────────────────────────────
   // Per-keyword string matching can't catch a competitor's brand searches when they
   // are written as abbreviations or in another language ("boa", "bofa", "bof",
@@ -234,7 +287,7 @@ export function buildKwPool({
   // Unified competitor-brand test used by the competitor-sourced sections (§3–§5):
   // a member of a competitor brand category, OR string-branded to a competitor.
   const dropCompetitorBrand = (kwLow: string, kwRaw: string): boolean =>
-    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw);
+    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw);
 
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
@@ -244,6 +297,7 @@ export function buildKwPool({
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
     if (brandCatExcludedKw.has(kwLow)) continue;   // v7.199: AI/category brand term — never include
+    if (isAutoCompetitorBrand(k.keyword)) continue;   // v7.201: auto-discovered competitor brand (e.g. "schwab 529")
     if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -272,6 +326,7 @@ export function buildKwPool({
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || seen.has(kwLow)) continue;
     if (brandCatExcludedKw.has(kwLow)) continue;    // v7.199: AI/category brand term — never include
+    if (isAutoCompetitorBrand(k.keyword)) continue; // v7.201: auto-discovered competitor brand
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
@@ -293,7 +348,7 @@ export function buildKwPool({
     // competitor only appears in an uploaded file; plus the brand-category signal so
     // abbreviated/foreign competitor brand terms ("boa", "美国银行") are caught too.
     // Client-brand footprint is unaffected (these are competitor-ranked terms).
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains) || isAutoCompetitorBrand(k.keyword)) continue;
     if (competitorVolMin > 0 && (k.searchVolume ?? 0) < competitorVolMin) continue;
     seen.add(kwLow);
     pool.push({
@@ -319,7 +374,7 @@ export function buildKwPool({
     // script), is excluded so only NON-branded competitor terms enter the landscape
     // and clusters. The row's own `domain` is in compDomains, so the uploading
     // competitor's brand is caught even if it wasn't configured.
-    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains)) continue;
+    if (brandCatExcludedKw.has(kwLow) || isBrandedKeyword(k.keyword, clientDomain, compDomains) || isAutoCompetitorBrand(k.keyword)) continue;
     seen.add(kwLow);
     pool.push({
       keyword:      k.keyword,
