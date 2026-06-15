@@ -1424,10 +1424,13 @@ const TH_BASE: React.CSSProperties = {
 };
 
 function TopicTable({
-  rows, sortKey, sortDir, onSort, expanded, onToggle,
+  rows, sortKey, sortDir, onSort, expanded, onToggle, expandedParents, onToggleParent,
 }: {
   rows: TopicRow[]; sortKey: SortKey; sortDir: 1 | -1; onSort: (k: SortKey) => void;
   expanded: Set<string>; onToggle: (id: string) => void;
+  // v7.207: parent-collapse — a parent's child rows render only when its name is in
+  // expandedParents. Default-collapsed is enforced by the caller (empty set).
+  expandedParents: Set<string>; onToggleParent: (name: string) => void;
 }) {
   const cols: Array<{ k: SortKey; label: string; align: 'left' | 'right' }> = [
     { k: 'group',    label: 'Theme · product', align: 'left'  },
@@ -1466,17 +1469,30 @@ function TopicTable({
             }
             const out: React.ReactNode[] = [];
             let lastParent: string | null = null;
+            // v7.207: when grouped, a parent's child rows are hidden unless its name is
+            // in expandedParents (default-collapsed). The header row itself always shows
+            // so the list reads as a navigable index of parent topics.
+            const parentOpen = (name: string) => !grouped || expandedParents.has(name);
             rows.forEach(({ t, m }) => {
               if (grouped && t.parentName !== lastParent) {
                 lastParent = t.parentName;
                 const a = agg.get(t.parentName)!;
+                const isOpen = expandedParents.has(t.parentName);
                 // v7.200: band the parent header row with the category's own type tint + left accent
                 const ptm = TYPE_META[t.parentType];
                 out.push(
-                  <tr key={`hdr:${t.parentName}`}>
+                  <tr
+                    key={`hdr:${t.parentName}`}
+                    onClick={() => onToggleParent(t.parentName)}
+                    style={{ cursor: 'pointer' }}
+                    aria-expanded={isOpen}
+                  >
                     <td colSpan={7} style={{ padding: '9px 12px', background: ptm.headBg, borderLeft: `3px solid ${ptm.color}`, borderTop: '1px solid var(--c-15152a)', borderBottom: '1px solid var(--c-23233a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          <i className={`ti ti-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 13, color: ptm.color, flexShrink: 0 }} aria-hidden="true" />
+                          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
+                        </span>
                         <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                           {a.n} {a.n === 1 ? 'topic' : 'topics'} · {fmtVol(a.vol)}/mo
                         </span>
@@ -1485,6 +1501,8 @@ function TopicTable({
                   </tr>,
                 );
               }
+              // Skip child rows whose parent is collapsed (grouped view only).
+              if (!parentOpen(t.parentName)) return;
               const stm    = STAGE_META[t.stage];
               const stt    = TBL_STATUS[m.status];
               const open   = expanded.has(t.id);
@@ -1583,6 +1601,13 @@ function ClustersTab({
   const [sortKey, setSortKey] = useState<SortKey>('group');
   const [sortDir, setSortDir] = useState<1 | -1>(1);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // v7.207: parent-category collapse. Tracks which parent headers are EXPANDED.
+  // Default = empty set ⇒ every parent starts COLLAPSED until the user expands it,
+  // so the grouped cluster list opens as a tidy index of parent topics you drill into.
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const toggleParent = (name: string) => setExpandedParents(prev => {
+    const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n;
+  });
 
   // Pre-product = the life-problem themes (type 'problem'); product = everything else.
   const isPreProductCluster = (c: ThemeCluster) => c.type === 'problem';
@@ -2217,6 +2242,30 @@ function ClustersTab({
       })()}
 
       {/* ── v7.190: one sortable table — Theme · product × funnel stage ──────── */}
+      {/* v7.207: when grouped, expose Expand all / Collapse all for the parent rows. */}
+      {filtered.length > 0 && sortKey === 'group' && (() => {
+        const allParents = Array.from(new Set(sortedRows.map(r => r.t.parentName)));
+        const openCount  = allParents.filter(p => expandedParents.has(p)).length;
+        const allOpen    = openCount === allParents.length && allParents.length > 0;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '0 2px 8px' }}>
+            <span style={{ fontSize: 11, color: 'var(--c-585878)' }}>
+              {allParents.length} categor{allParents.length === 1 ? 'y' : 'ies'} · {openCount} expanded
+            </span>
+            <button
+              onClick={() => setExpandedParents(allOpen ? new Set() : new Set(allParents))}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
+                border: '1px solid var(--c-23233a)', background: 'var(--c-0d0d1a)', color: 'var(--c-9090b8)',
+                fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+              }}
+            >
+              <i className={`ti ti-${allOpen ? 'fold' : 'fold-down'}`} style={{ fontSize: 13 }} aria-hidden="true" />
+              {allOpen ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
+        );
+      })()}
       {filtered.length > 0 && (
         <TopicTable
           rows={sortedRows}
@@ -2225,6 +2274,8 @@ function ClustersTab({
           onSort={onSort}
           expanded={expanded}
           onToggle={toggleRow}
+          expandedParents={expandedParents}
+          onToggleParent={toggleParent}
         />
       )}
 

@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.207 — 2026-06-15 · Clusters — collapsible parent-category navigation (default collapsed)
+
+**The ask (Wayne):** on the Cluster panel, make the parent topic header rows collapsible/expandable so you can navigate the list easily, and start with every parent collapsed until you expand it.
+
+**What changed:**
+
+- **Collapsible parent headers (`components/brief/ThemeClustersPanel.tsx`, grouped `TopicTable`).** Each parent-category header row is now a toggle: click it (or its chevron) to expand/collapse its child topic rows. State is tracked as `expandedParents` (a Set of expanded parent names); the default is an **empty set, so every parent starts collapsed** and the grouped list reads as a tidy index you drill into. Header rows always render (with their topic count + monthly volume); child rows render only when their parent is expanded.
+- **Chevron affordance.** Collapsed parent shows `ti-chevron-right`, expanded shows `ti-chevron-down`, tinted to the category's own type colour. The header carries `aria-expanded` for assistive tech.
+- **Expand all / Collapse all.** A small control above the grouped table toggles every parent at once and shows "{N} categories · {k} expanded", so navigating a large taxonomy (e.g. 270 categories) is one click either way. Only shown in the grouped (Theme · product) sort, where parent headers exist.
+
+**Scope note:** this release is the UI/navigation change only. Two related data-pipeline items Wayne raised in the same review — the global no-competitor-brand rule (e.g. "Schwab") and reconciling the cluster count with the journey + content-plan counts (1 cluster = 1 intent = 1 page) — change the numbers in CMO-facing briefs and will ship as their own verified releases (v7.208, v7.209), per Art I (data integrity) and Art V.4 (high-stakes independent verification against real data).
+
+**Data integrity:** no data touched — collapse is presentation-only. Counts, volumes, and roll-ups are byte-for-byte unchanged (Art I). No caps introduced (Art I.6).
+
+**Verification (own debugging agent):** isolated `tsc` on `ThemeClustersPanel.tsx` + its resolvable deps (`kwVolume`, `JourneySection`) = **0 errors**. jsdom `renderToString` of the real `TopicTable` = **9/9**: both parent headers render while collapsed, all child rows hidden by default, collapsed header shows the right chevron; expanding one parent reveals only its children (other parent stays collapsed) and flips that header to the down chevron. Panel-scroll invariant (Art IV.1) confirmed intact — the collapse control and table remain children of the existing `flex-1 overflowY:auto` root; no nested scroll added. Render: `orbitiq-v7.207-RENDER.html`.
+
 ## v7.206 — 2026-06-15 · Branded — editable, AI-seeded client brand vocabulary (all clients)
 
 **The ask (Wayne):** "branded" must mean the client's own brand terms (a subset — generic terms TD ranks for like "0 apr credit cards" are NOT branded), it must reflect the **actual CSV upload**, and the rule must work **for all clients** — not just TD. v7.205 fixed the 2-char "td" drop but still missed TD's real brand **variants** (Toronto-Dominion, EasyWeb, Ameritrade, tidi) because a domain string can't yield them.
