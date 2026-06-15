@@ -1,0 +1,4 @@
+
+# macOS / iCloud junk (was causing stray commits)
+.DS_Store
+**/.DS_Store
