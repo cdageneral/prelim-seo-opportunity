@@ -75,9 +75,16 @@ const SEGMENT_ACCENTS = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children, accent, bar = true }: {
+  children: React.ReactNode;
+  accent?: typeof SEGMENT_ACCENTS[0];
+  bar?: boolean;
+}) {
   return (
-    <p className="text-orbit-tertiary text-[10px] font-semibold uppercase tracking-widest mb-2">
+    <p className="flex items-center gap-2.5 text-slate-200 text-[12.5px] font-bold uppercase tracking-[0.07em] mb-2.5">
+      {bar && accent && (
+        <span className={`inline-block w-[3px] h-3.5 rounded-sm shrink-0 ${accent.bar}`} aria-hidden="true" />
+      )}
       {children}
     </p>
   );
@@ -230,7 +237,7 @@ function SegmentDetail({ segment, accent, label }: {
           {/* Who They Are */}
           <div className="orbit-card p-5 flex flex-col gap-4">
             <div>
-              <SectionLabel>Who They Are</SectionLabel>
+              <SectionLabel accent={accent}>Who They Are</SectionLabel>
               <p className="text-orbit-primary text-xs leading-relaxed">{segment.whoTheyAre.demographics}</p>
             </div>
             <div className={accent.section}>
@@ -247,7 +254,7 @@ function SegmentDetail({ segment, accent, label }: {
 
           {/* Touchpoints */}
           <div className="orbit-card p-5">
-            <SectionLabel>Touchpoints by Journey Stage</SectionLabel>
+            <SectionLabel accent={accent}>Touchpoints by Journey Stage</SectionLabel>
             <div className="flex flex-col gap-3 mt-1">
               {segment.touchpoints.map((tp, i) => (
                 <div key={i} className="flex gap-3">
@@ -270,7 +277,7 @@ function SegmentDetail({ segment, accent, label }: {
 
           {/* Pre-product LLM prompts */}
           <div className="orbit-card p-5">
-            <SectionLabel>Pre-Product LLM Prompts</SectionLabel>
+            <SectionLabel accent={accent}>Pre-Product LLM Prompts</SectionLabel>
             <p className="text-orbit-tertiary text-[10px] mb-3 italic">
               Before they think of the product — these are the life-problem prompts that signal intent weeks or months upstream.
             </p>
@@ -283,7 +290,7 @@ function SegmentDetail({ segment, accent, label }: {
 
           {/* Product-stage prompts */}
           <div className="orbit-card p-5">
-            <SectionLabel>Product-Stage Search Prompts</SectionLabel>
+            <SectionLabel accent={accent}>Product-Stage Search Prompts</SectionLabel>
             <div className="flex flex-col gap-2">
               {segment.productPrompts.map((q, i) => (
                 <PromptChip key={i} text={q} accent={accent} />
@@ -301,7 +308,7 @@ function SegmentDetail({ segment, accent, label }: {
         <div className="orbit-card p-5">
           <div className="flex items-center gap-2 mb-3">
             <i className={`ti ti-message-2 text-sm ${accent.icon}`} />
-            <SectionLabel>Messaging &amp; Tone</SectionLabel>
+            <SectionLabel bar={false}>Messaging &amp; Tone</SectionLabel>
           </div>
           <div className="text-orbit-secondary text-xs leading-relaxed whitespace-pre-line">
             {segment.messagingAndTone}
@@ -312,7 +319,7 @@ function SegmentDetail({ segment, accent, label }: {
         <div className="orbit-card p-5">
           <div className="flex items-center gap-2 mb-3">
             <i className={`ti ti-palette text-sm ${accent.icon}`} />
-            <SectionLabel>Creative &amp; Imagery Direction</SectionLabel>
+            <SectionLabel bar={false}>Creative &amp; Imagery Direction</SectionLabel>
           </div>
           <div className="text-orbit-secondary text-xs leading-relaxed whitespace-pre-line">
             {segment.creativeDirection}
@@ -323,7 +330,7 @@ function SegmentDetail({ segment, accent, label }: {
         <div className="orbit-card p-5">
           <div className="flex items-center gap-2 mb-3">
             <i className={`ti ti-broadcast text-sm ${accent.icon}`} />
-            <SectionLabel>Channel Approach</SectionLabel>
+            <SectionLabel bar={false}>Channel Approach</SectionLabel>
           </div>
           <div className="text-orbit-secondary text-xs leading-relaxed whitespace-pre-line">
             {segment.channelApproach}

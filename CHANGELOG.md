@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.212 — 2026-06-16 · Audience Segments — readable section headlines
+
+**The ask (Wayne):** style the card headlines in the Audience Segments view (Who They Are, Touchpoints by Journey Stage, Pre-Product LLM Prompts, etc.) — make them more readable and larger. Chosen direction: Option B (accent bar), on the main card titles only — not on the Trigger sub-label.
+
+**What changed (`components/brief/AudienceSegmentsSection.tsx`, presentation only):**
+
+- **`SectionLabel` restyled.** Bumped from `text-[10px]` dim `text-orbit-tertiary` to `text-[12.5px] font-bold text-slate-200` with tighter `tracking-[0.07em]` — larger and brighter while keeping the app's uppercase eyebrow language. Now a flex row so an optional leading accent bar can sit inline.
+- **Per-segment accent bar.** New optional `accent` prop renders a 3px×14px segment-colored bar (`accent.bar` → cyan / violet / amber by segment) before the title. Passed to the four main headlines: Who They Are, Touchpoints by Journey Stage, Pre-Product LLM Prompts, Product-Stage Search Prompts.
+- **Icon rows unchanged in structure.** Messaging & Tone, Creative & Imagery Direction, and Channel Approach already lead with a colored Tabler icon; they get the larger/brighter title via `bar={false}` (no double marker).
+- **Sub-labels untouched.** The inline Trigger and Influencer / Gatekeeper Role labels keep their existing small style per Wayne's instruction.
+
+**Data integrity:** purely a styling change — no data, calculation, source, or taxonomy logic touched (Const I/II/III unaffected). No panel scroll structure changed (Const IV.1 unaffected); no new waits introduced (IV.2 unaffected).
+
+**Verification (own debugging agent):** isolated `tsc` on `AudienceSegmentsSection.tsx` = **0 errors**. jsdom `renderToStaticMarkup` harness on the REAL extracted `SectionLabel` + `SEGMENT_ACCENTS` = **8/8**: main label renders larger (`text-[12.5px] font-bold`) and brighter (`text-slate-200`); cyan bar on segment 1, violet bar on segment 2 (bar tracks segment color); bar is `aria-hidden`; `bar={false}` icon rows render NO accent bar but keep the larger/brighter title. Change rendered before packaging (Const V.2).
+
 ## v7.211 — 2026-06-15 · Reconciliation — Journey = one node per cluster
 
 **The ask (Wayne):** finish option A — the Journey should show one node per cluster so "Topics in journey" reconciles to the cluster count (it read 617 while the Cluster panel had ~2514). Wayne chose one node per cluster (accepting a denser graph).
