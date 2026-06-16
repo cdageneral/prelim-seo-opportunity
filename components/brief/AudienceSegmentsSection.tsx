@@ -47,6 +47,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-cyan-400',
     icon:   'text-cyan-400',
     bar:    'bg-cyan-400',
+    rail:   'bg-orbit-cyan',
     hex:    '#22d3ee',
     section:'border-l-2 border-cyan-400/30 pl-3',
   },
@@ -59,6 +60,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-violet-400',
     icon:   'text-violet-400',
     bar:    'bg-violet-400',
+    rail:   'bg-orbit-accent',
     hex:    '#a78bfa',
     section:'border-l-2 border-violet-400/30 pl-3',
   },
@@ -71,6 +73,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-amber-400',
     icon:   'text-amber-400',
     bar:    'bg-amber-400',
+    rail:   'bg-orbit-amber',
     hex:    '#fbbf24',
     section:'border-l-2 border-amber-400/30 pl-3',
   },
@@ -84,9 +87,9 @@ function SectionLabel({ children, accent, bar = true }: {
   bar?: boolean;
 }) {
   return (
-    <p className="flex items-center gap-2.5 text-slate-200 text-[12.5px] font-bold uppercase tracking-[0.07em] mb-2.5">
+    <p className="flex items-center gap-2.5 text-orbit-primary text-[12.5px] font-bold uppercase tracking-[0.07em] mb-2.5">
       {bar && accent && (
-        <span className={`inline-block w-[3px] h-3.5 rounded-sm shrink-0 ${accent.bar}`} aria-hidden="true" />
+        <span className={`inline-block w-[3px] h-3.5 rounded-sm shrink-0 ${accent.rail}`} aria-hidden="true" />
       )}
       {children}
     </p>

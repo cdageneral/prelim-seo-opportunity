@@ -1,5 +1,22 @@
 # OrbitIQ Changelog
 
+## v7.214 — 2026-06-16 · Audience Segments headlines — light-mode contrast fix
+
+**The ask (Wayne):** the v7.212 section headlines looked great in dark mode, but in light mode the headline text and the accent bar got lost on the white background.
+
+**Note on versioning:** v7.213 (the selected-card "caret bridge", below) shipped in parallel. This release lands on top of it — it carries the caret bridge **and** this light-mode fix together.
+
+**Root cause:** v7.212 used a fixed Tailwind color (`text-slate-200`) for the headline and fixed 400-level hues (`accent.bar` = `bg-cyan-400` / `bg-violet-400` / `bg-amber-400`) for the rail. Those are constant across themes — Tailwind `darkMode` isn't wired to the app's `[data-theme]` toggle; only the CSS-variable-backed `orbit-*` tokens adapt — so on the light theme's white card the light-gray text and pale rail washed out.
+
+**Fix (`components/brief/AudienceSegmentsSection.tsx`, styling only):**
+
+- **Headline text → adaptive token.** `text-slate-200` → `text-orbit-primary`: near-white (rgb 240 240 255) in dark, near-black (rgb 23 24 43) in light — readable on both card backgrounds.
+- **Accent rail → adaptive per-segment token.** Added a `rail` field to each `SEGMENT_ACCENTS` entry (`bg-orbit-cyan`, `bg-orbit-accent`, `bg-orbit-amber`); `SectionLabel` now uses `accent.rail` instead of `accent.bar`. These follow `[data-theme]`, resolving to the deliberately darkened light-theme values (cyan rgb 6 179 208, indigo rgb 9 0 156, amber rgb 206 132 8) that hold contrast on white, while staying vivid in dark. The original `bar` token is left untouched — still used by the v7.213 caret bridge.
+
+No data / taxonomy / scroll / progress logic touched — Const I–IV unaffected.
+
+**Verification (own debugging agent):** isolated `tsc` on the full component (caret bridge + this fix) = **0 errors**; jsdom harness on the real `SectionLabel` + `SEGMENT_ACCENTS` = **6/6** (headline uses `text-orbit-primary` not `text-slate-200`; rails resolve to `bg-orbit-cyan` / `bg-orbit-accent` / `bg-orbit-amber`; icon rows still render no rail with the adaptive title). Rendered side-by-side with the real light + dark token values before packaging.
+
 ## v7.213 — 2026-06-16 · Audience Segments — selected card flows into its detail panel
 
 **The ask (Wayne):** on the Audience panel, when you select a persona card the detail box below already updates — make the two visually connect so the selected card flows into the connected detail box beneath it. Chosen direction: Concept 1 (caret bridge), rendered and approved in chat before build.
