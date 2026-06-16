@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.211 — 2026-06-15 · Reconciliation — Journey = one node per cluster
+
+**The ask (Wayne):** finish option A — the Journey should show one node per cluster so "Topics in journey" reconciles to the cluster count (it read 617 while the Cluster panel had ~2514). Wayne chose one node per cluster (accepting a denser graph).
+
+**What changed:**
+
+- **Canonical topics → the Journey (`app/projects/[id]/page.tsx`).** The page now builds the canonical cluster topics once (via `buildCanonicalClusterTopics`, the same source the Cluster panel and Content plan use) and passes them to `JourneySection` as a new `canonicalTopics` prop. Done at the page level because `ThemeClustersPanel` imports `JourneySection`, so the Journey can't import the builder back — the page is the cycle-free seam. The page fetches the project keywords once for this.
+- **One node per cluster (`components/brief/JourneySection.tsx`).** New `nodesFromCanonical(topics)` adapter maps each canonical cluster to exactly one journey node (lane from product vs problem; stage → funnel column; state existing/competitor/missing from the cluster's own ranking + gap signals; volumes and keyword list carried through). When `canonicalTopics` are supplied they drive `preNodes`/`prodNodes`, so the "Topics in journey" count, the completeness roll-ups and the mind-map all reflect the cluster count. The empty-state gate now also recognises canonical topics.
+- **Performance guard.** The within-theme edge mesh is O(n²); above `MAX_EDGE_MESH_NODES` (300) the journey renders nodes with no mesh (the funnel columns still read left→right) rather than hang. Nodes themselves are never capped — every cluster shows.
+
+**Data integrity:** the Journey is now a view over the same canonical cluster list as the Cluster panel and Content plan (Const II.7) — one node per cluster, one cluster per node, no fork. Volumes are the clusters' real keyword volumes.
+
+**Verification (own debugging agent):** isolated `tsc` on `JourneySection` + `ThemeClustersPanel` + `ContentPlanSection` + `ContentMapSection` + `contentPlan` = **0 errors**. Adapter harness on the REAL `nodesFromCanonical` + edge guard = **11/11**: one node per cluster (count parity), correct lane split, existing/competitor/missing states, stage→column, keywords carried; **1200 clusters → 1200 nodes in <500 ms** (O(n), no hang) and the edge mesh is correctly skipped above the threshold. jsdom `renderToString` of the REAL `JourneySection` with `canonicalTopics` = **3/3**: renders, shows "Topics in journey", count reflects the canonical clusters.
+
+**Live-data caveat (please eyeball after deploy):** the anti-hang guards are verified, but the *visual density* of a mind-map with thousands of nodes can only be judged on your real project. If it's too dense to read, the natural next step is a per-theme collapse on the Journey (same pattern as the v7.207 cluster headers) — tell me and I'll add it.
+
+**Reconciliation complete:** Cluster panel, Content plan, Content map and Journey now all derive from the one canonical cluster list (1 cluster = 1 intent = 1 page = 1 journey node).
+
 ## v7.210 — 2026-06-15 · Reconciliation — Content plan = one page per cluster (Const III.5)
 
 **The ask (Wayne):** the cluster count (2514), Journey (617) and Content plan (323) didn't agree, but the Constitution says one cluster = one intent = one page (III.4/III.5). Root cause: three separate builders over two different sources — the Cluster panel builds from the keyword pool; the Journey and Content plan each build their own buckets from the demand universe. Wayne chose option A (refined clusters as the single source of truth) and confirmed: Content plan should list one page per cluster (total rises from 323 toward the cluster count), and the Journey should show one node per cluster.

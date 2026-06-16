@@ -10,7 +10,7 @@ import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
-import ThemeClustersPanel   from '@/components/brief/ThemeClustersPanel';
+import ThemeClustersPanel, { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
 import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
@@ -247,6 +247,29 @@ export default function ProjectBriefPage() {
       : analysis),
     [analysis, brandTerms, excludedBrands],
   );
+
+  // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
+  // the Journey, so "Topics in journey" reconciles to the cluster count (one node per
+  // cluster). Done here (not inside Journey) because ThemeClustersPanel imports Journey,
+  // so Journey can't import the builder back — the page is the cycle-free seam.
+  const [pageKeywords, setPageKeywords] = useState<any[]>([]);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then((r: Response) => (r.ok ? r.json() : { keywords: [] }))
+      .then((d: any) => { if (!cancelled) setPageKeywords(d.keywords ?? []); })
+      .catch(() => { if (!cancelled) setPageKeywords([]); });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+  const journeyCanonicalTopics = useMemo(() => {
+    if (!analysisForPanels) return [];
+    const clientDomain = ((analysisForPanels as any).semrushSnapshot?.domain as string) ?? '';
+    const compDomains = (project?.competitors ?? []).map((c: any) => c.domain);
+    try {
+      return buildCanonicalClusterTopics(analysisForPanels, clientDomain, compDomains, pageKeywords);
+    } catch { return []; }
+  }, [analysisForPanels, project, pageKeywords]);
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -1357,6 +1380,7 @@ export default function ProjectBriefPage() {
                 projectId={projectId}
                 analysis={analysisForPanels}
                 competitors={competitorDomains}
+                canonicalTopics={journeyCanonicalTopics}
               />
             </div>
           )}

@@ -65,6 +65,55 @@ interface Props {
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:    any;
   competitors: string[];
+  // v7.211: canonical cluster topics from the page (ThemeClustersPanel.buildCanonicalClusterTopics).
+  // When present, the journey shows ONE NODE PER CLUSTER so "Topics in journey" reconciles
+  // to the cluster count (Const II.7/III.4). Passed as a prop because JourneySection can't
+  // import ThemeClustersPanel (that module imports this one — would be a cycle).
+  canonicalTopics?: CanonicalJourneyTopic[];
+}
+
+// Structural shape of a ThemeClustersPanel `Topic` — kept local so there's no import.
+interface CanonicalJourneyTopic {
+  id:          string;
+  parentName:  string;
+  parentType:  'procedure' | 'brand' | 'location' | 'demand' | 'problem';
+  product:     string;
+  pageUrl?:    string;
+  stage:       JourneyStage;
+  totalVolume: number;
+  keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }>;
+}
+
+// v7.211: how dense an edge mesh we'll compute before skipping cross-node edges. The
+// within-theme edge builder is O(n²); at one-node-per-cluster scale (thousands) that
+// would hang the panel, so above this many nodes we render nodes without the mesh
+// (the funnel-column layout still reads left→right). Nodes themselves are uncapped.
+const MAX_EDGE_MESH_NODES = 300;
+
+// v7.211: adapt the canonical cluster topics into journey nodes — one node per cluster.
+function nodesFromCanonical(topics: CanonicalJourneyTopic[]): JourneyNode[] {
+  const out: JourneyNode[] = [];
+  for (const t of topics) {
+    const lane: JourneyType = t.parentType === 'problem' ? 'pre-product' : 'product';
+    const fp = t.keywords.filter(k => k.origin !== 'demand');
+    const clientRanked = fp.filter(k => !k.isGap && k.position !== null);
+    const gaps = t.keywords.filter(k => k.isGap);
+    const clientVol = clientRanked.reduce((s, k) => s + k.searchVolume, 0);
+    const compVol = gaps.reduce((s, k) => s + k.searchVolume, 0);
+    const state: NodeState = (clientRanked.length > 0 || !!t.pageUrl) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+    const sorted = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume);
+    const keywords: NodeKw[] = sorted.map(k => ({
+      keyword: k.keyword, volume: k.searchVolume, rank: k.position,
+      state: (k.isGap ? 'competitor' : (k.position !== null ? 'existing' : 'missing')) as NodeState,
+    }));
+    out.push({
+      id: t.id, name: t.product, lane, stage: t.stage,
+      col: JOURNEY_STAGE_ORDER.indexOf(t.stage), state,
+      totalVol: t.totalVolume, clientVol, compVol, kwCount: t.keywords.length,
+      sampleKws: sorted.slice(0, 8).map(k => k.keyword), keywords,
+    });
+  }
+  return out;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1945,7 +1994,7 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function JourneySection({ projectId, kwVersion, analysis, competitors }: Props) {
+export default function JourneySection({ projectId, kwVersion, analysis, competitors, canonicalTopics }: Props) {
   const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
@@ -2076,8 +2125,18 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     [demandMode, demandUniverse, footprint, activeBucketId, seedBucket, rankByKeyword],
   );
 
-  const preNodes  = demand ? demand.preNodes  : fpPreNodes;
-  const prodNodes = demand ? demand.prodNodes : fpProdNodes;
+  // v7.211: when the page supplies the canonical cluster topics, the journey shows ONE
+  // NODE PER CLUSTER (so "Topics in journey" === the cluster count). Falls back to the
+  // demand/footprint node models when no canonical topics are passed.
+  const canonicalNodes = useMemo(
+    () => (canonicalTopics && canonicalTopics.length) ? nodesFromCanonical(canonicalTopics) : null,
+    [canonicalTopics],
+  );
+  const canonPre  = useMemo(() => canonicalNodes ? canonicalNodes.filter((n) => n.lane === 'pre-product') : null, [canonicalNodes]);
+  const canonProd = useMemo(() => canonicalNodes ? canonicalNodes.filter((n) => n.lane === 'product') : null, [canonicalNodes]);
+
+  const preNodes  = canonPre  ?? (demand ? demand.preNodes  : fpPreNodes);
+  const prodNodes = canonProd ?? (demand ? demand.prodNodes : fpProdNodes);
 
   // v7.175: keyword → real ranking page (snapshot rows + persisted _pageMap) so
   // every journey node can resolve an existing page to optimise vs a net-new build.
@@ -2241,8 +2300,11 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
   // Demand mode: within-theme stage edges (no cross-theme hub). Footprint mode:
   // AI-inferred edges with the stage-order fallback (v7.152 behavior).
-  const preEdges  = demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : sharedThemeEdges(fpPreNodes));
-  const prodEdges = demand ? demand.prodEdges : (edges.product.length    ? edges.product    : sharedThemeEdges(fpProdNodes));
+  // v7.211: one-node-per-cluster edges are guarded — the within-theme mesh is O(n²), so
+  // above MAX_EDGE_MESH_NODES we render nodes with no mesh (the funnel columns still read
+  // left→right) rather than hang the panel. Nodes themselves are never capped.
+  const preEdges  = canonPre  ? (canonPre.length  <= MAX_EDGE_MESH_NODES ? withinThemeEdges(canonPre)  : []) : (demand ? demand.preEdges  : (edges.preProduct.length ? edges.preProduct : sharedThemeEdges(fpPreNodes)));
+  const prodEdges = canonProd ? (canonProd.length <= MAX_EDGE_MESH_NODES ? withinThemeEdges(canonProd) : []) : (demand ? demand.prodEdges : (edges.product.length    ? edges.product    : sharedThemeEdges(fpProdNodes)));
 
   // v7.170: in demand mode the personas + a "Shared / all personas" bucket are an
   // exclusive partition of the journey topics, so they sum to the combined total.
@@ -2290,7 +2352,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     ? (activeSegment.productPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.productPrompts ?? []);
 
-  const hasData = segments.length > 0 || clusters.length > 0 || demandMode;
+  const hasData = segments.length > 0 || clusters.length > 0 || demandMode || (canonicalTopics?.length ?? 0) > 0;   // v7.211: canonical clusters also populate the journey
 
   if (!hasData) {
     return (
