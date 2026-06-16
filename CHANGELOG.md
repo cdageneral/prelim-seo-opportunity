@@ -1,5 +1,15 @@
 # OrbitIQ Changelog
 
+## v7.217 — 2026-06-16 · Re-release of the v7.216 connector fix (deploy hygiene)
+
+**Why this exists:** v7.216 was built and verified correctly but never reached production — Vercel's newest deployment was still v7.215 (confirmed in the Vercel dashboard: latest production build = v7.215, no v7.216 deployment ever appeared), so the v7.216 file changes weren't in the committed/pushed code. A prior version's zip is never overwritten (Const VI.3), so this re-release bumps the version to v7.217 to produce a clean new deployment row.
+
+**Code:** identical to v7.216 — the one continuous SVG neck connector (rounded corners, rounded mouth, hollow opening, drawn from measured rects) and the share-of-volume moved to the far right of the detail card. No component logic changed from v7.216; only `package.json` version + this changelog entry.
+
+**Deploy note (for upload):** copy the **contents** of the `orbitiq-v7.217/` folder into the repo root (replacing files) — do not commit the `orbitiq-v7.217/` folder nested inside the repo. Before committing in GitHub Desktop, confirm `components/brief/AudienceSegmentsSection.tsx` shows as changed; that's the file that drives the UI. After push, a v7.217 row should appear in Vercel.
+
+**Verification:** isolated `tsc` = 0 errors; jsdom/SSR + geometry harness = 15/15 (re-run on the unchanged component); dual-theme render regenerated.
+
 ## v7.216 — 2026-06-16 · Audience Segments — neck connector redrawn as one continuous outline + share % moved
 
 **The ask (Wayne):** the v7.215 connector didn't match the approved mockup — there were hairlines crossing the mouth, the facing corners were squared, and the mouth corners were sharp. It should be one continuous shape: rounded outer corners, a rounded (filleted) mouth, and a truly hollow opening. Also move the detail card's share-of-volume to the far right. Corrected version rendered and approved in chat before build.
