@@ -1722,8 +1722,9 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
           const title = rawTitle.length > 16 ? rawTitle.slice(0, 15) + '…' : rawTitle;
           return (
             <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
-              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={(e) => { e.stopPropagation(); onSelect(n); }}>
-              <title>{rawTitle}</title>
+              onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))}
+              onClick={(e) => { e.stopPropagation(); if (n.id === selectedId) onClear(); else onSelect(n); }}>
+              <title>{n.id === selectedId ? 'Click to close · ' + rawTitle : rawTitle}</title>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
                 <rect width={NODE_W} height={NODE_H} rx={8} style={{ fill: 'var(--c-0d0d22)' }} stroke={col} strokeWidth={sel ? 2.3 : 1.4} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
@@ -1983,7 +1984,7 @@ function GraphDetail({ node, graph, onClose, anchored }: { node: JGNode | null; 
           <span style={{ fontSize: 10, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 6, padding: '4px 9px', whiteSpace: 'nowrap' }}>
             {node.action === 'optimize' ? 'Existing page' : (node.state === 'competitor' ? 'Competitor only' : 'Build net-new')}
           </span>
-          <button onClick={onClose} aria-label="Close detail" style={{ background: 'transparent', border: 'none', color: 'var(--c-5a5a80)', cursor: 'pointer', fontSize: 16, lineHeight: 1 }}><i className="ti ti-x" /></button>
+          <button onClick={onClose} aria-label="Close detail" title="Close (Esc)" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, flexShrink: 0, background: 'var(--ca-120-120-160-0_05)', border: '1px solid var(--c-1f1f3a)', borderRadius: 6, color: 'var(--c-8080a0)', cursor: 'pointer', fontSize: 15, lineHeight: 1 }}><i className="ti ti-x" /></button>
         </div>
       </div>
 

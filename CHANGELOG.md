@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.219 — 2026-06-16 · Topic Journeys — easier deselect after clicking a cluster
+
+**The ask (Wayne):** after clicking a journey cluster there was no obvious way to deselect — the only exits were the small ×, the Esc key, or clicking empty canvas.
+
+**Fix (`components/brief/JourneySection.tsx`, presentation only):**
+
+- **Click the selected box again to close it.** In `TopicJourneyMap` a box's click now toggles: clicking the box that's already open clears the selection (and the overlay) instead of re-opening it. The hover tooltip on the open box reads "Click to close · …" so the affordance is discoverable.
+- **Bigger, clearer close control.** The overlay's × is now a proper 26×26 bordered button with a faint surface fill and a "Close (Esc)" tooltip, instead of a bare 16px glyph — easy to see and tap.
+- Background-click-to-clear and Esc still work as before.
+
+No data, taxonomy, architecture, scroll, or progress logic touched (Const I–III, IV.1/2/4/5 unaffected). Close-button colors use defined tokens legible in both themes (Art. IV.6).
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors**; jsdom/SSR harness = **3/3**; journey-adapter harness = **11/11**; dual-theme contrast assertion = **PASS**. Dual-theme render regenerated (`orbitiq-v7.219-RENDER.html`).
+
 ## v7.218 — 2026-06-16 · Topic Journeys — real topic names in the boxes + click-anchored detail overlay
 
 **The ask (Wayne):** on the Topic Journeys panel the boxes just repeated the step facet ("What it is", "Why it matters", …) over and over — the column header already says that, so the box itself was empty of meaning. The boxes should carry the **actual topic name**. And clicking a box shouldn't make you scroll to the bottom of the page to read the detail — the detail should appear as an **overlay anchored directly under the box you clicked**. Both changes were rendered and approved in chat before build.
