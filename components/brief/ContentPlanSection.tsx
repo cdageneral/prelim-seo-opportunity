@@ -5,7 +5,7 @@ import {
   buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
-import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
+import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 
 // ─── palette (matches the app's orbit-* dark theme) ─────────────────────────────
 const COL = {
@@ -290,9 +290,9 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
 }
 
 // ─── Content Plan sub-nav section (default export) ───────────────────────────────
-interface Props { projectId: string; kwVersion?: number; analysis: any; competitors: string[]; }
+interface Props { projectId: string; kwVersion?: number; analysis: any; competitors: string[]; claudeAssigns?: Record<string, IntentType>; }   // v7.220: page-supplied intent map → reconciles topic count to the Cluster panel
 
-export default function ContentPlanSection({ projectId, kwVersion, analysis, competitors = [] }: Props) {
+export default function ContentPlanSection({ projectId, kwVersion, analysis, competitors = [], claudeAssigns = {} }: Props) {
   const [uploadedKeywords, setUploadedKeywords] = useState<any[]>([]);
   const [kwLoaded, setKwLoaded] = useState(false);
 
@@ -313,10 +313,10 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   // no clusters exist yet.
   const clientDomain = (analysis?.semrushSnapshot?.domain as string) ?? '';
   const plan = useMemo(() => {
-    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords);
+    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns);
     if (topics.length > 0) return buildContentPlanFromTopics(topics);
     return planFromSnapshot(analysis, uploadedKeywords);
-  }, [analysis, clientDomain, competitors, uploadedKeywords]);
+  }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>

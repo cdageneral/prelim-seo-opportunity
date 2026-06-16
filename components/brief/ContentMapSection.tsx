@@ -111,6 +111,10 @@ interface Props {
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:    any;
   competitors: string[];
+  // v7.220: page-supplied Claude intent map (single source of truth, Const II.7) — fed
+  // into buildCanonicalClusterTopics so the content-map topic count reconciles to the
+  // Cluster panel's. Must be the same map the Cluster panel uses, not the local one.
+  claudeAssigns?: Record<string, IntentType>;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1328,7 +1332,7 @@ function TopicGroupTable({ topics, order, selectedId, onSelect }: {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ContentMapSection({ projectId, kwVersion, analysis, competitors }: Props) {
+export default function ContentMapSection({ projectId, kwVersion, analysis, competitors, claudeAssigns = {} }: Props) {
   const [claudeAssignments,  setClaudeAssignments]  = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,   setUploadedKeywords]   = useState<any[]>([]);
   const [filterStage,   setFilterStage]   = useState<JourneyStage | 'all'>('all');
@@ -1492,10 +1496,10 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   // v7.210: build the plan from the canonical cluster topics (one page per cluster,
   // Const III.5) so Content panel + Content Plan reconcile to the cluster count.
   const plan = useMemo(() => {
-    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors ?? [], uploadedKeywords);
+    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors ?? [], uploadedKeywords, claudeAssigns);
     if (topics.length > 0) return buildContentPlanFromTopics(topics);
     return planFromSnapshot(analysis, uploadedKeywords);
-  }, [analysis, clientDomain, competitors, uploadedKeywords]);
+  }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
 
   const allGaps = useMemo(() => buildContentGaps(clusters, segments), [clusters, segments]);
 

@@ -10,7 +10,7 @@ import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
-import ThemeClustersPanel, { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';
+import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import RefreshModal         from '@/components/brief/RefreshModal';
 import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
@@ -262,14 +262,54 @@ export default function ProjectBriefPage() {
       .catch(() => { if (!cancelled) setPageKeywords([]); });
     return () => { cancelled = true; };
   }, [projectId, kwVersion]);
+  // v7.220: lift the Claude intent-assignment pass to the PAGE so it runs regardless of
+  // which tab is open and feeds every canonical view from one map (Const II.7). Before
+  // this, only the Cluster panel ran the pass; the Journey/Content canonical builds used
+  // an empty map and so under-counted (Journey showed 617 where the Cluster panel showed
+  // 2514). Cache-first under the same key the Cluster panel uses, so they never diverge.
+  const [pageClaudeAssigns, setPageClaudeAssigns] = useState<Record<string, IntentType>>({});
+  useEffect(() => {
+    if (!analysisForPanels) return;
+    const analysisId = (analysisForPanels as any)?.id ?? 'unknown';
+    const cacheKey   = `orbitiq-cluster-assigns-${analysisId}`;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) { setPageClaudeAssigns(JSON.parse(cached)); return; }
+    } catch { /* unavailable */ }
+    const snap         = (analysisForPanels as any).semrushSnapshot ?? {};
+    const clientDomain = (snap.domain as string) ?? '';
+    const industry     = (analysisForPanels as any)?._industry ?? 'General';
+    const pool: string[] = [];
+    const seen = new Set<string>();
+    for (const kw of [...(snap.topKeywords ?? []), ...(snap.gapKeywords ?? [])]) {
+      const k = kw?.keyword?.toLowerCase();
+      if (k && !seen.has(k) && !detectIntentSignal(kw.keyword)) { pool.push(kw.keyword); seen.add(k); }
+    }
+    if (pool.length === 0) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/clusters`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: pool, industry, domain: clientDomain }),
+    })
+      .then((r: Response) => (r.ok ? r.json() : null))
+      .then((d: any) => {
+        if (!d || cancelled) return;
+        const assigns: Record<string, IntentType> = d.assignments ?? {};
+        setPageClaudeAssigns(assigns);
+        try { localStorage.setItem(cacheKey, JSON.stringify(assigns)); } catch { /* silent */ }
+      })
+      .catch(() => { /* silent — empty map just means no AI-assisted intents */ });
+    return () => { cancelled = true; };
+  }, [analysisForPanels, projectId]);
+
   const journeyCanonicalTopics = useMemo(() => {
     if (!analysisForPanels) return [];
     const clientDomain = ((analysisForPanels as any).semrushSnapshot?.domain as string) ?? '';
     const compDomains = (project?.competitors ?? []).map((c: any) => c.domain);
     try {
-      return buildCanonicalClusterTopics(analysisForPanels, clientDomain, compDomains, pageKeywords);
+      return buildCanonicalClusterTopics(analysisForPanels, clientDomain, compDomains, pageKeywords, pageClaudeAssigns);
     } catch { return []; }
-  }, [analysisForPanels, project, pageKeywords]);
+  }, [analysisForPanels, project, pageKeywords, pageClaudeAssigns]);
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -1294,6 +1334,7 @@ export default function ProjectBriefPage() {
               competitors={competitorDomains}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
+              claudeAssigns={pageClaudeAssigns}
             />
           )}
 
@@ -1318,6 +1359,7 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               analysis={analysisForPanels}
               competitors={competitorDomains}
+              claudeAssigns={pageClaudeAssigns}
             />
           )}
 
@@ -1328,6 +1370,7 @@ export default function ProjectBriefPage() {
               projectId={projectId}
               analysis={analysisForPanels}
               competitors={competitorDomains}
+              claudeAssigns={pageClaudeAssigns}
             />
           )}
 

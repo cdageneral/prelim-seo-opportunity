@@ -6,7 +6,7 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-s
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
+export type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
 type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retention';
 
 export interface KwItem {
@@ -57,6 +57,11 @@ interface Props {
   competitors:              string[];
   defaultClientThreshold?:     number;
   defaultCompetitorThreshold?: number;
+  // v7.220: the page-level Claude intent-assignment map (single source of truth, Const
+  // II.7). When supplied (non-empty) the panel uses it instead of its own pass, so the
+  // Cluster panel, Journey and Content panels all build clusters from the SAME map and
+  // their topic counts reconcile. Falls back to the panel's own pass when absent.
+  claudeAssigns?:           Record<string, IntentType>;
 }
 
 // ─── Competitor colour palette ────────────────────────────────────────────────
@@ -98,7 +103,7 @@ const INFORMATIONAL_SIGNALS = [
   'overview', 'about ', 'definition', 'learn', 'understanding', 'causes', 'symptoms',
 ];
 
-function detectIntentSignal(keyword: string): IntentType | null {
+export function detectIntentSignal(keyword: string): IntentType | null {
   const kw = keyword.toLowerCase();
   for (const s of TRANSACTIONAL_SIGNALS) { if (kw.includes(s)) return 'transactional'; }
   for (const s of COMMERCIAL_SIGNALS)    { if (kw.includes(s)) return 'commercial';    }
@@ -1257,6 +1262,12 @@ export function buildCanonicalClusterTopics(
   clientDomain: string,
   competitorDomains: string[] = [],
   uploadedKeywords: any[] = [],
+  // v7.220: the Claude intent-assignment map — MUST be the same map the Cluster panel
+  // feeds buildThemeClusters, or the Journey/Content topic count diverges from the
+  // Cluster panel's. (v7.211 reconciliation only held when this was non-empty; this arg
+  // was previously hard-coded to {}, so every canonical view under-counted vs the panel.)
+  // The page lifts the map once and threads it here so all views reconcile (Const II.7).
+  claudeAssigns: Record<string, IntentType> = {},
   clientVolMin = 0,
   competitorVolMin = 0,
 ): Topic[] {
@@ -1264,7 +1275,7 @@ export function buildCanonicalClusterTopics(
     analysis, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin,
   );
   const base = buildThemeClusters(
-    analysis, {}, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin, jb.preProductKws,
+    analysis, claudeAssigns, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin, jb.preProductKws,
   );
   return flattenTopics([...base, ...jb.clusters]);
 }
@@ -2328,6 +2339,7 @@ function ClustersTab({
 export default function ThemeClustersPanel({
   projectId, kwVersion, analysis, competitors,
   defaultClientThreshold = 0, defaultCompetitorThreshold = 0,
+  claudeAssigns: propClaudeAssigns,   // v7.220: page-supplied map (single source of truth)
 }: Props) {
   const semSnap       = useMemo(() => analysis?.semrushSnapshot ?? {}, [analysis]);
   const clientDomain  = useMemo(() => (semSnap.domain as string) ?? '', [semSnap]);
@@ -2376,12 +2388,20 @@ export default function ThemeClustersPanel({
 
   // Product-lane clusters — built EXCLUDING the pre-product keywords so a keyword is
   // never counted in both lanes (Art I.3, no double counting).
+  // v7.220: prefer the page-supplied map (single source of truth) when present, so this
+  // panel builds from the SAME intent assignments the Journey/Content canonical builds
+  // use — making "Total clusters" reconcile to "Topics in journey". Falls back to the
+  // panel's own pass (propClaudeAssigns absent/empty) so the panel still works standalone.
+  const effectiveAssigns = useMemo(
+    () => (propClaudeAssigns && Object.keys(propClaudeAssigns).length > 0) ? propClaudeAssigns : claudeAssigns,
+    [propClaudeAssigns, claudeAssigns],
+  );
   const baseClusters = useMemo(
     () => buildThemeClusters(
-      effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords ?? [],
+      effectiveAnalysis, effectiveAssigns, clientDomain, competitors, uploadedKeywords ?? [],
       defaultClientThreshold, defaultCompetitorThreshold, journeyBuild.preProductKws,
     ),
-    [effectiveAnalysis, claudeAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold, journeyBuild],
+    [effectiveAnalysis, effectiveAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold, journeyBuild],
   );
 
   // Full tagged cluster list (product lane + pre-product problem themes). The journey

@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.220 — 2026-06-16 · Journey & Content topic counts reconcile to the Cluster panel (one intent map, Const II.7)
+
+**The ask (Wayne):** the Journeys panel showed **617** "Topics in journey" while the Cluster panel showed **2,514** total clusters. Journeys (and the Content panels) should be in sync with the clusters — every cluster is one journey topic.
+
+**Root cause:** the Cluster panel builds clusters with its live Claude intent-assignment map (`claudeAssigns`), but `buildCanonicalClusterTopics` — the shared builder the Journey and both Content panels read — passed a hard-coded `{}` for that map. With the map, no-signal keywords split into their real per-intent topics; without it they collapsed into one. So the canonical views under-counted (617) versus the Cluster panel (2,514), breaking the single-source-of-truth rule (Const II.7).
+
+**Fix:**
+
+- `buildCanonicalClusterTopics` now accepts a `claudeAssigns` argument and threads it into `buildThemeClusters` (was hard-coded `{}`).
+- The Claude intent pass is lifted to the page (`app/projects/[id]/page.tsx`) so the map is computed once, cached under the same key the Cluster panel uses, and runs regardless of which tab is open.
+- That one map is passed into the Journey canonical build and as a `claudeAssigns` prop to `ThemeClustersPanel`, `ContentMapSection`, and `ContentPlanSection`, so all four panels build from identical inputs and their topic counts reconcile.
+- `detectIntentSignal` / `IntentType` exported from `ThemeClustersPanel` for the page-level pass.
+
+No data sourcing, taxonomy, scroll, progress, or styling changed (Const I, III, IV.1/2/4/5/6 unaffected) — this only unifies which intent map the existing builder uses.
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors** on changed components; `page.tsx` = no new errors (only pre-existing `next/*` env gaps in the isolated build); reconciliation harness = **PASS** (canonical builder: 1 topic with `{}` → 3 with the map, deterministic); JourneySection SSR = **3/3**; dual-theme render regenerated (`orbitiq-v7.220-RENDER.html`).
+
+**Note:** the live counts (617 / 2,514) come from Wayne's project database, which isn't in the build workspace — the fix is verified *structurally* (the canonical builder now uses the same intent map the Cluster panel does). The exact on-screen number should be confirmed in the running app after upload.
+
 ## v7.219 — 2026-06-16 · Topic Journeys — easier deselect after clicking a cluster
 
 **The ask (Wayne):** after clicking a journey cluster there was no obvious way to deselect — the only exits were the small ×, the Esc key, or clicking empty canvas.
