@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.213 — 2026-06-16 · Audience Segments — selected card flows into its detail panel
+
+**The ask (Wayne):** on the Audience panel, when you select a persona card the detail box below already updates — make the two visually connect so the selected card flows into the connected detail box beneath it. Chosen direction: Concept 1 (caret bridge), rendered and approved in chat before build.
+
+**What changed (`components/brief/AudienceSegmentsSection.tsx`, presentation only):**
+
+- **Selected card docks downward.** The active card now squares its bottom corners at the `lg` breakpoint (`lg:rounded-b-none`) and drops a small segment-colored caret (rotated square, `accent.bar` → cyan / violet / amber) from its bottom-center, pointing into the detail panel below. The caret is `hidden lg:block` so it only appears when the three cards sit in a row; the stacked mobile layout is unchanged.
+- **Detail hero receives the connection.** The detail panel's hero header gains a 2px accent top border in the selected segment's color (`border-t-2`, `borderTopColor: accent.hex`) and squares its top corners at `lg` (`lg:rounded-t-none`), so the card above and the box below read as one continuous shape in the segment's accent.
+- **Stacking fix.** The cards grid gets `relative z-10` so the caret paints above the detail panel's top border rather than behind it.
+- **Palette addition.** Each `SEGMENT_ACCENTS` entry gains a `hex` value (cyan `#22d3ee`, violet `#a78bfa`, amber `#fbbf24`) used for the inline top-border color.
+
+No data, taxonomy, scroll, or progress logic touched — Constitution Articles I–IV unaffected. Verified: isolated `tsc` = 0 errors; jsdom/SSR harness on the real component = 9/9 (exactly one caret on the active card, accent top border `#22d3ee`, squared corners, stacking context, all three segments render).
+
 ## v7.212 — 2026-06-16 · Audience Segments — readable section headlines
 
 **The ask (Wayne):** style the card headlines in the Audience Segments view (Who They Are, Touchpoints by Journey Stage, Pre-Product LLM Prompts, etc.) — make them more readable and larger. Chosen direction: Option B (accent bar), on the main card titles only — not on the Trigger sub-label.

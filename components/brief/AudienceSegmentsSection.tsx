@@ -47,6 +47,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-cyan-400',
     icon:   'text-cyan-400',
     bar:    'bg-cyan-400',
+    hex:    '#22d3ee',
     section:'border-l-2 border-cyan-400/30 pl-3',
   },
   {
@@ -58,6 +59,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-violet-400',
     icon:   'text-violet-400',
     bar:    'bg-violet-400',
+    hex:    '#a78bfa',
     section:'border-l-2 border-violet-400/30 pl-3',
   },
   {
@@ -69,6 +71,7 @@ const SEGMENT_ACCENTS = [
     heading:'text-amber-400',
     icon:   'text-amber-400',
     bar:    'bg-amber-400',
+    hex:    '#fbbf24',
     section:'border-l-2 border-amber-400/30 pl-3',
   },
 ];
@@ -193,8 +196,8 @@ function SegmentDetail({ segment, accent, label }: {
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
 
-      {/* ── Hero header ── */}
-      <div className="orbit-card p-5">
+      {/* ── Hero header ── v7.213: accent top border connects it to the selected card above ── */}
+      <div className="orbit-card p-5 border-t-2 lg:rounded-t-none" style={{ borderTopColor: accent.hex }}>
         <div className="flex items-center gap-5">
 
           {/* v7.149: AI-generated persona portrait (Option A) — v7.151: enlarged, caption removed */}
@@ -391,7 +394,7 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
       ) : (
         <>
           {/* ── Clickable summary cards ── */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 relative z-10">
             {segments.map((seg, i) => {
               const acc   = SEGMENT_ACCENTS[i % SEGMENT_ACCENTS.length];
               const isAct = i === active;
@@ -399,13 +402,21 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                 <button
                   key={seg.id}
                   onClick={() => setActive(i)}
-                  className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer ${
+                  className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer relative ${
                     isAct
-                      ? 'ring-1 ring-inset ' + acc.tab.split(' ')[0].replace('border-', 'ring-')
+                      ? 'ring-1 ring-inset lg:rounded-b-none ' + acc.tab.split(' ')[0].replace('border-', 'ring-')
                       : 'opacity-70 hover:opacity-100'
                   }`}
                   style={isAct ? { borderTopWidth: '2px', borderTopColor: 'currentColor' } : {}}
                 >
+                  {/* v7.213: caret bridge — only at lg (cards in a row) — connects the active card down into the detail below */}
+                  {isAct && (
+                    <span
+                      aria-hidden="true"
+                      className={`hidden lg:block absolute left-1/2 -translate-x-1/2 -bottom-[6px] w-3 h-3 rotate-45 rounded-[2px] z-10 pointer-events-none ${acc.bar}`}
+                    />
+                  )}
+
                   {/* Card header — v7.149: AI-generated persona portrait (Option A) left */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
