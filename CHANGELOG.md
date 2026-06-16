@@ -1,5 +1,38 @@
 # OrbitIQ Changelog
 
+## v7.222 — 2026-06-16 · Build deep journey now refreshes the Keyword / Clusters / Content panels automatically (no manual reload)
+
+**The ask (Wayne):** after clicking **Build deep journey**, the Journeys panel updated live but the Keyword, Clusters, and Content panels only reflected the new demand after a page reload. Make them update in one step.
+
+**Why:** those panels read the demand universe from the analysis snapshot (`semrushSnapshot._demandUniverse`, via `buildKwPool(includeDemand)`), and the build persists it to the DB — but the page's `analysis` prop is only fetched at load, so it was stale until reload. Only the Journeys panel saw it live (it keeps the built universe in its own state + cache).
+
+**Fix:**
+
+- `JourneySection` gains an optional `onDeepJourneyBuilt` callback, fired on the build's `done` event (after the universe is persisted + cached).
+- The page (`app/projects/[id]/page.tsx`) passes a handler that refetches the project — which re-reads the analysis snapshot now carrying `_demandUniverse` — and bumps `kwVersion`. That flows the new demand into `analysisForPanels` and triggers the panels' `/keywords` refetch, so the Keyword landscape, Clusters, Content Map/Plan, and the canonical Journey count all update together (closing the footprint→deep-journey→backfill loop, Const II.4).
+
+No data sourcing or visual change — purely wiring an existing refresh to the build-complete event (every number is still a real roll-up; Const I). 
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors** on the brief components; `page.tsx` = no new errors (only pre-existing `next/*` env gaps); SSR render harness = **3/3** (panel renders unchanged with the new optional prop). Dual-theme render `orbitiq-v7.222-RENDER.html`.
+
+## v7.221 — 2026-06-16 · Journeys panel rebuilt from the canonical clusters (count + map now reconcile to the Cluster panel)
+
+**The ask (Wayne):** v7.220 didn't move the number — the Journeys panel still showed **617** "Topics in journey" vs the Cluster panel's **2,514**. The journey should equal the cluster count.
+
+**Root cause (the real one):** once a deep journey exists, the Journeys panel renders in *demand mode*, where "Topics in journey" = `graph.plan.total` from `buildTopicJourneyGraph` (`lib/journey/graph.ts`) — the count of **demand-universe journey step-nodes**, a different model from the canonical cluster topics. v7.211's "one node per cluster" reconciliation only applied in *footprint mode*; demand mode bypassed it entirely. So v7.220 (which rewired the canonical builder) never touched the number on screen.
+
+**Fix (`components/brief/JourneySection.tsx`):** when canonical cluster topics are present (always, after an analysis), the panel now renders a new `CanonicalJourneyView` instead of the demand-universe graph:
+
+- **Count reconciles.** "Topics in journey" = the canonical cluster topic count (= the Cluster panel's). Existing/optimize vs net-new/build is split per cluster (client-ranked or has a page → optimise; else build), with the pre/product breakdown.
+- **Map rebuilt as a scalable, collapsible category list.** A flat node map can't legibly show thousands of clusters (one funnel column would be ~130k px tall), so the journey map is now a collapsible parent-category list grouped into the two lanes (Product · solution-aware / Pre-product · problem-aware) — the same shape the Cluster panel uses to stay navigable at scale. Expand a category to see its topics with stage, volume, keyword count, and an Existing/Build badge.
+- The demand-universe `buildTopicJourneyGraph` view remains only as the legacy fallback when no canonical topics exist. The deep journey still backfills *into* the clusters this reads, so its demand is included — nothing is lost.
+
+Data sourcing unchanged (every number is a real roll-up of the cluster topics; Const I). Colors reuse existing journey tokens (lane accents, stage labels, state badges) legible in both themes (Const IV.6).
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors**; SSR harness = **7/7** — "Topics in journey" reconciles to the canonical topic count (7 = 7), the canonical branch is active (not demand/footprint), both lanes render, parent categories group correctly, optimize/build split shows. Dual-theme render `orbitiq-v7.221-RENDER.html`.
+
+**Note:** verified structurally on synthetic data (the journey now counts the same canonical topics the Cluster panel does). On your live project the "Topics in journey" figure should now equal the Cluster panel's 2,514 after you redeploy — no deep-journey rebuild needed.
+
 ## v7.220 — 2026-06-16 · Journey & Content topic counts reconcile to the Cluster panel (one intent map, Const II.7)
 
 **The ask (Wayne):** the Journeys panel showed **617** "Topics in journey" while the Cluster panel showed **2,514** total clusters. Journeys (and the Content panels) should be in sync with the clusters — every cluster is one journey topic.

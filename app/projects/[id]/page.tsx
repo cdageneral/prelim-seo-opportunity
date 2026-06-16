@@ -1424,6 +1424,7 @@ export default function ProjectBriefPage() {
                 analysis={analysisForPanels}
                 competitors={competitorDomains}
                 canonicalTopics={journeyCanonicalTopics}
+                onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}
               />
             </div>
           )}

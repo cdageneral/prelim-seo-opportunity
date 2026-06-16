@@ -70,6 +70,10 @@ interface Props {
   // to the cluster count (Const II.7/III.4). Passed as a prop because JourneySection can't
   // import ThemeClustersPanel (that module imports this one — would be a cycle).
   canonicalTopics?: CanonicalJourneyTopic[];
+  // v7.222: fired after a deep-journey build finishes + is persisted, so the page can
+  // refetch the analysis snapshot (now carrying _demandUniverse) and refresh the
+  // Keyword / Clusters / Content panels in one step — no manual reload (Const II.4 loop).
+  onDeepJourneyBuilt?: () => void;
 }
 
 // Structural shape of a ThemeClustersPanel `Topic` — kept local so there's no import.
@@ -1947,6 +1951,159 @@ function ContentPlanSummary({ graph }: { graph: JGraph }) {
   );
 }
 
+// v7.221: per-cluster state from a canonical topic (same rule as nodesFromCanonical):
+// client ranks OR an existing page → "existing" (optimise); else competitor gap →
+// "competitor"; else net-new "missing". Drives both the count and the row badges.
+function canonTopicState(t: CanonicalJourneyTopic): NodeState {
+  const fp = t.keywords.filter(k => k.origin !== 'demand');
+  const clientRanked = fp.filter(k => !k.isGap && k.position !== null);
+  const compVol = t.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
+  return (clientRanked.length > 0 || !!t.pageUrl) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+}
+
+const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
+  procedure: { label: 'Procedure',      color: 'var(--c-9b96ff)' },
+  brand:     { label: 'Brand',          color: 'var(--c-f59e0b)' },
+  location:  { label: 'Location',       color: 'var(--c-38bdf8)' },
+  demand:    { label: 'Missing demand', color: 'var(--c-22d3ee)' },
+  problem:   { label: 'Pre-product',    color: 'var(--c-34d399)' },
+};
+
+// v7.221: the canonical journey view — drives "Topics in journey" from the SAME
+// cluster topics the Cluster panel counts (Const II.7), so the journey reconciles to
+// the cluster count instead of the demand-universe graph. The map is a collapsible
+// parent-category list (the flat node map can't legibly show thousands of clusters),
+// grouped into the two journey lanes. Every number is a real roll-up of the topics.
+function CanonicalJourneyView({ topics }: { topics: CanonicalJourneyTopic[] }) {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  const rows = useMemo(() => topics.map(t => {
+    const lane: JourneyType = t.parentType === 'problem' ? 'pre-product' : 'product';
+    const state = canonTopicState(t);
+    return { t, lane, state, action: (state === 'existing' ? 'optimize' : 'build') as 'optimize' | 'build' };
+  }), [topics]);
+
+  const total     = rows.length;
+  const optimize  = rows.filter(r => r.action === 'optimize').length;
+  const build     = total - optimize;
+  const preBuild  = rows.filter(r => r.action === 'build' && r.lane === 'pre-product').length;
+  const prodBuild = build - preBuild;
+  const coverage  = total ? Math.round((optimize / total) * 100) : 0;
+
+  const groupsByLane = useMemo(() => {
+    const m = new Map<JourneyType, Map<string, typeof rows>>();
+    for (const r of rows) {
+      const lm = m.get(r.lane) ?? m.set(r.lane, new Map()).get(r.lane)!;
+      const key = r.t.parentName || '(uncategorized)';
+      (lm.get(key) ?? lm.set(key, []).get(key)!).push(r);
+    }
+    return m;
+  }, [rows]);
+
+  const lanes: Array<{ lane: JourneyType; label: string; accent: string }> = [
+    { lane: 'product',     label: 'Product · solution-aware',     accent: 'var(--c-a78bfa)' },
+    { lane: 'pre-product', label: 'Pre-product · problem-aware',  accent: 'var(--c-22d3ee)' },
+  ];
+
+  const cell = (label: string, val: number | string, color: string, sub?: string) => (
+    <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+      <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 0' }}>{val.toLocaleString?.() ?? val}</div>
+      {sub && <div style={{ fontSize: 10, color: 'var(--c-5a5a80)', marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      {/* content-plan summary — reconciles to the cluster count */}
+      <div style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)' }}>Content plan — every topic mapped</span>
+          <span style={{ fontSize: 10.5, color: 'var(--c-5a7a80)' }}><i className="ti ti-arrow-right" style={{ margin: '0 4px' }} />feeds the Content panel · in sync with the Cluster panel</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+          {cell('Topics in journey', total, 'var(--c-c8c8e8)')}
+          {cell('Existing — optimize', optimize, STATE_COLOR.existing)}
+          {cell('Net-new — build', build, STATE_COLOR.missing, `${preBuild} pre · ${prodBuild} product`)}
+          <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+            <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>Coverage</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-c8c8e8)', margin: '2px 0 6px' }}>{coverage}%</div>
+            <div style={{ height: 5, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${coverage}%`, background: STATE_COLOR.existing }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* grouped, collapsible topic list — one journey per cluster, by category */}
+      <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--ca-167-139-250-0_1)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <i className="ti ti-sitemap" style={{ color: 'var(--c-a78bfa)', fontSize: 14 }} />
+          </div>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>Topic Journeys — every cluster</span>
+            <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 1 }}>
+              Every cluster is a journey topic, grouped by category across the two lanes. Expand a category to see its topics. Volumes are real Semrush roll-ups.
+            </p>
+          </div>
+        </div>
+
+        {lanes.map(L => {
+          const lm = groupsByLane.get(L.lane);
+          if (!lm || lm.size === 0) return null;
+          const parents = Array.from(lm.entries()).sort((a, b) =>
+            b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0));
+          const laneCount = Array.from(lm.values()).reduce((s, rs) => s + rs.length, 0);
+          return (
+            <div key={L.lane} style={{ marginTop: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 8px', borderBottom: `1px solid var(--c-1a1a30)` }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: L.accent }} />
+                <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: L.accent }}>{L.label}</span>
+                <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{laneCount.toLocaleString()} topics · {lm.size} categories</span>
+              </div>
+              {parents.map(([name, rs]) => {
+                const key = L.lane + '::' + name;
+                const open = expanded.has(key);
+                const vol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
+                const badge = CANON_TYPE_BADGE[rs[0].t.parentType] ?? CANON_TYPE_BADGE.procedure;
+                return (
+                  <div key={key} style={{ borderBottom: '1px solid var(--c-141428)' }}>
+                    <button
+                      onClick={() => toggle(key)}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 4px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--c-6a6a90)', width: 14, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                      <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, color: badge.color, border: `1px solid ${badge.color}`, opacity: 0.85, flexShrink: 0 }}>{badge.label}</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>{rs.length.toLocaleString()} topics</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 70, textAlign: 'right', fontFamily: 'monospace' }}>{fmtVol(vol)}/mo</span>
+                    </button>
+                    {open && (
+                      <div style={{ paddingBottom: 6 }}>
+                        {rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume).map(r => (
+                          <div key={r.t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px 6px 26px' }}>
+                            <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: STAGE_COLORS[r.t.stage].text, minWidth: 86, flexShrink: 0 }}>{JOURNEY_STAGE_LABELS[r.t.stage]}</span>
+                            <span style={{ fontSize: 11.5, color: 'var(--c-c0c0dc)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.product}</span>
+                            <span style={{ fontSize: 10, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 54, textAlign: 'right' }}>{r.t.keywords.length} kw</span>
+                            <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', flexShrink: 0, minWidth: 66, textAlign: 'right', fontFamily: 'monospace' }}>{fmtVol(r.t.totalVolume)}/mo</span>
+                            <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 4, flexShrink: 0, minWidth: 70, textAlign: 'center', color: r.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing, background: r.action === 'optimize' ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-248-113-113-0_1)', border: `1px solid ${r.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing}` }}>{r.action === 'optimize' ? 'Existing' : 'Build new'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function GraphDetail({ node, graph, onClose, anchored }: { node: JGNode | null; graph: JGraph; onClose: () => void; anchored?: boolean }) {
   if (!node) {
     return (
@@ -2035,7 +2192,7 @@ function GraphDetail({ node, graph, onClose, anchored }: { node: JGNode | null; 
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function JourneySection({ projectId, kwVersion, analysis, competitors, canonicalTopics }: Props) {
+export default function JourneySection({ projectId, kwVersion, analysis, competitors, canonicalTopics, onDeepJourneyBuilt }: Props) {
   const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
@@ -2269,6 +2426,10 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             // v7.157: cache so it survives leaving/re-entering this panel in-session
             // (the parent's analysis prop isn't refetched until a full reload).
             try { window.localStorage.setItem(demandCacheKey(analysis), JSON.stringify(ev.demandUniverse)); } catch {}
+            // v7.222: the universe is now persisted on the analysis — tell the page to
+            // refetch so the Keyword / Clusters / Content panels pick it up immediately
+            // (they read _demandUniverse from the analysis snapshot, not this panel's state).
+            onDeepJourneyBuilt?.();
           }
         }
       }
@@ -2553,7 +2714,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
       <Legend />
 
-      {demand && graph ? (
+      {(canonicalTopics?.length ?? 0) > 0 ? (
+        /* v7.221: canonical clusters are the single source of truth (Const II.7) — the
+           journey count + the (collapsible, category-grouped) map come straight from the
+           cluster topics, so "Topics in journey" reconciles to the Cluster panel count.
+           The demand-universe graph below is only the legacy fallback when no canonical
+           topics exist (the deep journey still backfills INTO the clusters this reads). */
+        <CanonicalJourneyView topics={canonicalTopics as CanonicalJourneyTopic[]} />
+      ) : demand && graph ? (
         /* v7.175: ONE connected journey — problem topics link by co-search, bridge
            to the product that solves them, and fan into supporting decision topics. */
         <>
