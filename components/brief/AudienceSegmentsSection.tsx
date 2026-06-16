@@ -81,6 +81,22 @@ const SEGMENT_ACCENTS = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+// v7.215: horizontal centre of the active summary card, in the detail card's own
+// coordinate space. The summary grid is `lg:grid-cols-3` with a 12px gap (`gap-3`),
+// so column centres are derived from a 3-up track. Used to align the connecting
+// "neck" (the opening that fuses the active card into the detail below) under
+// whichever column is active. Pure CSS calc — no runtime measurement, so it renders
+// identically in SSR and in the browser.
+function colCenterLeft(col: number): string {
+  if (col <= 0) return 'calc((100% - 24px) / 6)';          // column 0 centre
+  if (col === 1) return '50%';                              // column 1 centre
+  return 'calc((100% - 24px) * 0.833333 + 24px)';          // column 2 centre
+}
+
+// Mouth width = 60% of one summary column, expressed in the detail card's own width
+// so the detail-side opening matches the active card's opening exactly (in px).
+const NECK_MOUTH_W = 'calc((100% - 24px) / 5)';            // 0.6 * (100% - 24px) / 3
+
 function SectionLabel({ children, accent, bar = true }: {
   children: React.ReactNode;
   accent?: typeof SEGMENT_ACCENTS[0];
@@ -191,61 +207,67 @@ function EmptyState() {
 
 // ── Segment detail panel ──────────────────────────────────────────────────────
 
-function SegmentDetail({ segment, accent, label }: {
+function SegmentDetail({ segment, accent, label, activeCol, showNeck }: {
   segment: AudienceSegment;
   accent: typeof SEGMENT_ACCENTS[0];
   label: string;
+  activeCol: number;
+  showNeck: boolean;
 }) {
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
 
-      {/* ── Hero header ── v7.213: accent top border connects it to the selected card above ── */}
-      <div className="orbit-card p-5 border-t-2 lg:rounded-t-none" style={{ borderTopColor: accent.hex }}>
-        <div className="flex items-center gap-5">
+      {/* ── Merged profile + triggers card ── v7.215: the bottom of the active
+           summary card opens into a neck that fuses into this card so the two read
+           as one continuous outline. Two columns: portrait + quote on the left,
+           trigger + influencer stacked on the right. The "Who they are" demographics
+           now live (in primary/white) on the active summary card above, so they are
+           no longer repeated here. ── */}
+      <div
+        className="orbit-card p-5 lg:rounded-t-none relative"
+        style={{ border: `2px solid ${accent.hex}` }}
+      >
+        {/* neck mouth — paints over this card's top border directly beneath the
+            active summary column, so the opening reads through as one shape (lg only) */}
+        {showNeck && (
+          <span
+            aria-hidden="true"
+            className="hidden lg:block absolute -top-[1px] h-[4px] -translate-x-1/2 z-20 pointer-events-none"
+            style={{ left: colCenterLeft(activeCol), width: NECK_MOUTH_W, background: 'var(--card)' }}
+          />
+        )}
 
-          {/* v7.149: AI-generated persona portrait (Option A) — v7.151: enlarged, caption removed */}
-          <PersonaAvatar segment={segment} accent={accent} size={104} />
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 lg:gap-7">
 
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-3">
-                <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
-                  {label}
+          {/* LEFT — portrait + quote */}
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
+                {label}
+              </span>
+              {segment.yoyGrowth && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
+                  {segment.yoyGrowth}
                 </span>
-                {segment.yoyGrowth && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
-                    {segment.yoyGrowth}
-                  </span>
-                )}
-              </div>
-              <div className="text-right">
-                <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
-                <p className={`text-xl font-bold ${accent.heading}`}>{segment.volumePct}%</p>
-              </div>
+              )}
+              <span className="ml-auto text-right">
+                <span className="block text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</span>
+                <span className={`block text-xl font-bold leading-none mt-0.5 ${accent.heading}`}>{segment.volumePct}%</span>
+              </span>
             </div>
 
-            <div className="mt-3">
+            <div className="flex items-center gap-4">
+              <PersonaAvatar segment={segment} accent={accent} size={96} />
               <h2 className={`text-lg font-bold ${accent.heading}`}>{segment.name}</h2>
-              <p className="text-orbit-secondary text-sm mt-1 italic leading-relaxed">
-                &ldquo;{segment.tagline}&rdquo;
-              </p>
             </div>
+
+            <p className="text-orbit-secondary text-sm italic leading-relaxed">
+              &ldquo;{segment.tagline}&rdquo;
+            </p>
           </div>
-        </div>
-      </div>
 
-      {/* ── Two-column layout ── */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-
-        {/* LEFT COLUMN */}
-        <div className="flex flex-col gap-5">
-
-          {/* Who They Are */}
-          <div className="orbit-card p-5 flex flex-col gap-4">
-            <div>
-              <SectionLabel accent={accent}>Who They Are</SectionLabel>
-              <p className="text-orbit-primary text-xs leading-relaxed">{segment.whoTheyAre.demographics}</p>
-            </div>
+          {/* RIGHT — trigger + influencer, stacked */}
+          <div className="flex flex-col gap-4 justify-center">
             <div className={accent.section}>
               <p className="text-orbit-tertiary text-[10px] font-medium mb-1 uppercase tracking-widest">Trigger</p>
               <p className="text-orbit-secondary text-xs leading-relaxed">{segment.whoTheyAre.trigger}</p>
@@ -257,6 +279,15 @@ function SegmentDetail({ segment, accent, label }: {
               </div>
             )}
           </div>
+
+        </div>
+      </div>
+
+      {/* ── Two-column layout ── */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+
+        {/* LEFT COLUMN */}
+        <div className="flex flex-col gap-5">
 
           {/* Touchpoints */}
           <div className="orbit-card p-5">
@@ -366,6 +397,13 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
   const imagedCount = segments.filter(s => !!s.personaImageUrl).length;
   const showImageDiag = !!imageStatus && imagedCount < segments.length;
 
+  // v7.215: neck-connector geometry. The summary grid is lg:grid-cols-3; the neck
+  // that fuses the active card into the detail below is only drawn when the active
+  // card is in the last grid row (so it sits directly above the full-width detail).
+  const activeCol = active % 3;
+  const rows = Math.ceil(Math.max(segments.length, 1) / 3);
+  const showNeck = Math.floor(active / 3) === rows - 1;
+
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
@@ -406,18 +444,35 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                   key={seg.id}
                   onClick={() => setActive(i)}
                   className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer relative ${
-                    isAct
-                      ? 'ring-1 ring-inset lg:rounded-b-none ' + acc.tab.split(' ')[0].replace('border-', 'ring-')
-                      : 'opacity-70 hover:opacity-100'
+                    isAct ? 'lg:rounded-b-none' : 'opacity-70 hover:opacity-100'
                   }`}
-                  style={isAct ? { borderTopWidth: '2px', borderTopColor: 'currentColor' } : {}}
+                  style={isAct ? { border: `2px solid ${acc.hex}` } : {}}
                 >
-                  {/* v7.213: caret bridge — only at lg (cards in a row) — connects the active card down into the detail below */}
-                  {isAct && (
-                    <span
-                      aria-hidden="true"
-                      className={`hidden lg:block absolute left-1/2 -translate-x-1/2 -bottom-[6px] w-3 h-3 rotate-45 rounded-[2px] z-10 pointer-events-none ${acc.bar}`}
-                    />
+                  {/* v7.215: neck — the active card's bottom edge opens in the middle
+                      and two short walls drop into the detail card below, so the pair
+                      reads as one continuous outline. lg only (cards in a row), and
+                      only when the active card is in the last grid row (directly above
+                      the full-width detail). */}
+                  {isAct && showNeck && (
+                    <>
+                      {/* mouth: paint over the centre of this card's bottom border */}
+                      <span
+                        aria-hidden="true"
+                        className="hidden lg:block absolute left-[20%] right-[20%] -bottom-[1px] h-[4px] z-20 pointer-events-none"
+                        style={{ background: 'var(--card)' }}
+                      />
+                      {/* two throat walls dropping into the detail card */}
+                      <span
+                        aria-hidden="true"
+                        className="hidden lg:block absolute left-[20%] -bottom-[13px] w-[2px] h-[14px] z-20 -translate-x-[1px] pointer-events-none"
+                        style={{ background: acc.hex }}
+                      />
+                      <span
+                        aria-hidden="true"
+                        className="hidden lg:block absolute right-[20%] -bottom-[13px] w-[2px] h-[14px] z-20 translate-x-[1px] pointer-events-none"
+                        style={{ background: acc.hex }}
+                      />
+                    </>
                   )}
 
                   {/* Card header — v7.149: AI-generated persona portrait (Option A) left */}
@@ -441,8 +496,10 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                     </p>
                   </div>
 
-                  {/* Who they are — short summary */}
-                  <p className="text-orbit-secondary text-[11px] leading-relaxed line-clamp-3">
+                  {/* Who they are — moved up from the detail. Primary (reads white
+                      on dark, dark on light — legible in both themes) when active;
+                      muted + clamped when not. */}
+                  <p className={`text-[11px] leading-relaxed ${isAct ? 'text-orbit-primary' : 'text-orbit-secondary line-clamp-3'}`}>
                     {seg.whoTheyAre.demographics}
                   </p>
 
@@ -470,6 +527,8 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
             segment={segments[active]}
             accent={SEGMENT_ACCENTS[active % SEGMENT_ACCENTS.length]}
             label={segmentLabels[active]}
+            activeCol={activeCol}
+            showNeck={showNeck}
           />
         </>
       )}
