@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.216 — 2026-06-16 · Audience Segments — neck connector redrawn as one continuous outline + share % moved
+
+**The ask (Wayne):** the v7.215 connector didn't match the approved mockup — there were hairlines crossing the mouth, the facing corners were squared, and the mouth corners were sharp. It should be one continuous shape: rounded outer corners, a rounded (filleted) mouth, and a truly hollow opening. Also move the detail card's share-of-volume to the far right. Corrected version rendered and approved in chat before build.
+
+**Root cause of the v7.215 miss:** the connector was faked with CSS border-stubs + a `var(--card)` cover strip. The cover only spanned the inner 1px of the 2px border, so a hairline showed through the mouth; and `lg:rounded-b-none` / `lg:rounded-t-none` squared the facing corners. Border-stubs also can't round the mouth shoulders.
+
+**Fix (`components/brief/AudienceSegmentsSection.tsx`, presentation + layout only):**
+
+- **One measured SVG outline.** New exported `buildNeckPath(A, B, r, fr, mh)` returns a single closed path: the active card as a rounded rect whose bottom edge opens in the middle, rounded throat fillets, two walls across the gap, then the rounded detail card — the same geometry as the approved chat mockup. `neckParams(A, B)` clamps the corner radius, mouth fillet, and mouth half-width to the measured throat/column so the curve never self-overlaps. The component measures both card rects (`getBoundingClientRect`, via a `ResizeObserver` + resize listener, re-run on segment change) and renders the path with `fill: var(--card)` + a 2px segment-accent stroke. When connected, the active card and the detail card set their own background + border to transparent so the SVG provides the fill **and** the outline — no doubled lines, no hairline, fully rounded corners and mouth. The old border-stub spans and the `rounded-b/t-none` squaring are gone; corners stay rounded.
+- **Graceful fallback.** The neck draws only at `lg` when the active card is in the last grid row (directly above the full-width detail). On mobile / before measurement / SSR, the cards keep their own rounded 2px accent border and normal background — so the section is always correct without JS.
+- **Share-of-volume moved.** In the merged detail card it now sits in a full-width header row, pinned to the **far right**, with the segment label + YoY growth on the left. Below it, the two columns are unchanged (portrait + name + quote left; Trigger + Influencer/Gatekeeper right).
+
+No data, taxonomy, scroll, or progress logic touched — Constitution Articles I–III and IV.1/IV.2/IV.4/IV.5 unaffected.
+
+**Theme-parity note (Art. IV.6):** unchanged from v7.215 — the active "who they are" copy uses the adaptive `text-orbit-primary` token (legible on both themes); the segment accent (`#22d3ee` etc.) is the component's existing fixed accent hue, vivid on dark and fainter on the white light card. Both themes rendered before packaging (`orbitiq-v7.216-RENDER.html` measures and draws the real neck on open). Open item for Wayne still stands: darken the light-mode segment accent for stronger outline contrast, or keep the current hue.
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors**; jsdom/SSR + geometry harness = **15/15** — SSR content (active who-they-are primary token; inactive muted+clamped; no repeated "Who They Are"; Trigger + Influencer; quote; share-of-volume present; rounded accent-border fallback on both cards; neck wrapper mounts), **plus** unit tests of the new geometry (closed path; 12 rounded joins = 8 outer corners + 4 mouth fillets; `neckParams` sane for a normal throat and clamped for a tight one; mouth opens symmetrically about the active-card centre). Rendered in both light and dark mode before packaging.
+
 ## v7.215 — 2026-06-16 · Audience Segments — selected card opens into the detail (neck connector) + restructured detail
 
 **The ask (Wayne):** replace the v7.213 caret bridge. The selected summary card should keep its rounded outline, but its bottom edge opens in the middle and a straight vertical neck drops down to fuse into the detail card below, so the two read as one continuous shape. On activation, move the "Who they are" copy up into the selected card (in white); restructure the detail's top card into two columns — portrait + quote on the left, Trigger + Influencer/Gatekeeper stacked on the right — and drop the now-duplicated "Who they are" from the detail. Mouth size iterated and approved in chat (render v6) before build.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -81,21 +81,42 @@ const SEGMENT_ACCENTS = [
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-// v7.215: horizontal centre of the active summary card, in the detail card's own
-// coordinate space. The summary grid is `lg:grid-cols-3` with a 12px gap (`gap-3`),
-// so column centres are derived from a 3-up track. Used to align the connecting
-// "neck" (the opening that fuses the active card into the detail below) under
-// whichever column is active. Pure CSS calc — no runtime measurement, so it renders
-// identically in SSR and in the browser.
-function colCenterLeft(col: number): string {
-  if (col <= 0) return 'calc((100% - 24px) / 6)';          // column 0 centre
-  if (col === 1) return '50%';                              // column 1 centre
-  return 'calc((100% - 24px) * 0.833333 + 24px)';          // column 2 centre
+export interface Rect { x: number; y: number; w: number; h: number; }
+
+// v7.216: the active→detail connector is ONE continuous outline — a rounded card
+// whose bottom edge opens in the middle, rounded throat fillets, two walls, then the
+// rounded detail card. Drawn as a single SVG path measured from the live card rects
+// so it matches the approved mockup exactly (rounded outer corners, rounded mouth,
+// hollow opening). Pure geometry — unit-tested in the harness. Replaces the v7.215
+// border-stub approach (which left a hairline across the mouth and squared corners).
+export function buildNeckPath(A: Rect, B: Rect, r: number, fr: number, mh: number): string {
+  const cx = A.x + A.w / 2, mL = cx - mh, mR = cx + mh;
+  const aL = A.x, aR = A.x + A.w, aT = A.y, aBot = A.y + A.h;
+  const bL = B.x, bR = B.x + B.w, bT = B.y, bBot = B.y + B.h;
+  return [
+    `M ${aL + r} ${aT}`, `L ${aR - r} ${aT}`, `Q ${aR} ${aT} ${aR} ${aT + r}`,
+    `L ${aR} ${aBot - r}`, `Q ${aR} ${aBot} ${aR - r} ${aBot}`,
+    `L ${mR + fr} ${aBot}`, `Q ${mR} ${aBot} ${mR} ${aBot + fr}`,
+    `L ${mR} ${bT - fr}`, `Q ${mR} ${bT} ${mR + fr} ${bT}`,
+    `L ${bR - r} ${bT}`, `Q ${bR} ${bT} ${bR} ${bT + r}`,
+    `L ${bR} ${bBot - r}`, `Q ${bR} ${bBot} ${bR - r} ${bBot}`,
+    `L ${bL + r} ${bBot}`, `Q ${bL} ${bBot} ${bL} ${bBot - r}`,
+    `L ${bL} ${bT + r}`, `Q ${bL} ${bT} ${bL + r} ${bT}`,
+    `L ${mL - fr} ${bT}`, `Q ${mL} ${bT} ${mL} ${bT - fr}`,
+    `L ${mL} ${aBot + fr}`, `Q ${mL} ${aBot} ${mL - fr} ${aBot}`,
+    `L ${aL + r} ${aBot}`, `Q ${aL} ${aBot} ${aL} ${aBot - r}`,
+    `L ${aL} ${aT + r}`, `Q ${aL} ${aT} ${aL + r} ${aT}`, 'Z',
+  ].join(' ');
 }
 
-// Mouth width = 60% of one summary column, expressed in the detail card's own width
-// so the detail-side opening matches the active card's opening exactly (in px).
-const NECK_MOUTH_W = 'calc((100% - 24px) / 5)';            // 0.6 * (100% - 24px) / 3
+// Clamp the corner radius, mouth fillet, and mouth half-width to the measured throat
+// and column so the curve never self-overlaps when space is tight.
+export function neckParams(A: Rect, B: Rect): { r: number; fr: number; mh: number } {
+  const throat = B.y - (A.y + A.h);
+  const mh = Math.max(24, Math.min(A.w * 0.28, A.w / 2 - 16));
+  const fr = Math.max(6, Math.min(14, throat / 2 - 1, mh - 4));
+  return { r: 14, fr, mh };
+}
 
 function SectionLabel({ children, accent, bar = true }: {
   children: React.ReactNode;
@@ -207,55 +228,52 @@ function EmptyState() {
 
 // ── Segment detail panel ──────────────────────────────────────────────────────
 
-function SegmentDetail({ segment, accent, label, activeCol, showNeck }: {
+function SegmentDetail({ segment, accent, label, connected, cardRef }: {
   segment: AudienceSegment;
   accent: typeof SEGMENT_ACCENTS[0];
   label: string;
-  activeCol: number;
-  showNeck: boolean;
+  connected: boolean;
+  cardRef: React.Ref<HTMLDivElement>;
 }) {
   return (
     <div className="flex flex-col gap-5 animate-fade-in">
 
-      {/* ── Merged profile + triggers card ── v7.215: the bottom of the active
-           summary card opens into a neck that fuses into this card so the two read
-           as one continuous outline. Two columns: portrait + quote on the left,
-           trigger + influencer stacked on the right. The "Who they are" demographics
-           now live (in primary/white) on the active summary card above, so they are
-           no longer repeated here. ── */}
+      {/* ── Merged profile + triggers card ── v7.216: the active summary card's
+           opened bottom fuses into this card via one continuous SVG outline (drawn by
+           the parent). When connected, this card's own bg + border go transparent so
+           the SVG provides the fill + outline; otherwise (mobile / SSR) it keeps its
+           own rounded accent border. Header row carries the label + growth on the
+           left and the share-of-volume on the far right; below, two columns: portrait
+           + quote on the left, trigger + influencer on the right. ── */}
       <div
-        className="orbit-card p-5 lg:rounded-t-none relative"
-        style={{ border: `2px solid ${accent.hex}` }}
+        ref={cardRef}
+        className="orbit-card p-5 relative z-10 lg:mt-8"
+        style={connected
+          ? { background: 'transparent', border: '2px solid transparent' }
+          : { border: `2px solid ${accent.hex}` }}
       >
-        {/* neck mouth — paints over this card's top border directly beneath the
-            active summary column, so the opening reads through as one shape (lg only) */}
-        {showNeck && (
-          <span
-            aria-hidden="true"
-            className="hidden lg:block absolute -top-[1px] h-[4px] -translate-x-1/2 z-20 pointer-events-none"
-            style={{ left: colCenterLeft(activeCol), width: NECK_MOUTH_W, background: 'var(--card)' }}
-          />
-        )}
+        {/* full-width header — share-of-volume pinned far right */}
+        <div className="flex items-start justify-between gap-4 mb-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
+              {label}
+            </span>
+            {segment.yoyGrowth && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
+                {segment.yoyGrowth}
+              </span>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</p>
+            <p className={`text-xl font-bold leading-none mt-0.5 ${accent.heading}`}>{segment.volumePct}%</p>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 lg:gap-7">
 
-          {/* LEFT — portrait + quote */}
+          {/* LEFT — portrait + name + quote */}
           <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold ${accent.badge}`}>
-                {label}
-              </span>
-              {segment.yoyGrowth && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
-                  {segment.yoyGrowth}
-                </span>
-              )}
-              <span className="ml-auto text-right">
-                <span className="block text-orbit-tertiary text-[10px] uppercase tracking-widest">Share of volume</span>
-                <span className={`block text-xl font-bold leading-none mt-0.5 ${accent.heading}`}>{segment.volumePct}%</span>
-              </span>
-            </div>
-
             <div className="flex items-center gap-4">
               <PersonaAvatar segment={segment} accent={accent} size={96} />
               <h2 className={`text-lg font-bold ${accent.heading}`}>{segment.name}</h2>
@@ -397,12 +415,41 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
   const imagedCount = segments.filter(s => !!s.personaImageUrl).length;
   const showImageDiag = !!imageStatus && imagedCount < segments.length;
 
-  // v7.215: neck-connector geometry. The summary grid is lg:grid-cols-3; the neck
-  // that fuses the active card into the detail below is only drawn when the active
-  // card is in the last grid row (so it sits directly above the full-width detail).
-  const activeCol = active % 3;
+  // v7.216: neck connector. Drawn only when the active card sits in the last grid
+  // row at lg (directly above the full-width detail). The outline is measured from
+  // the live card rects so it tracks any column / content height / viewport.
   const rows = Math.ceil(Math.max(segments.length, 1) / 3);
   const showNeck = Math.floor(active / 3) === rows - 1;
+  const activeAcc = SEGMENT_ACCENTS[active % SEGMENT_ACCENTS.length];
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const activeCardRef = useRef<HTMLButtonElement>(null);
+  const detailCardRef = useRef<HTMLDivElement>(null);
+  const [neck, setNeck] = useState<{ d: string; w: number; h: number } | null>(null);
+
+  const measureNeck = useCallback(() => {
+    const wrap = wrapRef.current, ac = activeCardRef.current, dc = detailCardRef.current;
+    const isLg = typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+    if (!wrap || !ac || !dc || !isLg || !showNeck) { setNeck(null); return; }
+    const w = wrap.getBoundingClientRect();
+    const a = ac.getBoundingClientRect();
+    const b = dc.getBoundingClientRect();
+    const A: Rect = { x: a.left - w.left, y: a.top - w.top, w: a.width, h: a.height };
+    const B: Rect = { x: b.left - w.left, y: b.top - w.top, w: b.width, h: b.height };
+    if (B.y <= A.y + A.h) { setNeck(null); return; }   // not stacked above → no neck
+    const { r, fr, mh } = neckParams(A, B);
+    setNeck({ d: buildNeckPath(A, B, r, fr, mh), w: w.width, h: w.height });
+  }, [showNeck, active]);
+
+  useEffect(() => {
+    let raf = 0;
+    const run = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(measureNeck); };
+    run();
+    window.addEventListener('resize', run);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(run) : null;
+    if (ro && wrapRef.current) ro.observe(wrapRef.current);
+    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', run); if (ro) ro.disconnect(); };
+  }, [measureNeck]);
 
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
@@ -433,7 +480,23 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
       {segments.length === 0 ? (
         <EmptyState />
       ) : (
-        <>
+        <div ref={wrapRef} className="relative flex flex-col gap-3">
+
+          {/* v7.216: one continuous outline fusing the active card into the detail —
+              rounded corners, rounded mouth, hollow opening. Measured from the live
+              rects; the connected cards go transparent so this provides fill+stroke. */}
+          {neck && (
+            <svg
+              aria-hidden="true"
+              className="absolute left-0 top-0 z-0 pointer-events-none"
+              style={{ overflow: 'visible' }}
+              width={neck.w}
+              height={neck.h}
+            >
+              <path d={neck.d} fill="var(--card)" stroke={activeAcc.hex} strokeWidth={2} />
+            </svg>
+          )}
+
           {/* ── Clickable summary cards ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 relative z-10">
             {segments.map((seg, i) => {
@@ -442,39 +505,15 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
               return (
                 <button
                   key={seg.id}
+                  ref={isAct ? activeCardRef : undefined}
                   onClick={() => setActive(i)}
                   className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer relative ${
-                    isAct ? 'lg:rounded-b-none' : 'opacity-70 hover:opacity-100'
+                    isAct ? '' : 'opacity-70 hover:opacity-100'
                   }`}
-                  style={isAct ? { border: `2px solid ${acc.hex}` } : {}}
+                  style={isAct
+                    ? (neck ? { background: 'transparent', border: '2px solid transparent' } : { border: `2px solid ${acc.hex}` })
+                    : {}}
                 >
-                  {/* v7.215: neck — the active card's bottom edge opens in the middle
-                      and two short walls drop into the detail card below, so the pair
-                      reads as one continuous outline. lg only (cards in a row), and
-                      only when the active card is in the last grid row (directly above
-                      the full-width detail). */}
-                  {isAct && showNeck && (
-                    <>
-                      {/* mouth: paint over the centre of this card's bottom border */}
-                      <span
-                        aria-hidden="true"
-                        className="hidden lg:block absolute left-[20%] right-[20%] -bottom-[1px] h-[4px] z-20 pointer-events-none"
-                        style={{ background: 'var(--card)' }}
-                      />
-                      {/* two throat walls dropping into the detail card */}
-                      <span
-                        aria-hidden="true"
-                        className="hidden lg:block absolute left-[20%] -bottom-[13px] w-[2px] h-[14px] z-20 -translate-x-[1px] pointer-events-none"
-                        style={{ background: acc.hex }}
-                      />
-                      <span
-                        aria-hidden="true"
-                        className="hidden lg:block absolute right-[20%] -bottom-[13px] w-[2px] h-[14px] z-20 translate-x-[1px] pointer-events-none"
-                        style={{ background: acc.hex }}
-                      />
-                    </>
-                  )}
-
                   {/* Card header — v7.149: AI-generated persona portrait (Option A) left */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -527,10 +566,10 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
             segment={segments[active]}
             accent={SEGMENT_ACCENTS[active % SEGMENT_ACCENTS.length]}
             label={segmentLabels[active]}
-            activeCol={activeCol}
-            showNeck={showNeck}
+            connected={!!neck}
+            cardRef={detailCardRef}
           />
-        </>
+        </div>
       )}
     </div>
   );
