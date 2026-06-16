@@ -1581,6 +1581,17 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
   selectedId: string | null;
 }) {
   const [hover, setHover] = useState<string | null>(null);
+  // v7.218: measure the rendered SVG width so the click-detail overlay can be
+  // absolutely positioned under the clicked node (the SVG scales to 100% width,
+  // so screen px = viewBox coord × wrapWidth/W). Harness-safe: no ResizeObserver.
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [wrapW, setWrapW] = useState(0);
+  useEffect(() => {
+    const measure = () => { if (wrapRef.current) setWrapW(wrapRef.current.clientWidth); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
   const LABEL_W = 168, NCOLS = STEP_ORDER.length, NODE_H = 50, ROW_GAP = 16, HEAD_H = 24, PAD = 12;
   const W = 900;
   const colW = (W - LABEL_W) / NCOLS;
@@ -1654,7 +1665,7 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
   });
 
   return (
-    <div>
+    <div ref={wrapRef} style={{ position: 'relative' }}>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', marginTop: 8 }} role="img"
         onClick={() => { if (focus) onClear(); }}
         aria-label="Per-topic journeys: each row is one topic broken into the steps a searcher moves through, left to right, with related topics linked where they share real demand.">
@@ -1704,15 +1715,20 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
           const scale = n.id === hover ? 1.06 : 1;
           const sel = n.id === selectedId;
           const dim = focus ? !focus.has(n.id) : (nb ? !nb.has(n.id) : false);
-          const stepLbl = n.step ? STEP_LABEL[n.step] : n.name;
+          // v7.218: the box now carries the real TOPIC NAME (not the repeated step
+          // facet — the column header already states the step). Read down a column to
+          // scan one topic across every stage. Truncated to fit; full label on hover.
+          const rawTitle = n.topicLabel ?? n.name;
+          const title = rawTitle.length > 16 ? rawTitle.slice(0, 15) + '…' : rawTitle;
           return (
             <g key={n.id} transform={`translate(${p.x} ${p.y}) scale(${scale})`} style={{ cursor: 'pointer', opacity: dim ? 0.16 : 1, transition: 'opacity 0.12s' }}
               onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h: string | null) => (h === n.id ? null : h))} onClick={(e) => { e.stopPropagation(); onSelect(n); }}>
+              <title>{rawTitle}</title>
               <g transform={`translate(${-NODE_W / 2} ${-NODE_H / 2})`}>
                 <rect width={NODE_W} height={NODE_H} rx={8} style={{ fill: 'var(--c-0d0d22)' }} stroke={col} strokeWidth={sel ? 2.3 : 1.4} />
                 <rect width={4} height={NODE_H} rx={2} fill={col} />
-                <text x={11} y={18} style={{ fill: 'var(--c-d8d8f0)' }} fontSize={10} fontWeight={600} fontFamily="inherit">{stepLbl}</text>
-                <text x={11} y={32} style={{ fill: 'var(--c-7a7aa0)' }} fontSize={8.5} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
+                <text x={11} y={18} style={{ fill: 'var(--c-d8d8f0)' }} fontSize={10} fontWeight={600} fontFamily="inherit">{title}</text>
+                <text x={11} y={32} style={{ fill: 'var(--c-8080a0)' }} fontSize={8.5} fontFamily="monospace">{fmtVol(n.totalVol)}/mo · {n.kwCount} kw</text>
                 <g transform={`translate(11 ${NODE_H - 14})`}>
                   <rect width={n.action === 'optimize' ? 50 : 54} height={11} rx={3} fill={`${col}22`} stroke={`${col}55`} strokeWidth={0.8} />
                   <text x={6} y={8.5} fill={col} fontSize={7.5} fontWeight={700} fontFamily="inherit">{n.action === 'optimize' ? 'Existing' : 'Build new'}</text>
@@ -1723,6 +1739,30 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
           );
         })}
       </svg>
+      {/* v7.218: click-detail OVERLAY anchored directly under the clicked box,
+          instead of a panel at the bottom of the page that forced a scroll. */}
+      {(() => {
+        if (!selectedId) return null;
+        const sel = byId.get(selectedId);
+        const p = sel ? pos[sel.id] : null;
+        const w = wrapW || (wrapRef.current?.clientWidth ?? 0);
+        if (!sel || !p || w <= 0) return null;
+        const scale = w / W;
+        const cardW = Math.min(380, w - 8);
+        const cx = p.x * scale;
+        const cyBottom = (p.y + NODE_H / 2) * scale;
+        let left = cx - cardW / 2;
+        left = Math.max(0, Math.min(left, w - cardW));
+        const caretLeft = Math.max(12, Math.min(cardW - 24, cx - left - 6));
+        const oc = STATE_COLOR[sel.state];
+        return (
+          <div style={{ position: 'absolute', top: cyBottom + 8, left, width: cardW, zIndex: 30, maxHeight: 440, overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}>
+            <div style={{ position: 'absolute', top: -6, left: caretLeft, width: 12, height: 12, background: 'var(--c-0d0d1e)', borderLeft: `1px solid ${oc}66`, borderTop: `1px solid ${oc}66`, transform: 'rotate(45deg)', zIndex: 1 }} />
+            <GraphDetail node={sel} graph={graph} onClose={onClear} anchored />
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1906,7 +1946,7 @@ function ContentPlanSummary({ graph }: { graph: JGraph }) {
   );
 }
 
-function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGraph; onClose: () => void }) {
+function GraphDetail({ node, graph, onClose, anchored }: { node: JGNode | null; graph: JGraph; onClose: () => void; anchored?: boolean }) {
   if (!node) {
     return (
       <div style={{ marginTop: 14, border: '1px solid var(--c-1a1a30)', borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16, fontSize: 12, color: 'var(--c-5a5a80)', textAlign: 'center' }}>
@@ -1931,7 +1971,7 @@ function GraphDetail({ node, graph, onClose }: { node: JGNode | null; graph: JGr
   const rankedPositions = node.keywords.map((k) => k.rank).filter((r): r is number => r != null);
   const bestRank = rankedPositions.length ? Math.min(...rankedPositions) : null;
   return (
-    <div style={{ marginTop: 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16 }}>
+    <div style={{ marginTop: anchored ? 0 : 14, border: `1px solid ${col}44`, borderRadius: 12, background: 'var(--c-0d0d1e)', padding: 16, boxShadow: anchored ? '0 12px 32px rgba(0,0,0,0.45)' : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)' }}>{(!node.step && node.kind === 'core') ? '★ ' : ''}{node.name}</div>
@@ -2006,11 +2046,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // v7.188: scroll the detail panel into view on select (it sits below the map, so a
   // click otherwise looked like nothing happened) + Esc clears the focused journey.
   const detailRef = useRef<HTMLDivElement | null>(null);
+  // v7.218: only the footprint-mode DetailPanel sits at the bottom and needs the
+  // scroll-into-view. The demand-mode TopicJourneyMap now shows its detail as an
+  // overlay anchored under the clicked box, so no scroll (and no jump) is wanted.
   useEffect(() => {
-    if (selected || selectedGraphNode) {
+    if (selected) {
       detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [selected, selectedGraphNode]);
+  }, [selected]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setSelected(null); setSelectedGraphNode(null); } };
     window.addEventListener('keydown', onKey);
@@ -2541,11 +2584,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             {productPrompts.length > 0 && <PromptStrip prompts={productPrompts} accent="var(--c-a78bfa)" />}
             <TopicJourneyMap graph={graph} onSelect={setSelectedGraphNode} onClear={() => setSelectedGraphNode(null)} selectedId={selectedGraphNode?.id ?? null} />
           </div>
-
-          <div ref={detailRef}>
-            {selectedGraphNode && <FocusBanner name={selectedGraphNode.name} onExit={() => setSelectedGraphNode(null)} />}
-            <GraphDetail node={selectedGraphNode} graph={graph} onClose={() => setSelectedGraphNode(null)} />
-          </div>
+          {/* v7.218: the per-topic detail now renders as an overlay anchored under
+              the clicked box inside TopicJourneyMap — no bottom panel / scroll here. */}
         </>
       ) : (
         /* Footprint mode (no demand universe yet) — the v7.161 two-lane view. */

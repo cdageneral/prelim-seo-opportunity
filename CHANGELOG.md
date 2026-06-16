@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.218 — 2026-06-16 · Topic Journeys — real topic names in the boxes + click-anchored detail overlay
+
+**The ask (Wayne):** on the Topic Journeys panel the boxes just repeated the step facet ("What it is", "Why it matters", …) over and over — the column header already says that, so the box itself was empty of meaning. The boxes should carry the **actual topic name**. And clicking a box shouldn't make you scroll to the bottom of the page to read the detail — the detail should appear as an **overlay anchored directly under the box you clicked**. Both changes were rendered and approved in chat before build.
+
+**Fix (`components/brief/JourneySection.tsx`, presentation only):**
+
+- **Box title = the topic name.** In `TopicJourneyMap`, each step box now renders `n.topicLabel` (the AI-/title-cased topic name) instead of `STEP_LABEL[n.step]`. Read down a column to scan one topic across every stage; the column header still names the stage, so nothing is lost. The title is truncated to fit the box with the full label on hover (`<title>`). No data sourcing changed — the label is the same real topic label already carried on the node (Const I.1/I.2 unaffected).
+- **Click detail is now an anchored overlay.** The per-topic `GraphDetail` (keywords, coverage, why-it-connects, page CTA) used to render in a panel at the bottom of the page, which forced a scroll and looked like nothing happened on click. It now renders as an absolutely-positioned popover **directly beneath the clicked box** inside the map (a `position:relative` wrapper measures the rendered SVG width so screen-px = viewBox-coord × width/W; the card is clamped to stay on-canvas, with a small caret). New optional `anchored` prop on `GraphDetail` drops the top margin and adds the popover shadow. The bottom panel + its `scrollIntoView` for the demand view were removed; the footprint-mode `DetailPanel` (and its scroll) are unchanged. Click outside or the card's × closes it; Esc still clears.
+- **Incidental theme-parity fix (Art. IV.6).** The box's volume/keyword sub-line referenced `var(--c-7a7aa0)`, a token that is **undefined in both themes** (no fallback → defaulted to black, near-invisible on the dark node surface). Since it sits in the box being restyled, it was swapped to the defined `var(--c-8080a0)` (legible on both themes).
+
+No data, taxonomy, architecture, scroll-container, or progress logic touched — Const Articles I–III and IV.1/IV.2/IV.4/IV.5 unaffected.
+
+**Theme-parity (Art. IV.6 / V.5):** every color in the touched boxes + overlay was resolved in **both** themes and contrast-checked against its surface (box title 13.7/17.5, vol-kw 5.0/8.2, overlay heading 14.3/17.5, body 6.3/8.2, accents all ≥2.0) — parity assertion **PASS**. Dual-theme render regenerated (`orbitiq-v7.218-RENDER.html`) showing the new box titles and the anchored overlay in dark + light.
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors**; jsdom/SSR harness = **3/3**; journey-adapter harness = **11/11**; theme-parity contrast assertion = **PASS** (both themes). Rendered in both light and dark before packaging.
+
 ## v7.217 — 2026-06-16 · Re-release of the v7.216 connector fix (deploy hygiene)
 
 **Why this exists:** v7.216 was built and verified correctly but never reached production — Vercel's newest deployment was still v7.215 (confirmed in the Vercel dashboard: latest production build = v7.215, no v7.216 deployment ever appeared), so the v7.216 file changes weren't in the committed/pushed code. A prior version's zip is never overwritten (Const VI.3), so this re-release bumps the version to v7.217 to produce a clean new deployment row.
