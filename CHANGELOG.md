@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.223 — 2026-06-16 · Journey categories: existing/net-new split + clearer type label; pre-product lane now populated from problem-aware demand
+
+**The ask (Wayne):** on the canonical Journeys view — (1) "Procedure" was unclear; (2) categories should show existing vs net-new without expanding; (3) the product-vs-pre-product segmentation was missing (the Pre-product lane showed ~1 topic).
+
+**Fix (`components/brief/JourneySection.tsx`, `CanonicalJourneyView`):**
+
+- **Clearer type label.** The category type badge `Procedure` is relabeled **"Product topic"** (Brand / Location / Missing demand / Pre-product unchanged). "Procedure" was cosmetic-vertical wording that read oddly for non-cosmetic clients.
+- **Existing/net-new per category (chosen layout, Option A).** Each category header now shows `N existing · M build` (green/red) alongside the type badge — so coverage reads at a glance without expanding. Existing = client ranks or has a page; build = net-new.
+- **Pre-product lane populated correctly (Const III.2a).** A topic is now treated as pre-product (problem-aware, awareness-only) when it is a `problem` cluster **or** a missing-demand cluster seeded by a deep-journey problem head term (`demandUniverse.problemSeeds`). Before, problem-aware demand was absorbed into the product lane, leaving the Pre-product journey nearly empty. The product journey stays solution-aware/full-funnel; the pre-product journey carries the problem/life-trigger demand. `problemSeeds` is read from the demand universe (panel state or the analysis snapshot) and passed into the view.
+
+No data sourcing changed — every count is a real roll-up of the cluster topics; the pre-product routing only re-lanes existing topics using the deep journey's own problem seeds (Const I, II.7).
+
+**Verification (own debugging agent):** isolated `tsc` = **0 errors**; SSR harness = **8/8** — type relabeled (old "Procedure" gone), per-category existing/build split present, problem-seed demand routed to the Pre-product lane, product-seed demand stays in the Product lane. Dual-theme render `orbitiq-v7.223-RENDER.html`.
+
 ## v7.222 — 2026-06-16 · Build deep journey now refreshes the Keyword / Clusters / Content panels automatically (no manual reload)
 
 **The ask (Wayne):** after clicking **Build deep journey**, the Journeys panel updated live but the Keyword, Clusters, and Content panels only reflected the new demand after a page reload. Make them update in one step.

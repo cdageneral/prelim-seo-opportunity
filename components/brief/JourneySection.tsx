@@ -1962,7 +1962,7 @@ function canonTopicState(t: CanonicalJourneyTopic): NodeState {
 }
 
 const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
-  procedure: { label: 'Procedure',      color: 'var(--c-9b96ff)' },
+  procedure: { label: 'Product topic',  color: 'var(--c-9b96ff)' },
   brand:     { label: 'Brand',          color: 'var(--c-f59e0b)' },
   location:  { label: 'Location',       color: 'var(--c-38bdf8)' },
   demand:    { label: 'Missing demand', color: 'var(--c-22d3ee)' },
@@ -1974,15 +1974,24 @@ const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
 // the cluster count instead of the demand-universe graph. The map is a collapsible
 // parent-category list (the flat node map can't legibly show thousands of clusters),
 // grouped into the two journey lanes. Every number is a real roll-up of the topics.
-function CanonicalJourneyView({ topics }: { topics: CanonicalJourneyTopic[] }) {
+function CanonicalJourneyView({ topics, problemSeeds = [] }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[] }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
+  // v7.223: a topic is PRE-PRODUCT (problem-aware, awareness-only — Const III.2a) when it
+  // is a 'problem' cluster OR a missing-demand cluster seeded by a problem head term from
+  // the deep journey (demandUniverse.problemSeeds). Without this, problem-aware demand was
+  // absorbed into the product lane, leaving the pre-product journey nearly empty.
+  const problemSet = useMemo(() => new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim())), [problemSeeds]);
+  const isPreProduct = (t: CanonicalJourneyTopic): boolean =>
+    t.parentType === 'problem' ||
+    (t.parentType === 'demand' && problemSet.has((t.parentName || '').toLowerCase().trim()));
+
   const rows = useMemo(() => topics.map(t => {
-    const lane: JourneyType = t.parentType === 'problem' ? 'pre-product' : 'product';
+    const lane: JourneyType = isPreProduct(t) ? 'pre-product' : 'product';
     const state = canonTopicState(t);
     return { t, lane, state, action: (state === 'existing' ? 'optimize' : 'build') as 'optimize' | 'build' };
-  }), [topics]);
+  }), [topics, problemSet]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const total     = rows.length;
   const optimize  = rows.filter(r => r.action === 'optimize').length;
@@ -2068,6 +2077,10 @@ function CanonicalJourneyView({ topics }: { topics: CanonicalJourneyTopic[] }) {
                 const open = expanded.has(key);
                 const vol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
                 const badge = CANON_TYPE_BADGE[rs[0].t.parentType] ?? CANON_TYPE_BADGE.procedure;
+                // v7.223: per-category existing-vs-net-new split (Option A) so coverage
+                // reads without expanding. existing = client ranks / has a page; build = net-new.
+                const catExisting = rs.filter(r => r.action === 'optimize').length;
+                const catBuild    = rs.length - catExisting;
                 return (
                   <div key={key} style={{ borderBottom: '1px solid var(--c-141428)' }}>
                     <button
@@ -2077,6 +2090,11 @@ function CanonicalJourneyView({ topics }: { topics: CanonicalJourneyTopic[] }) {
                       <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--c-6a6a90)', width: 14, flexShrink: 0 }} />
                       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                       <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, color: badge.color, border: `1px solid ${badge.color}`, opacity: 0.85, flexShrink: 0 }}>{badge.label}</span>
+                      <span style={{ fontSize: 10.5, flexShrink: 0, minWidth: 132, textAlign: 'right' }}>
+                        <span style={{ color: STATE_COLOR.existing }}>{catExisting.toLocaleString()} existing</span>
+                        <span style={{ color: 'var(--c-5a5a80)' }}> · </span>
+                        <span style={{ color: STATE_COLOR.missing }}>{catBuild.toLocaleString()} build</span>
+                      </span>
                       <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>{rs.length.toLocaleString()} topics</span>
                       <span style={{ fontSize: 10.5, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 70, textAlign: 'right', fontFamily: 'monospace' }}>{fmtVol(vol)}/mo</span>
                     </button>
@@ -2720,7 +2738,10 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
            cluster topics, so "Topics in journey" reconciles to the Cluster panel count.
            The demand-universe graph below is only the legacy fallback when no canonical
            topics exist (the deep journey still backfills INTO the clusters this reads). */
-        <CanonicalJourneyView topics={canonicalTopics as CanonicalJourneyTopic[]} />
+        <CanonicalJourneyView
+          topics={canonicalTopics as CanonicalJourneyTopic[]}
+          problemSeeds={(demandUniverse?.problemSeeds ?? (analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[]}
+        />
       ) : demand && graph ? (
         /* v7.175: ONE connected journey — problem topics link by co-search, bridge
            to the product that solves them, and fan into supporting decision topics. */
