@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.226 — 2026-06-17 · Centralized competitor-brand category guard (Const III.1a)
+
+**The ask (Wayne):** the Theme-Cluster panel and the Keyword panel showed different category lists, and the cluster panel looked "cleaner / more accurate." **Root cause:** both panels read the same `_categoryBreakdown`, but ThemeClustersPanel applied the competitor-brand category guard while KeywordsPanel applied **none** — a III.1a gap (same class as the v7.224 "Wells Fargo" leak in the Google-Rank panel). The categorization was identical; only the post-categorization guard diverged.
+
+**What changed:**
+- **New `lib/category/categoryGuard.ts`** — single source of truth for the competitor-brand category guard. `buildCategoryGuard(snap, clientDomain, competitorDomains)` exposes `isCompetitorBrandCategory(name, type)` and `droppedCategoryNames(categories)`, encoding the exact three drop conditions ThemeClustersPanel used (v7.196 brand-type that isn't the client; v7.201 auto-discovered/configured competitor brand carried in the name; v7.208 user blocklist). The client's own brand category is always kept.
+- **ThemeClustersPanel** now calls the shared guard instead of its inline token-set checks — **identical behavior (pure extraction).**
+- **KeywordsPanel** now applies the same guard: any keyword row mapped to a competitor-brand category is rerouted to **"Other"** (volume preserved, brand label removed) and no competitor-brand leaf is formed. The two panels' category lists now agree.
+
+**Data impact:** the Keyword panel's Category Breakdown no longer shows competitor / third-party brand categories; their (non-branded) keyword volume rolls into **"Other."** Client brand categories are unchanged. No change to ThemeClusters, Journey, or any total beyond removing brand-category labels the panel should never have shown.
+
+**Architecture:** first brick of the one-`CategoryModel` direction (see `OrbitIQ_Enrichment_Workflow_Spec.md`, Step 1) — the brand guard becomes shared infrastructure instead of per-panel code (Art. III.1a: the guard, not the synthesis output, is the enforcement layer). Constitution amended to **v0.6** (Art. II.8: category membership is established at discovery, never re-derived lexically at a read site).
+
+**Verification (own debugging agent):** isolated `tsc --noEmit` over the full project = **0 errors**. Behavioral harness against the **real compiled** guard = **9/9** (client brand kept; competitor brand-type, competitor-brand-in-name, and user-blocklisted dropped; generic procedure/location categories kept; `droppedCategoryNames` excludes the client brand). **No styling change → Art. IV.6/V.5 dual-theme parity not triggered.** Manifest: diff vs pristine v7.225 = only the two panels + `package.json` changed, `categoryGuard.ts` added; nothing else.
+
 ## v7.225 — 2026-06-17 · API usage & credit ledger (per-project + cross-project Dashboard)
 
 **The ask (Wayne):** "how many Semrush API credits have we used since we started?" — and then: build a log that shows, per project, how many API credits are being used across all API keys; surface it from a global **Dashboard** button that opens stats across all projects and at the individual-project level without opening a project.

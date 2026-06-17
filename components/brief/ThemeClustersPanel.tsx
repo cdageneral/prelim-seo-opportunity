@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand, buildExcludedBrandTokens } from '@/lib/utils/kwVolume';
+import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a)
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -210,12 +211,11 @@ function buildThemeClusters(
 ): ThemeCluster[] {
   const semSnap  = analysis?.semrushSnapshot ?? {};
   const cb       = semSnap._categoryBreakdown ?? null;
-  // v7.201: brand tokens from Semrush AUTO-DISCOVERED competitors (+ configured) — used
-  // to drop any cluster whose NAME carries a competitor brand (e.g. "529 Schwab").
-  const compBrandTokens = buildCompetitorBrandTokens(semSnap, clientDomain, competitorDomains);
-  // v7.208: also drop clusters whose NAME carries a USER-BLOCKLISTED brand (the
-  // deterministic safety net for brands Semrush never auto-discovered, e.g. "Schwab").
-  const excludedBrandTokens = buildExcludedBrandTokens(semSnap);
+  // v7.226: competitor-brand category guard, centralized in lib/category/categoryGuard
+  // (Const III.1a). Replaces the prior inline token-set construction (v7.201 auto-discovered
+  // + configured competitor brands, v7.208 user blocklist) — identical behavior, now the
+  // SAME guard the Keyword panel uses, so both panels drop exactly the same brand categories.
+  const categoryGuard = buildCategoryGuard(semSnap, clientDomain, competitorDomains);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
     (cb?.categories ?? []).map((c: any) => ({
       name: c.name,
@@ -354,18 +354,13 @@ function buildThemeClusters(
   const result: ThemeCluster[] = [];
 
   for (const cat of categories) {
-    // v7.196: never render a COMPETITOR (non-client) brand category as a cluster.
-    // buildKwPool already strips its keywords, but this is a defensive guard so an
-    // "American Express" / "Bank of America" brand cluster can never appear even if a
-    // stray member keyword slips through. The client's own brand category is kept
-    // (its name contains the client brand).
-    if (cat.type === 'brand' && !isBranded(cat.name, clientDomain, [])) continue;
-    // v7.201: drop any cluster whose NAME carries a competitor brand (auto-discovered by
-    // Semrush or configured) — e.g. a procedure-typed category literally named
-    // "529 Schwab". Belt-and-suspenders with the pool-level keyword stripping above; the
-    // client's own brand category is kept (its name contains the client brand).
-    if (textHasCompetitorBrand(cat.name, compBrandTokens) && !isBranded(cat.name, clientDomain, [])) continue;
-    if (textHasCompetitorBrand(cat.name, excludedBrandTokens) && !isBranded(cat.name, clientDomain, [])) continue;   // v7.208: user blocklist
+    // v7.196/201/208 → centralized v7.226: never render a COMPETITOR (non-client) brand
+    // category as a cluster. buildKwPool already strips its keywords; this is the defensive
+    // category-level guard so an "American Express" / "Bank of America" / "529 Schwab" brand
+    // category can never appear even if a stray member keyword slips through. The client's
+    // own brand category is kept (its name contains the client brand). Same guard the Keyword
+    // panel now applies (Const III.1a — the guard, not the synthesis output, is enforcement).
+    if (categoryGuard.isCompetitorBrandCategory(cat.name, cat.type)) continue;
     const kws = catMap.get(cat.name) ?? [];
     if (kws.length === 0) continue;
     const totalVolume = kws.reduce((s, k) => s + k.searchVolume, 0);

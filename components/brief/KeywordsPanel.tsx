@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
+import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -698,6 +699,20 @@ export default function KeywordsPanel({
   // the canonical segmentRows pool, so category totals always balance with
   // the summary cards for the active segment.
   const cb = (analysis?.semrushSnapshot?._categoryBreakdown ?? null) as KwCategoryBreakdown | null;
+
+  // v7.226: competitor-brand category guard (Const III.1a). The raw `_categoryBreakdown`
+  // legitimately contains competitor/third-party brand categories (built from competitor
+  // gap keywords). ThemeClustersPanel already drops them at render; the Keyword panel did
+  // NOT — so a "Wells Fargo Brand Searches"–style category could surface here. Compute the
+  // dropped-name set ONCE from the shared guard and hand it to KwCategorySection, which
+  // reroutes any row mapped to a dropped category into "Other" (volume preserved, brand
+  // label removed) so both panels' category lists agree.
+  const dropCategoryNames = useMemo<Set<string>>(
+    () => (cb?.categories?.length
+      ? buildCategoryGuard(analysis?.semrushSnapshot, clientDomain, competitorDomains).droppedCategoryNames(cb.categories)
+      : new Set<string>()),
+    [cb, analysis, clientDomain, competitorDomains],
+  );
 
   // ── Add keyword ──
   async function handleAdd() {
@@ -1482,6 +1497,7 @@ export default function KeywordsPanel({
             rankFilter={rankFilter}
             segmentLabel={FILTER_META[filter].label}
             expectedCount={segmentRows.length}
+            dropCategoryNames={dropCategoryNames}
           />
         )}
 
@@ -2054,12 +2070,14 @@ function KwCategorySection({
   rankFilter,
   segmentLabel,
   expectedCount,
+  dropCategoryNames,
 }: {
   cb:            KwCategoryBreakdown;
   rows:          KeywordRow[];
   rankFilter:    RankFilter;
   segmentLabel:  string;
   expectedCount: number;
+  dropCategoryNames: Set<string>;   // v7.226: competitor-brand categories to suppress (Const III.1a)
 }) {
   // ── Expand/collapse state — collapsed by default (parents only). Hooks run
   //    unconditionally before any early return (rules of hooks). ──
@@ -2075,13 +2093,17 @@ function KwCategorySection({
 
     const catRows = new Map<string, KeywordRow[]>();
     for (const row of rows) {
-      const catName = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
+      const raw = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
+      // v7.226: reroute any row mapped to a competitor-brand category into "Other" so the
+      // brand label never renders here (matches ThemeClustersPanel). Volume is preserved.
+      const catName = dropCategoryNames.has(raw) ? 'Other' : raw;
       let arr = catRows.get(catName); if (!arr) { arr = []; catRows.set(catName, arr); }
       arr.push(row);
     }
 
     const procLeaves: CatNode[] = [], navLeaves: CatNode[] = [], otherLeaves: CatNode[] = [];
     for (const [name, kws] of Array.from(catRows.entries())) {
+      if (name !== 'Other' && dropCategoryNames.has(name)) continue;   // v7.226: defensive — never form a competitor-brand leaf
       const type: CatNode['type'] = name === 'Other' ? 'procedure' : (typeByName[name] ?? 'procedure');
       const node = buildSubTree('cat:' + name, name, type, kws, catHeadTokens(name), 0, false);
       if (name === 'Other') otherLeaves.push(node);
@@ -2091,7 +2113,7 @@ function KwCategorySection({
     const proc = buildFamilies(procLeaves).sort((a, b) => b.totVol - a.totVol);
     navLeaves.sort((a, b) => b.totVol - a.totVol);
     return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
-  }, [rows, cb]);
+  }, [rows, cb, dropCategoryNames]);
 
   const allTop = procedureTop.concat(navTop, otherTop);
   if (allTop.length === 0) return null;
