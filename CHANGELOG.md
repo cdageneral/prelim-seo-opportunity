@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.224 — 2026-06-16 · Google-Rank panel: competitor brand categories removed (Const III.1)
+
+**The problem (Wayne):** on the Google-Rank panel, TD Bank's "Weakest Categories" and "Competitor Outperforming" cards surfaced **"Wells Fargo Brand Searches"** (and other non-client brands). Constitution III.1 is absolute — no brand name other than the client's may appear anywhere.
+
+**Root cause:** the Keyword, Cluster, Journey and Content panels already strip competitor / third-party brands (`buildKwPool` + the v7.196/v7.201/v7.208 guards in `ThemeClustersPanel`). But the Google-Rank summary cards (Strongest / Weakest / Competitor-Outperforming / Largest-Opportunity) and the Category-Performance table read `semrushSnapshot._categoryBreakdown.categories` **directly**, and that read had **no brand guard**. A `brand`-typed category named after a competitor (built from competitor *gap* keywords during synthesis) therefore leaked straight into the panel.
+
+**Fix (`components/brief/GoogleSerpSection.tsx`):** the panel now sanitizes `_categoryBreakdown` before use, mirroring the `ThemeClustersPanel` rule exactly. A category is dropped when it is a `brand`-type category that is **not** the client's own brand, **or** its name carries an auto-discovered / configured / blocklisted competitor brand (`buildCompetitorBrandTokens` + `buildExcludedBrandTokens` + `textHasCompetitorBrand`). The client's **own** brand category is always kept (its name contains the client brand via `isBrandedKeyword`). The matching `keywordCategories` entries are stripped too, so the expanded keyword sub-tables and `inferCategoryForKw` can never resurface a dropped category.
+
+**Data integrity (Art I):** the guard only **removes** rows — it never fabricates. `totalMonthlyDemand` / `totalPage1Demand` are recomputed as exact roll-ups of the surviving real categories. Because it filters at the view (not the stored snapshot), it fixes **already-analysed projects with no re-run** — consistent with the v7.208 blocklist philosophy.
+
+**Verification (own debugging agent):** isolated `tsc` on `GoogleSerpSection.tsx` + `kwVolume.ts` = **0 errors**. Logic harness against the **real** `kwVolume` helpers (TD Bank fixture) = **10/10** in two scenarios — (A) empty blocklist (relies on the `brand`-type + competitor-domain guard) and (B) populated blocklist: "Wells Fargo Brand Searches", "Bank of America Locations" and a competitor-named procedure ("Usbank Mortgage Rates") all dropped; "TD Bank Brand Searches" and generic procedures kept; `keywordCategories` cleaned; totals exact. Dual-theme render `orbitiq-v7.224-RENDER.html` (Art V.5) — before/after cards in light + dark; jsdom self-check confirms no competitor-brand text in the AFTER columns. No markup or color changed, so theme parity holds by construction.
+
 ## v7.223 — 2026-06-16 · Journey categories: existing/net-new split + clearer type label; pre-product lane now populated from problem-aware demand
 
 **The ask (Wayne):** on the canonical Journeys view — (1) "Procedure" was unclear; (2) categories should show existing vs net-new without expanding; (3) the product-vs-pre-product segmentation was missing (the Pre-product lane showed ~1 topic).

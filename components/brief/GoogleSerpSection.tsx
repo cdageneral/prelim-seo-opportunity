@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect } from 'react';
-import { buildKwPool } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1219,7 +1219,50 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
 
   // ── Category Performance ──────────────────────────────────────────────────
   // Read category breakdown stored by the synthesis pipeline
-  const cb = (analysis.semrushSnapshot?._categoryBreakdown ?? null) as CategoryBreakdown | null;
+  const rawCb = (analysis.semrushSnapshot?._categoryBreakdown ?? null) as CategoryBreakdown | null;
+
+  // v7.224: enforce Constitution III.1 on the category breakdown feeding this panel.
+  // The Keyword / Cluster / Journey / Content panels already strip COMPETITOR and
+  // third-party brands (buildKwPool + the v7.196/v7.201/v7.208 guards in
+  // ThemeClustersPanel), but the Google-Rank summary cards (Weakest / Competitor
+  // Outperforming) and Category Performance read `_categoryBreakdown` directly and
+  // had NO such guard — so a competitor-brand category (e.g. "Wells Fargo Brand
+  // Searches" on a TD Bank project) leaked through. Mirror the ThemeClustersPanel
+  // rule exactly: drop any brand-type category that is not the client's own brand,
+  // plus any category whose NAME carries an auto-discovered / configured / blocklisted
+  // competitor brand. The client's OWN brand category is always kept (its name
+  // contains the client brand). This only REMOVES rows — never fabricates — and the
+  // recomputed totals stay exact roll-ups of the surviving real categories (Art I),
+  // working on already-stored analyses with no re-run.
+  const cb = useMemo<CategoryBreakdown | null>(() => {
+    if (!rawCb || !Array.isArray(rawCb.categories)) return rawCb;
+    const snap         = analysis?.semrushSnapshot ?? {};
+    const clientDomain = (snap?.domain ?? domain ?? '') as string;
+    const compTokens   = buildCompetitorBrandTokens(snap, clientDomain, competitors ?? []);
+    const exclTokens   = buildExcludedBrandTokens(snap);
+
+    const isClientBrand = (name: string) => isBrandedKeyword(name, clientDomain, []);
+    const isForbidden   = (name: string, type: string) =>
+      (type === 'brand'                                && !isClientBrand(name)) ||
+      (textHasCompetitorBrand(name, compTokens)        && !isClientBrand(name)) ||
+      (textHasCompetitorBrand(name, exclTokens)        && !isClientBrand(name));
+
+    const keptCats = rawCb.categories.filter(c => !isForbidden(c.name, c.type));
+    if (keptCats.length === rawCb.categories.length) return rawCb;   // nothing forbidden — pass through
+
+    const keptNames = new Set(keptCats.map(c => c.name));
+    const keptKwCats: Record<string, string> = {};
+    for (const [kw, cat] of Object.entries(rawCb.keywordCategories ?? {})) {
+      if (keptNames.has(cat)) keptKwCats[kw] = cat;
+    }
+    return {
+      ...rawCb,
+      categories:         keptCats,
+      keywordCategories:  keptKwCats,
+      totalMonthlyDemand: keptCats.reduce((s, c) => s + (c.monthlyDemand ?? 0), 0),
+      totalPage1Demand:   keptCats.reduce((s, c) => s + (c.page1Demand   ?? 0), 0),
+    };
+  }, [rawCb, analysis, domain, competitors]);
 
   // Compute per-category rank stats from the FULL merged topKws list.
   // Uses inferCategoryForKw so CSV keywords that weren't in the 40-keyword
