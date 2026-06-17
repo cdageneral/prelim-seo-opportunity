@@ -1,5 +1,30 @@
 # OrbitIQ Changelog
 
+## v7.225 — 2026-06-17 · API usage & credit ledger (per-project + cross-project Dashboard)
+
+**The ask (Wayne):** "how many Semrush API credits have we used since we started?" — and then: build a log that shows, per project, how many API credits are being used across all API keys; surface it from a global **Dashboard** button that opens stats across all projects and at the individual-project level without opening a project.
+
+**Why it couldn't be answered before:** OrbitIQ logged no usage. The Semrush MCP exposes no units-balance endpoint, and nothing recorded historical spend. Any past total would have been a guess — which Art. I.1 forbids. So this release starts a **real, forward-looking ledger**: counting begins at deploy; a per-provider **baseline** field lets you anchor the in-app total to your provider dashboard's real figure.
+
+**What's counted (all five metered providers), measured not modeled (Art. I.1):**
+- **Semrush** — units = rows *actually returned* × the provider's **published per-line rate**, verified live at developer.semrush.com on 2026-06-17: domain overview / organic / unique-pages / URL reports **10**/line; **competitor-discovery (`domain_organic_organic`) and demand reports (`phrase_questions`, `phrase_related`) 40**/line (the code's old generic "10/row" comment under-counted these). Recorded at the single `semrushGet` choke point, so every report type is captured automatically.
+- **SerpAPI** — searches actually run (Google, AI-Overview follow-up, Maps, Local-Pack each billed separately).
+- **Profound** — calls made.
+- **Anthropic (Claude)** — input+output tokens reported by each response (auto-recorded by wrapping `getClient()` so all current and future calls are caught).
+- **OpenAI** — chat tokens, and persona portraits counted as images.
+
+**How it's wired:**
+- New `api_usage` table (`db/schema.ts`) — one row per billed call: provider, endpoint, unit, quantity, rows×rate provenance, a non-reversible key fingerprint (supports multiple keys per provider), `kind` (usage|baseline), and a JSON meta. Created at deploy by `drizzle-kit push`; reads are fault-tolerant so a not-yet-migrated table shows an honest empty ledger (Art. I.5).
+- `lib/usage/context.ts` (request-scoped `AsyncLocalStorage`) + `lib/usage/record.ts` (the recorder + verified rate table + key fingerprint). Recording can **never** break a real call — every write is try/caught.
+- Each paid API route sets the project once (`setUsageProject`), so calls attribute to the right project; calls with no project context roll up under **Unattributed**.
+- **UI:** per-project **API Usage** panel (new left-nav section) — provider cards (measured vs. baseline vs. total, rows/calls), a recent-calls log (provenance), an in-place Refresh + last-activity timestamp (Art. IV.4/IV.5), and a methodology note. New global **Dashboard** button (top nav, inline by New Project; also in the project header) opens `/usage` — grand totals across all projects + a per-project breakdown table with an "All projects" total.
+
+**Data integrity:** the ledger only ever **adds** measured rows; provider dashboards remain the billing source of truth and the panel says so. Nothing here touches the keyword/cluster/journey pipeline, brand guard, or any existing number.
+
+**Verification (own debugging agent):** full-project isolated `tsc --noEmit` (real next/drizzle/anthropic/neon/vercel/zod deps installed) = **0 errors**. jsdom render harness for `ApiUsageSection` + `UsageRollup`, effects flushed against stubbed routes, in **both** dark and light themes (Art. V.5) = **24/24** — headers, provider cards, formatted figures, baseline control, recent-calls log, per-project table, Unattributed bucket, grand-total row all render; theme-parity scan confirms no `text-white` off an accent surface and no hardcoded #fff/#000 (Art. IV.6). Scroll: the new panel resolves to one `overflow-y-auto flex-1 min-h-0` container (Art. IV.1).
+
+**Note:** counting starts when v7.225 is deployed and `db:push` runs. To reflect spend before today, open a project's **API Usage** panel and set a per-provider baseline from your real Semrush/SerpAPI/etc. dashboard figure.
+
 ## v7.224 — 2026-06-16 · Google-Rank panel: competitor brand categories removed (Const III.1)
 
 **The problem (Wayne):** on the Google-Rank panel, TD Bank's "Weakest Categories" and "Competitor Outperforming" cards surfaced **"Wells Fargo Brand Searches"** (and other non-client brands). Constitution III.1 is absolute — no brand name other than the client's may appear anywhere.

@@ -22,11 +22,13 @@ import { db } from '@/db';
 import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { groupCategoriesByIntent, INTENT_ENGINE, CategoryInput } from '@/lib/claude/intentGroups';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const projectId = params.id;
+  setUsageProject(projectId);   // v7.225: attribute API usage to this project
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body ok */ }
   const force = !!body?.force;

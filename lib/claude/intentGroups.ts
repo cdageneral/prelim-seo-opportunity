@@ -22,6 +22,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { instrumentAnthropic } from '@/lib/usage/record';
 
 export type Stage = 'awareness' | 'consideration' | 'decision' | 'retention';
 const STAGES: Stage[] = ['awareness', 'consideration', 'decision', 'retention'];
@@ -53,7 +54,7 @@ function getClient(): Anthropic {
   if (!apiKey) {
     throw new Error('ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.');
   }
-  return new Anthropic({ apiKey });
+  return instrumentAnthropic(new Anthropic({ apiKey }));   // v7.225: auto-record token usage
 }
 
 // haiku — fast/cheap structured JSON; a project can have hundreds of categories.

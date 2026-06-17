@@ -13,6 +13,7 @@ import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
 import { generatePersonaImages } from '@/lib/apis/personaImage';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
 
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
   if (!analysis) {
     return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   }
+  setUsageProject(analysis.projectId);   // v7.225: attribute synthesis API usage to the project
   if (!analysis.semrushSnapshot) {
     return NextResponse.json(
       { error: 'Phase 1 snapshots not found. Run analysis again.' },

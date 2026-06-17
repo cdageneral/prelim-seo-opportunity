@@ -99,6 +99,38 @@ export const projectKeywords = pgTable('project_keywords', {
   createdAt:    timestamp('created_at').defaultNow().notNull(),
 });
 
+// ─── API Usage Ledger (v7.225) ─────────────────────────────────────────────────
+//
+// Per-call ledger of metered third-party API consumption, so each project's
+// real credit spend (and a cross-project total) is visible in-app. One row per
+// billable API call. Honors Constitution Art. I.1: every quantity is a REAL
+// measured value — Semrush units = (rows actually returned × the provider's
+// published per-line rate); SerpAPI = searches actually run; Anthropic/OpenAI =
+// tokens/images actually consumed — never a modeled or projected number.
+//
+// `projectId` is nullable: a few calls run outside a project context (they roll
+// up under "Unattributed"). `keyHash` is a non-reversible fingerprint of the API
+// key used (last4 + sha256 prefix) so spend can be split when MULTIPLE keys per
+// provider are in play, without ever storing the key itself.
+//
+// NOTE: created at deploy by `drizzle-kit push` (build step). Reads are written
+// fault-tolerantly so a not-yet-migrated table degrades to an empty ledger.
+
+export const apiUsage = pgTable('api_usage', {
+  id:         serial('id').primaryKey(),
+  projectId:  uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),  // null = unattributed
+  provider:   text('provider').notNull(),   // 'semrush' | 'serpapi' | 'profound' | 'anthropic' | 'openai'
+  endpoint:   text('endpoint').notNull(),    // report type / path / model (provenance of the cost)
+  unit:       text('unit').notNull(),        // 'units' | 'searches' | 'calls' | 'tokens' | 'images'
+  quantity:   integer('quantity').notNull().default(0),  // REAL credits consumed, in the provider's native unit
+  rows:       integer('rows'),               // rows returned (Semrush) — provenance for units = rows × rate
+  rate:       integer('rate'),               // per-line rate applied (Semrush) — provenance
+  keyHash:    text('key_hash'),              // masked fingerprint of the key used (supports multiple keys/provider)
+  kind:       text('kind').notNull().default('usage'),  // 'usage' | 'baseline' (manual reconciliation anchor)
+  meta:       jsonb('meta'),                 // extra provenance: tokens in/out, model, status, note
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
+});
+
 // ─── Personas ─────────────────────────────────────────────────────────────────
 
 export const personas = pgTable('personas', {
@@ -149,6 +181,11 @@ export const projectsRelations = relations(projects, ({ many }) => ({
   analyses:        many(analyses),
   competitors:     many(competitors),
   projectKeywords: many(projectKeywords),
+  apiUsage:        many(apiUsage),
+}));
+
+export const apiUsageRelations = relations(apiUsage, ({ one }) => ({
+  project: one(projects, { fields: [apiUsage.projectId], references: [projects.id] }),
 }));
 
 export const competitorsRelations = relations(competitors, ({ one }) => ({
@@ -191,3 +228,5 @@ export type Opportunity       = typeof opportunities.$inferSelect;
 export type Report            = typeof reports.$inferSelect;
 export type ProjectKeyword    = typeof projectKeywords.$inferSelect;
 export type NewProjectKeyword = typeof projectKeywords.$inferInsert;
+export type ApiUsage          = typeof apiUsage.$inferSelect;
+export type NewApiUsage       = typeof apiUsage.$inferInsert;

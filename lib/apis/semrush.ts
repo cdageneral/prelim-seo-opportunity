@@ -11,6 +11,8 @@
  *  - Share of Voice (requires Semrush .Trends — falls back to position data)
  */
 
+import { recordSemrush } from '@/lib/usage/record';
+
 const SEMRUSH_BASE = 'https://api.semrush.com';;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -93,7 +95,11 @@ async function semrushGet(params: Record<string, string>): Promise<string> {
   if (!res.ok) {
     throw new Error(`Semrush API error ${res.status}: ${await res.text()}`);
   }
-  return res.text();
+  const body = await res.text();
+  // v7.225: record real unit consumption — rows actually returned × the verified
+  // per-line rate for this report type. Awaited but fault-tolerant (never throws).
+  await recordSemrush(params.type, body, API_KEY);
+  return body;
 }
 
 // ─── Domain Overview ──────────────────────────────────────────────────────────

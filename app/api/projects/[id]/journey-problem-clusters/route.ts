@@ -20,11 +20,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { setUsageProject } from '@/lib/usage/context';
+import { instrumentAnthropic } from '@/lib/usage/record';
 
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
-  return new Anthropic({ apiKey });
+  return instrumentAnthropic(new Anthropic({ apiKey }));   // v7.225: auto-record token usage
 }
 
 function extractJSON<T>(text: string): T {
@@ -50,6 +52,7 @@ export async function POST(
   req: NextRequest,
   _ctx: { params: { id: string } }
 ) {
+  setUsageProject(_ctx.params.id);   // v7.225: attribute Claude usage to this project
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });

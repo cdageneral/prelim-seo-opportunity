@@ -11,6 +11,8 @@
  *  - Citation rate per platform (ChatGPT, Perplexity, Gemini, Claude)
  */
 
+import { recordProfound } from '@/lib/usage/record';
+
 const BASE_URL = process.env.PROFOUND_BASE_URL ?? 'https://api.tryprofound.com/v1';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -83,6 +85,7 @@ async function profoundGet<T>(path: string, params?: Record<string, string>): Pr
     throw new Error(`Profound API error ${res.status} on ${path}: ${body}`);
   }
 
+  await recordProfound(path, API_KEY);   // v7.225: 1 billed call per endpoint hit
   return res.json() as Promise<T>;
 }
 

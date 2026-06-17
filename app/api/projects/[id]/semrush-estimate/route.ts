@@ -14,6 +14,7 @@ import { db } from '@/db';
 import { projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { estimateSemrushPull } from '@/lib/apis/semrush';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 60;
 
@@ -21,6 +22,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  setUsageProject(params.id);   // v7.225: attribute Semrush usage to this project
   if (!process.env.SEMRUSH_API_KEY) {
     return NextResponse.json(
       { error: 'SEMRUSH_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.' },

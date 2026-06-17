@@ -25,6 +25,7 @@
  */
 
 import { put } from '@vercel/blob';
+import { recordOpenAIImages } from '@/lib/usage/record';
 
 const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
 const IMAGE_MODEL = 'gpt-image-1';
@@ -115,6 +116,7 @@ async function generateOne(
 
     const json: any = await res.json();
     const b64: string | undefined = json?.data?.[0]?.b64_json;
+    if (b64) await recordOpenAIImages(1, IMAGE_MODEL);   // v7.225: 1 billed image generated
     if (!b64) {
       const error = 'openai returned no image data';
       console.error(`[OrbitIQ] persona image ${index}: ${error}`);

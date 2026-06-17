@@ -52,6 +52,14 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             {/* v7.185: global dark/light theme toggle */}
             <ThemeToggle />
+          {/* v7.225: global Dashboard button — opens the cross-project API usage dashboard */}
+          <Link
+            href="/usage"
+            className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors"
+          >
+            <i className="ti ti-gauge" aria-hidden="true" />
+            Dashboard
+          </Link>
           <button
             onClick={() => setShowNewModal(true)}
             className="flex items-center gap-2 bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"

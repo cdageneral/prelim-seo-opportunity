@@ -12,10 +12,12 @@ import { db }       from '@/db';
 import { projects } from '@/db/schema';
 import { eq }       from 'drizzle-orm';
 import { suggestExcludedBrands } from '@/lib/claude/excludedBrandVocab';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 60;
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+  setUsageProject(params.id);   // v7.225: attribute Claude usage to this project
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, params.id),
     with: {

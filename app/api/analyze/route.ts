@@ -31,6 +31,7 @@ import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan }  f
 import { getMarket } from '@/lib/utils/markets';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
 
@@ -62,6 +63,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { projectId, mode } = parsed.data;
+  setUsageProject(projectId);   // v7.225: attribute every API call in this run to the project
 
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, projectId),

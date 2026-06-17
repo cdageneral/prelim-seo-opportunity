@@ -31,6 +31,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { recordAnthropic, recordOpenAITokens } from '@/lib/usage/record';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -204,6 +205,7 @@ async function askClaude(prompt: string): Promise<string> {
     max_tokens: PROBE_MAX_TOKENS,
     messages:   [{ role: 'user', content: prompt }],
   }, { timeout: 30_000 });
+  await recordAnthropic(msg, 'claude-haiku-4-5-20251001');   // v7.225
   return msg.content
     .filter(b => b.type === 'text')
     .map(b => (b as any).text as string)
@@ -232,7 +234,8 @@ async function askChatGPT(prompt: string): Promise<string> {
     const errText = await res.text();
     throw new Error(`OpenAI ${res.status}: ${errText.substring(0, 200)}`);
   }
-  const data = await res.json() as { choices: { message: { content: string } }[] };
+  const data = await res.json() as { choices: { message: { content: string } }[]; usage?: any };
+  await recordOpenAITokens(data.usage, 'gpt-4o-mini');   // v7.225
   return data.choices?.[0]?.message?.content ?? '';
 }
 
@@ -334,6 +337,7 @@ ${JSON.stringify(payload)}`;
       max_tokens: 4000,
       messages:   [{ role: 'user', content: prompt }],
     }, { timeout: 100_000 });
+    await recordAnthropic(msg, 'claude-sonnet-4-6');   // v7.225
 
     const text = msg.content.filter(b => b.type === 'text').map(b => (b as any).text as string).join('');
     const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();

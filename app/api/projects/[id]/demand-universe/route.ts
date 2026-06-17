@@ -20,6 +20,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
 import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
@@ -116,6 +117,7 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   const projectId = params.id;
+  setUsageProject(projectId);   // v7.225: attribute API usage to this project
 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }

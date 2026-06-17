@@ -4,6 +4,7 @@ import { db }     from '@/db';
 import { analyses, reports } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { generatePPTPrompt } from '@/lib/claude/synthesize';
+import { setUsageProject } from '@/lib/usage/context';
 
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 30;
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest) {
 
   if (!analysis) return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
   if (analysis.status !== 'completed') return NextResponse.json({ error: 'Analysis not complete' }, { status: 400 });
+  setUsageProject(analysis.projectId);   // v7.225: attribute Claude usage to the project
 
   const project   = (analysis as any).project;
   const opps      = (analysis as any).opportunities ?? [];

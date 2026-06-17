@@ -13,6 +13,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { instrumentAnthropic } from '@/lib/usage/record';
 import { groupCategoriesByIntent } from '@/lib/claude/intentGroups';
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
@@ -39,7 +40,7 @@ function getClient(): Anthropic {
       'ANTHROPIC_API_KEY is not set. Go to Vercel → your project → Settings → Environment Variables and add it.'
     );
   }
-  return new Anthropic({ apiKey });
+  return instrumentAnthropic(new Anthropic({ apiKey }));   // v7.225: auto-record token usage
 }
 
 // ─── Model Selection ──────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@
  */
 
 import { getMarket, type Market } from '@/lib/utils/markets';
+import { recordSerp } from '@/lib/usage/record';
 
 const SERP_BASE = 'https://serpapi.com/search';;
 
@@ -116,6 +117,7 @@ async function fetchSerpData(keyword: string, market?: Market): Promise<any> {
   if (!res.ok) {
     throw new Error(`SerpAPI error ${res.status}: ${await res.text()}`);
   }
+  await recordSerp('google', API_KEY);   // v7.225: 1 billed search
   return res.json();
 }
 
@@ -142,6 +144,7 @@ async function fetchAIOverviewByToken(pageToken: string): Promise<any | null> {
       console.error(`SerpAPI AIO follow-up error ${res.status}: ${await res.text()}`);
       return null;
     }
+    await recordSerp('google_ai_overview', API_KEY);   // v7.225: separate billed search
     const json = await res.json();
     return json?.ai_overview ?? null;
   } catch (err) {
@@ -510,6 +513,7 @@ export async function getMapsListings(
   try {
     const res = await fetch(`${SERP_BASE}?${params.toString()}`, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) { console.error(`SerpAPI maps error ${res.status}`); return []; }
+    await recordSerp('google_maps', API_KEY);   // v7.225: 1 billed search
     const data = await res.json();
     // google_maps returns local_results[] for a search; place_results{} for an
     // exact single match. Normalize both into MapsPlace[].
@@ -558,6 +562,7 @@ export async function getLocalPack(
   try {
     const res = await fetch(`${SERP_BASE}?${params.toString()}`, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) { console.error(`SerpAPI local-pack error ${res.status}`); return { packPresent: false, places: [] }; }
+    await recordSerp('google_local_pack', API_KEY);   // v7.225: 1 billed search
     const data = await res.json();
     // On the google engine, local_results is an object { places: [...] }.
     const lr = data?.local_results;

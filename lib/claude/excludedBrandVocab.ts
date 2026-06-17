@@ -15,13 +15,14 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { instrumentAnthropic } from '@/lib/usage/record';
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
-  return new Anthropic({ apiKey });
+  return instrumentAnthropic(new Anthropic({ apiKey }));   // v7.225: auto-record token usage
 }
 
 export interface ExcludedBrandInput {

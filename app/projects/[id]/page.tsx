@@ -19,6 +19,7 @@ import ContentMapSection    from '@/components/brief/ContentMapSection';
 import ContentPlanSection   from '@/components/brief/ContentPlanSection';
 import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection';
 import LocalSearchSection     from '@/components/brief/LocalSearchSection';
+import ApiUsageSection        from '@/components/brief/ApiUsageSection';
 import { getMarket } from '@/lib/utils/markets';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
@@ -67,7 +68,8 @@ type NavSection =
   | 'llm'
   | 'local'
   | 'authority' | 'entity'
-  | 'urlTax' | 'techHygiene';
+  | 'urlTax' | 'techHygiene'
+  | 'usage';
 
 interface NavItem {
   id:    NavSection;
@@ -91,9 +93,10 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'entity',       num: '11', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
   { id: 'urlTax',       num: '12', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
   { id: 'techHygiene',  num: '13', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
+  { id: 'usage',        num: '14', icon: 'ti-receipt',          label: 'API Usage',              group: 'Operations' },
 ];
 
-const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Local Search', 'Page & Entity Authority', 'Technical Authority'];
+const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Local Search', 'Page & Entity Authority', 'Technical Authority', 'Operations'];
 
 // ── Score calculator ──────────────────────────────────────────────────────────
 
@@ -829,6 +832,14 @@ export default function ProjectBriefPage() {
         <div className="flex items-center gap-2">
           {/* v7.185: global dark/light theme toggle */}
           <ThemeToggle />
+          {/* v7.225: global Dashboard button — cross-project API usage */}
+          <Link
+            href="/usage"
+            className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+          >
+            <i className="ti ti-gauge" aria-hidden="true" />
+            Dashboard
+          </Link>
           <button
             onClick={() => setShowEditProject(true)}
             className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
@@ -1441,8 +1452,15 @@ export default function ProjectBriefPage() {
             />
           )}
 
+          {/* ── API Usage (v7.225) — independent of analysis: spend exists from the first call ── */}
+          {activeSection === 'usage' && (
+            <div className="overflow-y-auto flex-1 min-h-0 p-3 animate-fade-in">
+              <ApiUsageSection projectId={projectId} />
+            </div>
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'local' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'local' && activeSection !== 'usage' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
