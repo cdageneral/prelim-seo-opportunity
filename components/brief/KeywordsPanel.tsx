@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
+import { buildCategoryModel, type CategoryModel } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -712,6 +713,16 @@ export default function KeywordsPanel({
       ? buildCategoryGuard(analysis?.semrushSnapshot, clientDomain, competitorDomains).droppedCategoryNames(cb.categories)
       : new Set<string>()),
     [cb, analysis, clientDomain, competitorDomains],
+  );
+
+  // v7.227: the ONE canonical category model — same source the Cluster, Journey and
+  // Content panels use (buildCanonicalClusterTopics). The Keyword panel now groups its rows
+  // by THIS (guarded + near-dup-merged categories, stored membership) instead of the raw
+  // _categoryBreakdown, so all four panels show the same category set (Const II.7).
+  // claudeAssigns omitted ({}) — it only splits intent sub-topics, not parent categories.
+  const categoryModel = useMemo<CategoryModel>(
+    () => buildCategoryModel(analysis, clientDomain, competitorDomains, dbKeywords),
+    [analysis, clientDomain, competitorDomains, dbKeywords],
   );
 
   // ── Add keyword ──
@@ -1498,6 +1509,7 @@ export default function KeywordsPanel({
             segmentLabel={FILTER_META[filter].label}
             expectedCount={segmentRows.length}
             dropCategoryNames={dropCategoryNames}
+            categoryModel={categoryModel}
           />
         )}
 
@@ -2071,6 +2083,7 @@ function KwCategorySection({
   segmentLabel,
   expectedCount,
   dropCategoryNames,
+  categoryModel,
 }: {
   cb:            KwCategoryBreakdown;
   rows:          KeywordRow[];
@@ -2078,6 +2091,7 @@ function KwCategorySection({
   segmentLabel:  string;
   expectedCount: number;
   dropCategoryNames: Set<string>;   // v7.226: competitor-brand categories to suppress (Const III.1a)
+  categoryModel: CategoryModel;     // v7.227: canonical categories + stored membership (shared source)
 }) {
   // ── Expand/collapse state — collapsed by default (parents only). Hooks run
   //    unconditionally before any early return (rules of hooks). ──
@@ -2088,14 +2102,17 @@ function KwCategorySection({
   //    arithmetically (aggregateCatNode) so a parent === the exact sum of its
   //    descendants — defensible, nothing modeled. ──
   const { procedureTop, navTop, otherTop } = useMemo(() => {
+    // v7.227: types + membership come from the shared canonical model (same source as the
+    // Cluster/Journey/Content panels). demand/problem parent types render as procedure.
     const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
-    for (const c of cb.categories) typeByName[c.name] = c.type;
+    for (const c of categoryModel.categories) typeByName[c.name] = (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure';
 
     const catRows = new Map<string, KeywordRow[]>();
     for (const row of rows) {
-      const raw = cb.keywordCategories?.[row.keyword.toLowerCase().trim()] ?? 'Other';
-      // v7.226: reroute any row mapped to a competitor-brand category into "Other" so the
-      // brand label never renders here (matches ThemeClustersPanel). Volume is preserved.
+      // Canonical STORED membership (Const II.8) — never re-derived by string match here.
+      const raw = categoryModel.categoryForKeyword.get(row.keyword.toLowerCase().trim()) ?? 'Other';
+      // Defensive: a competitor-brand category can never reach here (the model is already
+      // guarded), but keep the v7.226 reroute so a stray name still collapses into "Other".
       const catName = dropCategoryNames.has(raw) ? 'Other' : raw;
       let arr = catRows.get(catName); if (!arr) { arr = []; catRows.set(catName, arr); }
       arr.push(row);
@@ -2113,7 +2130,7 @@ function KwCategorySection({
     const proc = buildFamilies(procLeaves).sort((a, b) => b.totVol - a.totVol);
     navLeaves.sort((a, b) => b.totVol - a.totVol);
     return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
-  }, [rows, cb, dropCategoryNames]);
+  }, [rows, categoryModel, dropCategoryNames]);
 
   const allTop = procedureTop.concat(navTop, otherTop);
   if (allTop.length === 0) return null;

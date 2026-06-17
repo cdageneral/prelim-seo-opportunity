@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.227 — 2026-06-17 · One canonical category model — Keyword panel renders the same categories as Cluster/Journey/Content (Step 1b, Const II.7)
+
+**The ask (Wayne):** after v7.226 closed the brand-guard gap, unify the panels onto ONE category source so the Keyword, Cluster, and Journey panels stop showing different/mismatched category lists. Decision (design session): "build full unify now" — Keyword adopts the canonical categories; ThemeClusters stays byte-identical as the producer.
+
+**What changed:**
+- **New `lib/category/categoryModel.ts`** — `buildCategoryModel(analysis, clientDomain, competitorDomains, uploadedKeywords, claudeAssigns?)` returns `{ categories, categoryForKeyword, topics }`. It is a thin **read-only projection of `buildCanonicalClusterTopics`** — the SAME canonical "one cluster = one intent = one page" source the Journey and Content panels already consume (v7.210). The category list is therefore already **guarded** (competitor brands dropped by the shared categoryGuard inside the cluster build) and **near-dup merged** (v7.194), and membership (`categoryForKeyword`) is the **stored** assignment read off each canonical topic's keywords — never re-derived by lexical matching (Const II.8).
+- **KeywordsPanel** now groups its rows by `categoryModel` instead of the raw `_categoryBreakdown`: `typeByName` comes from `categoryModel.categories` (demand/problem parents render as procedure) and each row's category comes from `categoryModel.categoryForKeyword`. The v7.226 competitor-brand reroute is kept as defense (now a no-op, since the model is already guarded). The Keyword panel's category set now equals the Cluster/Journey/Content set.
+- **ThemeClustersPanel — UNCHANGED (byte-identical to v7.226, verified `cmp`).** It remains the producer; nothing about its output, the Journey count, or the Content plan moves.
+
+**Data impact (Keyword panel only):** its Category Breakdown now mirrors the canonical clusters — near-duplicate categories collapse into one parent, and keywords previously dumped to "Other" are assigned to their canonical category. Total keyword/volume counts are unchanged (pure regrouping; every metric is still an exact roll-up). The grouping LOOKS different because it now matches the other panels. **Eyeball on a live analysis after redeploy** (no live Semrush snapshot in this build env to confirm exact per-category numbers).
+
+**Architecture:** this is **Step 1b** of `OrbitIQ_Enrichment_Workflow_Spec.md` — the panels are now views over one assembled model (Const II.7); Step 1a (v7.226) centralized the guard, this centralizes the category list + membership.
+
+**Verification (own debugging agent):** isolated `tsc --noEmit` full project = **0 errors**. Behavioral harness — esbuild-bundled **REAL** pipeline (`buildCategoryModel` → `buildCanonicalClusterTopics` → cluster builders), mortgage/schwab fixture = **6/6**: canonical categories derived; competitor-brand category guarded out; competitor-brand keyword stripped from membership; mortgage keywords mapped to the right canonical category; no keyword maps to a guarded category. ThemeClustersPanel `cmp` vs v7.226 = identical (no count/Journey/Content movement). No styling change → Art. IV.6/V.5 dual-theme parity not triggered. Manifest: diff vs v7.226 = only KeywordsPanel + package.json changed, categoryModel.ts added.
+
 ## v7.226 — 2026-06-17 · Centralized competitor-brand category guard (Const III.1a)
 
 **The ask (Wayne):** the Theme-Cluster panel and the Keyword panel showed different category lists, and the cluster panel looked "cleaner / more accurate." **Root cause:** both panels read the same `_categoryBreakdown`, but ThemeClustersPanel applied the competitor-brand category guard while KeywordsPanel applied **none** — a III.1a gap (same class as the v7.224 "Wells Fargo" leak in the Google-Rank panel). The categorization was identical; only the post-categorization guard diverged.
