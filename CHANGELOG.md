@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.234 — 2026-06-18 · Reset lands on the Run screen (no dead-end); uploaded Semrush SERP features now show
+
+**Two issues after the v7.233 reset + a fresh CSV upload (Wayne):** (1) the Journey and Audience tabs asked to "upload a file" and the Keyword **list/cluster sub-panels were missing**, even though the Keyword Landscape showed the 1,427 uploaded keywords; (2) the **SERP-feature columns were all "—"**, even though the Semrush CSV export carries a "SERP Features by Keyword" column.
+
+**Issue 1 — post-reset dead-end (my v7.233 design).** A full reset deletes the analysis record, so `hasResults` is false. The Journey/Audience tabs and the Keyword list/cluster sub-nav are all gated on having a completed analysis, so they correctly showed the pre-run screen / hid. The trap: v7.233 kept the user on the empty Keyword Landscape, whose "Upload CSV" button only adds rows to the keyword table — it does **not** run the analysis the other panels need — with no signal that a "Run Analysis" was still required. So uploading there looked like it should populate everything, but couldn't.
+- **Fix (`app/projects/[id]/page.tsx`):** after a reset the app now lands on the **pre-run data-source / Run screen** (the proper "start over" entry — choose Auto-discover or Upload footprints, then Run Analysis, and every panel rebuilds). Reverted the v7.233 `cleared`-flag forcing; `onCleared` now just refetches the (empty) project so `hasResults` flips false and the data-source screen shows. (Wayne chose this over keeping the empty Keyword panel.) Note: the upload-mode analysis already reads existing `source='csv'` rows, so a client CSV uploaded via the Keyword Landscape is picked up by Run Analysis — no Semrush units, no re-upload needed.
+
+**Issue 2 — uploaded SERP features never rendered.** The CSV parser already reads the "SERP Features by Keyword" column and stores it on the row (`project_keywords.serp_features`), but `buildRows` derived the AIO / PAA / Video pills **only** from live SerpAPI data (`serpMap`) and never looked at the uploaded cell — so an upload-only project showed "—".
+- **Fix (`components/brief/KeywordsPanel.tsx`):** `buildRows` now falls back to the uploaded `serp_features` cell when there's no live SerpAPI row for a keyword — parsing Semrush's own labels ("AI Overview" → AIO, "People also ask" → PAA, "Video"/"Video Carousel" → Video). Real data only (Const I.1) — the flags come straight from Semrush's column. Live SerpAPI stays authoritative when present. The "client cited" check needs a live SERP scan, so it stays off for uploaded-only rows (honest gap, Const I.5). Added `serpFeatures` to the runtime `DbKeyword` type.
+
+**Verified (own debugging agent).** esbuild type-strip transform of both changed files = clean. Feature-string parser unit-checked = 6/6 (multi-feature, single, none, "Video Carousel", empty, null). `page.tsx` diffed back to the v7.232 render baseline (only the new `onCleared` prop remains); SERP fix adds no colors (theme parity IV.6 unaffected); scroll root unchanged (IV.1). node_modules not vendored → no full-deps tsc/jsdom (isolated-harness model, same as prior releases).
+
+**Action for Wayne:** deploy v7.234. To finish your current project without re-uploading, just click **Run Analysis** — it will use the client CSV already on file (Semrush skipped) and rebuild the clusters, journeys, and audience, and the SERP-feature columns will populate from your Semrush export.
+
 ## v7.233 — 2026-06-18 · Clear All now truly DELETES (no more hiding); full reset back to a blank project
 
 **The ask (Wayne):** "I'm trying to delete the client's keywords to start over and Clear All is not working. I also saw a message 'Hiding Semrush keywords.' When we delete the keywords there should be NO hiding — it should delete and clear them out."

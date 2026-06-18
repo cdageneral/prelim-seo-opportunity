@@ -69,6 +69,7 @@ interface DbKeyword {
   branded:      boolean;
   source:       string;
   domain?:      string | null;   // competitor domain for uploaded gap rows (v7.31+); present at runtime
+  serpFeatures?: string | null;  // v7.103: raw "SERP Features by Keyword" cell from a Semrush CSV upload; present at runtime
 }
 
 interface Props {
@@ -158,6 +159,18 @@ function buildRows(
     const serp  = serpMap[kwLow];
     const dbRow = dbKeywords.find(d => d.keyword.toLowerCase() === kwLow && d.source !== 'blocked');
 
+    // v7.234: SERP features from a Semrush CSV upload. The "SERP Features by Keyword"
+    // cell is stored on the uploaded row (project_keywords.serp_features) but was never
+    // rendered — buildRows only read live SerpAPI data (serpMap), so uploaded features
+    // showed as "—". Fall back to the uploaded cell when there's no live SerpAPI row.
+    // Real data only (Const I.1): these flags come straight from Semrush's own column.
+    // The "client cited" flags can't be known from a CSV (they need a live SERP scan),
+    // so they stay false — an honest gap (Const I.5).
+    const upLow = typeof dbRow?.serpFeatures === 'string' ? dbRow.serpFeatures.toLowerCase() : '';
+    const upHasAIO   = /ai overview|\baio\b/.test(upLow);
+    const upHasPAA   = upLow.includes('people also ask');
+    const upHasVideo = upLow.includes('video');
+
     return {
       key:          dbRow ? `${dbRow.source}-${dbRow.id}` : (item.isGap ? `sem-gap-${kwLow}` : `sem-ranked-${kwLow}`),
       keyword:      item.keyword,
@@ -168,17 +181,18 @@ function buildRows(
       source:       (dbRow?.source ?? 'semrush') as KwSource,
       origin:       (item as any).origin === 'demand' ? 'demand' : 'footprint',
       competitor:   item.competitor,
-      hasAIO:       serp?.hasAIO ?? false,
+      // Live SerpAPI data is authoritative when present; otherwise use the uploaded cell.
+      hasAIO:       serp ? (serp.hasAIO ?? false) : upHasAIO,
       clientInAIO:  serp
         ? (serp.aioSources ?? []).some(
             (s: any) => clientDomain && s.domain?.includes(extractBrand(clientDomain)),
           )
         : false,
-      hasPAA:        (serp?.paaQuestions ?? []).length > 0,
+      hasPAA:        serp ? (serp.paaQuestions ?? []).length > 0 : upHasPAA,
       clientInPAA:   serp?.paaClientCited ?? false,
       // v7.81 fix: serp.ts stores 'video_carousel' — the old 'videos' check
       // meant the Video pill never lit up even for scanned keywords.
-      hasVideo:      (serp?.serpFeatures ?? []).includes('video_carousel'),
+      hasVideo:      serp ? (serp.serpFeatures ?? []).includes('video_carousel') : upHasVideo,
       clientInVideo: serp?.videoClientCited ?? false,
     };
   });
