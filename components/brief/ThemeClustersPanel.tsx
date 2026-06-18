@@ -36,6 +36,9 @@ interface ThemeCluster {
   id:          string;
   name:        string;
   type:        'procedure' | 'brand' | 'location' | 'demand' | 'problem';  // v7.162: 'demand' = missing-demand; v7.203: 'problem' = pre-product life-problem theme
+  // v7.236: the umbrella (stored taxonomy path[0]) this theme sits under, from
+  // `_categoryBreakdown.categories[].parent` — so the Cluster panel nests like the Keyword tree.
+  parentLine?: string;
   keywords:    KwItem[];
   totalVolume: number;
   subClusters: IntentCluster[];
@@ -226,6 +229,17 @@ function buildThemeClusters(
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
 
+  // v7.236: theme → umbrella (stored taxonomy parent, path[0]) from `_categoryBreakdown`,
+  // so the Cluster panel can nest umbrella → theme exactly like the Keyword tree (Const III.1b).
+  // Read-only; never re-derived from keyword text. Absent on pre-taxonomy analyses → umbrella
+  // falls back to the theme name (top-level) in flattenTopics.
+  const umbrellaByCat = new Map<string, string>();
+  for (const c of (cb?.categories ?? [])) {
+    const nm = String(c?.name ?? '').trim();
+    const par = String(c?.parent ?? '').trim();
+    if (nm && par) umbrellaByCat.set(nm.toLowerCase(), par);
+  }
+
   // ── Build keyword pool via shared utility — identical filtering to Keyword Landscape ──
   // v7.162: includeDemand unions the deep-journey demand universe into the pool
   // as origin:'demand' ("missing demand"). When no deep journey has been built
@@ -392,7 +406,7 @@ function buildThemeClusters(
       });
     });
 
-    result.push({ id: cat.name, name: cat.name, type: cat.type, keywords: kws, totalVolume, subClusters, aiGroups: aiGroupsByCat.get(cat.name) });
+    result.push({ id: cat.name, name: cat.name, type: cat.type, parentLine: umbrellaByCat.get(cat.name.toLowerCase()), keywords: kws, totalVolume, subClusters, aiGroups: aiGroupsByCat.get(cat.name) });
   }
 
   // ── v7.169: Surface every deep-journey demand TOPIC (theme × intent) ─────────
@@ -778,6 +792,11 @@ function dominantStage(c: ThemeCluster): JourneyStage {
 export interface Topic {
   id:            string;
   parentName:    string;
+  // v7.236: the umbrella (taxonomy path[0]) the parent theme sits under — the SAME stored
+  // hierarchy the Keyword panel renders (`_categoryBreakdown.categories[].parent`). Lets the
+  // Cluster panel nest umbrella → theme → topic, mirroring the keyword tree (Const II.7/III.1b).
+  // Falls back to parentName (top-level) when the analysis carries no stored umbrella.
+  umbrella:      string;
   parentType:    'procedure' | 'brand' | 'location' | 'demand' | 'problem';
   product:       string;        // v7.190: sub-product name (client page name when matched, else mined modifier, else Core)
   productKey:    string;        // v7.190: stable product grouping key
@@ -1228,6 +1247,9 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
       topics.push({
         id:          `${c.id}::${g.key}`,
         parentName:  c.name,
+        // v7.236: nest under the stored umbrella; top-level themes (no stored parent, or
+        // brand/location/demand/problem) use their own name as the umbrella.
+        umbrella:    c.parentLine && c.parentLine.trim() ? c.parentLine.trim() : c.name,
         parentType:  c.type,
         product:     g.name,        // v7.197: topical intent name (e.g. "401k vs IRA")
         productKey:  g.key,
@@ -1503,12 +1525,15 @@ const TH_BASE: React.CSSProperties = {
 
 function TopicTable({
   rows, sortKey, sortDir, onSort, expanded, onToggle, expandedParents, onToggleParent,
+  expandedUmbrellas, onToggleUmbrella,
 }: {
   rows: TopicRow[]; sortKey: SortKey; sortDir: 1 | -1; onSort: (k: SortKey) => void;
   expanded: Set<string>; onToggle: (id: string) => void;
   // v7.207: parent-collapse — a parent's child rows render only when its name is in
   // expandedParents. Default-collapsed is enforced by the caller (empty set).
   expandedParents: Set<string>; onToggleParent: (name: string) => void;
+  // v7.236: umbrella-collapse — the level above theme (mirrors the Keyword tree).
+  expandedUmbrellas: Set<string>; onToggleUmbrella: (name: string) => void;
 }) {
   const cols: Array<{ k: SortKey; label: string; align: 'left' | 'right' }> = [
     { k: 'group',    label: 'Theme · product', align: 'left'  },
@@ -1540,36 +1565,70 @@ function TopicTable({
             // and indent its child topic rows beneath it — so a parent name shows
             // exactly once (no more repeated "401k & Retirement Planning" rows).
             const grouped = sortKey === 'group';
+            // v7.236: theme-level AND umbrella-level aggregates. The umbrella is the stored
+            // taxonomy parent (path[0]) — the same top level the Keyword tree shows.
             const agg = new Map<string, { n: number; vol: number }>();
+            const umbAgg = new Map<string, { n: number; vol: number }>();
             for (const r of rows) {
               const a = agg.get(r.t.parentName) ?? { n: 0, vol: 0 };
               a.n += 1; a.vol += r.t.totalVolume; agg.set(r.t.parentName, a);
+              const u = umbAgg.get(r.t.umbrella) ?? { n: 0, vol: 0 };
+              u.n += 1; u.vol += r.t.totalVolume; umbAgg.set(r.t.umbrella, u);
             }
             const out: React.ReactNode[] = [];
+            let lastUmbrella: string | null = null;
             let lastParent: string | null = null;
-            // v7.207: when grouped, a parent's child rows are hidden unless its name is
-            // in expandedParents (default-collapsed). The header row itself always shows
-            // so the list reads as a navigable index of parent topics.
-            const parentOpen = (name: string) => !grouped || expandedParents.has(name);
+            // v7.207/236: grouped view is a tree — umbrella → theme → topic. A level's children
+            // are hidden unless it is expanded (default-collapsed), so the list reads as a
+            // navigable index you drill into (mirrors the Keyword panel's Category Breakdown).
+            const umbrellaOpen = (name: string) => !grouped || expandedUmbrellas.has(name);
+            const parentOpen   = (name: string) => !grouped || expandedParents.has(name);
             rows.forEach(({ t, m }) => {
-              if (grouped && t.parentName !== lastParent) {
+              // A theme that IS its own umbrella (no stored parent, or brand/location/demand/
+              // problem) collapses the two header levels into one — no redundant repeat.
+              const selfUmb = t.umbrella === t.parentName;
+              if (grouped && t.umbrella !== lastUmbrella) {
+                lastUmbrella = t.umbrella; lastParent = null;
+                const ua = umbAgg.get(t.umbrella)!;
+                const uOpen = expandedUmbrellas.has(t.umbrella);
+                out.push(
+                  <tr key={`umb:${t.umbrella}`} onClick={() => onToggleUmbrella(t.umbrella)} style={{ cursor: 'pointer' }} aria-expanded={uOpen}>
+                    <td colSpan={7} style={{ padding: '10px 12px', background: 'var(--c-0b0b15)', borderLeft: '3px solid var(--c-6c63ff)', borderTop: '1px solid var(--c-1a1a30)', borderBottom: '1px solid var(--c-23233a)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          <i className={`ti ti-chevron-${uOpen ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--c-8b85ff)', flexShrink: 0 }} aria-hidden="true" />
+                          <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-ececff)', letterSpacing: '.01em' }}>{t.umbrella}</span>
+                          {!selfUmb && <span style={{ fontSize: 9, color: 'var(--c-585878)', textTransform: 'uppercase', letterSpacing: '.06em' }}>umbrella</span>}
+                        </span>
+                        <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                          {ua.n} {ua.n === 1 ? 'topic' : 'topics'} · {fmtVol(ua.vol)}/mo
+                        </span>
+                      </div>
+                    </td>
+                  </tr>,
+                );
+              }
+              // Umbrella collapsed → hide every theme + topic beneath it.
+              if (!umbrellaOpen(t.umbrella)) return;
+              // Theme header — only when the umbrella has DISTINCT child themes (not self-umbrella).
+              if (grouped && !selfUmb && t.parentName !== lastParent) {
                 lastParent = t.parentName;
                 const a = agg.get(t.parentName)!;
                 const isOpen = expandedParents.has(t.parentName);
-                // v7.200: band the parent header row with the category's own type tint + left accent
+                // v7.200: band the theme header with the category's own type tint + left accent.
                 const ptm = TYPE_META[t.parentType];
                 out.push(
                   <tr
-                    key={`hdr:${t.parentName}`}
+                    key={`hdr:${t.umbrella}:${t.parentName}`}
                     onClick={() => onToggleParent(t.parentName)}
                     style={{ cursor: 'pointer' }}
                     aria-expanded={isOpen}
                   >
-                    <td colSpan={7} style={{ padding: '9px 12px', background: ptm.headBg, borderLeft: `3px solid ${ptm.color}`, borderTop: '1px solid var(--c-15152a)', borderBottom: '1px solid var(--c-23233a)' }}>
+                    <td colSpan={7} style={{ padding: '8px 12px 8px 30px', background: ptm.headBg, borderLeft: `3px solid ${ptm.color}`, borderBottom: '1px solid var(--c-23233a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
                           <i className={`ti ti-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 13, color: ptm.color, flexShrink: 0 }} aria-hidden="true" />
-                          <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                           {a.n} {a.n === 1 ? 'topic' : 'topics'} · {fmtVol(a.vol)}/mo
@@ -1579,12 +1638,15 @@ function TopicTable({
                   </tr>,
                 );
               }
-              // Skip child rows whose parent is collapsed (grouped view only).
-              if (!parentOpen(t.parentName)) return;
+              // Skip topic rows when their theme is collapsed (non-self umbrellas only).
+              if (grouped && !selfUmb && !parentOpen(t.parentName)) return;
               const stm    = STAGE_META[t.stage];
               const stt    = TBL_STATUS[m.status];
               const open   = expanded.has(t.id);
               const isCore = isCoreKey(t.productKey);
+              // v7.236: indent topic rows by tree depth — one level under a self-umbrella,
+              // two levels under a real umbrella → theme.
+              const childPad = !grouped ? 10 : (selfUmb ? 28 : 46);
               const topKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 24);
               out.push(
                 <Fragment key={t.id}>
@@ -1594,7 +1656,7 @@ function TopicTable({
                     onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--c-101019)'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = open ? 'var(--c-101019)' : 'transparent'; }}
                   >
-                    <td style={{ padding: '8px 10px', paddingLeft: grouped ? 26 : 10, borderBottom: '1px solid var(--c-15152a)' }}>
+                    <td style={{ padding: '8px 10px', paddingLeft: childPad, borderBottom: '1px solid var(--c-15152a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-4a4a6a)', flexShrink: 0 }} aria-hidden="true" />
                         <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d8d8f8)' }}>{t.product}</span>
@@ -1684,6 +1746,13 @@ function ClustersTab({
   // so the grouped cluster list opens as a tidy index of parent topics you drill into.
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const toggleParent = (name: string) => setExpandedParents(prev => {
+    const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n;
+  });
+  // v7.236: umbrella collapse — the level ABOVE theme (mirrors the Keyword tree's top rows).
+  // Default empty ⇒ every umbrella starts collapsed, so the list opens as a tidy index of
+  // umbrellas you drill into → themes → topics.
+  const [expandedUmbrellas, setExpandedUmbrellas] = useState<Set<string>>(new Set());
+  const toggleUmbrella = (name: string) => setExpandedUmbrellas(prev => {
     const n = new Set(prev); if (n.has(name)) n.delete(name); else n.add(name); return n;
   });
 
@@ -1787,9 +1856,11 @@ function ClustersTab({
     let r = 0;
     switch (sortKey) {
       case 'group': {
-        // Parent first; within a parent, core (intent-only) sub-topics come first in
-        // funnel order, then each split product group, each in funnel order.
-        r = a.t.parentName.localeCompare(b.t.parentName);
+        // v7.236: umbrella first (mirrors the Keyword tree's top level), then theme;
+        // within a theme, core (intent-only) sub-topics come first in funnel order, then
+        // each split product group, each in funnel order.
+        r = a.t.umbrella.localeCompare(b.t.umbrella);
+        if (r === 0) r = a.t.parentName.localeCompare(b.t.parentName);
         if (r === 0) r = (isCoreKey(a.t.productKey) ? 0 : 1) - (isCoreKey(b.t.productKey) ? 0 : 1);
         if (r === 0 && !isCoreKey(a.t.productKey)) r = a.t.product.localeCompare(b.t.product);
         if (r === 0) r = sIdx(a.t.stage) - sIdx(b.t.stage);
@@ -2322,16 +2393,22 @@ function ClustersTab({
       {/* ── v7.190: one sortable table — Theme · product × funnel stage ──────── */}
       {/* v7.207: when grouped, expose Expand all / Collapse all for the parent rows. */}
       {filtered.length > 0 && sortKey === 'group' && (() => {
-        const allParents = Array.from(new Set(sortedRows.map(r => r.t.parentName)));
-        const openCount  = allParents.filter(p => expandedParents.has(p)).length;
-        const allOpen    = openCount === allParents.length && allParents.length > 0;
+        // v7.236: count + expand/collapse operate on UMBRELLAS (the top level). Expand-all
+        // opens every umbrella AND its themes so one click reveals the full tree.
+        const allUmbrellas = Array.from(new Set(sortedRows.map(r => r.t.umbrella)));
+        const allParents   = Array.from(new Set(sortedRows.map(r => r.t.parentName)));
+        const openCount    = allUmbrellas.filter(u => expandedUmbrellas.has(u)).length;
+        const allOpen      = openCount === allUmbrellas.length && allUmbrellas.length > 0;
         return (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, margin: '0 2px 8px' }}>
             <span style={{ fontSize: 11, color: 'var(--c-585878)' }}>
-              {allParents.length} categor{allParents.length === 1 ? 'y' : 'ies'} · {openCount} expanded
+              {allUmbrellas.length} umbrella{allUmbrellas.length === 1 ? '' : 's'} · {openCount} expanded
             </span>
             <button
-              onClick={() => setExpandedParents(allOpen ? new Set() : new Set(allParents))}
+              onClick={() => {
+                if (allOpen) { setExpandedUmbrellas(new Set()); setExpandedParents(new Set()); }
+                else { setExpandedUmbrellas(new Set(allUmbrellas)); setExpandedParents(new Set(allParents)); }
+              }}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
                 border: '1px solid var(--c-23233a)', background: 'var(--c-0d0d1a)', color: 'var(--c-9090b8)',
@@ -2354,6 +2431,8 @@ function ClustersTab({
           onToggle={toggleRow}
           expandedParents={expandedParents}
           onToggleParent={toggleParent}
+          expandedUmbrellas={expandedUmbrellas}
+          onToggleUmbrella={toggleUmbrella}
         />
       )}
 
