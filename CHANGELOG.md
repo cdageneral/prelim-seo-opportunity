@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.239 — 2026-06-18 · One taxonomy, two panels: the Cluster panel now renders the SAME tree as the Keyword panel
+
+**The decision (Wayne).** "I don't think we need to recreate this view in the clusters. Can we not just have the one view in the keyword panel populate the clusters?" Yes — after four releases patching the cluster panel's *own* category pipeline, the durable fix is to build the taxonomy **once** and render it in both panels (Const II.7, single source of truth), with the cluster panel adding its intent / journey-stage / ownership annotations.
+
+**What changed.**
+- **New `lib/category/taxonomyTree.ts`** — THE shared builder. `buildTaxonomyTree(rows, keywordPaths, accessors)` groups keywords by their stored path into the umbrella → theme → sub tree, collapses redundant single-child levels, and rolls metrics up arithmetically (every keyword in exactly one node → a parent is the exact sum of its descendants). Generic over the row type so both panels use the identical algorithm.
+- **`components/brief/ThemeClustersPanel.tsx`** — the Cluster panel's topic list is now built by `buildTopicsFromTaxonomy`, which walks that shared tree: each node that holds keywords becomes one topic whose **umbrella / theme / sub labels ARE the canonical `keywordPaths` nodes** — identical to the Keyword tree by construction, never mined from keyword text. Each topic still carries the cluster panel's annotations (dominant search intent, journey stage, client/competitor/missing-demand ownership). Keywords with no stored path (deep-journey demand / pre-product problem themes) fall back to the prior intent grouping, so that incremental lens is preserved. Pre-taxonomy analyses fall back to the old view (honest gap, I.5).
+
+**Why this is different from v7.236–238.** Those added an umbrella level / sub-labels *on top of* the cluster's separate category pipeline, which kept drifting. This release removes that pipeline as the structure source: the cluster reads the exact same `keywordPaths` the keyword tree does, so they cannot diverge.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over the new module + all `Topic` consumers = 0 errors. The **full retained regression suite** (`_regression/run.sh`) — every prior check (v7.235–238) plus new v7.239 ones — **18/18 PASS** on real compiled code, including: the shared `buildTaxonomyTree` produces a single "Credit Cards" umbrella with "Balance Transfer"/"Cash Back" themes nesting under it, a theme holds its head keyword plus its canonical sub "No Annual Fee", and the rollup is the exact arithmetic sum (1500). No styling change → dual-theme parity (verified for this render in v7.236) holds.
+
+**Action for Wayne:** deploy v7.239, then **Run Analysis** once (so the cleanest, fully-merged `keywordPaths` are stored — the stronger synonym merge from v7.238 applies on a fresh run). The Cluster panel's umbrella → theme → sub should now match the Keyword panel exactly, with intent/stage/ownership shown per node. (Note: with one shared structure, the cluster "Total topics" count now counts taxonomy nodes; the Journey/Content panels move onto the same tree in the next phases.)
+
 ## v7.238 — 2026-06-18 · Cluster sub-categories now come from the canonical taxonomy (no mined names); stronger synonym merge
 
 **The issue (Wayne).** Comparing the same primary category (Credit Cards): the Keyword panel was right, the Cluster panel was wrong — the cluster showed a messy, duplicated set ("Balance Transfer" + "Balance Transfer Credit Cards" + "Balance Transfer Cards"; "Cash Back" + "Cashback"; "Secured" + "Secured Cards" + "Secured Credit Cards"). The v7.236 umbrella nesting sat on top of the old layer, so the labels never changed.

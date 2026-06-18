@@ -3,6 +3,7 @@
 import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand, buildExcludedBrandTokens } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a)
+import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTree';   // v7.239: ONE shared tree builder — same source as the Keyword panel (Const II.7)
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1206,6 +1207,89 @@ function buildPreProductClusters(
   return { clusters, preProductKws };
 }
 
+// ─── v7.239: cluster topics built from the SHARED taxonomy tree (Const II.7) ────────
+// The Cluster panel's topic list is built from the SAME stored `keywordPaths` the Keyword
+// panel renders, via the shared `buildTaxonomyTree`. Every node that holds its own keywords
+// is one topic; its umbrella/theme/sub labels ARE the canonical taxonomy nodes (never mined
+// from keyword text). Keywords without a stored path (deep-journey demand / pre-product
+// problem themes) fall back to the intent-based `flattenTopics` so that incremental lens is
+// preserved. Result: the Cluster panel mirrors the Keyword tree exactly for the footprint.
+export function buildTopicsFromTaxonomy(clusters: ThemeCluster[], pathOf: Map<string, string[]>): Topic[] {
+  // intent + type context per keyword from the clusters (so each taxonomy node can show a
+  // dominant intent / journey stage / type without re-deriving them).
+  const intentByKw = new Map<KwItem, IntentType>();
+  const typeByKw   = new Map<KwItem, ThemeCluster['type']>();
+  for (const c of clusters) {
+    for (const sc of c.subClusters) for (const kw of sc.keywords) intentByKw.set(kw, sc.intent);
+    for (const kw of c.keywords) if (!typeByKw.has(kw)) typeByKw.set(kw, c.type);
+  }
+  const hasPath = (kw: KwItem) => { const p = pathOf.get(kw.keyword.toLowerCase().trim()); return !!(p && p.length); };
+
+  // De-duplicate footprint keywords (first cluster wins) that carry a stored path.
+  const seen = new Set<string>();
+  const withPath: KwItem[] = [];
+  for (const c of clusters) for (const kw of c.keywords) {
+    const k = kw.keyword.toLowerCase().trim();
+    if (hasPath(kw) && !seen.has(k)) { seen.add(k); withPath.push(kw); }
+  }
+
+  const tree = buildTaxonomyTree<KwItem>(withPath, pathOf, {
+    keyOf: (r) => r.keyword.toLowerCase().trim(),
+    posOf: (r) => r.position,
+    volOf: (r) => r.searchVolume,
+  });
+
+  const out: Topic[] = [];
+  const walk = (n: TaxoTreeNode<KwItem>) => {
+    if (n.own.length > 0) {
+      const path     = n.path;
+      const umbrella = path[0] ?? n.name;
+      const theme    = path.length >= 2 ? path[1] : path[0];
+      const isHead   = n.name === theme;     // node sits at the theme level (head-term page)
+      // dominant intent by volume across this node's own keywords
+      const volByIntent = new Map<IntentType, number>();
+      for (const kw of n.own) {
+        const it = intentByKw.get(kw) ?? detectIntentSignal(kw.keyword) ?? 'unmatched';
+        volByIntent.set(it, (volByIntent.get(it) ?? 0) + kw.searchVolume);
+      }
+      let intent: IntentType = 'unmatched', dv = -1;
+      for (const [it, v] of Array.from(volByIntent.entries())) if (v > dv) { dv = v; intent = it; }
+      const type  = typeByKw.get(n.own[0]) ?? 'procedure';
+      const meta  = INTENT_META[intent];
+      const stage: JourneyStage = type === 'problem' ? 'awareness' : meta.stage;
+      out.push({
+        id:          'tax:' + n.id,
+        parentName:  theme,
+        umbrella,
+        parentType:  type,
+        product:     n.name,
+        productKey:  isHead ? `${CORE_KEY}::${n.id}` : `tax::${n.id}`,
+        pageUrl:     n.own.find(k => k.position !== null && k.url)?.url,
+        intent,
+        stage,
+        contentType: meta.contentType,
+        contentIcon: meta.contentIcon,
+        keywords:    n.own,
+        totalVolume: n.own.reduce((s, k) => s + k.searchVolume, 0),
+      });
+    }
+    for (const c of n.children) walk(c);
+  };
+  for (const n of tree) walk(n);
+
+  // Fallback (intent-based) topics for keywords with NO stored path — demand / problem lanes.
+  const fallbackClusters = clusters
+    .map(c => ({
+      ...c,
+      keywords:    c.keywords.filter(k => !hasPath(k)),
+      subClusters: c.subClusters.map(sc => ({ ...sc, keywords: sc.keywords.filter(k => !hasPath(k)) })).filter(sc => sc.keywords.length > 0),
+    }))
+    .filter(c => c.keywords.length > 0);
+  if (fallbackClusters.length > 0) out.push(...flattenTopics(fallbackClusters));
+
+  return out;
+}
+
 function flattenTopics(clusters: ThemeCluster[]): Topic[] {
   const topics: Topic[] = [];
   for (const c of clusters) {
@@ -1752,10 +1836,12 @@ function ClustersTab({
   refineProgress = null,
   refineError = null,
   aiRefined = false,
+  keywordPaths,
 }: {
   clusters:      ThemeCluster[];
   clientDomain:  string;
   loadingClaude: boolean;
+  keywordPaths?: Map<string, string[]>;   // v7.239: the SHARED stored taxonomy (same as Keyword panel)
   onRefine?:        (force?: boolean) => void;
   refining?:        boolean;
   refineProgress?:  { done: number; total: number; label: string; startedAt: number } | null;
@@ -1800,7 +1886,12 @@ function ClustersTab({
   };
 
   // ── Flatten categories → TOPICS (the counted unit) + classify each ──────────
-  const topics: Topic[] = flattenTopics(scopedClusters);
+  // v7.239: build topics from the SHARED taxonomy tree (keywordPaths) when available, so the
+  // Cluster panel's structure is identical to the Keyword panel's by construction (Const II.7);
+  // fall back to the intent-based flatten only on pre-taxonomy analyses (honest gap, I.5).
+  const flatten = (cl: ThemeCluster[]): Topic[] =>
+    (keywordPaths && keywordPaths.size > 0) ? buildTopicsFromTaxonomy(cl, keywordPaths) : flattenTopics(cl);
+  const topics: Topic[] = flatten(scopedClusters);
   const topicStats: TopicStat[] = topics.map(classifyTopic);
   const catCount = new Set(scopedClusters.map(c => `${c.type}:${c.name}`)).size;
 
@@ -2301,8 +2392,8 @@ function ClustersTab({
       {/* solution-aware, full funnel — the SAME split the Journey & Content Map  */}
       {/* panels use (single source of truth).                                    */}
       {(() => {
-        const preTopicsN     = flattenTopics(clusters.filter(c =>  isPreProductCluster(c))).length;
-        const productTopicsN = flattenTopics(clusters.filter(c => !isPreProductCluster(c))).length;
+        const preTopicsN     = flatten(clusters.filter(c =>  isPreProductCluster(c))).length;
+        const productTopicsN = flatten(clusters.filter(c => !isPreProductCluster(c))).length;
         const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
           { key: 'all',     label: 'All journeys',        count: productTopicsN + preTopicsN, hint: 'Product + pre-product topics',           accent: 'var(--c-c8c8e8)' },
           { key: 'product', label: 'Product journey',     count: productTopicsN,              hint: 'Solution-aware demand · full funnel',    accent: 'var(--c-9b96ff)', dot: true },
@@ -2553,6 +2644,20 @@ export default function ThemeClustersPanel({
   // scope toggle in ClustersTab slices THIS, and the cards/funnel/pills/grid recompute.
   const allClusters = useMemo(() => [...baseClusters, ...journeyBuild.clusters], [baseClusters, journeyBuild]);
 
+  // v7.239: the STORED canonical taxonomy (same source the Keyword panel renders). Read once
+  // here and handed to ClustersTab so the cluster topic tree IS the keyword tree (Const II.7).
+  const keywordPathsMap = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const kp: Record<string, any> = effectiveAnalysis?.semrushSnapshot?._categoryBreakdown?.keywordPaths ?? {};
+    for (const [k, v] of Object.entries(kp)) {
+      if (Array.isArray(v)) {
+        const path = v.map((s: any) => String(s ?? '').trim()).filter(Boolean);
+        if (path.length) m.set(k.toLowerCase().trim(), path);
+      }
+    }
+    return m;
+  }, [effectiveAnalysis]);
+
   const runRefine = useCallback(async (force = false) => {
     setRefining(true); setRefineError(null);
     setRefineProgress({ done: 0, total: 0, label: '', startedAt: Date.now() });
@@ -2722,6 +2827,7 @@ export default function ThemeClustersPanel({
           refineProgress={refineProgress}
           refineError={refineError}
           aiRefined={!!aiRefined}
+          keywordPaths={keywordPathsMap}
         />
       )}
     </div>
