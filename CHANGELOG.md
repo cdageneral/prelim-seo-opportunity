@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.232 — 2026-06-18 · Fix v7.231 regression: discovery truncation blanked the Cluster panel; speed up navigation
+
+**The ask (Wayne):** after re-running on v7.231, the Cluster panel's themes were completely gone, the Keyword panel lost its categories, and every click/navigation lagged for seconds.
+
+**Root cause (my v7.231 bug).** The new hierarchical discovery returns a full path per keyword — ~3× more verbose than the old flat index lists — but the batch size (250 keywords) and response limit (4,000 tokens) were unchanged. So each batch's JSON truncated, every batch failed to parse, and `generateCategoryBreakdown` collapsed to an EMPTY result. Both the Cluster panel and the Keyword-panel categories read that same `_categoryBreakdown`, so both blanked. My v7.231 harness only used 9-keyword fixtures, so it never hit the real-scale token budget — that's the gap that let this ship.
+
+**What changed.**
+- `lib/claude/synthesize.ts` — discovery batch 250 → 40 and `max_tokens` 4,000 → 8,000 (and canonicalization 4,000 → 8,000), so each response stays well inside the budget; concurrency 5 → 6 to keep wall-time down. Added a tolerant `parseAssignments` that salvages every COMPLETE assignment object from a response even if the tail is truncated — so a partial response still contributes its keywords instead of dropping the whole batch.
+- `components/brief/ThemeClustersPanel.tsx` — `buildCanonicalClusterTopics` (which walks the full ~14k-keyword footprint and is called by every panel) is now memoized on a signature of its inputs. The first panel computes it; the Cluster/Journey/Content/Keyword views reuse the cached result instead of recomputing on every navigation and interaction. The result is read-only to callers (verified: no caller sorts/pushes the returned array in place), so the cache can't be poisoned.
+
+**Verified (own debugging agent).** Isolated `tsc` = 0 errors. Behavioral harness (esbuild-bundled real compiled code): pipeline regression on the mortgage fixture = 12/12 (unchanged); a new truncation test = 5/5 — a deliberately truncated discovery response still yields a non-empty category breakdown (panels not blanked), `keywordPaths` populated from the salvaged objects, recovered keywords categorized, and all keywords still accounted for. Memo logic verified by inspection (signature covers footprint size, demand universe, category/keyword-map counts, domains, thresholds).
+
+**Still open (separate, pre-existing).** The Google Ranks "ranked" count (`topKeywords.length`) vs the Keyword Landscape "ranked/client" count differ because they count "ranked" differently (the latter includes uploaded keywords without a position). That's a different code path, not part of the taxonomy work, and is NOT fixed here — flagged for a follow-up.
+
+**Action for Wayne:** deploy v7.232 and run a fresh Data-only refresh. The Cluster panel + keyword categories should return, and navigation should be snappy.
+
 ## v7.231 — 2026-06-18 · Hierarchical taxonomy (Phase 1): one stored multi-level tree, every node a page (Const I.1, II.8, III.1b)
 
 **The ask (Wayne):** the v7.230 sub-clusters were mechanically mined ("Mortgage Year", "Rate Current" — two boxes that are really the same theme). Group categories and sub-categories by meaning into a real hierarchy: parent → sub → sub-sub, every level a page with keywords + volumes. Decisions: unlimited depth, a "Mortgages" umbrella over Rates/Calculator, every level is its own page. Approach: combined hierarchical discovery, fresh umbrellas, single-child collapse (no depth cap). See `OrbitIQ_Hierarchical_Taxonomy_Spec.md`.

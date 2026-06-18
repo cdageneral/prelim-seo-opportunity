@@ -1252,6 +1252,38 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
 // made the cluster / journey / content-plan counts diverge (2514 vs 617 vs 323).
 // It calls the SAME builders the panel uses (no parallel copy); AI-refined intent
 // merges flow in automatically when the snapshot carries `_categoryBreakdown.intentGroups`.
+// v7.232: building the canonical topics walks the FULL footprint (14k+ keywords) — pre-product
+// clusters + theme clusters + intent flattening. It is called by EVERY panel (Keyword model,
+// Cluster, Journey, Content) and on interactions, so recomputing it each time made navigation /
+// clicks lag for seconds. Memoize on a signature of the inputs that affect the output, so the
+// first panel computes it and the rest reuse it. The result is treated as read-only by callers
+// (they project new structures from it; they never mutate the Topic objects).
+const _canonTopicsCache = new Map<string, Topic[]>();
+function _canonSig(
+  analysis: any, clientDomain: string, competitorDomains: string[],
+  uploadedKeywords: any[], claudeAssigns: Record<string, IntentType>,
+  clientVolMin: number, competitorVolMin: number,
+): string {
+  const snap = analysis?.semrushSnapshot ?? {};
+  const du   = snap?._demandUniverse;
+  const cb   = snap?._categoryBreakdown;
+  return [
+    analysis?.id ?? '?',
+    snap?.domain ?? '',
+    snap?.topKeywords?.length ?? 0,
+    snap?.gapKeywords?.length ?? 0,
+    Array.isArray(du?.topics) ? du.topics.length : 0,
+    cb?.categories?.length ?? 0,
+    Object.keys(cb?.keywordCategories ?? {}).length,
+    clientDomain,
+    competitorDomains.join(','),
+    uploadedKeywords.length,
+    Object.keys(claudeAssigns).length,
+    clientVolMin,
+    competitorVolMin,
+  ].join('|');
+}
+
 export function buildCanonicalClusterTopics(
   analysis: any,
   clientDomain: string,
@@ -1266,13 +1298,24 @@ export function buildCanonicalClusterTopics(
   clientVolMin = 0,
   competitorVolMin = 0,
 ): Topic[] {
+  const sig = _canonSig(analysis, clientDomain, competitorDomains, uploadedKeywords, claudeAssigns, clientVolMin, competitorVolMin);
+  const cached = _canonTopicsCache.get(sig);
+  if (cached) return cached;
+
   const jb = buildPreProductClusters(
     analysis, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin,
   );
   const base = buildThemeClusters(
     analysis, claudeAssigns, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin, jb.preProductKws,
   );
-  return flattenTopics([...base, ...jb.clusters]);
+  const topics = flattenTopics([...base, ...jb.clusters]);
+
+  _canonTopicsCache.set(sig, topics);
+  if (_canonTopicsCache.size > 4) {              // small LRU — keep a few analyses / threshold variants
+    const oldest = _canonTopicsCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) _canonTopicsCache.delete(oldest);
+  }
+  return topics;
 }
 
 // A topic is "missing demand" (a third lens) when it is a seed demand category OR

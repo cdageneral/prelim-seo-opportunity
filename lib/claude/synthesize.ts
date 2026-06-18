@@ -246,13 +246,16 @@ export async function generateCategoryBreakdown(
   }
 
   // ── Phase 1 (v7.231): HIERARCHICAL DISCOVERY across the ENTIRE keyword set ──
-  // Every keyword participates — no sampling (Const I.6). The full set is chunked into
-  // batches of 250; each batch returns, per keyword, the FULL semantic PATH (umbrella →
-  // theme → sub → …) it belongs to. This replaces the old flat discovery: structure +
-  // membership come out of the same pass, so per-analysis cost is unchanged.
+  // Every keyword participates — no sampling (Const I.6). Each batch returns, per keyword,
+  // the FULL semantic PATH (umbrella → theme → sub → …). Structure + membership come out of
+  // the same pass, so per-analysis cost is unchanged.
+  // v7.232: per-keyword PATH output is ~3× more verbose than the old flat index lists, so a
+  // 250-kw batch overran max_tokens and the JSON truncated → every batch failed to parse →
+  // empty category breakdown (which blanked the Cluster panel + keyword categories). Smaller
+  // batches keep each response comfortably inside the token budget; concurrency keeps it fast.
   const OTHER_NAME      = 'Other';
-  const DISCOVERY_BATCH = 250;
-  const CONCURRENCY     = 5;
+  const DISCOVERY_BATCH = 40;
+  const CONCURRENCY     = 6;
 
   const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
   for (let i = 0; i < merged.length; i += DISCOVERY_BATCH) {
@@ -269,18 +272,32 @@ export async function generateCategoryBreakdown(
   const cleanPath = (p: any): string[] =>
     Array.isArray(p) ? p.map(s => String(s ?? '').trim()).filter(Boolean) : [];
 
+  // v7.232: tolerant parse — if the whole-JSON parse fails (e.g. a truncated tail), salvage
+  // every COMPLETE assignment object from the text so a partial response still contributes
+  // its keywords instead of dropping the whole batch to "Other".
+  const parseAssignments = (text: string): Array<{ index: number; path: string[]; type?: string }> => {
+    try {
+      const parsed = extractJSON<{ assignments: Array<{ index: number; path: string[]; type?: string }> }>(text);
+      if (Array.isArray(parsed?.assignments) && parsed.assignments.length > 0) return parsed.assignments;
+    } catch { /* fall through to salvage */ }
+    const out: Array<{ index: number; path: string[]; type?: string }> = [];
+    const re = /\{[^{}]*?"index"\s*:\s*\d+[^{}]*?"path"\s*:\s*\[[^\]]*\][^{}]*?\}/g;
+    const matches = text.match(re) ?? [];
+    for (const m of matches) { try { out.push(JSON.parse(m)); } catch { /* skip */ } }
+    return out;
+  };
+
   const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
     try {
       const bPrompt   = hierarchicalDiscoveryPrompt(domain, industry, batch.kws);
       const bResponse = await getClient().messages.create({
         model:      MODELS.fast,
-        max_tokens: 4000,   // paths are more verbose than flat names
+        max_tokens: 8000,   // v7.232: room for ~40 keywords × full path objects, no truncation
         messages:   [{ role: 'user', content: bPrompt }],
       }, { timeout: 60_000 });
       const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
-      const bParsed = extractJSON<{ assignments: Array<{ index: number; path: string[]; type?: string }> }>(bText);
 
-      for (const a of bParsed.assignments ?? []) {
+      for (const a of parseAssignments(bText)) {
         const li = a?.index;
         if (!Number.isInteger(li) || li < 0 || li >= batch.kws.length) continue;
         const path = cleanPath(a?.path);
@@ -326,7 +343,7 @@ export async function generateCategoryBreakdown(
       const cPrompt   = pathCanonicalizationPrompt(domain, industry, distinctPaths);
       const cResponse = await getClient().messages.create({
         model:      MODELS.fast,
-        max_tokens: 4000,
+        max_tokens: 8000,   // v7.232: up to 300 distinct paths → needs headroom
         messages:   [{ role: 'user', content: cPrompt }],
       }, { timeout: 60_000 });
       const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
