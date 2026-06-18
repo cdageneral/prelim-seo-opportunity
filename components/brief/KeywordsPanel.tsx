@@ -1649,99 +1649,23 @@ function fmtKwAnn(monthly: number): string {
 
 const RANK_SEL_INDEX: Record<Exclude<RankFilter, 'all'>, number> = { p13: 0, p410: 1, p2: 2, p3p: 3 };
 
-// ─── Category hierarchy (v7.191) ─────────────────────────────────────────────
-// Wayne: turn the flat Category Breakdown into a parent → child → … tree, derived
-// ENTIRELY from the keyword data (no hardcoded vertical word list — the v7.187
-// rule). Two independent, data-driven mechanisms, collapsed by default:
-//   • SUB-CATEGORIES (depth ↓): within a procedure category, recurring distinctive
-//     keyword modifiers (adjacent bigrams, then unigrams; each in ≥2 keywords)
-//     become child rows, RECURSIVELY, after stripping the parent's own head words.
-//     A "— general" remainder child holds the rest, so every node's totals are the
-//     EXACT sum of its descendants — nothing invented, nothing lost (defensible).
-//   • FAMILIES (depth ↑): procedure categories that share the SAME trailing product
-//     noun (e.g. "Personal Loans" + "Auto Loans" → "Loans") nest under a derived
-//     parent named from that shared noun. Categories with a unique noun stay top-
-//     level. A semantic super-group ("Lending") whose word is NOT in the data can
-//     only come from the LLM grouping pass — never fabricated here.
-// Brand/location categories stay flat (navigational, not product lines).
-
-const CAT_STOP = new Set<string>([
-  'the','and','for','with','without','your','you','our','their','this','that','these','those',
-  'what','whats','which','who','whom','how','why','when','where','are','was','were','being','been',
-  'does','did','can','could','will','would','should','about','near','vs','versus','its','get','getting',
-  'got','use','using','need','want','much','many','best','top','online','app','from','into','out',
-]);
-
-function catStem(w: string): string { return w.endsWith('s') ? w.slice(0, -1) : w; }
-
-function catModTokens(text: string, head: Set<string>): string[] {
-  return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-    .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !head.has(w) && !/^\d+$/.test(w));
-}
-
-function catHeadTokens(name: string): Set<string> {
-  const h = new Set<string>();
-  for (const w of name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean)) {
-    if (w.length >= 3) { h.add(w); h.add(catStem(w)); h.add(catStem(w) + 's'); }
-  }
-  return h;
-}
+// ─── Category hierarchy (v7.229 — real taxonomy) ─────────────────────────────
+// The parent/child tree is now READ from the stored taxonomy
+// (`_categoryBreakdown.categories[].parent`, surfaced as `categoryModel.parentForCategory`),
+// NOT fabricated from keyword text at render time. The pre-v7.229 lexical heuristics
+// (trailing-noun "families" + recurring-word "sub-categories") were removed: they
+// produced semantically wrong edges — e.g. "Mortgage Rates and Calculators" filed
+// under "Calculators" (shared last word) and "Credit Card" surfaced inside it — which
+// violates Const II.8 (no lexical re-derivation at a read site) and III.1 (real
+// parent/child categorization). The tree is now exactly two levels: a real product
+// LINE (synthetic parent, ≥2 member categories) over its CATEGORY leaves; categories
+// with a unique line stay top-level. When an analysis predates the taxonomy pass the
+// `parent` is absent → the panel renders FLAT (honest gap, Const I.5) rather than guessing.
+// Brand/location categories stay flat (navigational, not product lines). Every parent's
+// metrics remain the exact arithmetic sum of its leaves (aggregateCatNode).
 
 function catTitle(s: string): string {
   return s.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-interface SubSeed { key: string; label: string; tokens: string[]; gram: number; }
-
-// Recurring distinctive modifiers among a node's keywords. Bigrams (order-
-// independent) first, then unigrams; each must recur in ≥2 keywords.
-function deriveSubSeeds(kws: KeywordRow[], head: Set<string>): SubSeed[] {
-  const uni = new Map<string, number>();
-  const bi  = new Map<string, number>();
-  const biLabel = new Map<string, Map<string, number>>();
-  for (const k of kws) {
-    const toks = catModTokens(k.keyword, head);
-    const seen = new Set<string>();
-    for (const t of toks) if (!seen.has(t)) { uni.set(t, (uni.get(t) ?? 0) + 1); seen.add(t); }
-    for (let i = 0; i < toks.length - 1; i++) {
-      const a = toks[i], b = toks[i + 1];
-      if (a === b) continue;
-      const key  = [a, b].slice().sort().join(' ');
-      const orig = a + ' ' + b;
-      bi.set(key, (bi.get(key) ?? 0) + 1);
-      let lm = biLabel.get(key); if (!lm) { lm = new Map(); biLabel.set(key, lm); }
-      lm.set(orig, (lm.get(orig) ?? 0) + 1);
-    }
-  }
-  const MIN = 2;
-  const seeds: SubSeed[] = [];
-  for (const [key, n] of Array.from(bi.entries())) {
-    if (n < MIN) continue;
-    const parts = key.split(' ');
-    let label = key, lbest = -1;
-    for (const [orig, c] of Array.from((biLabel.get(key) ?? new Map<string, number>()).entries())) if (c > lbest) { lbest = c; label = orig; }
-    seeds.push({ key: 'b:' + key, label: catTitle(label), tokens: parts, gram: 2 });
-  }
-  for (const [u, n] of Array.from(uni.entries())) {
-    if (n < MIN) continue;
-    seeds.push({ key: 'u:' + u, label: catTitle(u), tokens: [u], gram: 1 });
-  }
-  return seeds.sort((a, b) => b.gram - a.gram);
-}
-
-// Best modifier seed for a keyword: multi-token seeds need ALL tokens present.
-function bestSubSeed(kw: KeywordRow, head: Set<string>, seeds: SubSeed[]): SubSeed | null {
-  const toks = new Set<string>(catModTokens(kw.keyword, head));
-  let best: SubSeed | null = null, bestScore = 0;
-  for (const s of seeds) {
-    let shared = 0;
-    for (const t of s.tokens) if (toks.has(t)) shared++;
-    if (shared === 0) continue;
-    if (s.tokens.length > 1 && shared < s.tokens.length) continue;
-    const score = shared * 10 + s.gram;
-    if (score > bestScore) { bestScore = score; best = s; }
-  }
-  return best;
 }
 
 interface CatNode {
@@ -1780,47 +1704,11 @@ function aggregateCatNode(node: CatNode): void {
   }
 }
 
-const CAT_MAX_DEPTH = 5;   // safety cap; real trees are 2–3 deep
-const CAT_SPLIT_MIN = 6;   // only split a node holding at least this many keywords
-
-// Recursively split a category's keywords into data-derived sub-categories.
-function buildSubTree(id: string, name: string, type: CatNode['type'], kws: KeywordRow[], head: Set<string>, depth: number, derived: boolean): CatNode {
-  const node = emptyCatNode(id, name, type, depth, derived);
-  let seeds: SubSeed[] = [];
-  if (type === 'procedure' && kws.length >= CAT_SPLIT_MIN && depth < CAT_MAX_DEPTH) {
-    seeds = deriveSubSeeds(kws, head);
-  }
-  if (seeds.length === 0) { node.own = kws; aggregateCatNode(node); return node; }
-
-  const groups = new Map<string, KeywordRow[]>();
-  const remainder: KeywordRow[] = [];
-  for (const kw of kws) {
-    const s = bestSubSeed(kw, head, seeds);
-    if (!s) { remainder.push(kw); continue; }
-    let g = groups.get(s.key); if (!g) { g = []; groups.set(s.key, g); }
-    g.push(kw);
-  }
-  const seedByKey = new Map(seeds.map(s => [s.key, s] as const));
-  const childKeys = Array.from(groups.keys()).filter(k => (groups.get(k) as KeywordRow[]).length >= 2);
-  for (const k of Array.from(groups.keys())) if ((groups.get(k) as KeywordRow[]).length < 2) remainder.push(...(groups.get(k) as KeywordRow[]));
-
-  // a single child group covering everything is just the parent renamed → don't split
-  if (childKeys.length === 0 || (childKeys.length === 1 && remainder.length === 0)) {
-    node.own = kws; aggregateCatNode(node); return node;
-  }
-
-  for (const k of childKeys) {
-    const seed = seedByKey.get(k) as SubSeed;
-    const childHead = new Set(head);
-    for (const t of seed.tokens) { childHead.add(t); childHead.add(catStem(t)); childHead.add(catStem(t) + 's'); }
-    node.children.push(buildSubTree(id + '/' + k, seed.label, type, groups.get(k) as KeywordRow[], childHead, depth + 1, true));
-  }
-  if (remainder.length > 0) {
-    const rest = emptyCatNode(id + '/__rest__', `${name} — general`, type, depth + 1, true);
-    rest.own = remainder; aggregateCatNode(rest);
-    node.children.push(rest);
-  }
-  node.children.sort((a, b) => b.totVol - a.totVol);
+// A category is now a LEAF holding its own keywords — no fabricated sub-splitting.
+// (Intent-level sub-grouping lives on the canonical model / Cluster + Journey panels.)
+function leafCatNode(id: string, name: string, type: CatNode['type'], kws: KeywordRow[]): CatNode {
+  const node = emptyCatNode(id, name, type, 0, false);
+  node.own = kws;
   aggregateCatNode(node);
   return node;
 }
@@ -1830,41 +1718,34 @@ function bumpDepth(node: CatNode, delta: number): void {
   for (const c of node.children) bumpDepth(c, delta);
 }
 
-// Group top-level procedure category nodes under a derived parent when ≥2 share the
-// same trailing product noun. Members nest (depth +1); unique-noun categories stay
-// top-level. Family name = the most common surface form of the shared noun.
-function buildFamilies(leaves: CatNode[]): CatNode[] {
-  const trailing = (name: string): { stem: string; surface: string } | null => {
-    const toks = name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter(w => w.length >= 3 && !CAT_STOP.has(w) && !/^\d+$/.test(w));
-    if (!toks.length) return null;
-    const last = toks[toks.length - 1];
-    return { stem: catStem(last), surface: last };
-  };
-  const byStem = new Map<string, CatNode[]>();
-  const surfaceVote = new Map<string, Map<string, number>>();
+// Group procedure category leaves under their REAL product-line parent, read from the
+// stored taxonomy (`parentOf`: lowercased category name → product-line label). A
+// synthetic parent ROW is created only when ≥2 categories share a line; a category
+// with a unique line — or no stored line at all (pre-v7.229 analysis) — stays top-level
+// (honest gap, Const I.5). Parent metrics are the exact arithmetic sum of the leaves
+// (aggregateCatNode) — nothing modeled (Const I.1). The parent is semantic, never the
+// shared trailing word, so a category never nests under an unrelated sibling (Const III.1).
+function buildProductLines(leaves: CatNode[], parentOf: Map<string, string>): CatNode[] {
+  const groups = new Map<string, { surface: string; members: CatNode[] }>();
+  const order: string[] = [];
   for (const lf of leaves) {
-    const t = trailing(lf.name);
-    if (!t) continue;
-    let arr = byStem.get(t.stem); if (!arr) { arr = []; byStem.set(t.stem, arr); }
-    arr.push(lf);
-    let sv = surfaceVote.get(t.stem); if (!sv) { sv = new Map(); surfaceVote.set(t.stem, sv); }
-    sv.set(t.surface, (sv.get(t.surface) ?? 0) + 1);
+    const raw  = (parentOf.get(lf.name.toLowerCase().trim()) ?? '').trim();
+    const line = raw || lf.name;                 // no taxonomy → its own name → top-level
+    const key  = line.toLowerCase();
+    let g = groups.get(key);
+    if (!g) { g = { surface: line, members: [] }; groups.set(key, g); order.push(key); }
+    g.members.push(lf);
   }
   const out: CatNode[] = [];
-  const used = new Set<CatNode>();
-  for (const [stem, members] of Array.from(byStem.entries())) {
-    if (members.length < 2) continue;
-    const sv = surfaceVote.get(stem) ?? new Map<string, number>();
-    let surface = stem, vbest = -1;
-    for (const [s, c] of Array.from(sv.entries())) if (c > vbest) { vbest = c; surface = s; }
-    const parent = emptyCatNode('fam:' + stem, catTitle(surface), 'procedure', 0, true);
-    for (const m of members) { used.add(m); bumpDepth(m, 1); parent.children.push(m); }
+  for (const key of order) {
+    const g = groups.get(key)!;
+    if (g.members.length < 2) { out.push(...g.members); continue; }   // unique line → top-level leaf
+    const parent = emptyCatNode('line:' + key, catTitle(g.surface), 'procedure', 0, true);
+    for (const m of g.members) { bumpDepth(m, 1); parent.children.push(m); }
     parent.children.sort((a, b) => b.totVol - a.totVol);
     aggregateCatNode(parent);
     out.push(parent);
   }
-  for (const lf of leaves) if (!used.has(lf)) out.push(lf);
   return out;
 }
 
@@ -2122,12 +2003,12 @@ function KwCategorySection({
     for (const [name, kws] of Array.from(catRows.entries())) {
       if (name !== 'Other' && dropCategoryNames.has(name)) continue;   // v7.226: defensive — never form a competitor-brand leaf
       const type: CatNode['type'] = name === 'Other' ? 'procedure' : (typeByName[name] ?? 'procedure');
-      const node = buildSubTree('cat:' + name, name, type, kws, catHeadTokens(name), 0, false);
+      const node = leafCatNode('cat:' + name, name, type, kws);
       if (name === 'Other') otherLeaves.push(node);
       else if (type === 'brand' || type === 'location') navLeaves.push(node);
       else procLeaves.push(node);
     }
-    const proc = buildFamilies(procLeaves).sort((a, b) => b.totVol - a.totVol);
+    const proc = buildProductLines(procLeaves, categoryModel.parentForCategory).sort((a, b) => b.totVol - a.totVol);
     navLeaves.sort((a, b) => b.totVol - a.totVol);
     return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
   }, [rows, categoryModel, dropCategoryNames]);

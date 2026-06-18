@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.229 — 2026-06-18 · Real category taxonomy — parent/child is stored data, not a render-time word guess (Const I.1, II.8, III.1)
+
+**The ask (Wayne, with screenshot):** the category tree was wrong — "Mortgage Rates and Calculators" sat under a "Calculators" parent, and "Credit Card" was nested *inside* the Mortgage category. How do we make the category structure accurate? Decision: make the hierarchy **real data** (not a heuristic), ship it in one release, and amend the Constitution.
+
+**Root cause (two layers).** (1) The category breakdown was a *flat* list — no parent/child anywhere. The whole tree was *fabricated at render time* in `KeywordsPanel` by two lexical heuristics: `buildFamilies` grouped categories by their **literal last word** (so "…and Calculators" fell under "Calculators"), and `buildSubTree` promoted recurring word-pairs to child rows. This is exactly the lexical re-derivation Const II.8 forbids. (2) Batched discovery had **misfiled** keywords — credit-card keywords were sitting inside the Mortgage category, which the sub-tree splitter then surfaced as a fake "Credit Card" sub-line.
+
+**What changed.**
+- **`lib/claude/prompts.ts`** — two new prompts: `categoryTaxonomyPrompt` (assign each procedure category a **semantic** product-line parent — "Mortgage Rates and Calculators" → "Mortgages", never "Calculators"; siblings never nest under each other) and `categoryMembershipCheckPrompt` (flag keywords clearly filed in the wrong category and give the correct one from the same canonical list).
+- **`lib/claude/synthesize.ts`** — `CategoryBreakdownResult.categories[]` gains an optional `parent`. Two bounded, fault-tolerant passes added: **Pass 2.5c membership self-check** (re-files misfiled keywords *before* the demand sums — Claude only relabels, all volume math stays in TS) and **Pass 2.5d taxonomy** (writes the real product-line `parent` onto each procedure category). Both run as a single LLM call, are guarded for the Lambda time budget, and on any failure leave the prior behavior intact (flat = honest gap, Const I.5).
+- **`lib/category/categoryModel.ts`** — `ModelCategory` gains `parentLine?`; `CategoryModel` gains `parentForCategory` (canonical name → product line), read **once** from the stored `_categoryBreakdown` (Const II.8 — never re-derived at a read site).
+- **`components/brief/KeywordsPanel.tsx`** — deleted the fabrication: `buildFamilies`, `buildSubTree`, and the bigram/unigram token machinery are gone. Categories are now leaves; `buildProductLines` groups them under their **real** stored parent (synthetic line row only when ≥2 categories share a line; unique or untagged categories stay top-level). Parent metrics remain the exact arithmetic sum of their leaves.
+
+**Data impact.** On a freshly-run analysis the Keyword Category Breakdown shows a real two-level tree (Product Line → Category); misfiled keywords are re-filed (their volume moves with them, totals conserved). On analyses run before v7.229 there is no stored `parent`, so the panel renders **flat** rather than guessing — re-run the analysis to populate the taxonomy. No data caps added; the time-budget guards skip the *optional* enrichment on very large footprints (→ flat) but never trim keywords or volume.
+
+**Verified (own debugging agent).** Isolated `tsc --noEmit` on all four changed files + deps = 0 errors. Behavioral harness (esbuild-bundled **real** compiled code): the synthesize pipeline on a bank fixture that reproduces the exact bug = **12/12** — credit-card keywords misfiled into "Mortgage Rates and Calculators" are moved to "Credit Cards", parents are semantic ("Mortgages"/"Loans"/"Credit Cards", nothing under "Calculators"), demand conserved (5000==5000); the render tree (`buildProductLines`/`leafCatNode`/`aggregateCatNode`) = **11/11** — ≥2-member line becomes a synthetic parent with exact-sum totals, unique lines stay top-level, and absent taxonomy → flat. No styling/markup/color change → Const IV.6/V.5 dual-theme parity not triggered (KwCatRow render is byte-unchanged; only the tree it is handed changed). Panel scroll untouched.
+
+**Constitution.** Amended **v0.7** — new Art. III.1b: category parent/child structure is **real, stored data**, assigned semantically at synthesis, and is never fabricated from keyword text (shared words, trailing nouns) at a read site. Added to the Art. III pass/fail and the Art. VIII release-gate checklist.
+
 ## v7.228 — 2026-06-17 · Staged category members on the shared model (Step 2 foundation, Const III.2a)
 
 **The ask (Wayne):** continue the enrichment build — stage the members so the deep-journey / pre-product layer has a foundation.

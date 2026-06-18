@@ -149,6 +149,89 @@ Return JSON ONLY — no markdown, no explanation:
 }`;
 }
 
+// ─── Pass 2.5d: Category Taxonomy (real parent/child) — v7.229 ────────────────
+//
+// The canonical category list is FLAT. This pass assigns each PROCEDURE category
+// a semantic PRODUCT-LINE parent, chosen BY MEANING — never by shared trailing
+// words. It replaces the render-time lexical nesting (the old buildFamilies /
+// buildSubTree heuristics) so the parent/child structure is real, stored data
+// (Const I.1, II.8, III.1). Claude only maps category names → a product-line
+// label; no keyword moves and no arithmetic happens here.
+
+export function categoryTaxonomyPrompt(
+  domain: string,
+  industry: string,
+  categories: Array<{ name: string }>
+): string {
+  const catList = categories.map(c => `- "${c.name}"`).join('\n');
+
+  return `You are organizing the product/service categories of a ${industry} website (${domain}) into a clean two-level taxonomy.
+
+PROCEDURE CATEGORIES (each is one specific service or product line):
+${catList}
+
+Your job: give each category a PARENT — the broader product line or service family it belongs to.
+
+RULES — follow exactly:
+1. The parent is decided by MEANING, never by shared words. "Mortgage Rates and Calculators" belongs to a "Mortgages" parent, NOT to a "Calculators" parent just because its name ends in "calculators".
+2. NEVER make one specific product a child of a different specific product. "Credit Cards" is never under "Mortgages"; "Auto Loans" is never under "Personal Loans". Siblings stay siblings under a shared family.
+3. Only group categories under the same parent when they genuinely belong to the same offering family (e.g. "Personal Loans" + "Auto Loans" + "Home Loans" → parent "Loans"; "Travel Cards" + "Secured Cards" → parent "Credit Cards").
+4. If a category is already a standalone top-level line with no sibling family in this list, set its parent equal to its own name (it stays top-level).
+5. Parent names must come from the meaning of these categories or the industry — do NOT invent unrelated abstractions, and do NOT use a non-client brand name.
+6. Every category name must appear EXACTLY ONCE, spelled identically to the input.
+
+Return JSON ONLY — no markdown, no explanation:
+{
+  "assignments": [
+    { "category": "Mortgage Rates and Calculators", "parent": "Mortgages" },
+    { "category": "Credit Cards", "parent": "Credit Cards" }
+  ]
+}`;
+}
+
+// ─── Pass 2.5c: Category Membership Self-Check — v7.229 ───────────────────────
+//
+// Batched discovery can sweep a keyword into the wrong category (e.g. credit-card
+// keywords landing inside "Mortgage Rates and Calculators"). This pass re-reads
+// each category's assigned keywords and names ONLY the keywords that clearly do
+// not belong, with the correct category from the SAME canonical list. Claude
+// relabels keywords; it never invents a category and never touches volume —
+// every demand sum is still computed in TypeScript afterward (Const I.1).
+
+export function categoryMembershipCheckPrompt(
+  domain: string,
+  industry: string,
+  categories: Array<{ name: string; keywords: string[] }>
+): string {
+  const validNames = categories.map(c => `"${c.name}"`).join(', ');
+  const blocks = categories
+    .map(c => `### ${c.name}\n${c.keywords.map(k => `- ${k}`).join('\n')}`)
+    .join('\n\n');
+
+  return `You are auditing keyword-to-category assignments for a ${industry} website (${domain}). Each keyword below was auto-assigned to a category, but some were misfiled.
+
+VALID CATEGORIES (a corrected keyword MUST map to one of these exact names): ${validNames}
+
+CURRENT ASSIGNMENTS (category header, then its keywords):
+${blocks}
+
+Your job: find ONLY the keywords that clearly do NOT belong in the category they are currently under, and give the correct category for each.
+
+RULES — follow exactly:
+1. Move a keyword ONLY when it clearly belongs to a different listed category (e.g. "credit card balance transfer" sitting under "Mortgage Rates and Calculators" → "Credit Cards"). When in doubt, LEAVE IT — do not move borderline or generic keywords.
+2. The "to" value MUST be one of the valid category names above, spelled identically. Never invent a new category.
+3. Do not move a keyword to the category it is already in.
+4. Only list keywords that need correcting. If everything looks correctly filed, return an empty array.
+5. Use the keyword text exactly as written.
+
+Return JSON ONLY — no markdown, no explanation:
+{
+  "corrections": [
+    { "keyword": "credit card balance transfer", "from": "Mortgage Rates and Calculators", "to": "Credit Cards" }
+  ]
+}`;
+}
+
 // ─── Pass 1: Audience Segment Generation ─────────────────────────────────────
 
 export function personaPrompt(

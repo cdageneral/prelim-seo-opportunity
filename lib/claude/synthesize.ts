@@ -26,6 +26,8 @@ import {
   pptPromptGenerator,
   categoryBreakdownPrompt,
   categoryConsolidationPrompt,
+  categoryTaxonomyPrompt,
+  categoryMembershipCheckPrompt,
   type MergedKeyword,
 } from './prompts';
 
@@ -167,6 +169,11 @@ export interface CategoryBreakdownResult {
     monthlyDemand: number;
     page1Demand:   number;
     top3Demand:    number;
+    // v7.229: semantic product-line parent (real two-level taxonomy, Const III.1).
+    // Absent on pre-v7.229 analyses → consumers fall back to a flat list (honest
+    // gap, Const I.5) instead of the old lexical guess. Equal to `name` when the
+    // category is itself a top-level line.
+    parent?:       string;
   }>;
   totalMonthlyDemand:      number;
   totalPage1Demand:        number;
@@ -376,6 +383,64 @@ export async function generateCategoryBreakdown(
     if (!assignmentByIndex.has(i)) assignmentByIndex.set(i, OTHER_NAME);
   }
 
+  // ── Pass 2.5c (v7.229): MEMBERSHIP SELF-CHECK ─────────────────────────────
+  // Batched discovery can misfile a keyword (e.g. credit-card keywords swept into
+  // "Mortgage Rates and Calculators"). Re-read each procedure category's keywords
+  // and move ONLY the ones that clearly belong elsewhere, to an EXISTING canonical
+  // category. Best-effort + bounded so it can never break or slow an analysis;
+  // any failure leaves the original assignment untouched (Const I.5). Claude only
+  // relabels keywords — all demand arithmetic still happens below in TypeScript.
+  try {
+    const PROC_NAMES = new Set(
+      Array.from(catTypeByName.entries()).filter(([, t]) => t === 'procedure').map(([n]) => n),
+    );
+    // Group the current procedure assignments back to keyword lists.
+    const checkCats = new Map<string, string[]>();   // category → keyword texts
+    const kwLowToIndex = new Map<string, number>();
+    assignmentByIndex.forEach((catName, idx) => {
+      const kw = merged[idx];
+      if (!kw) return;
+      kwLowToIndex.set(kw.keyword.toLowerCase().trim(), idx);
+      if (!PROC_NAMES.has(catName)) return;
+      const arr = checkCats.get(catName) ?? [];
+      arr.push(kw.keyword);
+      checkCats.set(catName, arr);
+    });
+    const checkInputs = Array.from(checkCats.entries()).map(([name, keywords]) => ({ name, keywords }));
+    const checkKwCount = checkInputs.reduce((s, c) => s + c.keywords.length, 0);
+
+    // Bound to one call within the Lambda budget; larger footprints are left as-is
+    // (the assignment is still complete + traceable — just not re-audited inline).
+    if (checkInputs.length >= 2 && checkInputs.length <= 50 && checkKwCount > 0 && checkKwCount <= 1200) {
+      const mPrompt   = categoryMembershipCheckPrompt(domain, industry, checkInputs);
+      const mResponse = await getClient().messages.create({
+        model:      MODELS.fast,
+        max_tokens: 3000,
+        messages:   [{ role: 'user', content: mPrompt }],
+      }, { timeout: 60_000 });
+      const mText   = mResponse.content[0].type === 'text' ? mResponse.content[0].text : '';
+      const mParsed = extractJSON<{ corrections: Array<{ keyword: string; from?: string; to: string }> }>(mText);
+
+      let moved = 0;
+      for (const c of mParsed.corrections ?? []) {
+        const kwLow = String(c?.keyword ?? '').toLowerCase().trim();
+        const to    = String(c?.to ?? '');
+        if (!kwLow || !PROC_NAMES.has(to)) continue;            // target must be an existing procedure category
+        const idx = kwLowToIndex.get(kwLow);
+        if (idx === undefined) continue;
+        const current = assignmentByIndex.get(idx);
+        if (current === to || !PROC_NAMES.has(current ?? '')) continue;  // only re-file procedure→procedure
+        assignmentByIndex.set(idx, to);
+        moved++;
+      }
+      console.log(`[OrbitIQ] Membership self-check: ${(mParsed.corrections ?? []).length} flagged, ${moved} reassigned`);
+    } else {
+      console.log(`[OrbitIQ] Membership self-check skipped (${checkInputs.length} procedure categories / ${checkKwCount} kws — out of inline bounds)`);
+    }
+  } catch (err) {
+    console.error('[OrbitIQ] Membership self-check failed (non-fatal, assignment kept):', (err as any)?.message ?? err);
+  }
+
   // ── Compute demand sums in TypeScript over the FULL footprint ──────────────
   // No Claude arithmetic — all sums below come from actual Semrush/upload volumes.
   const result: CategoryBreakdownResult = {
@@ -436,6 +501,47 @@ export async function generateCategoryBreakdown(
     : 0;
 
   console.log(`[OrbitIQ] Category breakdown: ${result.categories.length} categories covering ${Object.keys(result.keywordCategories).length}/${merged.length} keywords`);
+
+  // ── Pass 2.5d (v7.229): CATEGORY TAXONOMY — real parent/child ─────────────
+  // Assign each PROCEDURE category a semantic product-line parent so the panels
+  // render a real two-level tree instead of guessing one from shared trailing
+  // words at the read site (Const II.8, III.1). Best-effort + bounded; on any
+  // failure each category's parent stays its own name (flat, honest gap I.5).
+  // Brand/location stay navigational (no parent). No keyword or volume changes.
+  try {
+    const procCats = result.categories.filter(c => c.type === 'procedure' && c.name !== OTHER_NAME);
+    if (procCats.length >= 2 && procCats.length <= 80) {
+      const tPrompt   = categoryTaxonomyPrompt(domain, industry, procCats.map(c => ({ name: c.name })));
+      const tResponse = await getClient().messages.create({
+        model:      MODELS.fast,
+        max_tokens: 2000,
+        messages:   [{ role: 'user', content: tPrompt }],
+      }, { timeout: 60_000 });
+      const tText   = tResponse.content[0].type === 'text' ? tResponse.content[0].text : '';
+      const tParsed = extractJSON<{ assignments: Array<{ category: string; parent: string }> }>(tText);
+
+      const parentByCat = new Map<string, string>();
+      for (const a of tParsed.assignments ?? []) {
+        const cat = String(a?.category ?? '').trim();
+        const par = String(a?.parent ?? '').trim();
+        if (cat && par) parentByCat.set(cat.toLowerCase(), par);
+      }
+      let withParent = 0;
+      for (const c of result.categories) {
+        if (c.type !== 'procedure' || c.name === OTHER_NAME) continue;
+        const par = parentByCat.get(c.name.toLowerCase());
+        // Default to the category's own name (top-level) when the model omitted it.
+        c.parent = (par && par.length > 0) ? par : c.name;
+        if (par && par.toLowerCase() !== c.name.toLowerCase()) withParent++;
+      }
+      const lines = new Set(result.categories.filter(c => c.parent).map(c => c.parent));
+      console.log(`[OrbitIQ] Category taxonomy: ${procCats.length} categories → ${lines.size} product line(s), ${withParent} nested`);
+    } else {
+      console.log(`[OrbitIQ] Category taxonomy skipped (${procCats.length} procedure categories — out of inline bounds); rendering flat`);
+    }
+  } catch (err) {
+    console.error('[OrbitIQ] Category taxonomy failed (non-fatal, rendering flat):', (err as any)?.message ?? err);
+  }
 
   // ── v7.199: AI search-intent grouping (the "automatic" half of Wayne's hybrid) ──
   // Best-effort + bounded so it can NEVER break an analysis. For large footprints we

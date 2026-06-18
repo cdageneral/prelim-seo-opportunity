@@ -30,6 +30,10 @@ export type JourneyLane = 'product' | 'pre-product';
 export interface ModelCategory {
   name: string;
   type: CategoryType;
+  // v7.229: semantic product-line parent from the STORED taxonomy
+  // (`_categoryBreakdown.categories[].parent`). Equal to `name` for a top-level
+  // line; undefined on pre-v7.229 analyses (→ consumers render flat, Const I.5).
+  parentLine?: string;
 }
 
 /**
@@ -53,6 +57,9 @@ export interface CategoryModel {
   categoryForKeyword: Map<string, string>;
   members:            ModelMember[];   // v7.228: staged membership (one per keyword, first-topic wins)
   topics:             Topic[];
+  // v7.229: canonical category name → product-line parent (the STORED taxonomy,
+  // Const II.8/III.1). Empty when the analysis predates the taxonomy pass.
+  parentForCategory:  Map<string, string>;
 }
 
 export function buildCategoryModel(
@@ -86,6 +93,19 @@ export function buildCategoryModel(
     t.parentType === 'problem'
     || (t.parentType === 'demand' && problemSet.has((t.parentName || '').toLowerCase().trim()));
 
+  // v7.229: the STORED taxonomy lives on the snapshot's category breakdown. Read it
+  // ONCE here (keyed by lowercased canonical name) so the parent comes from real data
+  // (Const II.8) — never re-derived lexically at a read site. Absent on old analyses.
+  const parentForCategory = new Map<string, string>();
+  {
+    const cbCats: any[] = analysis?.semrushSnapshot?._categoryBreakdown?.categories ?? [];
+    for (const c of cbCats) {
+      const nm  = String(c?.name ?? '').trim();
+      const par = String(c?.parent ?? '').trim();
+      if (nm && par) parentForCategory.set(nm.toLowerCase(), par);
+    }
+  }
+
   const categories: ModelCategory[] = [];
   const seenCat = new Set<string>();
   const categoryForKeyword = new Map<string, string>();
@@ -95,7 +115,8 @@ export function buildCategoryModel(
     const name = t.parentName;
     if (name && !seenCat.has(name)) {
       seenCat.add(name);
-      categories.push({ name, type: t.parentType });
+      const parentLine = parentForCategory.get(name.toLowerCase());
+      categories.push({ name, type: t.parentType, ...(parentLine ? { parentLine } : {}) });
     }
     const lane: JourneyLane = isPreProduct(t) ? 'pre-product' : 'product';
     for (const kw of t.keywords) {
@@ -116,5 +137,5 @@ export function buildCategoryModel(
     }
   }
 
-  return { categories, categoryForKeyword, members, topics };
+  return { categories, categoryForKeyword, members, topics, parentForCategory };
 }
