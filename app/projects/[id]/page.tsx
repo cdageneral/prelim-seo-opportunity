@@ -175,6 +175,11 @@ export default function ProjectBriefPage() {
   const [activeSection,    setActiveSection]    = useState<NavSection>('overview');
   const [hoveredNav,       setHoveredNav]       = useState<NavSection | null>(null);
   const [keywordsSubView,  setKeywordsSubView]  = useState<'list' | 'clusters'>('list');
+  // v7.233: set right after a full reset (Clear All) so the user stays on an EMPTY
+  // Keyword panel instead of being bounced to the pre-run data-source screen. The
+  // analysis is genuinely deleted, so hasResults goes false; this flag keeps the
+  // empty Keyword Landscape visible until the next analysis run is started.
+  const [cleared,          setCleared]          = useState(false);
 
   // Data source state
   const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
@@ -363,6 +368,7 @@ export default function ProjectBriefPage() {
 
   async function triggerAnalysis(mode: 'full' | 'gaps' | 'data' = 'full') {
     setTriggering(true);
+    setCleared(false);   // v7.233: leaving the post-reset empty state — a real run is starting
     setAnalysisError(null);
     setAnalysisWarnings([]);
     setCostEstimate(null);
@@ -1299,8 +1305,11 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* No results yet */}
-          {!isRunning && !hasResults && (
+          {/* No results yet. v7.233: after a full reset we keep the user on the
+              empty Keyword panel, so suppress the pre-run data-source card while
+              `cleared` and the Keyword section is active (the run CTA stays in the
+              header). Any other section falls back to this pre-run screen. */}
+          {!isRunning && !hasResults && !(cleared && activeSection === 'keywords') && (
             <div className="overflow-y-auto flex-1 p-4 flex flex-col gap-4">
 
               {/* ── Data Source Card ── */}
@@ -1319,13 +1328,25 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
-          {/* ── Keyword Landscape — list or clusters sub-view ── */}
-          {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'list' && (
+          {/* ── Keyword Landscape — list or clusters sub-view ──
+              v7.233: also render (empty) right after a full reset, so Clear All
+              leaves the user on an empty Keyword Landscape rather than the pre-run
+              screen. When there's no analysis we pass an empty snapshot shell so
+              buildKwPool/buildJourneyClassifier never deref a null and the panel
+              renders its honest-gap empty state. */}
+          {((hasResults && analysis) || (cleared && !hasResults)) && activeSection === 'keywords' && keywordsSubView === 'list' && (
             <KeywordsPanel
               kwVersion={kwVersion}
               onKeywordsChanged={() => setKwVersion(v => v + 1)}   // v7.108: client kw changes refresh all panels
+              onCleared={() => {                                   // v7.233: full reset done → refetch empty project, stay on empty Keyword panel
+                setCleared(true);
+                setActiveSection('keywords');
+                setKeywordsSubView('list');
+                setKwVersion(v => v + 1);
+                fetchProject();
+              }}
               projectId={projectId}
-              analysis={analysisForPanels}
+              analysis={hasResults ? analysisForPanels : { semrushSnapshot: {}, serpApiSnapshot: {} }}
               competitors={competitorDomains}
               brandTerms={brandTerms}
               domain={domainDisplay}

@@ -75,6 +75,7 @@ interface Props {
   projectId:   string;
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   onKeywordsChanged?: () => void;   // v7.108: fired after any successful keyword mutation here (CSV upload, add, delete/block, clear) so the parent can bump kwVersion and refresh ALL panels (SOV, clusters, etc.)
+  onCleared?: () => void;   // v7.233: fired after a successful FULL RESET (Clear All) so the parent can refetch the (now empty) project and keep the user on the empty Keyword panel.
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
   brandTerms?: string[];  // v7.206: client brand vocabulary (variants a domain can't yield)
@@ -387,7 +388,7 @@ function SortHeader({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
-  projectId, kwVersion, onKeywordsChanged, analysis, competitors, brandTerms = [], domain,
+  projectId, kwVersion, onKeywordsChanged, onCleared, analysis, competitors, brandTerms = [], domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
@@ -933,41 +934,29 @@ export default function KeywordsPanel({
     setTimeout(() => setCsvStatus(null), 10000);
   }
 
-  // ── Clear all custom/CSV/blocked keywords ──
-
+  // ── Clear All — FULL RESET (v7.233) ─────────────────────────────────────────
+  // Wayne's decision: "delete and clear them out — there should be NO hiding."
+  // The old Clear All deleted the uploaded rows but then INSERTED a 'blocked' row
+  // for every Semrush keyword to mask them — which (a) was hiding, not deleting,
+  // and (b) only covered topKeywords+gapKeywords, leaving the demand-universe and
+  // competitor-gap keywords (buildKwPool includeDemand:true) still visible, so it
+  // looked like nothing happened. The Semrush footprint isn't in project_keywords
+  // at all — it lives in analyses.semrush_snapshot — so a true wipe must delete
+  // the analysis record. The /reset endpoint does both in one shot: every keyword
+  // row + every analysis (cascades personas/opportunities/reports). The api_usage
+  // ledger, competitors and brand vocab are preserved (project config / spend).
   async function handleClearAll() {
     setClearLoading(true);
-    setClearStep('Deleting uploaded keywords…');
+    setClearStep('Deleting all keywords & analysis…');
 
-    // Step 1: bulk-delete all csv/custom/blocked rows in a single SQL statement
-    await fetch(`/api/projects/${projectId}/keywords/clear`, {
+    await fetch(`/api/projects/${projectId}/keywords/reset`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sources: ['csv', 'custom', 'blocked'] }),
     }).catch(() => null);
 
-    // Step 2: block all Semrush analysis keywords via batch endpoint
-    setClearStep('Hiding Semrush keywords…');
-    const semSnap = (analysis?.semrushSnapshot ?? {}) as any;
-    const semKws: Array<{ keyword: string }> = [
-      ...(semSnap.topKeywords ?? []),
-      ...(semSnap.gapKeywords ?? []),
-    ];
-    if (semKws.length > 0) {
-      const CHUNK = 500;
-      for (let i = 0; i < semKws.length; i += CHUNK) {
-        await fetch(`/api/projects/${projectId}/keywords/batch`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            domain: '', source: 'blocked',
-            keywords: semKws.slice(i, i + CHUNK).map((k: { keyword: string }) => ({ keyword: k.keyword, searchVolume: 0 })),
-          }),
-        }).catch(() => null);
-      }
-    }
-
     setClearStep('Refreshing…');
-    await fetchDb();
-      onKeywordsChanged?.();   // v7.108: refresh dependent panels
+    await fetchDb();              // local panel rows → empty
+    onKeywordsChanged?.();        // v7.108: refresh dependent panels
+    onCleared?.();               // v7.233: parent refetches the now-empty project and keeps us on the empty Keyword panel
     setClearLoading(false);
     setClearStep('');
     setShowClearConfirm(false);
@@ -1011,13 +1000,17 @@ export default function KeywordsPanel({
               <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCsvUpload} />
             </label>
 
-            {/* Clear All */}
-            {dbKeywords.length > 0 && !showClearConfirm && !csvProgress && (
+            {/* Clear All — v7.233: full reset. Show whenever there's anything to
+                wipe — uploaded rows OR a Semrush footprint (which lives in the
+                analysis snapshot, not dbKeywords). The old `dbKeywords.length > 0`
+                gate hid the button on pure-Semrush projects, exactly when a reset
+                was needed. */}
+            {(summaryRows.length > 0 || dbKeywords.length > 0) && !showClearConfirm && !csvProgress && (
               <button
                 onClick={() => setShowClearConfirm(true)}
                 className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
                 style={{ color: 'var(--c-7070a0)' }}
-                title="Remove all uploaded/custom keywords and unblock any hidden Semrush keywords"
+                title="Delete everything and start over — removes all keywords (uploaded + Semrush footprint) and the saved analysis. No hiding."
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -1040,7 +1033,7 @@ export default function KeywordsPanel({
                 ) : (
                   <>
                     <span className="text-[11px]" style={{ color: 'var(--c-f87171)' }}>
-                      Clear all keywords (uploads + Semrush analysis)?
+                      Delete all keywords + the saved analysis and start over? This can't be undone.
                     </span>
                     <button
                       onClick={handleClearAll}
