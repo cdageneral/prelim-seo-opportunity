@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.240 — 2026-06-18 · Journey + Content panels now use the same base taxonomy as Keyword + Cluster
+
+**The ask (Wayne).** "Now let's bring this base categorization into the journey panel." Phase 2 of the unification.
+
+**What changed (`components/brief/ThemeClustersPanel.tsx`).** `buildCanonicalClusterTopics` — the single function the **Journey, Content, and keyword category model** all consume — now builds its topics from the **shared taxonomy tree** (`buildTopicsFromTaxonomy` over the stored `keywordPaths`) instead of the intent-mined `flattenTopics`, whenever the stored taxonomy is present. So every panel now derives its categories from the one canonical structure (Const II.7): the Journey panel's nodes are the canonical umbrella → theme → sub topics (no mined names), placed in their funnel stage/lane; Content inherits the same. Keywords with no stored path (deep-journey demand / pre-product problem themes) still fall back to the intent grouping inside `buildTopicsFromTaxonomy`, preserving that incremental lens. Pre-taxonomy analyses keep the old flatten (honest gap, I.5).
+
+**Net effect.** All four surfaces — Keyword, Cluster, Journey, Content — now share one base categorization built once from `keywordPaths`. Because they read the same structure, the Cluster "Total topics" and "Topics in journey" counts reconcile again.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over the changed file + every consumer (ThemeClustersPanel, KeywordsPanel, JourneySection, ContentPlanSection, ContentMapSection, categoryModel, contentPlan) = 0 errors. The **full retained regression suite** — every prior check (v7.235–239) plus a new journey-stage assertion — **19/19 PASS** on real compiled code: `buildCanonicalClusterTopics` (the journey/content source) now returns canonical umbrella/theme/sub topics with no mined labels, the brand drop + no-flatten hold, and every topic carries a valid journey stage (awareness/consideration/decision/retention). No styling change → dual-theme parity holds.
+
+**Action for Wayne:** deploy v7.240 and **Run Analysis** once. The Journey (and Content) panel topics will now match the Keyword and Cluster panels' categories — same labels, no invented names — laid out by funnel stage.
+
 ## v7.239 — 2026-06-18 · One taxonomy, two panels: the Cluster panel now renders the SAME tree as the Keyword panel
 
 **The decision (Wayne).** "I don't think we need to recreate this view in the clusters. Can we not just have the one view in the keyword panel populate the clusters?" Yes — after four releases patching the cluster panel's *own* category pipeline, the durable fix is to build the taxonomy **once** and render it in both panels (Const II.7, single source of truth), with the cluster panel adding its intent / journey-stage / ownership annotations.

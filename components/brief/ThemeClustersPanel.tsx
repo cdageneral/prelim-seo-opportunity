@@ -1442,7 +1442,24 @@ export function buildCanonicalClusterTopics(
   const base = buildThemeClusters(
     analysis, claudeAssigns, clientDomain, competitorDomains, uploadedKeywords, clientVolMin, competitorVolMin, jb.preProductKws,
   );
-  const topics = flattenTopics([...base, ...jb.clusters]);
+  // v7.240: build the canonical topics from the SHARED taxonomy tree (the SAME structure the
+  // Keyword + Cluster panels render) when the stored taxonomy is present, so the Journey and
+  // Content panels share the one base categorization (Const II.7). keywords with no stored path
+  // (deep-journey demand / pre-product problem themes) fall back inside buildTopicsFromTaxonomy.
+  // Pre-taxonomy analyses keep the intent-based flatten (honest gap, I.5).
+  const _kp = new Map<string, string[]>();
+  {
+    const raw: Record<string, any> = analysis?.semrushSnapshot?._categoryBreakdown?.keywordPaths ?? {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (Array.isArray(v)) {
+        const p = v.map((s: any) => String(s ?? '').trim()).filter(Boolean);
+        if (p.length) _kp.set(k.toLowerCase().trim(), p);
+      }
+    }
+  }
+  const topics = _kp.size > 0
+    ? buildTopicsFromTaxonomy([...base, ...jb.clusters], _kp)
+    : flattenTopics([...base, ...jb.clusters]);
 
   _canonTopicsCache.set(sig, topics);
   if (_canonTopicsCache.size > 4) {              // small LRU — keep a few analyses / threshold variants
