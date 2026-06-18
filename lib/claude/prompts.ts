@@ -149,6 +149,92 @@ Return JSON ONLY — no markdown, no explanation:
 }`;
 }
 
+// ─── Pass 2 (v7.231): HIERARCHICAL DISCOVERY — full path per keyword ──────────
+//
+// Replaces the flat category discovery: instead of one category name per keyword, the
+// model returns the FULL semantic path from a top umbrella down to the most specific
+// node (e.g. ["Mortgages","Mortgage Rates","Current rates","VA"]). Unlimited depth;
+// umbrellas are defined fresh from meaning. Every level is a real page target. Claude
+// only assigns labels + structure; all volume math is done in TypeScript (Const I.1).
+// Runs per batch (like the old discovery) so cost is unchanged; a later canonicalization
+// pass aligns synonym labels across batches.
+
+export function hierarchicalDiscoveryPrompt(
+  domain: string,
+  industry: string,
+  keywords: MergedKeyword[]
+): string {
+  const kwList = keywords
+    .map((k, i) => {
+      const posLabel = k.clientPosition !== null ? `client pos: ${k.clientPosition}` : 'client: unranked';
+      return `${i}. ${k.keyword} | ${posLabel} | ${k.searchVolume.toLocaleString()}/mo`;
+    })
+    .join('\n');
+  const brandHint = domain.replace(/\.(com|net|org|io|co).*$/, '').replace(/[-_]/g, ' ');
+
+  return `You are organizing a website's organic search keywords into a clean, multi-level SEO content taxonomy — a tree of pages.
+
+WEBSITE: ${domain}
+INDUSTRY: ${industry}
+BRAND NAME HINT: "${brandHint}" (use to detect branded keywords)
+
+KEYWORDS (index. keyword | client ranking | monthly search volume):
+${kwList}
+
+For EACH keyword, return the full PATH of nodes it belongs to, from the broadest umbrella down to the most specific topic. Each node is a page.
+
+RULES — follow exactly:
+1. Group by MEANING at every level, never by shared words. "30 year mortgage rates", "current mortgage rates", and "15 year fixed rates" are ALL under the same theme ("Mortgage Rates") — they are sub-topics of it, not separate themes. Do not split one theme into look-alikes like "Mortgage Year" vs "Rate Current".
+2. Path shape: [umbrella, theme, sub-topic, …]. Go only as deep as the keyword's specificity warrants (a head term like "mortgage rates" stops at ["Mortgages","Mortgage Rates"]; "current va mortgage rates" goes deeper). Unlimited depth allowed; do NOT pad with filler levels.
+3. The umbrella is the broad product/service family (e.g. "Mortgages", "Credit Cards", "Investing"). Sibling themes that belong together share an umbrella (e.g. "Mortgage Rates" and "Mortgage Calculator" both under "Mortgages").
+4. type: "procedure" (a real service/product topic), "brand" (contains a brand name — path like ["<Brand> Brand Searches"]), or "location" (brand/service + a place). Use the CLIENT brand only for brand paths; never create a path named after a competitor brand.
+5. Reuse identical label spellings across keywords so the same node merges. Every index appears exactly once.
+
+Return JSON ONLY — no markdown, no prose:
+{
+  "assignments": [
+    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"], "type": "procedure" },
+    { "index": 1, "path": ["Mortgages","Mortgage Rates","Current rates"], "type": "procedure" },
+    { "index": 2, "path": ["${brandHint} Brand Searches"], "type": "brand" }
+  ]
+}`;
+}
+
+// ─── Pass 2.6 (v7.231): PATH CANONICALIZATION — align labels across batches ────
+//
+// Independent discovery batches can name the same node slightly differently
+// ("30-yr fixed" vs "30 Year Fixed", "Mortgages" vs "Mortgage"). This single call sees
+// the DISTINCT paths (bounded — far fewer than keywords) and returns a canonical label
+// for each raw path, so identical concepts merge into one node. Claude maps paths →
+// paths only; no keyword or volume is touched.
+
+export function pathCanonicalizationPrompt(
+  domain: string,
+  industry: string,
+  paths: string[][]
+): string {
+  const list = paths.map((p, i) => `${i}. ${p.join(' > ')}`).join('\n');
+  return `You are cleaning up a multi-level SEO taxonomy for a ${industry} website (${domain}). The paths below were produced by independent passes over different keyword slices, so the SAME node may appear under slightly different labels or depths.
+
+PATHS (index. umbrella > theme > …):
+${list}
+
+For each path, return its CANONICAL form so equivalent nodes merge.
+
+RULES — follow exactly:
+1. Merge labels that mean the same thing to ONE spelling at each level ("30 Year Fixed" / "30-yr fixed" / "30 year fixed rate" → one). Keep the clearest, most natural label.
+2. Keep genuinely distinct nodes separate. Do NOT merge a specific topic into an unrelated sibling.
+3. Preserve the parent chain — a node keeps the same ancestors; only normalize labels (and, if a level is clearly redundant, you may shorten the path).
+4. Every input index must appear exactly once with a canonical path (return the same path if it needs no change).
+
+Return JSON ONLY — no markdown, no prose:
+{
+  "canonical": [
+    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"] }
+  ]
+}`;
+}
+
 // ─── Pass 2.5d: Category Taxonomy (real parent/child) — v7.229 ────────────────
 //
 // The canonical category list is FLAT. This pass assigns each PROCEDURE category

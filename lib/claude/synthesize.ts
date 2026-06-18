@@ -24,10 +24,8 @@ import {
   opportunityPrompt,
   narrativePrompt,
   pptPromptGenerator,
-  categoryBreakdownPrompt,
-  categoryConsolidationPrompt,
-  categoryTaxonomyPrompt,
-  categoryMembershipCheckPrompt,
+  hierarchicalDiscoveryPrompt,
+  pathCanonicalizationPrompt,
   type MergedKeyword,
 } from './prompts';
 
@@ -184,6 +182,10 @@ export interface CategoryBreakdownResult {
   page1CaptureRate:        number;
   // v7.34: keyword→category map for ThemeClustersPanel (lowercase keyword → category name)
   keywordCategories:       Record<string, string>;
+  // v7.231: keyword → full semantic PATH (umbrella → theme → sub → …). The stored
+  // multi-level taxonomy the Keyword panel renders (every node a page). Absent on
+  // pre-v7.231 analyses → panels fall back to the flat/2-level view (honest gap I.5).
+  keywordPaths?:           Record<string, string[]>;
   // v7.199: AI search-intent grouping (synonyms merged, topical names) + brand terms
   // to drop. Populated inline for smaller analyses; large ones use the on-demand
   // "Refine with AI" button. Optional — absent → panel uses the heuristic grouping.
@@ -198,7 +200,8 @@ export interface CategoryBreakdownResult {
 // onProgress; an interrupted run resumes from the saved progress instead of
 // re-running (and re-paying for) completed batches.
 export interface CbDiscoveryProgress {
-  proposed:   Array<{ name: string; type: 'procedure' | 'brand' | 'location'; indices: number[] }>;
+  // v7.231: hierarchical discovery checkpoints raw per-keyword path assignments.
+  proposed:   Array<{ index: number; path: string[]; type: 'procedure' | 'brand' | 'location' }>;
   doneStarts: number[];   // batch start offsets already discovered
 }
 
@@ -242,11 +245,11 @@ export async function generateCategoryBreakdown(
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} };
   }
 
-  // ── Phase 1 (v7.80): category DISCOVERY across the ENTIRE keyword set ──────
-  // Every keyword participates in defining what categories exist — no top-200
-  // sampling. The full set is chunked into batches of 250; each batch runs the
-  // discovery prompt independently (parallel, bounded concurrency), proposing
-  // categories and assigning its own keywords to them.
+  // ── Phase 1 (v7.231): HIERARCHICAL DISCOVERY across the ENTIRE keyword set ──
+  // Every keyword participates — no sampling (Const I.6). The full set is chunked into
+  // batches of 250; each batch returns, per keyword, the FULL semantic PATH (umbrella →
+  // theme → sub → …) it belongs to. This replaces the old flat discovery: structure +
+  // membership come out of the same pass, so per-analysis cost is unchanged.
   const OTHER_NAME      = 'Other';
   const DISCOVERY_BATCH = 250;
   const CONCURRENCY     = 5;
@@ -255,190 +258,123 @@ export async function generateCategoryBreakdown(
   for (let i = 0; i < merged.length; i += DISCOVERY_BATCH) {
     batches.push({ start: i, kws: merged.slice(i, i + DISCOVERY_BATCH) });
   }
-  console.log(`[OrbitIQ] Category discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
+  console.log(`[OrbitIQ] Hierarchical discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
 
-  interface ProposedCat {
-    name:    string;
-    type:    'procedure' | 'brand' | 'location';
-    indices: number[];   // GLOBAL indices into merged
-  }
-  // v7.86: seed from saved progress (resume) — completed batches are skipped
-  const proposed: ProposedCat[] = (progress?.proposed ?? []).map(p => ({ ...p }));
+  type CatType = 'procedure' | 'brand' | 'location';
+  interface RawAssign { index: number; path: string[]; type: CatType; }  // GLOBAL index into merged
+
+  const rawAssigns: RawAssign[] = (progress?.proposed ?? []).map(p => ({ index: p.index, path: [...p.path], type: p.type }));
   const doneStarts = new Set<number>(progress?.doneStarts ?? []);
+
+  const cleanPath = (p: any): string[] =>
+    Array.isArray(p) ? p.map(s => String(s ?? '').trim()).filter(Boolean) : [];
 
   const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
     try {
-      const bPrompt   = categoryBreakdownPrompt(domain, industry, batch.kws);
-      // v7.83: 60s (was 100s) — haiku finishes these in <30s; a tighter timeout
-      // keeps the worst-case Phase 2 duration under Vercel's 300s hard kill.
+      const bPrompt   = hierarchicalDiscoveryPrompt(domain, industry, batch.kws);
       const bResponse = await getClient().messages.create({
         model:      MODELS.fast,
-        max_tokens: 3000,
+        max_tokens: 4000,   // paths are more verbose than flat names
         messages:   [{ role: 'user', content: bPrompt }],
       }, { timeout: 60_000 });
       const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
-      const bParsed = extractJSON<{ categories: Array<{ name: string; type?: string; keywordIndices: number[] }> }>(bText);
+      const bParsed = extractJSON<{ assignments: Array<{ index: number; path: string[]; type?: string }> }>(bText);
 
-      for (const cat of bParsed.categories ?? []) {
-        if (!cat?.name) continue;
-        const catType = (cat.type === 'brand' || cat.type === 'location') ? cat.type : 'procedure';
-        const indices = (cat.keywordIndices ?? [])
-          .filter(i => Number.isInteger(i) && i >= 0 && i < batch.kws.length)
-          .map(i => batch.start + i);
-        if (indices.length > 0) proposed.push({ name: cat.name, type: catType, indices });
+      for (const a of bParsed.assignments ?? []) {
+        const li = a?.index;
+        if (!Number.isInteger(li) || li < 0 || li >= batch.kws.length) continue;
+        const path = cleanPath(a?.path);
+        if (path.length === 0) continue;
+        const type: CatType = (a?.type === 'brand' || a?.type === 'location') ? a.type : 'procedure';
+        rawAssigns.push({ index: batch.start + li, path, type });
       }
       doneStarts.add(batch.start);
     } catch (err) {
-      // Non-fatal — this batch's keywords fall into "Other" below.
-      // NOT marked done, so a resumed run retries it.
-      console.error('[OrbitIQ] Category discovery batch failed (keywords → Other):', (err as any)?.message);
+      // Non-fatal — this batch's keywords fall into "Other" below. NOT marked done.
+      console.error('[OrbitIQ] Hierarchical discovery batch failed (keywords → Other):', (err as any)?.message);
     }
   };
 
   const pendingBatches = batches.filter(b => !doneStarts.has(b.start));
   if (pendingBatches.length < batches.length) {
-    console.log(`[OrbitIQ] Category discovery resume: ${batches.length - pendingBatches.length} batch(es) already done, ${pendingBatches.length} remaining`);
+    console.log(`[OrbitIQ] Discovery resume: ${batches.length - pendingBatches.length} done, ${pendingBatches.length} remaining`);
   }
   for (let i = 0; i < pendingBatches.length; i += CONCURRENCY) {
     await Promise.all(pendingBatches.slice(i, i + CONCURRENCY).map(runDiscovery));
-    // v7.86: checkpoint after every wave so an interrupted run resumes here
     if (onProgress && i + CONCURRENCY < pendingBatches.length) {
-      await onProgress({ proposed, doneStarts: Array.from(doneStarts) });
+      await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts) });
     }
   }
 
-  // Degenerate case: every discovery batch failed → keep the old empty-result
-  // contract so callers treat it as "no category data" rather than all-Other.
-  if (proposed.length === 0) {
-    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: merged.length, page1CaptureRate: 0, keywordCategories: {} };
+  // Degenerate case: every discovery batch failed → keep the old empty-result contract.
+  if (rawAssigns.length === 0) {
+    return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: merged.length, page1CaptureRate: 0, keywordCategories: {}, keywordPaths: {} };
   }
 
-  // ── Phase 2 (v7.80): CONSOLIDATION — merge duplicate category names ────────
-  // Independent batches name the same concept differently ("Liposuction" vs
-  // "Lipo Procedures"). One haiku call merges aliases into a canonical list.
-  // On failure, identity mapping is used (raw names kept — still full coverage).
+  // ── Phase 2 (v7.231): PATH CANONICALIZATION — align labels across batches ──
+  // Independent batches can label the same node differently ("30-yr fixed" vs "30 Year
+  // Fixed"). One call over the DISTINCT paths (bounded — far fewer than keywords) returns
+  // a canonical path for each, so equivalent nodes merge. On failure → identity (raw paths).
+  const pathKey = (p: string[]) => p.join(' › ');
+  const distinctMap = new Map<string, string[]>();
+  for (const r of rawAssigns) if (!distinctMap.has(pathKey(r.path))) distinctMap.set(pathKey(r.path), r.path);
+  const distinctPaths = Array.from(distinctMap.values());
+  const canonByRawKey = new Map<string, string[]>();
 
-  // Unique proposed names (case-insensitive) with majority type vote
-  const nameVotes = new Map<string, { name: string; types: Record<string, number> }>();
-  for (const p of proposed) {
-    const low = p.name.toLowerCase().trim();
-    if (!nameVotes.has(low)) nameVotes.set(low, { name: p.name, types: {} });
-    const v = nameVotes.get(low)!;
-    v.types[p.type] = (v.types[p.type] ?? 0) + p.indices.length;
-  }
-  const uniqueCats: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> = [];
-  nameVotes.forEach(v => {
-    const top = (Object.entries(v.types).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'procedure') as 'procedure' | 'brand' | 'location';
-    uniqueCats.push({ name: v.name, type: top });
-  });
-
-  // canonical lookup: proposed name (lowercase) → { name, type }
-  const canonical = new Map<string, { name: string; type: 'procedure' | 'brand' | 'location' }>();
-
-  if (batches.length > 1 && uniqueCats.length > 1) {
+  if (distinctPaths.length > 1 && distinctPaths.length <= 300) {
     try {
-      const cPrompt   = categoryConsolidationPrompt(domain, industry, uniqueCats);
+      const cPrompt   = pathCanonicalizationPrompt(domain, industry, distinctPaths);
       const cResponse = await getClient().messages.create({
         model:      MODELS.fast,
-        max_tokens: 3000,
+        max_tokens: 4000,
         messages:   [{ role: 'user', content: cPrompt }],
       }, { timeout: 60_000 });
       const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
-      const cParsed = extractJSON<{ categories: Array<{ name: string; type?: string; merges: string[] }> }>(cText);
-
-      for (const canon of cParsed.categories ?? []) {
-        if (!canon?.name) continue;
-        const canonType = (canon.type === 'brand' || canon.type === 'location') ? canon.type : 'procedure';
-        for (const alias of canon.merges ?? []) {
-          if (typeof alias === 'string') {
-            canonical.set(alias.toLowerCase().trim(), { name: canon.name, type: canonType });
-          }
-        }
+      const cParsed = extractJSON<{ canonical: Array<{ index: number; path: string[] }> }>(cText);
+      for (const c of cParsed.canonical ?? []) {
+        const idx = c?.index;
+        if (!Number.isInteger(idx) || idx < 0 || idx >= distinctPaths.length) continue;
+        const cp = cleanPath(c?.path);
+        if (cp.length) canonByRawKey.set(pathKey(distinctPaths[idx]), cp);
       }
-      console.log(`[OrbitIQ] Category consolidation: ${uniqueCats.length} proposed → ${(cParsed.categories ?? []).length} canonical`);
+      console.log(`[OrbitIQ] Path canonicalization: ${distinctPaths.length} distinct paths processed`);
     } catch (err) {
-      console.error('[OrbitIQ] Category consolidation failed (using raw names):', (err as any)?.message);
+      console.error('[OrbitIQ] Path canonicalization failed (using raw paths):', (err as any)?.message);
     }
   }
-  // Identity mapping for anything the consolidation call missed
-  for (const u of uniqueCats) {
-    const low = u.name.toLowerCase().trim();
-    if (!canonical.has(low)) canonical.set(low, { name: u.name, type: u.type });
-  }
+  for (const [k, p] of Array.from(distinctMap.entries())) if (!canonByRawKey.has(k)) canonByRawKey.set(k, p);
 
-  // ── Phase 3: build the complete keyword → canonical-category assignment ────
-  const assignmentByIndex = new Map<number, string>();
-  const catTypeByName     = new Map<string, 'procedure' | 'brand' | 'location'>();
-
-  for (const p of proposed) {
-    const canon = canonical.get(p.name.toLowerCase().trim()) ?? { name: p.name, type: p.type };
-    if (!catTypeByName.has(canon.name)) catTypeByName.set(canon.name, canon.type);
-    for (const g of p.indices) {
-      if (merged[g] && !assignmentByIndex.has(g)) assignmentByIndex.set(g, canon.name);
-    }
+  // ── Phase 3: per-keyword canonical PATH + derived flat category (back-compat) ──
+  // keywordPaths is the new stored taxonomy. We ALSO derive the flat `keywordCategories`
+  // (theme level) + `categories` + umbrella `parent`, so the 14 existing consumers
+  // (ThemeClusters, Journey, Content, brand guard, etc.) keep working unchanged.
+  const pathByIndex = new Map<number, string[]>();
+  const typeByIndex = new Map<number, CatType>();
+  for (const r of rawAssigns) {
+    if (!merged[r.index] || pathByIndex.has(r.index)) continue;
+    pathByIndex.set(r.index, canonByRawKey.get(pathKey(r.path)) ?? r.path);
+    typeByIndex.set(r.index, r.type);
   }
-  // Every keyword not assigned by discovery (failed batch / omitted index)
-  // falls into "Other" so totals always cover the full footprint.
   for (let i = 0; i < merged.length; i++) {
-    if (!assignmentByIndex.has(i)) assignmentByIndex.set(i, OTHER_NAME);
+    if (!pathByIndex.has(i)) { pathByIndex.set(i, [OTHER_NAME]); typeByIndex.set(i, 'procedure'); }
   }
 
-  // ── Pass 2.5c (v7.229): MEMBERSHIP SELF-CHECK ─────────────────────────────
-  // Batched discovery can misfile a keyword (e.g. credit-card keywords swept into
-  // "Mortgage Rates and Calculators"). Re-read each procedure category's keywords
-  // and move ONLY the ones that clearly belong elsewhere, to an EXISTING canonical
-  // category. Best-effort + bounded so it can never break or slow an analysis;
-  // any failure leaves the original assignment untouched (Const I.5). Claude only
-  // relabels keywords — all demand arithmetic still happens below in TypeScript.
-  try {
-    const PROC_NAMES = new Set(
-      Array.from(catTypeByName.entries()).filter(([, t]) => t === 'procedure').map(([n]) => n),
-    );
-    // Group the current procedure assignments back to keyword lists.
-    const checkCats = new Map<string, string[]>();   // category → keyword texts
-    const kwLowToIndex = new Map<string, number>();
-    assignmentByIndex.forEach((catName, idx) => {
-      const kw = merged[idx];
-      if (!kw) return;
-      kwLowToIndex.set(kw.keyword.toLowerCase().trim(), idx);
-      if (!PROC_NAMES.has(catName)) return;
-      const arr = checkCats.get(catName) ?? [];
-      arr.push(kw.keyword);
-      checkCats.set(catName, arr);
-    });
-    const checkInputs = Array.from(checkCats.entries()).map(([name, keywords]) => ({ name, keywords }));
-    const checkKwCount = checkInputs.reduce((s, c) => s + c.keywords.length, 0);
-
-    // Bound to one call within the Lambda budget; larger footprints are left as-is
-    // (the assignment is still complete + traceable — just not re-audited inline).
-    if (checkInputs.length >= 2 && checkInputs.length <= 50 && checkKwCount > 0 && checkKwCount <= 1200) {
-      const mPrompt   = categoryMembershipCheckPrompt(domain, industry, checkInputs);
-      const mResponse = await getClient().messages.create({
-        model:      MODELS.fast,
-        max_tokens: 3000,
-        messages:   [{ role: 'user', content: mPrompt }],
-      }, { timeout: 60_000 });
-      const mText   = mResponse.content[0].type === 'text' ? mResponse.content[0].text : '';
-      const mParsed = extractJSON<{ corrections: Array<{ keyword: string; from?: string; to: string }> }>(mText);
-
-      let moved = 0;
-      for (const c of mParsed.corrections ?? []) {
-        const kwLow = String(c?.keyword ?? '').toLowerCase().trim();
-        const to    = String(c?.to ?? '');
-        if (!kwLow || !PROC_NAMES.has(to)) continue;            // target must be an existing procedure category
-        const idx = kwLowToIndex.get(kwLow);
-        if (idx === undefined) continue;
-        const current = assignmentByIndex.get(idx);
-        if (current === to || !PROC_NAMES.has(current ?? '')) continue;  // only re-file procedure→procedure
-        assignmentByIndex.set(idx, to);
-        moved++;
-      }
-      console.log(`[OrbitIQ] Membership self-check: ${(mParsed.corrections ?? []).length} flagged, ${moved} reassigned`);
-    } else {
-      console.log(`[OrbitIQ] Membership self-check skipped (${checkInputs.length} procedure categories / ${checkKwCount} kws — out of inline bounds)`);
-    }
-  } catch (err) {
-    console.error('[OrbitIQ] Membership self-check failed (non-fatal, assignment kept):', (err as any)?.message ?? err);
+  const keywordPaths: Record<string, string[]> = {};
+  const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
+  const catTypeByName     = new Map<string, CatType>();
+  const umbrellaByCat     = new Map<string, string>();             // category (theme) → umbrella (path[0])
+  for (let i = 0; i < merged.length; i++) {
+    const kw = merged[i]; if (!kw) continue;
+    const P    = pathByIndex.get(i)!;
+    const type = typeByIndex.get(i)!;
+    keywordPaths[kw.keyword.toLowerCase()] = P;
+    const umbrella = P[0];
+    // Theme = the level other panels treat as the "category": for a procedure that's the
+    // node under the umbrella (path[1]); brand/location stay at their top node (path[0]).
+    const cat = (type === 'procedure' && P.length >= 2) ? P[1] : P[0];
+    assignmentByIndex.set(i, cat);
+    if (!catTypeByName.has(cat))   catTypeByName.set(cat, type);
+    if (!umbrellaByCat.has(cat))   umbrellaByCat.set(cat, umbrella);
   }
 
   // ── Compute demand sums in TypeScript over the FULL footprint ──────────────
@@ -502,45 +438,19 @@ export async function generateCategoryBreakdown(
 
   console.log(`[OrbitIQ] Category breakdown: ${result.categories.length} categories covering ${Object.keys(result.keywordCategories).length}/${merged.length} keywords`);
 
-  // ── Pass 2.5d (v7.229): CATEGORY TAXONOMY — real parent/child ─────────────
-  // Assign each PROCEDURE category a semantic product-line parent so the panels
-  // render a real two-level tree instead of guessing one from shared trailing
-  // words at the read site (Const II.8, III.1). Best-effort + bounded; on any
-  // failure each category's parent stays its own name (flat, honest gap I.5).
-  // Brand/location stay navigational (no parent). No keyword or volume changes.
-  try {
-    const procCats = result.categories.filter(c => c.type === 'procedure' && c.name !== OTHER_NAME);
-    if (procCats.length >= 2 && procCats.length <= 80) {
-      const tPrompt   = categoryTaxonomyPrompt(domain, industry, procCats.map(c => ({ name: c.name })));
-      const tResponse = await getClient().messages.create({
-        model:      MODELS.fast,
-        max_tokens: 2000,
-        messages:   [{ role: 'user', content: tPrompt }],
-      }, { timeout: 60_000 });
-      const tText   = tResponse.content[0].type === 'text' ? tResponse.content[0].text : '';
-      const tParsed = extractJSON<{ assignments: Array<{ category: string; parent: string }> }>(tText);
-
-      const parentByCat = new Map<string, string>();
-      for (const a of tParsed.assignments ?? []) {
-        const cat = String(a?.category ?? '').trim();
-        const par = String(a?.parent ?? '').trim();
-        if (cat && par) parentByCat.set(cat.toLowerCase(), par);
-      }
-      let withParent = 0;
-      for (const c of result.categories) {
-        if (c.type !== 'procedure' || c.name === OTHER_NAME) continue;
-        const par = parentByCat.get(c.name.toLowerCase());
-        // Default to the category's own name (top-level) when the model omitted it.
-        c.parent = (par && par.length > 0) ? par : c.name;
-        if (par && par.toLowerCase() !== c.name.toLowerCase()) withParent++;
-      }
-      const lines = new Set(result.categories.filter(c => c.parent).map(c => c.parent));
-      console.log(`[OrbitIQ] Category taxonomy: ${procCats.length} categories → ${lines.size} product line(s), ${withParent} nested`);
-    } else {
-      console.log(`[OrbitIQ] Category taxonomy skipped (${procCats.length} procedure categories — out of inline bounds); rendering flat`);
-    }
-  } catch (err) {
-    console.error('[OrbitIQ] Category taxonomy failed (non-fatal, rendering flat):', (err as any)?.message ?? err);
+  // ── v7.231: store the multi-level taxonomy + derive umbrella parents ───────
+  // `parent` (back-compat with v7.229) = the umbrella the theme sits under (path[0]),
+  // read straight from the canonical paths — no extra LLM call. `keywordPaths` carries
+  // the full tree the Keyword panel renders. Brand/location stay navigational (no parent).
+  result.keywordPaths = keywordPaths;
+  for (const c of result.categories) {
+    if (c.type !== 'procedure' || c.name === OTHER_NAME) continue;
+    const umbrella = umbrellaByCat.get(c.name);
+    c.parent = (umbrella && umbrella.length > 0) ? umbrella : c.name;
+  }
+  {
+    const umbrellas = new Set(result.categories.filter(c => c.parent).map(c => c.parent));
+    console.log(`[OrbitIQ] Taxonomy: ${Object.keys(keywordPaths).length} keyword paths, ${umbrellas.size} umbrella(s)`);
   }
 
   // ── v7.199: AI search-intent grouping (the "automatic" half of Wayne's hybrid) ──

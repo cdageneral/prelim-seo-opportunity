@@ -60,6 +60,10 @@ export interface CategoryModel {
   // v7.229: canonical category name → product-line parent (the STORED taxonomy,
   // Const II.8/III.1). Empty when the analysis predates the taxonomy pass.
   parentForCategory:  Map<string, string>;
+  // v7.231: lowercased keyword → full semantic PATH (umbrella → theme → sub → …),
+  // read from the STORED hierarchical taxonomy. Empty on pre-v7.231 analyses (→ the
+  // Keyword panel falls back to the v7.230 2-level view, honest gap I.5).
+  keywordPaths:       Map<string, string[]>;
 }
 
 export function buildCategoryModel(
@@ -106,6 +110,18 @@ export function buildCategoryModel(
     }
   }
 
+  // v7.231: the STORED multi-level taxonomy — keyword → full path. Read once here.
+  const keywordPaths = new Map<string, string[]>();
+  {
+    const kp: Record<string, any> = analysis?.semrushSnapshot?._categoryBreakdown?.keywordPaths ?? {};
+    for (const [k, v] of Object.entries(kp)) {
+      if (Array.isArray(v)) {
+        const path = v.map(s => String(s ?? '').trim()).filter(Boolean);
+        if (path.length) keywordPaths.set(k.toLowerCase().trim(), path);
+      }
+    }
+  }
+
   const categories: ModelCategory[] = [];
   const seenCat = new Set<string>();
   const categoryForKeyword = new Map<string, string>();
@@ -137,5 +153,5 @@ export function buildCategoryModel(
     }
   }
 
-  return { categories, categoryForKeyword, members, topics, parentForCategory };
+  return { categories, categoryForKeyword, members, topics, parentForCategory, keywordPaths };
 }

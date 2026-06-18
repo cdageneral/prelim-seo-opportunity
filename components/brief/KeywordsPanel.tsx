@@ -1803,6 +1803,58 @@ function buildProductLines(leaves: CatNode[], parentOf: Map<string, string>): Ca
   return out;
 }
 
+// ─── v7.231: multi-level tree from the STORED taxonomy paths ─────────────────
+// Build an N-level page tree directly from each keyword's canonical PATH
+// (umbrella → theme → sub → …). Every node is a page: it holds the keywords whose
+// MOST-SPECIFIC home is that node (`own`) and rolls up its descendants' volume
+// (aggregateCatNode). Single-child, no-own nodes collapse (Wayne: collapse instead of
+// a depth cap), so a redundant umbrella with one theme disappears. No lexical guessing —
+// the structure is the stored assignment (Const II.8, III.1b).
+function aggregateTree(node: CatNode): void {
+  for (const c of node.children) aggregateTree(c);
+  aggregateCatNode(node);
+}
+function collapseSingleChild(node: CatNode): CatNode {
+  node.children = node.children.map(collapseSingleChild);
+  // a node with exactly one child and no page-keywords of its own is a redundant level
+  while (node.children.length === 1 && node.own.length === 0) node = node.children[0];
+  return node;
+}
+function setTreeDepth(node: CatNode, d: number): void {
+  node.depth = d;
+  for (const c of node.children) setTreeDepth(c, d + 1);
+}
+function sortTree(nodes: CatNode[]): void {
+  nodes.sort((a, b) => b.totVol - a.totVol);
+  for (const n of nodes) sortTree(n.children);
+}
+function buildPathTree(rows: KeywordRow[], pathOf: Map<string, string[]>): CatNode[] {
+  const roots: CatNode[] = [];
+  const byKey = new Map<string, CatNode>();
+  const ensure = (path: string[]): CatNode => {
+    let key = '';
+    let parentChildren = roots;
+    let node: CatNode | null = null;
+    for (let d = 0; d < path.length; d++) {
+      key = key ? key + ' › ' + path[d] : path[d];
+      let n = byKey.get(key);
+      if (!n) { n = emptyCatNode('path:' + key, path[d], 'procedure', d, true); byKey.set(key, n); parentChildren.push(n); }
+      node = n; parentChildren = n.children;
+    }
+    return node!;
+  };
+  for (const r of rows) {
+    const path = pathOf.get(r.keyword.toLowerCase().trim());
+    const leaf = ensure(path && path.length ? path : ['Other']);
+    leaf.own.push(r);
+  }
+  const collapsed = roots.map(collapseSingleChild);
+  for (const n of collapsed) aggregateTree(n);
+  collapsed.forEach(n => setTreeDepth(n, 0));
+  sortTree(collapsed);
+  return collapsed;
+}
+
 // Flatten a tree to the rows currently visible given the expanded set (DFS).
 function flattenVisible(nodes: CatNode[], expanded: Set<string>, acc: CatNode[]): void {
   for (const n of nodes) {
@@ -2064,19 +2116,28 @@ function KwCategorySection({
       arr.push(row);
     }
 
+    // v7.231: when the analysis carries the stored multi-level taxonomy, build the
+    // procedure tree straight from each keyword's PATH (umbrella → theme → sub → …),
+    // every node a page. Otherwise fall back to the v7.230 2-level view (honest gap I.5).
+    const hasPaths = categoryModel.keywordPaths.size > 0;
+
     const procLeaves: CatNode[] = [], navLeaves: CatNode[] = [], otherLeaves: CatNode[] = [];
+    const procRows: KeywordRow[] = [];
     for (const [name, kws] of Array.from(catRows.entries())) {
       if (name !== 'Other' && dropCategoryNames.has(name)) continue;   // v7.226: defensive — never form a competitor-brand leaf
       const type: CatNode['type'] = name === 'Other' ? 'procedure' : (typeByName[name] ?? 'procedure');
-      // Procedure categories split into real sub-clusters (expandable); nav/Other stay leaves.
-      const node = (type === 'procedure' && name !== 'Other')
-        ? buildCategoryNode('cat:' + name, name, type, kws, topicByKw)
-        : leafCatNode('cat:' + name, name, type, kws);
+      if (name !== 'Other' && type === 'procedure') {
+        if (hasPaths) { procRows.push(...kws); continue; }              // path tree consumes these rows
+        procLeaves.push(buildCategoryNode('cat:' + name, name, type, kws, topicByKw));
+        continue;
+      }
+      const node = leafCatNode('cat:' + name, name, type, kws);
       if (name === 'Other') otherLeaves.push(node);
-      else if (type === 'brand' || type === 'location') navLeaves.push(node);
-      else procLeaves.push(node);
+      else navLeaves.push(node);
     }
-    const proc = buildProductLines(procLeaves, categoryModel.parentForCategory).sort((a, b) => b.totVol - a.totVol);
+    const proc = hasPaths
+      ? buildPathTree(procRows, categoryModel.keywordPaths)
+      : buildProductLines(procLeaves, categoryModel.parentForCategory).sort((a, b) => b.totVol - a.totVol);
     navLeaves.sort((a, b) => b.totVol - a.totVol);
     return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
   }, [rows, categoryModel, dropCategoryNames]);
@@ -2113,7 +2174,7 @@ function KwCategorySection({
         cat={n}
         depth={n.depth}
         hasChildren={n.children.length > 0}
-        canRevealKeywords={n.children.length === 0 && n.own.length > 0}
+        canRevealKeywords={n.own.length > 0}
         expanded={expanded.has(n.id)}
         onToggle={() => toggle(n.id)}
         selIdx={selIdx}
