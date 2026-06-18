@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.237 — 2026-06-18 · FIX: modifier rule was flattening the keyword hierarchy
+
+**The regression (Wayne).** After re-running the analysis on v7.236, the Keyword panel's Category Breakdown went **flat** — "Credit Cards" showed every keyword as a chip directly beneath it with no sub-categories, and each distinguishing term ("no annual fee", "0 APR", "balance transfer", "prequalify") had been pulled into a **modifier** chip. The Cluster panel then had no theme level to nest by either.
+
+**Root cause (mine, from v7.235).** The modifier-separation rule in `hierarchicalDiscoveryPrompt` (Const III.1c) was too aggressive. It listed *rates* and *calculator* as modifiers and told the model to "separate the topic from its modifiers," so on a fresh run the classifier stripped **product-defining facets** (no annual fee, 0 APR, balance transfer, cash back, …) out of the path and into the modifier field. That collapsed every path to a single umbrella node → the tree flattened. This is a synthesis/prompt change, so it only surfaced on the re-run.
+
+**The fix (`lib/claude/prompts.ts`).** Rewrote the modifier rule around the **"same page vs different page" test**: strip a term as a modifier ONLY if two keywords differing just by it would target the **same page** (best, top, reviews, compare, vs, near me, online, how to, requirements, apply). Any term that names a **distinct product/sub-product** — no annual fee, 0 APR / balance transfer, cash back, rewards, secured, student, business, for bad credit, 30-year, VA, current, and any "<thing> rates" / "<thing> calculator" — **stays a sub-topic path node, never a modifier**. Added an explicit "never collapse an umbrella's sub-products into modifiers — that flattens the tree" warning with worked examples ("no annual fee credit cards" → `["Credit Cards","No Annual Fee"]`, modifier ""). Constitution **III.1c corrected to v0.9** with the same test, and over-stripping that flattens the hierarchy is now an explicit FAIL.
+
+**Verified (own debugging agent — real code).** Isolated `tsc` (prompts + synthesize) = 0 errors. The **real** `hierarchicalDiscoveryPrompt` now emits the same-page test, the keep-facets rule, the anti-flatten warning, the "no annual fee → sub-topic" example, and no longer frames "calculator" as a stripped modifier — 5/5 PASS.
+
+**Action for Wayne:** deploy v7.237 and **Run Analysis** again (this is a synthesis fix — it only takes effect on a fresh run). The Keyword tree's umbrella → theme → sub hierarchy returns, facets become sub-categories again (with "best/apply/etc." still shown as modifier chips), and — because the paths now carry real theme levels — the v7.236 Cluster nesting will populate too.
+
 ## v7.236 — 2026-06-18 · Cluster panel mirrors the keyword taxonomy (umbrella → theme → topic); brand-typing fix
 
 **The ask (Wayne):** the Keyword panel's Category Breakdown looks right, but the Cluster panel (and Journey/Content) don't mirror it — and they showed themes that weren't in the keyword categories even with no competitor upload and no deep journey run. Make all three panels share the SAME foundational hierarchy as the Keyword panel, with deep-journey demand layered on top only when present. (Phase 1 of 3 — this release does the **Cluster** panel; Journey = v7.237, Content = v7.238.)
