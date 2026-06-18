@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.230 — 2026-06-18 · Restore Category drill-down on real data — sub-clusters + keywords at each level (Const II.8, III)
+
+**The ask (Wayne):** after v7.229 the Category Breakdown was correct but you couldn't click a category to see its sub-categories and the keywords at each level. v7.229 had (correctly) deleted the *fabricated* word-guess sub-splitting, but it left categories as flat leaves with no drill-down at all — a regression in usefulness.
+
+**What changed (ONE file, `components/brief/KeywordsPanel.tsx`).**
+- New `buildCategoryNode` — splits a procedure category into its **real single-intent sub-clusters** using `categoryModel.topics` (the canonical "one cluster = one intent = one page" unit the Cluster/Journey panels already use). The sub-cluster membership is the **stored topic assignment** (Const II.8), not a lexical guess. A keyword with no topic, or a topic with only one keyword, falls into a "— general" remainder; if the split wouldn't yield ≥2 real sub-clusters the category stays a single leaf. Keywords live on each leaf's `own`.
+- `KwCatRow` now reveals the **actual keywords** of a leaf as chips when you expand it (`canRevealKeywords`) — each chip is a real source row showing the keyword, its annual demand, and a rank-colored dot for the client's position bucket. So the tree is: Product Line → Category → intent sub-cluster → (expand) keyword chips, and every level's totals stay the exact arithmetic sum of the keywords beneath it.
+
+**Data impact.** Pure presentation over the existing canonical model — no data sourcing, volume, or membership change; category/line totals are byte-identical to v7.229 (the sub-clusters just partition what was already there). Brand/Location/Other stay flat (navigational).
+
+**Verified (own debugging agent).** Isolated `tsc` = 0 errors. Behavioral harness (esbuild-bundled real compiled code): drill-down logic `buildCategoryNode`/`buildProductLines` = **11/11** (category splits into its real sub-clusters + "— general"; each leaf carries its own keywords; single-topic category stays a viewable leaf; totals exact, no double-count; lines wrap without disturbing sub-cluster depth). SSR render of `KwCatRow` = **6/6** (expanded leaf renders its real keyword chips with annual demand + reveal badge; collapsed shows none). This release ADDS markup (keyword chips) → Const IV.6/V.5 dual-theme parity **triggered and verified**: the harness asserts every color in the new rows is an existing theme CSS variable (zero hardcoded literals), and `orbitiq-v7.230-RENDER.html` renders the tree with a light/dark toggle for eyeballing. Panel scroll untouched.
+
 ## v7.229 — 2026-06-18 · Real category taxonomy — parent/child is stored data, not a render-time word guess (Const I.1, II.8, III.1)
 
 **The ask (Wayne, with screenshot):** the category tree was wrong — "Mortgage Rates and Calculators" sat under a "Calculators" parent, and "Credit Card" was nested *inside* the Mortgage category. How do we make the category structure accurate? Decision: make the hierarchy **real data** (not a heuristic), ship it in one release, and amend the Constitution.

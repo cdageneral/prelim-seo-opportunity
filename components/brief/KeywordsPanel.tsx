@@ -1704,11 +1704,65 @@ function aggregateCatNode(node: CatNode): void {
   }
 }
 
-// A category is now a LEAF holding its own keywords — no fabricated sub-splitting.
-// (Intent-level sub-grouping lives on the canonical model / Cluster + Journey panels.)
+// A category as a LEAF holding its own keywords (used for brand/nav/Other and for
+// procedure categories that have no real sub-clusters).
 function leafCatNode(id: string, name: string, type: CatNode['type'], kws: KeywordRow[]): CatNode {
   const node = emptyCatNode(id, name, type, 0, false);
   node.own = kws;
+  aggregateCatNode(node);
+  return node;
+}
+
+// v7.230: split a procedure category into its REAL single-intent sub-clusters using the
+// canonical topics (`topicByKw`: keyword → { key, label } from categoryModel.topics — the
+// same "one cluster = one intent = one page" unit the Cluster/Journey panels use, Const
+// II.7/III). NOT a lexical guess (Const II.8): the sub-cluster membership is the stored
+// topic assignment. A keyword with no topic, or a topic group with a single keyword, falls
+// into a "— general" remainder so every node's totals are the EXACT sum of its leaves.
+// When the split would yield <2 real sub-clusters the category stays a single leaf (its
+// keywords are still viewable on expand). The keywords live on `own` at the leaf level so
+// the UI can reveal them at each level.
+function buildCategoryNode(
+  id: string,
+  name: string,
+  type: CatNode['type'],
+  kws: KeywordRow[],
+  topicByKw: Map<string, { key: string; label: string }>,
+): CatNode {
+  const node = emptyCatNode(id, name, type, 0, false);
+  if (type !== 'procedure') { node.own = kws; aggregateCatNode(node); return node; }
+
+  const groups = new Map<string, { label: string; rows: KeywordRow[] }>();
+  const order: string[] = [];
+  for (const r of kws) {
+    const t = topicByKw.get(r.keyword.toLowerCase().trim());
+    const key = t ? t.key : '__general__';
+    let g = groups.get(key);
+    if (!g) { g = { label: t ? t.label : `${name} — general`, rows: [] }; groups.set(key, g); order.push(key); }
+    g.rows.push(r);
+  }
+  const topicKeys = order.filter(k => k !== '__general__' && (groups.get(k)!.rows.length >= 2));
+  const remainder: KeywordRow[] = [];
+  for (const k of order) {
+    if (topicKeys.includes(k)) continue;
+    remainder.push(...groups.get(k)!.rows);
+  }
+  // A single sub-cluster covering everything is just the category renamed → keep it a leaf.
+  if (topicKeys.length === 0 || (topicKeys.length === 1 && remainder.length === 0)) {
+    node.own = kws; aggregateCatNode(node); return node;
+  }
+  for (const k of topicKeys) {
+    const g = groups.get(k)!;
+    const child = emptyCatNode(id + '::t::' + k, g.label, type, 1, true);
+    child.own = g.rows; aggregateCatNode(child);
+    node.children.push(child);
+  }
+  if (remainder.length > 0) {
+    const rest = emptyCatNode(id + '::general', `${name} — general`, type, 1, true);
+    rest.own = remainder; aggregateCatNode(rest);
+    node.children.push(rest);
+  }
+  node.children.sort((a, b) => b.totVol - a.totVol);
   aggregateCatNode(node);
   return node;
 }
@@ -1988,6 +2042,17 @@ function KwCategorySection({
     const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
     for (const c of categoryModel.categories) typeByName[c.name] = (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure';
 
+    // v7.230: keyword → its canonical single-intent sub-cluster (topic), first-topic-wins
+    // to match categoryForKeyword. Drives the real Category → sub-cluster drill-down.
+    const topicByKw = new Map<string, { key: string; label: string }>();
+    for (const t of categoryModel.topics) {
+      for (const kw of t.keywords) {
+        const k = (kw.keyword ?? '').toLowerCase().trim();
+        if (!k || topicByKw.has(k)) continue;
+        topicByKw.set(k, { key: t.id, label: t.product || t.parentName });
+      }
+    }
+
     const catRows = new Map<string, KeywordRow[]>();
     for (const row of rows) {
       // Canonical STORED membership (Const II.8) — never re-derived by string match here.
@@ -2003,7 +2068,10 @@ function KwCategorySection({
     for (const [name, kws] of Array.from(catRows.entries())) {
       if (name !== 'Other' && dropCategoryNames.has(name)) continue;   // v7.226: defensive — never form a competitor-brand leaf
       const type: CatNode['type'] = name === 'Other' ? 'procedure' : (typeByName[name] ?? 'procedure');
-      const node = leafCatNode('cat:' + name, name, type, kws);
+      // Procedure categories split into real sub-clusters (expandable); nav/Other stay leaves.
+      const node = (type === 'procedure' && name !== 'Other')
+        ? buildCategoryNode('cat:' + name, name, type, kws, topicByKw)
+        : leafCatNode('cat:' + name, name, type, kws);
       if (name === 'Other') otherLeaves.push(node);
       else if (type === 'brand' || type === 'location') navLeaves.push(node);
       else procLeaves.push(node);
@@ -2045,6 +2113,7 @@ function KwCategorySection({
         cat={n}
         depth={n.depth}
         hasChildren={n.children.length > 0}
+        canRevealKeywords={n.children.length === 0 && n.own.length > 0}
         expanded={expanded.has(n.id)}
         onToggle={() => toggle(n.id)}
         selIdx={selIdx}
@@ -2135,18 +2204,21 @@ function KwCatRow({
   dimmed,
   depth = 0,
   hasChildren = false,
+  canRevealKeywords = false,
   expanded = false,
   onToggle,
 }: {
-  cat:          CatNode;
-  selIdx:       number | null;   // null = all ranks; 0–3 = selected bucket
-  maxVol:       number;
-  dimmed:       boolean;
-  depth?:       number;          // v7.191: tree depth (0 = top-level parent/category)
-  hasChildren?: boolean;
-  expanded?:    boolean;
-  onToggle?:    () => void;
+  cat:               CatNode;
+  selIdx:            number | null;   // null = all ranks; 0–3 = selected bucket
+  maxVol:            number;
+  dimmed:            boolean;
+  depth?:            number;          // v7.191: tree depth (0 = top-level parent/category)
+  hasChildren?:      boolean;
+  canRevealKeywords?: boolean;        // v7.230: leaf with own keywords → expand to chips
+  expanded?:         boolean;
+  onToggle?:         () => void;
 }) {
+  const clickable = hasChildren || canRevealKeywords;
   const p1Vol   = cat.vol[0] + cat.vol[1];
   const dispKw  = selIdx === null ? cat.totKw  : cat.kw[selIdx];
   const dispVol = selIdx === null ? cat.totVol : cat.vol[selIdx];
@@ -2174,9 +2246,14 @@ function KwCatRow({
     ? 'var(--c-9090b8)'
     : isParent ? 'var(--c-e6e6ff)' : 'var(--c-b0b0d8)';
 
+  // v7.230: the actual keywords held at this leaf, largest demand first — revealed as
+  // chips when the row is expanded (Const I.1 — each is a real source row).
+  const ownSorted = canRevealKeywords ? cat.own.slice().sort((a, b) => b.searchVolume - a.searchVolume) : [];
+
   return (
+    <>
     <div
-      onClick={hasChildren ? onToggle : undefined}
+      onClick={clickable ? onToggle : undefined}
       style={{
         display: 'grid',
         gridTemplateColumns: '1fr 105px 80px 52px 60px 100px',
@@ -2184,14 +2261,14 @@ function KwCatRow({
         padding: '5px 20px',
         borderBottom: '1px solid var(--ca-255-255-255-0_03)',
         opacity: dimmed ? 0.6 : 1,
-        cursor: hasChildren ? 'pointer' : 'default',
-        userSelect: hasChildren ? 'none' : 'auto',
+        cursor: clickable ? 'pointer' : 'default',
+        userSelect: clickable ? 'none' : 'auto',
         background: depth > 0 ? 'var(--ca-255-255-255-0_02)' : 'transparent',
       }}
     >
       {/* Disclosure chevron + category name + stacked rank-bucket bar */}
       <div style={{ minWidth: 0, paddingRight: 10, paddingLeft: depth * 16, display: 'flex', alignItems: 'center', gap: 6 }}>
-        {hasChildren ? (
+        {clickable ? (
           <i
             className="ti ti-chevron-right"
             style={{ fontSize: 12, color: 'var(--c-6060a0)', flex: '0 0 auto', transition: 'transform .15s ease', transform: expanded ? 'rotate(90deg)' : 'none' }}
@@ -2203,7 +2280,9 @@ function KwCatRow({
         <div style={{ minWidth: 0, flex: '1 1 auto' }}>
           <span style={{ fontSize: '12px', fontWeight: nameWeight, color: nameColor, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {cat.name}
-            {hasChildren && <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.children.length}</span>}
+            {hasChildren
+              ? <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.children.length}</span>
+              : (canRevealKeywords && <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.own.length} kw</span>)}
           </span>
           <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: 'var(--c-111120)', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
             {cat.vol.map((v, i) => {
@@ -2253,5 +2332,42 @@ function KwCatRow({
         )}
       </div>
     </div>
+
+    {/* v7.230: expanded leaf → the real keywords for this level, as chips. Each chip is a
+        source row (keyword · annual demand); rank-colored dot = client position bucket. */}
+    {expanded && canRevealKeywords && (
+      <div
+        style={{
+          display: 'flex', flexWrap: 'wrap', gap: 6,
+          padding: '6px 20px 8px',
+          paddingLeft: depth * 16 + 38,
+          background: 'var(--ca-255-255-255-0_02)',
+          borderBottom: '1px solid var(--ca-255-255-255-0_03)',
+          opacity: dimmed ? 0.6 : 1,
+        }}
+      >
+        {ownSorted.map(k => {
+          const b = bucketIndexOf(k.position);
+          const dotColor = k.position === null ? 'var(--c-55557a)' : RANK_BUCKETS[b].color;
+          return (
+            <span
+              key={k.key}
+              title={k.position !== null ? `position ${k.position}` : 'not ranking'}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: '11px', color: 'var(--c-b0b0d8)',
+                background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e30)',
+                borderRadius: 4, padding: '2px 8px', maxWidth: '100%',
+              }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flex: '0 0 auto' }} aria-hidden="true" />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{k.keyword}</span>
+              <span style={{ color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(k.searchVolume)}</span>
+            </span>
+          );
+        })}
+      </div>
+    )}
+    </>
   );
 }
