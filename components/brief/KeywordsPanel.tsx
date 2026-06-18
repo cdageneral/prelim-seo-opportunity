@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
-import { buildCategoryModel, type CategoryModel } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
+import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -288,6 +288,50 @@ function downloadCSV(rows: KeywordRow[], clientName: string, filterSlug: string)
   const a    = document.createElement('a');
   a.href     = url;
   a.download = `${clientName.replace(/\s+/g, '-')}-keywords-${filterSlug}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// v7.235: the hierarchical-taxonomy export Wayne specified — one row per keyword with the
+// full semantic path split across level_1..5, plus the LLM's separated modifier (appended as
+// the trailing level per Const III.1c), search intent, confidence (LLM self-estimate, NOT a
+// measured data metric — Const III.7), and reasoning. volume is the real Semrush/upload row
+// (Const I.1). Keywords the model is unsure about (confidence < 80) are flagged needs_review.
+function csvCell(v: unknown): string {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadTaxonomyCSV(
+  rows: KeywordRow[],
+  pathOf: Map<string, string[]>,
+  metaOf: Map<string, KeywordMeta>,
+  clientName: string,
+  filterSlug: string,
+) {
+  const headers = ['keyword','volume','level_1','level_2','level_3','level_4','level_5','search_intent','confidence','reasoning','needs_review'];
+  const lines: string[] = [headers.join(',')];
+  for (const r of rows) {
+    const k    = r.keyword.toLowerCase().trim();
+    const path = pathOf.get(k) ?? [];
+    const meta = metaOf.get(k);
+    // Trailing modifier/intent level (Const III.1c): the clean topic path, then the modifier.
+    const levels = meta?.modifier ? [...path, meta.modifier] : [...path];
+    const lv = [0,1,2,3,4].map(i => levels[i] ?? '');   // level_1..5; deeper paths truncate ("first 5 of N")
+    lines.push([
+      csvCell(r.keyword),
+      csvCell(r.searchVolume),
+      ...lv.map(csvCell),
+      csvCell(meta?.intent ?? ''),
+      csvCell(meta?.confidence != null ? meta.confidence : ''),
+      csvCell(meta?.reasoning ?? ''),
+      csvCell(meta?.needsReview ? 'YES' : ''),
+    ].join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `${clientName.replace(/\s+/g, '-')}-taxonomy-${filterSlug}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -1120,6 +1164,22 @@ export default function KeywordsPanel({
             </svg>
             {filter === 'all' ? 'Excel' : <>{FILTER_META[filter].label}<span className="opacity-50 ml-0.5">Excel</span></>}
           </button>
+
+          {/* v7.235: Taxonomy CSV — keyword, volume, level_1..5, search_intent, confidence
+              (LLM self-estimate, not a measured metric), reasoning, needs_review. Only when
+              the analysis carries the stored hierarchical taxonomy (else nothing to export). */}
+          {categoryModel.keywordPaths.size > 0 && (
+            <button
+              onClick={() => downloadTaxonomyCSV(visibleRows, categoryModel.keywordPaths, categoryModel.keywordMeta, clientName, FILTER_META[filter].slug)}
+              title="Download the hierarchical taxonomy (keyword, volume, level_1–5, search_intent, confidence [LLM estimate], reasoning, needs_review) as CSV"
+              className="text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 hover:border-indigo-500/60 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              Taxonomy<span className="opacity-50 ml-0.5">CSV</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2152,6 +2212,12 @@ function KwCategorySection({
   const allTop = procedureTop.concat(navTop, otherTop);
   if (allTop.length === 0) return null;
 
+  // v7.235: how many of the shown keywords the LLM flagged low-confidence (Const III.7).
+  let needsReviewCount = 0;
+  if (categoryModel.keywordMeta.size > 0) {
+    for (const r of rows) if (categoryModel.keywordMeta.get(r.keyword.toLowerCase().trim())?.needsReview) needsReviewCount++;
+  }
+
   const maxVol = Math.max(...allTop.map(n => n.totVol), 1);
   const selIdx = rankFilter === 'all' ? null : RANK_SEL_INDEX[rankFilter];
 
@@ -2187,6 +2253,7 @@ function KwCategorySection({
         selIdx={selIdx}
         maxVol={maxVol}
         dimmed={dimmed}
+        metaOf={categoryModel.keywordMeta}
       />
     ));
   };
@@ -2200,6 +2267,14 @@ function KwCategorySection({
           <span style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'var(--ca-108-99-255-0_1)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-8080c0)' }}>
             {overallShare.toFixed(1)}% page 1 capture · {segmentLabel}
           </span>
+          {needsReviewCount > 0 && (
+            <span
+              title="Keywords the AI flagged low-confidence (< 80% self-estimate) for human review — Const III.7"
+              style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'var(--ca-245-158-11-0_12, rgba(245,158,11,0.12))', border: '1px solid var(--amber)', color: 'var(--amber)' }}
+            >
+              {needsReviewCount.toLocaleString()} needs review
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {RANK_BUCKETS.map(b => (
@@ -2275,6 +2350,7 @@ function KwCatRow({
   canRevealKeywords = false,
   expanded = false,
   onToggle,
+  metaOf,
 }: {
   cat:               CatNode;
   selIdx:            number | null;   // null = all ranks; 0–3 = selected bucket
@@ -2285,6 +2361,7 @@ function KwCatRow({
   canRevealKeywords?: boolean;        // v7.230: leaf with own keywords → expand to chips
   expanded?:         boolean;
   onToggle?:         () => void;
+  metaOf?:           Map<string, KeywordMeta>;   // v7.235: per-keyword classification metadata (Const III.7)
 }) {
   const clickable = hasChildren || canRevealKeywords;
   const p1Vol   = cat.vol[0] + cat.vol[1];
@@ -2417,19 +2494,37 @@ function KwCatRow({
         {ownSorted.map(k => {
           const b = bucketIndexOf(k.position);
           const dotColor = k.position === null ? 'var(--c-55557a)' : RANK_BUCKETS[b].color;
+          // v7.235: classification metadata for this keyword (Const III.7). confidence is the
+          // LLM's self-estimate — labeled as an estimate in the tooltip, NOT a measured metric.
+          const meta = metaOf?.get(k.keyword.toLowerCase().trim());
+          const review = meta?.needsReview === true;
+          const titleParts = [k.position !== null ? `position ${k.position}` : 'not ranking'];
+          if (meta?.modifier)        titleParts.push(`modifier: ${meta.modifier}`);
+          if (meta?.intent)          titleParts.push(`intent: ${meta.intent}`);
+          if (meta?.confidence != null) titleParts.push(`confidence: ${meta.confidence}% (LLM estimate)`);
+          if (meta?.reasoning)       titleParts.push(`why: ${meta.reasoning}`);
           return (
             <span
               key={k.key}
-              title={k.position !== null ? `position ${k.position}` : 'not ranking'}
+              title={titleParts.join('  ·  ')}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 fontSize: '11px', color: 'var(--c-b0b0d8)',
-                background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e30)',
+                background: 'var(--c-0f0f1e)',
+                border: `1px solid ${review ? 'var(--amber)' : 'var(--c-1e1e30)'}`,
                 borderRadius: 4, padding: '2px 8px', maxWidth: '100%',
               }}
             >
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flex: '0 0 auto' }} aria-hidden="true" />
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>{k.keyword}</span>
+              {meta?.modifier && (
+                <span style={{ fontSize: '9px', color: 'var(--c-7070a0)', background: 'var(--ca-108-99-255-0_1)', borderRadius: 3, padding: '0 4px' }}>{meta.modifier}</span>
+              )}
+              {meta?.confidence != null && (
+                <span title="LLM confidence estimate (not a measured metric)" style={{ fontSize: '9px', color: review ? 'var(--amber)' : 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>
+                  {meta.confidence}%{review ? ' ⚠' : ''}
+                </span>
+              )}
               <span style={{ color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(k.searchVolume)}</span>
             </span>
           );

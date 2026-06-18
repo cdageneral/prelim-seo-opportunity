@@ -52,6 +52,17 @@ export interface ModelMember {
   mentionsProduct: boolean;         // false for pre-product / trigger terms (Const III.2a)
 }
 
+// v7.235: per-keyword classification metadata from the hierarchical pass (Const III.7).
+// confidence is the LLM's self-estimate (0–100) — labeled as a model estimate everywhere
+// it is shown, never a measured data metric; needsReview = confidence < 80.
+export interface KeywordMeta {
+  modifier?:   string;
+  intent?:     string;
+  confidence?: number;
+  reasoning?:  string;
+  needsReview?: boolean;
+}
+
 export interface CategoryModel {
   categories:         ModelCategory[];
   categoryForKeyword: Map<string, string>;
@@ -64,6 +75,9 @@ export interface CategoryModel {
   // read from the STORED hierarchical taxonomy. Empty on pre-v7.231 analyses (→ the
   // Keyword panel falls back to the v7.230 2-level view, honest gap I.5).
   keywordPaths:       Map<string, string[]>;
+  // v7.235: lowercased keyword → classification metadata (modifier/intent/confidence/
+  // reasoning/needsReview), read from the STORED taxonomy. Empty on pre-v7.235 analyses.
+  keywordMeta:        Map<string, KeywordMeta>;
 }
 
 export function buildCategoryModel(
@@ -122,6 +136,24 @@ export function buildCategoryModel(
     }
   }
 
+  // v7.235: the STORED classification metadata — keyword → modifier/intent/confidence/
+  // reasoning/needsReview. Read once here; consumed by the Keyword panel + taxonomy CSV.
+  const keywordMeta = new Map<string, KeywordMeta>();
+  {
+    const km: Record<string, any> = analysis?.semrushSnapshot?._categoryBreakdown?.keywordMeta ?? {};
+    for (const [k, v] of Object.entries(km)) {
+      if (v && typeof v === 'object') {
+        const conf = Number.isFinite((v as any).confidence) ? Math.max(0, Math.min(100, Math.round((v as any).confidence))) : undefined;
+        const entry: KeywordMeta = {};
+        if (typeof (v as any).modifier  === 'string' && (v as any).modifier.trim())  entry.modifier  = (v as any).modifier.trim();
+        if (typeof (v as any).intent    === 'string' && (v as any).intent.trim())    entry.intent    = (v as any).intent.trim();
+        if (conf != null) { entry.confidence = conf; entry.needsReview = (v as any).needsReview === true || conf < 80; }
+        if (typeof (v as any).reasoning === 'string' && (v as any).reasoning.trim()) entry.reasoning = (v as any).reasoning.trim();
+        if (Object.keys(entry).length) keywordMeta.set(k.toLowerCase().trim(), entry);
+      }
+    }
+  }
+
   const categories: ModelCategory[] = [];
   const seenCat = new Set<string>();
   const categoryForKeyword = new Map<string, string>();
@@ -153,5 +185,5 @@ export function buildCategoryModel(
     }
   }
 
-  return { categories, categoryForKeyword, members, topics, parentForCategory, keywordPaths };
+  return { categories, categoryForKeyword, members, topics, parentForCategory, keywordPaths, keywordMeta };
 }

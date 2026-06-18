@@ -181,21 +181,26 @@ BRAND NAME HINT: "${brandHint}" (use to detect branded keywords)
 KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
 
-For EACH keyword, return the full PATH of nodes it belongs to, from the broadest umbrella down to the most specific topic. Each node is a page.
+For EACH keyword, return the full topic PATH it belongs to (broadest umbrella → most specific topic), the MODIFIER pulled out of it, its search INTENT, a CONFIDENCE score, and a one-line REASONING. Each path node is a page.
 
 RULES — follow exactly:
 1. Group by MEANING at every level, never by shared words. "30 year mortgage rates", "current mortgage rates", and "15 year fixed rates" are ALL under the same theme ("Mortgage Rates") — they are sub-topics of it, not separate themes. Do not split one theme into look-alikes like "Mortgage Year" vs "Rate Current".
-2. Path shape: [umbrella, theme, sub-topic, …]. Go only as deep as the keyword's specificity warrants (a head term like "mortgage rates" stops at ["Mortgages","Mortgage Rates"]; "current va mortgage rates" goes deeper). Unlimited depth allowed; do NOT pad with filler levels.
-3. The umbrella is the broad product/service family (e.g. "Mortgages", "Credit Cards", "Investing"). Sibling themes that belong together share an umbrella (e.g. "Mortgage Rates" and "Mortgage Calculator" both under "Mortgages").
-4. type: "procedure" (a real service/product topic), "brand" (contains a brand name — path like ["<Brand> Brand Searches"]), or "location" (brand/service + a place). Use the CLIENT brand only for brand paths; never create a path named after a competitor brand.
-5. Reuse identical label spellings across keywords so the same node merges. Every index appears exactly once.
+2. SEPARATE THE TOPIC FROM ITS MODIFIERS. The path holds only the clean topic/subject. Pull qualifiers — best, rates, near me, calculator, requirements, compare, reviews, apply, online, cost, how to, vs — OUT of the path and into the "modifier" field. A modifier NEVER becomes a path node and NEVER mints a new theme. "best 30 year mortgage rates" → path ["Mortgages","Mortgage Rates","30-yr fixed"], modifier "best". "mortgage calculator" → path ["Mortgages","Mortgage Calculator"], modifier "calculator". If there is no modifier, use "".
+3. Path shape: [umbrella, theme, sub-topic, …]. Go only as deep as the keyword's specificity warrants (a head term like "mortgage rates" stops at ["Mortgages","Mortgage Rates"]; "current va mortgage rates" goes deeper). Unlimited depth allowed; do NOT pad with filler levels.
+4. The umbrella is the broad product/service family (e.g. "Mortgages", "Credit Cards", "Investing"). Sibling themes that belong together share an umbrella (e.g. "Mortgage Rates" and "Mortgage Calculator" both under "Mortgages").
+5. MOST-SPECIFIC, COMMERCIALLY-USEFUL placement. If a keyword could fit more than one place, pick the most specific category that is useful as a page. Parent/child is decided by MEANING, never overlap — a specific product is never nested under a different specific product. Routing examples: generic "construction loan" is NOT defaulted under Personal Loans; "home construction loan" → home/mortgage lending; "business construction loan" → business lending.
+6. type: "procedure" (a real service/product topic), "brand" (contains a brand name — path like ["<Brand> Brand Searches"]), or "location" (brand/service + a place). Use the CLIENT brand only for brand paths; never create a path named after a competitor brand.
+7. intent: one of "informational", "commercial", "transactional", "navigational" — the searcher's intent.
+8. confidence: an integer 0–100 = how sure you are of THIS placement. Be honest; a vague or cross-cutting keyword scores low. Below 80 means "needs human review" (still give your best path).
+9. reasoning: one short clause explaining the placement (≤ 12 words).
+10. Reuse identical label spellings across keywords so the same node merges. Every index appears exactly once.
 
 Return JSON ONLY — no markdown, no prose:
 {
   "assignments": [
-    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"], "type": "procedure" },
-    { "index": 1, "path": ["Mortgages","Mortgage Rates","Current rates"], "type": "procedure" },
-    { "index": 2, "path": ["${brandHint} Brand Searches"], "type": "brand" }
+    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"], "modifier": "best", "type": "procedure", "intent": "commercial", "confidence": 95, "reasoning": "fixed-rate product term, 'best' is a modifier" },
+    { "index": 1, "path": ["Mortgages","Mortgage Rates","Current rates"], "modifier": "", "type": "procedure", "intent": "informational", "confidence": 90, "reasoning": "rate-watching query under mortgage rates" },
+    { "index": 2, "path": ["${brandHint} Brand Searches"], "modifier": "", "type": "brand", "intent": "navigational", "confidence": 98, "reasoning": "client brand term" }
   ]
 }`;
 }

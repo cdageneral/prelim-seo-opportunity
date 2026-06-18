@@ -186,6 +186,12 @@ export interface CategoryBreakdownResult {
   // multi-level taxonomy the Keyword panel renders (every node a page). Absent on
   // pre-v7.231 analyses → panels fall back to the flat/2-level view (honest gap I.5).
   keywordPaths?:           Record<string, string[]>;
+  // v7.235: per-keyword classification metadata from the hierarchical pass — the LLM's
+  // separated MODIFIER, search INTENT, a CONFIDENCE self-estimate (0–100; Const III.7 —
+  // a model estimate, never a measured data metric), a one-line REASONING, and the derived
+  // needsReview flag (confidence < 80 → "Needs Review", Const III.7). Labels/structure only;
+  // every VOLUME sum is still computed in TypeScript (Const I.1). Absent on pre-v7.235 runs.
+  keywordMeta?:            Record<string, { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean }>;
   // v7.199: AI search-intent grouping (synonyms merged, topical names) + brand terms
   // to drop. Populated inline for smaller analyses; large ones use the on-demand
   // "Refine with AI" button. Optional — absent → panel uses the heuristic grouping.
@@ -201,7 +207,9 @@ export interface CategoryBreakdownResult {
 // re-running (and re-paying for) completed batches.
 export interface CbDiscoveryProgress {
   // v7.231: hierarchical discovery checkpoints raw per-keyword path assignments.
-  proposed:   Array<{ index: number; path: string[]; type: 'procedure' | 'brand' | 'location' }>;
+  // v7.235: also carries the separated modifier + intent/confidence/reasoning metadata
+  // so a resumed run keeps the classification fields (not just the path).
+  proposed:   Array<{ index: number; path: string[]; type: 'procedure' | 'brand' | 'location'; modifier?: string; intent?: string; confidence?: number; reasoning?: string }>;
   doneStarts: number[];   // batch start offsets already discovered
 }
 
@@ -254,7 +262,11 @@ export async function generateCategoryBreakdown(
   // empty category breakdown (which blanked the Cluster panel + keyword categories). Smaller
   // batches keep each response comfortably inside the token budget; concurrency keeps it fast.
   const OTHER_NAME      = 'Other';
-  const DISCOVERY_BATCH = 40;
+  // v7.235: each assignment now also carries modifier + intent + confidence + a short
+  // reasoning clause, so each object is larger than the v7.232 path-only output. Drop the
+  // batch to 25 and raise max_tokens so the JSON does not truncate (the salvage parser still
+  // backstops a clipped tail). Tested at real batch size per the harness-real-scale rule.
+  const DISCOVERY_BATCH = 25;
   const CONCURRENCY     = 6;
 
   const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
@@ -264,9 +276,10 @@ export async function generateCategoryBreakdown(
   console.log(`[OrbitIQ] Hierarchical discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
 
   type CatType = 'procedure' | 'brand' | 'location';
-  interface RawAssign { index: number; path: string[]; type: CatType; }  // GLOBAL index into merged
+  // GLOBAL index into merged. v7.235: + separated modifier and intent/confidence/reasoning.
+  interface RawAssign { index: number; path: string[]; type: CatType; modifier?: string; intent?: string; confidence?: number; reasoning?: string; }
 
-  const rawAssigns: RawAssign[] = (progress?.proposed ?? []).map(p => ({ index: p.index, path: [...p.path], type: p.type }));
+  const rawAssigns: RawAssign[] = (progress?.proposed ?? []).map(p => ({ index: p.index, path: [...p.path], type: p.type, modifier: p.modifier, intent: p.intent, confidence: p.confidence, reasoning: p.reasoning }));
   const doneStarts = new Set<number>(progress?.doneStarts ?? []);
 
   const cleanPath = (p: any): string[] =>
@@ -275,12 +288,13 @@ export async function generateCategoryBreakdown(
   // v7.232: tolerant parse — if the whole-JSON parse fails (e.g. a truncated tail), salvage
   // every COMPLETE assignment object from the text so a partial response still contributes
   // its keywords instead of dropping the whole batch to "Other".
-  const parseAssignments = (text: string): Array<{ index: number; path: string[]; type?: string }> => {
+  type ParsedAssign = { index: number; path: string[]; type?: string; modifier?: string; intent?: string; confidence?: number; reasoning?: string };
+  const parseAssignments = (text: string): ParsedAssign[] => {
     try {
-      const parsed = extractJSON<{ assignments: Array<{ index: number; path: string[]; type?: string }> }>(text);
+      const parsed = extractJSON<{ assignments: ParsedAssign[] }>(text);
       if (Array.isArray(parsed?.assignments) && parsed.assignments.length > 0) return parsed.assignments;
     } catch { /* fall through to salvage */ }
-    const out: Array<{ index: number; path: string[]; type?: string }> = [];
+    const out: ParsedAssign[] = [];
     const re = /\{[^{}]*?"index"\s*:\s*\d+[^{}]*?"path"\s*:\s*\[[^\]]*\][^{}]*?\}/g;
     const matches = text.match(re) ?? [];
     for (const m of matches) { try { out.push(JSON.parse(m)); } catch { /* skip */ } }
@@ -292,7 +306,7 @@ export async function generateCategoryBreakdown(
       const bPrompt   = hierarchicalDiscoveryPrompt(domain, industry, batch.kws);
       const bResponse = await getClient().messages.create({
         model:      MODELS.fast,
-        max_tokens: 8000,   // v7.232: room for ~40 keywords × full path objects, no truncation
+        max_tokens: 12000,  // v7.235: 25 keywords × (path + modifier + intent + confidence + reasoning), no truncation
         messages:   [{ role: 'user', content: bPrompt }],
       }, { timeout: 60_000 });
       const bText   = bResponse.content[0].type === 'text' ? bResponse.content[0].text : '';
@@ -303,7 +317,15 @@ export async function generateCategoryBreakdown(
         const path = cleanPath(a?.path);
         if (path.length === 0) continue;
         const type: CatType = (a?.type === 'brand' || a?.type === 'location') ? a.type : 'procedure';
-        rawAssigns.push({ index: batch.start + li, path, type });
+        // v7.235: capture the separated modifier + classification metadata. Sanitize:
+        // confidence clamped to 0–100, strings trimmed/length-bounded. Labels only.
+        const conf = Number.isFinite(a?.confidence as number)
+          ? Math.max(0, Math.min(100, Math.round(a!.confidence as number)))
+          : undefined;
+        const modifier = typeof a?.modifier === 'string' ? a.modifier.trim().slice(0, 60) : undefined;
+        const intent   = typeof a?.intent   === 'string' ? a.intent.trim().toLowerCase().slice(0, 20) : undefined;
+        const reasoning = typeof a?.reasoning === 'string' ? a.reasoning.trim().slice(0, 200) : undefined;
+        rawAssigns.push({ index: batch.start + li, path, type, modifier, intent, confidence: conf, reasoning });
       }
       doneStarts.add(batch.start);
     } catch (err) {
@@ -367,16 +389,20 @@ export async function generateCategoryBreakdown(
   // (ThemeClusters, Journey, Content, brand guard, etc.) keep working unchanged.
   const pathByIndex = new Map<number, string[]>();
   const typeByIndex = new Map<number, CatType>();
+  // v7.235: classification metadata per index (first assignment wins, same as the path).
+  const metaByIndex = new Map<number, { modifier?: string; intent?: string; confidence?: number; reasoning?: string }>();
   for (const r of rawAssigns) {
     if (!merged[r.index] || pathByIndex.has(r.index)) continue;
     pathByIndex.set(r.index, canonByRawKey.get(pathKey(r.path)) ?? r.path);
     typeByIndex.set(r.index, r.type);
+    metaByIndex.set(r.index, { modifier: r.modifier, intent: r.intent, confidence: r.confidence, reasoning: r.reasoning });
   }
   for (let i = 0; i < merged.length; i++) {
     if (!pathByIndex.has(i)) { pathByIndex.set(i, [OTHER_NAME]); typeByIndex.set(i, 'procedure'); }
   }
 
   const keywordPaths: Record<string, string[]> = {};
+  const keywordMeta: Record<string, { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean }> = {};
   const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
   const catTypeByName     = new Map<string, CatType>();
   const umbrellaByCat     = new Map<string, string>();             // category (theme) → umbrella (path[0])
@@ -385,6 +411,18 @@ export async function generateCategoryBreakdown(
     const P    = pathByIndex.get(i)!;
     const type = typeByIndex.get(i)!;
     keywordPaths[kw.keyword.toLowerCase()] = P;
+    // v7.235: store the separated modifier + classification metadata. needsReview derives
+    // from the confidence self-estimate (< 80 → review; Const III.7). Only set keys that
+    // exist so pre-classified keywords stay clean.
+    const m = metaByIndex.get(i);
+    if (m && (m.modifier || m.intent || m.confidence != null || m.reasoning)) {
+      const entry: { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean } = {};
+      if (m.modifier)        entry.modifier   = m.modifier;
+      if (m.intent)          entry.intent     = m.intent;
+      if (m.confidence != null) { entry.confidence = m.confidence; entry.needsReview = m.confidence < 80; }
+      if (m.reasoning)       entry.reasoning  = m.reasoning;
+      keywordMeta[kw.keyword.toLowerCase()] = entry;
+    }
     const umbrella = P[0];
     // Theme = the level other panels treat as the "category": for a procedure that's the
     // node under the umbrella (path[1]); brand/location stay at their top node (path[0]).
@@ -460,6 +498,7 @@ export async function generateCategoryBreakdown(
   // read straight from the canonical paths — no extra LLM call. `keywordPaths` carries
   // the full tree the Keyword panel renders. Brand/location stay navigational (no parent).
   result.keywordPaths = keywordPaths;
+  result.keywordMeta  = keywordMeta;   // v7.235: separated modifier + intent/confidence/reasoning/needsReview
   for (const c of result.categories) {
     if (c.type !== 'procedure' || c.name === OTHER_NAME) continue;
     const umbrella = umbrellaByCat.get(c.name);
