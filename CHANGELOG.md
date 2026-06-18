@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.238 — 2026-06-18 · Cluster sub-categories now come from the canonical taxonomy (no mined names); stronger synonym merge
+
+**The issue (Wayne).** Comparing the same primary category (Credit Cards): the Keyword panel was right, the Cluster panel was wrong — the cluster showed a messy, duplicated set ("Balance Transfer" + "Balance Transfer Credit Cards" + "Balance Transfer Cards"; "Cash Back" + "Cashback"; "Secured" + "Secured Cards" + "Secured Credit Cards"). The v7.236 umbrella nesting sat on top of the old layer, so the labels never changed.
+
+**Root cause.** The cluster panel labelled its sub-level (`Topic.product`) with names **mined from keyword text** (`buildIntentClusters` → `nameIntentCluster`), e.g. "Head + Modifier" → "Balance Transfer Credit Cards". That re-derives structure from keyword text at a read site (against Const III.1b/II.8) and never read the canonical `keywordPaths` the Keyword tree uses. A second issue: the synonym-merge pass left near-duplicates ("Cash Back"/"Cashback") unmerged in both panels.
+
+**The fix (2 changes, both `lib/claude/prompts.ts` + `components/brief/ThemeClustersPanel.tsx`).**
+1. **Cluster sub-topics from the stored taxonomy.** Each keyword now carries `subTopic` = its canonical `keywordPaths` node below the theme (path[2]). `flattenTopics` groups procedure categories by that canonical sub-topic instead of mining names — so a topic's label is the real taxonomy node ("No Annual Fee"), or the theme itself for head-term keywords. The Cluster panel now mirrors the Keyword tree's umbrella → theme → sub structure exactly, from one source of truth (Const II.7).
+2. **Stronger synonym merge.** `pathCanonicalizationPrompt` now aggressively collapses near-duplicates that differ only by spacing/compounding (Cash Back = Cashback), plural (Card = Cards), word order, or a redundant parent-name suffix (Balance Transfer = "Balance Transfer Credit Cards"), and forbids appending the parent's name into a child label — while keeping genuinely distinct nodes separate (Secured ≠ Unsecured, Cash Back ≠ Cash Advances).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over the changed files + all `Topic` consumers = 0 errors. The **full retained regression suite** (`_regression/run.sh`) re-ran every prior-release check (v7.235/236/237) plus the new v7.238 ones — **14/14 PASS** on real compiled code, including: a cluster topic's `product` equals the canonical `keywordPaths` node ("No Annual Fee"), **no** mined near-duplicate label ("Balance Transfer Credit Cards") is produced, the umbrella nesting + brand-drop still hold, and the synonym-merge rules are present.
+
+**Action for Wayne:** deploy v7.238 and **Run Analysis** again (both fixes are synthesis/structure changes — they take effect on a fresh run). The Cluster panel's categories + sub-categories should now match the Keyword panel, and the duplicate labels should collapse.
+
 ## v7.237 — 2026-06-18 · FIX: modifier rule was flattening the keyword hierarchy
 
 **The regression (Wayne).** After re-running the analysis on v7.236, the Keyword panel's Category Breakdown went **flat** — "Credit Cards" showed every keyword as a chip directly beneath it with no sub-categories, and each distinguishing term ("no annual fee", "0 APR", "balance transfer", "prequalify") had been pulled into a **modifier** chip. The Cluster panel then had no theme level to nest by either.

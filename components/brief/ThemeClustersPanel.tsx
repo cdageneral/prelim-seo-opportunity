@@ -19,6 +19,10 @@ export interface KwItem {
   origin?:      'footprint' | 'demand';  // v7.162: provenance (demand = deep-journey "missing demand")
   demandSeeds?: string[];        // v7.162: seed(s) that surfaced a demand keyword
   url?:         string;          // v7.190: client's ranking page URL (for sub-product page detection)
+  subTopic?:    string;          // v7.238: the canonical sub-topic from the STORED taxonomy path
+                                 // (the node BELOW the theme, i.e. keywordPaths[kw] level after path[1]).
+                                 // Used to label cluster sub-topics from the taxonomy instead of mining
+                                 // names from keyword text — so the Cluster panel mirrors the Keyword tree.
 }
 
 interface IntentCluster {
@@ -271,6 +275,14 @@ function buildThemeClusters(
   }
 
   // Map to KwItem (ThemeClusters internal type), carrying provenance.
+  // v7.238: the STORED canonical taxonomy path per keyword (the SAME source the Keyword tree
+  // renders). The sub-topic = the node BELOW the theme (path[2]; path[0]=umbrella, path[1]=theme).
+  // We label cluster sub-topics from THIS, never from mined keyword text (Const III.1b/II.8).
+  const pathByKw: Record<string, string[]> = (cb?.keywordPaths ?? {}) as Record<string, string[]>;
+  const subTopicOf = (kwLower: string): string => {
+    const p = pathByKw[kwLower];
+    return (Array.isArray(p) && p.length > 2) ? String(p[2] ?? '').trim() : '';
+  };
   const pool: KwItem[] = rawPool.map(item => ({
     keyword:      item.keyword,
     searchVolume: item.searchVolume,
@@ -280,6 +292,7 @@ function buildThemeClusters(
     origin:       item.origin,
     demandSeeds:  item.demandSeeds,
     url:          urlByKeyword.get(item.keyword.toLowerCase()),
+    subTopic:     subTopicOf(item.keyword.toLowerCase()),
   }));
 
   // The RANKING footprint flows through the existing category logic UNCHANGED.
@@ -1202,12 +1215,27 @@ function flattenTopics(clusters: ThemeCluster[]): Topic[] {
     const intentOf = new Map<KwItem, IntentCluster>();
     for (const sc of c.subClusters) for (const kw of sc.keywords) intentOf.set(kw, sc);
 
-    // v7.197: semantic intent clustering applies to PROCEDURE topics (Wayne's case).
-    // Brand / location / demand categories have no clean head entity to anchor topical
-    // names, so they keep the prior behaviour: one parent with intent-labelled children
-    // (General / Informational / …) — unchanged from v7.196.
+    // v7.238: PROCEDURE topics are grouped by the CANONICAL sub-topic from the stored
+    // taxonomy path (kw.subTopic = keywordPaths node below the theme) — the SAME structure
+    // the Keyword tree renders — NOT by names mined from keyword text (Const III.1b/II.8).
+    // This stops the Cluster panel inventing near-duplicate labels ("Balance Transfer Credit
+    // Cards" / "Balance Transfer Cards"). Keywords whose path stops at the theme (no sub-topic)
+    // form one "head" topic labelled with the theme itself, mirroring a theme node that holds
+    // its own keywords. Brand/location/demand/problem keep intent-labelled children (unchanged).
     const groupsForCat: IntentGroup[] = c.type === 'procedure'
-      ? buildIntentClusters(c)
+      ? (() => {
+          const bySub = new Map<string, KwItem[]>();
+          for (const kw of c.keywords) {
+            const st = (kw.subTopic && kw.subTopic.trim()) ? kw.subTopic.trim() : '';
+            (bySub.get(st) ?? bySub.set(st, []).get(st)!).push(kw);
+          }
+          return Array.from(bySub.entries()).map(([st, kws]) => ({
+            key:     st ? `sub::${st.toLowerCase()}` : `${CORE_KEY}::head`,
+            name:    st || c.name,   // canonical sub-topic, or the theme itself for head-term kws
+            kws,
+            pageUrl: kws.find(k => k.position !== null && k.url)?.url,
+          }));
+        })()
       : (() => {
           const byIntent = new Map<IntentType, KwItem[]>();
           for (const kw of c.keywords) {

@@ -231,9 +231,11 @@ For each path, return its CANONICAL form so equivalent nodes merge.
 
 RULES — follow exactly:
 1. Merge labels that mean the same thing to ONE spelling at each level ("30 Year Fixed" / "30-yr fixed" / "30 year fixed rate" → one). Keep the clearest, most natural label.
-2. Keep genuinely distinct nodes separate. Do NOT merge a specific topic into an unrelated sibling.
-3. Preserve the parent chain — a node keeps the same ancestors; only normalize labels (and, if a level is clearly redundant, you may shorten the path).
-4. Every input index must appear exactly once with a canonical path (return the same path if it needs no change).
+2. AGGRESSIVELY merge near-duplicates that are the SAME concept differing only by: spacing/compounding ("Cash Back" = "Cashback"), plural/singular ("Card" = "Cards"), word order, OR a redundant trailing/leading category word ("Balance Transfer" = "Balance Transfer Credit Cards" = "Balance Transfer Cards" when the parent is already "Credit Cards"; "Secured" = "Secured Cards" = "Secured Credit Cards"). Pick ONE clean label (drop the redundant parent word, e.g. prefer "Balance Transfer" over "Balance Transfer Credit Cards"). These MUST collapse to one node — leaving them separate is the failure this pass exists to prevent.
+3. Do NOT append the parent's name into a child label. A child of "Credit Cards" is "No Annual Fee", NOT "No Annual Fee Credit Cards".
+4. Keep genuinely distinct nodes separate. Do NOT merge a specific topic into an unrelated sibling (e.g. "Secured" ≠ "Unsecured"; "Cash Back" ≠ "Cash Advances").
+5. Preserve the parent chain — a node keeps the same ancestors; only normalize labels (and, if a level is clearly redundant, you may shorten the path).
+6. Every input index must appear exactly once with a canonical path (return the same path if it needs no change).
 
 Return JSON ONLY — no markdown, no prose:
 {
