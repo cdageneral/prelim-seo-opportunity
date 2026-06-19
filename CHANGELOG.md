@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.251 — 2026-06-19 · Persist the uploaded CSV's ranking URL (the real fix behind "no URL in the dataset")
+
+**The ask (Wayne).** A ranked page still showed "no URL in the dataset" even though the uploaded CSV has a keyword **and** a ranking URL for every row — and that CSV is the only data in the project, so a URL should exist.
+
+**Root cause (the real one).** v7.250 only resolved URLs from `topKeywords` and the page-map scan — neither exists in a CSV-only project. The uploaded CSV's **URL column was being dropped at every layer**: the CSV parser never looked for a URL column, the upload API never accepted it, and the `project_keywords` table had no `url` column. So the URL never made it into the system at all.
+
+**What changed (end-to-end, real data only — Const I.1).**
+- **Schema + auto-migration.** `project_keywords` gains a `url` column; both `ensureTable()` paths `ALTER TABLE … ADD COLUMN IF NOT EXISTS url TEXT` (same idempotent pattern as `domain`/`serp_features`), so it appears on deploy with no manual migration.
+- **CSV parser detects the URL column.** The upload parser now recognizes `URL` (Semrush Positions export) plus common variants (`ranking url`, `landing page`, `page url`, `address`, `current url`, `target url`), reads it per row, and sends it in the batch payload.
+- **API persists it.** The batch endpoint and the single-keyword POST both accept and store the per-row `url` (trimmed, capped). `GET` already returns all columns.
+- **Threaded to the topic.** `buildKwPool` carries `url` on each client pool item (§1 footprint, §2 uploaded); `ThemeClustersPanel` maps `KwItem.url = item.url ?? snapshot-lookup`, so the uploaded URL flows into `Topic.pageUrl` → `ContentTopic.url` → the drawer's "Mapped page" block and the row's open-page icon. The page-map/topKeywords sources from v7.250 remain as fallbacks.
+
+**Still honest when truly absent (Const I.5).** No URL is invented. If a CSV has no URL column (or a row is blank), that keyword stays unmapped and the drawer shows the honest "no URL in the dataset" note rather than a fabricated link.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors** (ContentPlanSection, ThemeClustersPanel, contentPlan, graph, kwVolume); server files (schema + both routes) syntax-checked via esbuild. New retained `csvurl:` invariant — in a CSV-only project (no topKeywords, no page-map) the uploaded ranking URL reaches `topic.pageUrl`, and no URLs are invented. **Full retained suite PASS (66 checks, 0 fail).** SSR render confirms the row open-page anchor renders with var-token-only styling (theme parity V.5/IV.6). 
+
+**Action for Wayne (important):** deploy v7.251, then **re-upload your client CSV**. Existing rows were saved before the `url` column existed (so their URL is still blank); the re-upload (UPSERT) fills the URL for every row, after which existing pages show their real URL in the drawer and the open-page icon on each row.
+
 ## v7.250 — 2026-06-19 · Content panel: existing pages now map their real URL — full URL in the detail drawer + open-page icon on each row
 
 **The ask (Wayne).** For existing (ranked) pages there should be a mapped URL. Show the full URL in the detail drawer, and add an inline open-page icon on the summary-table row.

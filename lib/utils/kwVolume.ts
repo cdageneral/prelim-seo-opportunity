@@ -33,6 +33,10 @@ export interface KwPoolItem {
   origin:       'footprint' | 'demand';
   inDemand?:    boolean;     // appears in the deep-journey demand universe
   demandSeeds?: string[];    // seed phrase(s) that surfaced it in the demand universe
+  // v7.251: real client ranking/landing URL for this keyword, when known — from the
+  // Semrush footprint (topKeywords[].url) or the uploaded CSV ("URL" column). Real data
+  // only (Const I.1); absent for demand/gap keywords and rows with no URL in the source.
+  url?:         string;
 }
 
 export interface KwPoolOptions {
@@ -434,6 +438,7 @@ export function buildKwPool({
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
       origin:       'footprint',
+      url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL
     });
   }
 
@@ -463,6 +468,7 @@ export function buildKwPool({
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
       origin:       'footprint',
+      url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL from the uploaded CSV
     });
   }
 

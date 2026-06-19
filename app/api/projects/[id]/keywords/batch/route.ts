@@ -56,6 +56,10 @@ async function ensureTable() {
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS serp_features TEXT
     `);
+    // v7.251: real ranking/landing URL from the uploaded CSV (Semrush "URL" column).
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS url TEXT
+    `);
   } catch {
     // Safe to continue — table exists or DB unavailable
   }
@@ -147,12 +151,17 @@ export async function POST(
     const feats = typeof k.serpFeatures === 'string' && k.serpFeatures.trim().length > 0
       ? k.serpFeatures.trim().slice(0, 500)
       : null;
+    // v7.251: real ranking/landing URL from the CSV row (Semrush "URL" column).
+    const kurl = typeof k.url === 'string' && k.url.trim().length > 0
+      ? k.url.trim().slice(0, 500)
+      : null;
     byKw.set(kw, {
       projectId,
       keyword:      kw,
       searchVolume: vol,
       position:     pos,
       serpFeatures: feats,
+      url:          kurl,
       // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
       // Competitor rows are ALWAYS 'gap' — their position is the competitor's
       // rank, kept for Share of Voice, not a client ranking.

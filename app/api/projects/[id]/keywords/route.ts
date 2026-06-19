@@ -46,6 +46,11 @@ async function ensureTable() {
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS serp_features TEXT
     `);
+    // v7.251: real ranking/landing URL from the uploaded CSV (Semrush "URL" column).
+    // MUST exist before the drizzle .select() below — drizzle lists columns explicitly.
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS url TEXT
+    `);
   } catch {
     // Table already exists or DB not available — safe to continue
   }
@@ -78,7 +83,7 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { keyword, searchVolume = 0, position = null, type = 'gap', branded = false, source, domain = null } = body;
+  const { keyword, searchVolume = 0, position = null, type = 'gap', branded = false, source, domain = null, url = null } = body;
 
   if (!keyword || typeof keyword !== 'string' || !keyword.trim()) {
     return NextResponse.json({ error: 'keyword is required' }, { status: 400 });
@@ -118,6 +123,7 @@ export async function POST(
       branded:      Boolean(branded),
       source,
       domain:       domain ?? null,
+      url:          (typeof url === 'string' && url.trim()) ? url.trim().slice(0, 500) : null,   // v7.251
     })
     .returning();
 

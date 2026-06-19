@@ -306,7 +306,9 @@ function buildThemeClusters(
     competitor:   item.competitor,
     origin:       item.origin,
     demandSeeds:  item.demandSeeds,
-    url:          urlByKeyword.get(item.keyword.toLowerCase()),
+    // v7.251: prefer the URL carried on the pool item itself (uploaded CSV "URL" column,
+    // now persisted) and fall back to the snapshot lookup (topKeywords + page-map, v7.250).
+    url:          item.url ?? urlByKeyword.get(item.keyword.toLowerCase()),
     subTopic:     subTopicOf(item.keyword.toLowerCase()),
   }));
 

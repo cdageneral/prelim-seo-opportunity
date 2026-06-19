@@ -409,7 +409,7 @@ export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = []): C
     const k = uploadedKeywords[i]; const kw = String(k.keyword || '').toLowerCase().trim();
     if (!kw) continue;
     if (k.type === 'gap') { competitor.add(kw); if (k.domain) competitorByKeyword[kw] = String(k.domain); }
-    else if (k.source !== 'blocked') client.add(kw);
+    else if (k.source !== 'blocked') { client.add(kw); if (k.url && !urlByKeyword[kw]) urlByKeyword[kw] = String(k.url); }   // v7.251: uploaded CSV ranking URL
   }
 
   const segments = snap._audienceSegments || [];
