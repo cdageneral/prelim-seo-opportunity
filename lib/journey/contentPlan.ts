@@ -51,6 +51,10 @@ export interface ContentTopic {
   clientCovPct: number;
   kwCount:      number;
   competitor:   string | null;
+  // v7.249: client's best (lowest) real Semrush SERP position across this topic's
+  // ranked keywords; null when the client ranks for none (net-new / competitor / missing).
+  // Exact rollup of real source rows (Const I.1) — never modeled.
+  bestPosition: number | null;
   // content-plan signals
   distance:     number;          // 1 (at decision) … 4 (just aware)
   distanceLabel: string;
@@ -194,6 +198,12 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
     else priority = 'P2';
     const refresh = n.state === 'existing' && n.clientCovPct < 60;
     const promptCount = promptCoverage(n, prompts);
+    // v7.249: best (lowest) real client SERP position across this node's ranked keywords
+    // (TopicKeyword.rank, real Semrush per Const I.1), null when the client ranks for none.
+    const rankedPositions = n.keywords
+      .filter((k) => k.state === 'existing' && k.rank != null)
+      .map((k) => k.rank as number);
+    const bestPosition = rankedPositions.length ? Math.min(...rankedPositions) : null;
 
     const faqKws = n.keywords.filter((k) => isQuestion(k.keyword)).slice(0, 4).map((k) => cap(k.keyword) + '?');
     const brief: Brief = {
@@ -210,6 +220,7 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
       stage: n.stage, state: n.state, action: n.action, url: n.url,
       totalVol: n.totalVol, clientVol: n.clientVol, clientCovPct: n.clientCovPct, kwCount: n.kwCount,
       competitor: n.competitor,
+      bestPosition,
       distance, distanceLabel: DISTANCE_LABEL[distance], promptCount, priority, quickWin, refresh, brief,
     });
   }
@@ -282,6 +293,11 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
 
     const footprint = t.keywords.filter(k => k.origin !== 'demand');
     const clientRanked = footprint.filter(k => !k.isGap && k.position !== null);
+    // v7.249: best (lowest) real SERP position the client holds in this topic — exact
+    // from real Semrush positions (Const I.1), null when the client ranks for none.
+    const bestPosition = clientRanked.length
+      ? Math.min(...clientRanked.map(k => k.position as number))
+      : null;
     const gaps = t.keywords.filter(k => k.isGap);
     const clientVol = clientRanked.reduce((s, k) => s + k.searchVolume, 0);
     const compVol = gaps.reduce((s, k) => s + k.searchVolume, 0);
@@ -311,6 +327,7 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
       id: t.id, name: t.product, lane, kind, supportType: 'core',
       stage: t.stage, state, action, url,
       totalVol: t.totalVolume, clientVol, clientCovPct, kwCount: t.keywords.length, competitor,
+      bestPosition,
       distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, quickWin, refresh,
       brief: {
         title: cap(t.product),

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.249 — 2026-06-19 · Content panel: filter pages by where you rank on Google (Page 1 / 2 / 3 / 4+)
+
+**The ask (Wayne).** On the Content panel, add a filter below the summary cards to see which pages are ranked on **page 1, page 2, page 3, or page 4+**.
+
+**What changed.**
+- **New "Where you rank" filter row** sits directly below the four summary cards (content mode only). It has pills for **All / Page 1 / Page 2 / Page 3 / Page 4+ / Unranked**, each with a live count, and composes with the existing card filter (All / Existing / Net-new / Quick wins). A **Clear filters** link appears in the toolbar when any filter is active.
+- **Each topic now carries `bestPosition`** — the client's **best (lowest) real SERP position** across the topic's ranked keywords — shown as a `#<pos> · Page N` badge in the row. Pages map on the standard 10-results-per-page basis: 1–10 = Page 1, 11–20 = Page 2, 21–30 = Page 3, 31+ = Page 4+. Topics the client doesn't rank for yet (net-new / competitor-only) read **Unranked**.
+
+**Data is real, not modeled (Const I.1).** `bestPosition` is an **exact rollup of real Semrush positions** — the minimum position over the topic's client-ranked **footprint** keywords (demand-origin keywords are excluded; nothing is modeled or estimated). When the client ranks for none, it is `null` → Unranked (honest gap, Const I.5). Computed in both plan builders (`buildContentPlanFromTopics` from `position`, `buildContentPlan` from `TopicKeyword.rank`).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors** (ContentPlanSection, ThemeClustersPanel, contentPlan, graph). New retained `content:` invariants — bestPosition = MIN real footprint position; no-rank ⇒ null; page buckets map 1-10/11-20/21-30/31+; demand-origin keyword excluded from bestPosition. **Full retained suite PASS.** SSR render harness confirms the filter row, all five page buckets, the in-row rank badges, and **CSS-var-token-only** styling → dual-theme parity (V.5/IV.6) holds (rendered light + dark). Panel still resolves to one working vertical scroller (IV.1).
+
+**Action for Wayne:** deploy v7.249. On the Content panel, use the **Where you rank** pills to filter topics by their Google SERP page; the count on each pill reflects the current card filter.
+
 ## v7.248 — 2026-06-19 · Pre-product journey corrected: deep-journey-only, no client products/services
 
 **The ask (Wayne).** Two problems on the Audience Journeys pre-product lane: (1) it had topics even though the deep journey hadn't been built — "how can there be anything in pre-product when we haven't built them yet?"; and (2) it showed client **products/services** (Cashback Credit Cards, loans, checking) when pre-product should be **need states / life events / pain points / goals** with no mention of products or services (Const III.2a).

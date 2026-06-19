@@ -24,6 +24,25 @@ function fmtVol(v: number): string {
   if (v >= 1_000) return `${Math.round(v / 1_000)}K`;
   return String(v);
 }
+
+// ─── v7.249: SERP page buckets (from the topic's real best Semrush position) ──────
+type PosKey = 'p1' | 'p2' | 'p3' | 'p4' | 'unranked';
+const PAGE_META: Record<PosKey, { label: string; color: string }> = {
+  p1:       { label: 'Page 1', color: COL.green },
+  p2:       { label: 'Page 2', color: 'var(--c-7dd3fc)' },
+  p3:       { label: 'Page 3', color: COL.amber },
+  p4:       { label: 'Page 4+', color: COL.red },
+  unranked: { label: 'Unranked', color: COL.mut },
+};
+// Standard 10-results-per-page mapping over the real best position. null = client
+// ranks for none of this topic's keywords yet (net-new / competitor / missing).
+function posBucketOf(p: number | null): PosKey {
+  if (p == null) return 'unranked';
+  if (p <= 10) return 'p1';
+  if (p <= 20) return 'p2';
+  if (p <= 30) return 'p3';
+  return 'p4';
+}
 function actionLabel(t: ContentTopic): string {
   if (t.state === 'existing') return t.refresh ? 'Optimise / refresh' : 'Optimise';
   return t.state === 'competitor' ? 'Build (comp.)' : 'Build new';
@@ -63,6 +82,24 @@ function FCard({ active, onClick, label, icon, val, sub, color, children }: {
   );
 }
 
+// ─── v7.249: SERP-page filter chip ───────────────────────────────────────────────
+function PChip({ active, onClick, label, count, color }: {
+  active: boolean; onClick: () => void; label: string; count: number; color: string;
+}) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+      background: active ? `${color}1f` : 'var(--ca-120-120-160-0_08)',
+      border: `1px solid ${active ? color : COL.line}`, borderRadius: 999,
+      padding: '5px 11px', fontSize: 11, fontWeight: 600,
+      color: active ? color : COL.mut, transition: 'border-color 0.12s, color 0.12s',
+    }}>
+      {label}
+      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 10.5, color: active ? color : COL.mut2 }}>{count}</span>
+    </button>
+  );
+}
+
 // ─── topic row ───────────────────────────────────────────────────────────────────
 const ROW_COLS = '1fr 122px 86px 104px 96px 74px';
 function Row({ t, onOpen }: { t: ContentTopic; onOpen: (t: ContentTopic) => void }) {
@@ -83,6 +120,11 @@ function Row({ t, onOpen }: { t: ContentTopic; onOpen: (t: ContentTopic) => void
           <span>{laneLabel[t.lane]} · {kindLabel[t.kind]}</span>
           <span><i className="ti ti-message-2" /> {t.promptCount}</span>
           <span>{t.kwCount} kw</span>
+          {t.bestPosition != null && (
+            <span style={{ fontWeight: 700, color: PAGE_META[posBucketOf(t.bestPosition)].color }}>
+              <i className="ti ti-trophy" style={{ fontSize: 9 }} /> #{t.bestPosition} · {PAGE_META[posBucketOf(t.bestPosition)].label}
+            </span>
+          )}
         </div>
       </div>
       <div className="ovHide"><DistMeter d={t.distance} /></div>
@@ -204,15 +246,28 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'content' | 'plan' }) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
   const [cFilter, setCFilter] = useState<'all' | 'existing' | 'build' | 'quickwin'>('all');
+  const [posFilter, setPosFilter] = useState<'all' | PosKey>('all');   // v7.249: SERP page filter
   const [pStatus, setPStatus] = useState<'all' | 'existing' | 'build'>('all');
   const [pPriority, setPPriority] = useState<'all' | Priority>('all');
 
   const sc = plan.scope;
   const T = plan.topics;
 
-  const contentRows = useMemo(() => T.filter((t: ContentTopic) =>
+  // v7.249: rows passing the summary-card filter, BEFORE the SERP-page filter — the
+  // page-bucket counts are taken from this subset so the chips reflect the active view.
+  const cFiltered = useMemo(() => T.filter((t: ContentTopic) =>
     cFilter === 'all' ? true : cFilter === 'quickwin' ? t.quickWin : cFilter === 'existing' ? t.state === 'existing' : t.state !== 'existing'
-  ).slice().sort((a, b) => b.totalVol - a.totalVol), [T, cFilter]);
+  ), [T, cFilter]);
+
+  const posCounts = useMemo(() => {
+    const c: Record<PosKey, number> = { p1: 0, p2: 0, p3: 0, p4: 0, unranked: 0 };
+    for (let i = 0; i < cFiltered.length; i++) c[posBucketOf(cFiltered[i].bestPosition)]++;
+    return c;
+  }, [cFiltered]);
+
+  const contentRows = useMemo(() => cFiltered.filter((t: ContentTopic) =>
+    posFilter === 'all' ? true : posBucketOf(t.bestPosition) === posFilter
+  ).slice().sort((a, b) => b.totalVol - a.totalVol), [cFiltered, posFilter]);
 
   const order: Record<Priority, number> = { P0: 0, P1: 1, P2: 2 };
   const planRows = useMemo(() => T.filter((t: ContentTopic) => {
@@ -228,6 +283,7 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
     <div>
       {styleTag}
       {mode === 'content' ? (
+        <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, margin: '14px 0 16px' }}>
           <FCard active={cFilter === 'all'} onClick={() => setCFilter('all')} label="All topics" icon="ti-stack-2" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo total demand`} color="var(--c-c8c8e8)">
             <div style={{ height: 6, borderRadius: 3, background: COL.line, overflow: 'hidden', marginTop: 10, display: 'flex' }}>
@@ -242,6 +298,17 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
           <FCard active={cFilter === 'build'} onClick={() => setCFilter('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo · pages to create`} color={COL.orange} />
           <FCard active={cFilter === 'quickwin'} onClick={() => setCFilter('quickwin')} label="Quick wins" icon="ti-bolt" val={sc.quickWins} sub={`${fmtVol(sc.quickWinVol)}/mo · fast ROI`} color={COL.amber} />
         </div>
+        {/* v7.249: SERP-page filter — bucket pages by the client's real best Semrush position */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
+          <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <i className="ti ti-trophy" /> Where you rank
+          </span>
+          <PChip active={posFilter === 'all'} onClick={() => setPosFilter('all')} label="All" count={cFiltered.length} color="var(--c-c8c8e8)" />
+          {(['p1', 'p2', 'p3', 'p4', 'unranked'] as PosKey[]).map((k) => (
+            <PChip key={k} active={posFilter === k} onClick={() => setPosFilter(k)} label={PAGE_META[k].label} count={posCounts[k]} color={PAGE_META[k].color} />
+          ))}
+        </div>
+        </>
       ) : (
         <>
           {/* scope row: total / existing / net-new (all carry volume) */}
@@ -267,6 +334,9 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
         </span>
         {mode === 'plan' && (pStatus !== 'all' || pPriority !== 'all') && (
           <button onClick={() => { setPStatus('all'); setPPriority('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
+        )}
+        {mode === 'content' && (cFilter !== 'all' || posFilter !== 'all') && (
+          <button onClick={() => { setCFilter('all'); setPosFilter('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
         <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>Cards filter · click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
       </div>
