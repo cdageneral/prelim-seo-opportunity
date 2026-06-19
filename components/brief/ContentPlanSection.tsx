@@ -113,6 +113,13 @@ function Row({ t, onOpen }: { t: ContentTopic; onOpen: (t: ContentTopic) => void
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: COL.txt2, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
           {t.kind === 'core' && <span style={{ color: COL.purple }}>★</span>}{t.name}
+          {/* v7.250: open the mapped existing page inline (does not open the detail drawer) */}
+          {t.url && (
+            <a href={t.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title={`Open ${t.url}`}
+              style={{ display: 'inline-flex', alignItems: 'center', color: COL.cyan, textDecoration: 'none', flexShrink: 0 }}>
+              <i className="ti ti-external-link" style={{ fontSize: 12 }} />
+            </a>
+          )}
           {t.quickWin && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--c-08081a)', background: COL.amber, borderRadius: 5, padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><i className="ti ti-bolt" /> Quick win</span>}
           {t.refresh && <span style={{ fontSize: 9, fontWeight: 700, color: COL.amber, background: 'var(--ca-245-158-11-0_12)', borderRadius: 5, padding: '2px 7px' }}>Refresh</span>}
         </div>
@@ -170,6 +177,23 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
               </div>
             </div>
             <div style={{ padding: '16px 20px 40px' }}>
+              {/* v7.250: mapped existing-page URL (full, clickable) — shown for existing pages */}
+              {t.url ? (
+                <>
+                  {lbl('Mapped page')}
+                  <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12.5, fontWeight: 600, color: COL.cyan, textDecoration: 'none', wordBreak: 'break-all', lineHeight: 1.45 }}>
+                    <i className="ti ti-external-link" style={{ flexShrink: 0 }} /> {t.url}
+                  </a>
+                </>
+              ) : t.state === 'existing' ? (
+                <>
+                  {lbl('Mapped page')}
+                  <p style={{ fontSize: 12, color: COL.mut2, margin: '7px 0 0', lineHeight: 1.5 }}>
+                    Existing page — no URL in the dataset yet{t.bestPosition != null ? ` (ranks #${t.bestPosition})` : ''}. Run the Page&nbsp;Map scan to link the live URL.
+                  </p>
+                </>
+              ) : null}
+
               {lbl('Suggested article title')}
               <p style={{ fontSize: 14, fontWeight: 600, color: COL.txt, margin: '7px 0 0', lineHeight: 1.4 }}>{t.brief.title}</p>
 
@@ -227,8 +251,12 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 
               {t.url ? (
                 <a href={t.url} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14, fontSize: 12, fontWeight: 600, color: col, border: `1px solid ${col}55`, borderRadius: 8, padding: '8px 13px', textDecoration: 'none' }}>
-                  <i className="ti ti-external-link" /> Optimise existing page · {t.url}
+                  <i className="ti ti-external-link" /> Optimise existing page
                 </a>
+              ) : t.state === 'existing' ? (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14, fontSize: 12, fontWeight: 600, color: col, border: `1px solid ${col}55`, borderRadius: 8, padding: '8px 13px' }}>
+                  <i className="ti ti-refresh" /> Optimise existing page
+                </div>
               ) : (
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 14, fontSize: 12, fontWeight: 600, color: col, border: `1px solid ${col}55`, borderRadius: 8, padding: '8px 13px' }}>
                   <i className="ti ti-pencil-plus" /> Net-new build

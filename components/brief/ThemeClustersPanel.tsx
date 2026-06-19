@@ -274,6 +274,20 @@ function buildThemeClusters(
     const key = (k?.keyword ?? '').toLowerCase();
     if (key && k?.url && !urlByKeyword.has(key)) urlByKeyword.set(key, k.url);
   }
+  // v7.250: also resolve the client ranking-page URL from the page-map scan
+  // (`_pageMap.pages[] = { url, keywords[] }`, real Semrush `url_organic` data). Many
+  // `topKeywords` rows arrive with an empty URL, so a ranked keyword would otherwise map
+  // to no page and an existing page would look net-new. The page-map is the authoritative
+  // page→keyword source; we only fill gaps (topKeywords URL wins when present). I.1: real
+  // data only — no URL is invented; keywords with no real page stay unmapped (honest gap).
+  for (const pg of (semSnap?._pageMap?.pages ?? [])) {
+    const purl = pg?.url ? String(pg.url) : '';
+    if (!purl) continue;
+    for (const kw of (pg?.keywords ?? [])) {
+      const key = String(kw ?? '').toLowerCase().trim();
+      if (key && !urlByKeyword.has(key)) urlByKeyword.set(key, purl);
+    }
+  }
 
   // Map to KwItem (ThemeClusters internal type), carrying provenance.
   // v7.238: the STORED canonical taxonomy path per keyword (the SAME source the Keyword tree

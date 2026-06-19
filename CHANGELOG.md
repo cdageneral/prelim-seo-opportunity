@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.250 — 2026-06-19 · Content panel: existing pages now map their real URL — full URL in the detail drawer + open-page icon on each row
+
+**The ask (Wayne).** For existing (ranked) pages there should be a mapped URL. Show the full URL in the detail drawer, and add an inline open-page icon on the summary-table row.
+
+**Root cause.** A topic that clearly ranks (e.g. "High Yield Savings" at #14) was showing as **Net-new build** with no URL. The cluster builder only resolved a keyword's page URL from `topKeywords[].url`, and many of those Semrush rows arrive with an **empty URL** — so the ranked keyword mapped to no page and the existing page looked net-new.
+
+**What changed (real data only, Const I.1).**
+- **URL resolution now also reads the page-map scan.** `buildThemeClusters` builds `urlByKeyword` from `topKeywords[].url` **and** from `semrushSnapshot._pageMap.pages[]` (the `url_organic` scan: each real client page → the keywords it ranks for). `topKeywords` URL wins when present; the page-map fills the gaps. No URL is ever invented — a keyword with no real page stays unmapped (honest gap, Const I.5), so an existing page with no URL in the dataset says so and points to the Page Map scan rather than mislabeling as net-new.
+- **Detail drawer shows the full mapped URL.** A new **"Mapped page"** block at the top of the drawer renders the complete, clickable URL (opens in a new tab) for existing pages. The bottom CTA is now **state-aware**: existing pages read "Optimise existing page" (linked when a URL exists), only true net-new topics read "Net-new build".
+- **Inline open-page icon on the row.** Each summary-table row with a mapped URL gets an external-link icon next to the topic name that opens the live page in a new tab; clicking it does **not** open the detail drawer (`stopPropagation`).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors** (ContentPlanSection, ThemeClustersPanel, contentPlan, graph). New retained `contenturl:` invariants — a ranked keyword with an empty `topKeywords` URL resolves its page from `_pageMap` (Const I.1); no invented URLs appear. **Full retained suite PASS (64 checks, 0 fail).** SSR render harness confirms the row open-page anchor + external-link icon render only on mapped rows (unmapped existing + net-new carry none) and **CSS-var-token-only** styling → dual-theme parity (V.5/IV.6) holds. Panel still one working scroller (IV.1).
+
+**Action for Wayne:** deploy v7.250. Existing pages will show their URL (in the drawer and as a row icon) wherever the URL is in the dataset. If a ranked page shows "no URL in the dataset", run the **Page Map** scan for that project to pull the live URLs from Semrush.
+
 ## v7.249 — 2026-06-19 · Content panel: filter pages by where you rank on Google (Page 1 / 2 / 3 / 4+)
 
 **The ask (Wayne).** On the Content panel, add a filter below the summary cards to see which pages are ranked on **page 1, page 2, page 3, or page 4+**.
