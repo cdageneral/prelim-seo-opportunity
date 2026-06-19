@@ -1010,9 +1010,32 @@ function segmentLanguage(seg: AudienceSegment): string {
   ].join(' ');
 }
 
+// v7.247: build the per-segment token sets once (a segment's own audience language).
+export function buildSegTokens(segments: AudienceSegment[]): Array<{ id: string; toks: Set<string> }> {
+  return segments.map(seg => ({ id: seg.id, toks: new Set(segWords(segmentLanguage(seg))) }));
+}
+
+// v7.247: attribute an arbitrary string of audience language to ONE persona bucket
+// (a segment.id) — or SHARED_BUCKET when nothing matches OR several tie. This is the
+// SAME exclusive word-overlap mechanism the demand journey has used since v7.170:
+// real overlap against each persona's actual language, never a modeled split. Factored
+// out so the canonical Journey view can re-slice cluster topics per segment too.
+export function bucketForText(text: string, segTok: Array<{ id: string; toks: Set<string> }>): string {
+  const words = segWords(text);
+  let bestScore = 0;
+  let bestIds: string[] = [];
+  for (const st of segTok) {
+    let score = 0;
+    for (const w of words) if (st.toks.has(w)) score++;
+    if (score > bestScore) { bestScore = score; bestIds = [st.id]; }
+    else if (score === bestScore && score > 0) bestIds.push(st.id);
+  }
+  return bestScore > 0 && bestIds.length === 1 ? bestIds[0] : SHARED_BUCKET;
+}
+
 /** Map every demand seed (theme) → a single bucket id: a segment.id or SHARED_BUCKET. */
 export function assignSeedSegments(universe: DemandUniverse, segments: AudienceSegment[]): Map<string, string> {
-  const segTok = segments.map(seg => ({ id: seg.id, toks: new Set(segWords(segmentLanguage(seg))) }));
+  const segTok = buildSegTokens(segments);
 
   const seeds = new Set<string>();
   for (const s of (universe.productSeeds ?? [])) seeds.add(s.toLowerCase());
@@ -1021,17 +1044,8 @@ export function assignSeedSegments(universe: DemandUniverse, segments: AudienceS
 
   const map = new Map<string, string>();
   for (const seed of Array.from(seeds)) {
-    const words = segWords(seed);
-    let bestScore = 0;
-    let bestIds: string[] = [];
-    for (const st of segTok) {
-      let score = 0;
-      for (const w of words) if (st.toks.has(w)) score++;
-      if (score > bestScore) { bestScore = score; bestIds = [st.id]; }
-      else if (score === bestScore && score > 0) bestIds.push(st.id);
-    }
     // Unique best match (score > 0) → that persona; none or a tie → Shared.
-    map.set(seed, bestScore > 0 && bestIds.length === 1 ? bestIds[0] : SHARED_BUCKET);
+    map.set(seed, bucketForText(seed, segTok));
   }
   return map;
 }
@@ -1974,9 +1988,11 @@ const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
 // the cluster count instead of the demand-universe graph. The map is a collapsible
 // parent-category list (the flat node map can't legibly show thousands of clusters),
 // grouped into the two journey lanes. Every number is a real roll-up of the topics.
-function CanonicalJourneyView({ topics, problemSeeds = [] }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[] }) {
+function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  // v7.247: Product / Pre-product / All journey scope (matches the Cluster panel).
+  const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
 
   // v7.223: a topic is PRE-PRODUCT (problem-aware, awareness-only — Const III.2a) when it
   // is a 'problem' cluster OR a missing-demand cluster seeded by a problem head term from
@@ -1993,22 +2009,33 @@ function CanonicalJourneyView({ topics, problemSeeds = [] }: { topics: Canonical
     return { t, lane, state, action: (state === 'existing' ? 'optimize' : 'build') as 'optimize' | 'build' };
   }), [topics, problemSet]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const total     = rows.length;
-  const optimize  = rows.filter(r => r.action === 'optimize').length;
+  // v7.247: lane counts for the scope pills come from ALL rows (the segment-filtered
+  // set); the cards + list then recompute over only the chosen scope's rows — exactly
+  // how the Cluster panel re-slices when a journey scope is picked.
+  const productN = rows.filter(r => r.lane === 'product').length;
+  const preN     = rows.filter(r => r.lane === 'pre-product').length;
+  const scopedRows = useMemo(() =>
+    journeyScope === 'product' ? rows.filter(r => r.lane === 'product')
+  : journeyScope === 'pre'     ? rows.filter(r => r.lane === 'pre-product')
+  :                             rows,
+  [rows, journeyScope]);
+
+  const total     = scopedRows.length;
+  const optimize  = scopedRows.filter(r => r.action === 'optimize').length;
   const build     = total - optimize;
-  const preBuild  = rows.filter(r => r.action === 'build' && r.lane === 'pre-product').length;
+  const preBuild  = scopedRows.filter(r => r.action === 'build' && r.lane === 'pre-product').length;
   const prodBuild = build - preBuild;
   const coverage  = total ? Math.round((optimize / total) * 100) : 0;
 
   const groupsByLane = useMemo(() => {
-    const m = new Map<JourneyType, Map<string, typeof rows>>();
-    for (const r of rows) {
+    const m = new Map<JourneyType, Map<string, typeof scopedRows>>();
+    for (const r of scopedRows) {
       const lm = m.get(r.lane) ?? m.set(r.lane, new Map()).get(r.lane)!;
       const key = r.t.parentName || '(uncategorized)';
       (lm.get(key) ?? lm.set(key, []).get(key)!).push(r);
     }
     return m;
-  }, [rows]);
+  }, [scopedRows]);
 
   const lanes: Array<{ lane: JourneyType; label: string; accent: string }> = [
     { lane: 'product',     label: 'Product · solution-aware',     accent: 'var(--c-a78bfa)' },
@@ -2030,6 +2057,12 @@ function CanonicalJourneyView({ topics, problemSeeds = [] }: { topics: Canonical
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)' }}>Content plan — every topic mapped</span>
           <span style={{ fontSize: 10.5, color: 'var(--c-5a7a80)' }}><i className="ti ti-arrow-right" style={{ margin: '0 4px' }} />feeds the Content panel · in sync with the Cluster panel</span>
+          {/* v7.247: when a persona is active, show whose slice these cards reflect. */}
+          {segmentLabel && (
+            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--c-a78bfa)', background: 'var(--ca-167-139-250-0_1)', border: '1px solid var(--ca-167-139-250-0_2)', borderRadius: 20, padding: '2px 9px' }}>
+              <i className="ti ti-user" style={{ marginRight: 5 }} />{segmentLabel}
+            </span>
+          )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
           {cell('Topics in journey', total, 'var(--c-c8c8e8)')}
@@ -2044,6 +2077,55 @@ function CanonicalJourneyView({ topics, problemSeeds = [] }: { topics: Canonical
           </div>
         </div>
       </div>
+
+      {/* v7.247: Journey scope — All / Product / Pre-product, the SAME control the */}
+      {/* Cluster panel uses. Choosing a scope re-slices the cards + the topic list  */}
+      {/* (product = solution-aware full funnel; pre-product = problem/trigger,       */}
+      {/* awareness only — Const III.2a, single source of truth across panels).        */}
+      {(() => {
+        const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
+          { key: 'all',     label: 'All journeys',        count: productN + preN, hint: 'Product + pre-product topics',                   accent: 'var(--c-c8c8e8)' },
+          { key: 'product', label: 'Product journey',     count: productN,        hint: 'Solution-aware demand · full funnel',            accent: 'var(--c-9b96ff)', dot: true },
+          { key: 'pre',     label: 'Pre-product journey', count: preN,            hint: 'Problem / trigger searches · awareness only',    accent: 'var(--c-34d399)', dot: true },
+        ];
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Journey</span>
+            <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
+              {SCOPES.map(s => {
+                const on = journeyScope === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    onClick={() => setJourneyScope(s.key)}
+                    title={s.hint}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7,
+                      fontSize: 12, fontWeight: 600, lineHeight: 1,
+                      padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
+                      border: 'none', outline: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s',
+                      background: on ? 'var(--c-1e1e38)' : 'transparent',
+                      boxShadow:  on ? `inset 0 0 0 1px ${s.accent}` : 'none',
+                      color:      on ? s.accent : 'var(--c-9090b8)',
+                    }}
+                    onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-c8c8e8)'; }}
+                    onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-9090b8)'; }}
+                  >
+                    {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
+                    {s.label}
+                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>{s.count.toLocaleString()}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>
+              {journeyScope === 'pre'     ? 'Problem / trigger searches · awareness only'
+             : journeyScope === 'product' ? 'Solution-aware demand · full funnel'
+             :                              'Showing both journeys'}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* grouped, collapsible topic list — one journey per cluster, by category */}
       <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 12, padding: '16px 18px', marginTop: 16 }}>
@@ -2318,6 +2400,33 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // activeTab is 'combined' (→ null, no filter), a segment.id, or SHARED_BUCKET.
   const activeBucketId = activeTab === 'combined' ? null : activeTab;
 
+  // v7.247: canonical clusters are the default render path (Const II.7). Restore the
+  // per-segment slice that regressed when canonical mode became the default: attribute
+  // every canonical topic to ONE persona bucket (segment.id or SHARED) by the SAME
+  // exclusive audience-language overlap the demand journey uses (v7.170 partition, so
+  // the per-segment slices sum to the combined total). Keyed by topic so a topic lands
+  // in exactly one bucket; the bucket signal is the topic's own real language (its
+  // category, its product label, and its keyword text) — never a modeled split.
+  const canonicalMode = (canonicalTopics?.length ?? 0) > 0;
+  const segTok = useMemo(() => buildSegTokens(segments), [segments]);
+  const canonTopicBucket = useMemo(() => {
+    const m = new Map<string, string>();
+    if (!canonicalTopics || segTok.length === 0) return m;
+    for (const t of canonicalTopics) {
+      const text = [t.parentName, t.product, ...t.keywords.map(k => k.keyword)].join(' ');
+      m.set(t.id, bucketForText(text, segTok));
+    }
+    return m;
+  }, [canonicalTopics, segTok]);
+  // The topics passed to the canonical view: all topics for "All Segments" (null), or
+  // just the active persona's slice. When segments exist but the active bucket has no
+  // topics, the view renders honest zeros (Const I.5) rather than disappearing.
+  const filteredCanonicalTopics = useMemo(() => {
+    if (!canonicalTopics) return null;
+    if (!activeBucketId || segTok.length === 0) return canonicalTopics;
+    return canonicalTopics.filter(t => canonTopicBucket.get(t.id) === activeBucketId);
+  }, [canonicalTopics, activeBucketId, segTok, canonTopicBucket]);
+
   // v7.188: keyword → client SERP position (rank), so the detail panel can show the
   // live rank next to each keyword. Source = the snapshot's ranked rows (topKeywords
   // carry position) plus any uploaded/CSV rows that carry a position. Declared before
@@ -2534,8 +2643,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const tabs = useMemo(() => [
     { id: 'combined', label: 'All Segments' },
     ...segments.map((s: AudienceSegment) => ({ id: s.id, label: s.name })),
-    ...(demandMode && segments.length > 0 ? [{ id: SHARED_BUCKET, label: 'Shared / all personas' }] : []),
-  ], [segments, demandMode]);
+    ...((demandMode || canonicalMode) && segments.length > 0 ? [{ id: SHARED_BUCKET, label: 'Shared / all personas' }] : []),
+  ], [segments, demandMode, canonicalMode]);
 
   const activeSegment = activeTab === 'combined' ? null : segments.find((s: AudienceSegment) => s.id === activeTab) ?? null;
   const segIdx = activeSegment ? segments.indexOf(activeSegment) : -1;
@@ -2697,8 +2806,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
            The demand-universe graph below is only the legacy fallback when no canonical
            topics exist (the deep journey still backfills INTO the clusters this reads). */
         <CanonicalJourneyView
-          topics={canonicalTopics as CanonicalJourneyTopic[]}
+          topics={(filteredCanonicalTopics ?? canonicalTopics) as CanonicalJourneyTopic[]}
           problemSeeds={(demandUniverse?.problemSeeds ?? (analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[]}
+          segmentLabel={activeSegment ? activeSegment.name : (activeBucketId === SHARED_BUCKET ? 'Shared / all personas' : null)}
         />
       ) : demand && graph ? (
         /* v7.175: ONE connected journey — problem topics link by co-search, bridge

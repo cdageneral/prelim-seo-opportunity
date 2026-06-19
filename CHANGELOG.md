@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.247 — 2026-06-19 · Journey panel: per-segment slicing restored + Product/Pre-product journey filter
+
+**The ask (Wayne).** Two things on the Audience Journeys panel. (1) **Regression:** clicking an audience segment used to re-slice the summary cards and the topic list to just that persona — it stopped doing that. (2) **New:** add the same **Product journey / Pre-product journey** filter the Theme-Clusters panel has.
+
+**Why it regressed.** When the canonical clusters became the journey's single source of truth (v7.221), the panel's default render switched to `CanonicalJourneyView`, which was passed the **full** topic list and never received the active segment — so the persona pills changed the highlight but not the data. (Demand-mode still filtered via the v7.170 partition; the new default path simply wasn't wired to it.)
+
+**What changed.**
+- **Per-segment slice restored (canonical mode).** Each canonical cluster topic is now attributed to exactly **one** persona bucket — a segment, or **Shared / all personas** — using the *same* exclusive audience-language word-overlap mechanism the demand journey has used since v7.170 (factored into a shared `bucketForText`). Selecting a persona filters the topics passed to the view, so the **summary cards (Topics in journey / optimize / build / coverage) and the topic list both re-slice** to that persona; the slices **partition** the combined total (segments + Shared = all). A "Shared / all personas" pill now also appears in canonical mode, and the active persona is labeled on the content-plan header. No persona match (or a tie) → Shared, so a topic is **never silently dropped**.
+- **Journey scope filter added.** The same **All journeys / Product journey / Pre-product journey** segmented control from the Theme-Clusters panel now sits below the summary cards; choosing a scope re-slices the cards and the grouped topic list (product = solution-aware full funnel; pre-product = problem/trigger, awareness-only — the single source-of-truth split, Const III.2a). It composes with the persona filter.
+
+**Attribution is honest, not modeled (Const I.1 / I.5).** The persona bucket is decided by **real word overlap** between a topic's own language (its category, product label, and keyword text) and each persona's stated language — never a modeled or invented split. Every volume/keyword still traces to its real source row; only the persona grouping is computed, exactly as in v7.170.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors**. SSR render harness confirms: the per-segment partition sums to the total, each persona earns a real non-empty slice, no-match topics fall to Shared, the All/Product/Pre-product control + Shared tab render, and the panel uses **CSS-var tokens only** → dual-theme parity (V.5/IV.6) holds (rendered in both light + dark). **Full retained regression suite PASS** — all prior checks (v7.235–246) plus the new journey-partition invariants (one bucket per topic, slices partition the total, language-match attribution, Shared fallback, empty-segments-safe).
+
+**Action for Wayne:** deploy v7.247. On the Audience Journeys panel, click a persona to see its slice (cards + list update, with a chip showing whose slice it is), and use the **Journey** control to switch between All / Product / Pre-product.
+
 ## v7.246 — 2026-06-19 · Competitor Share of Voice — slices added to the donut, auto-updating as competitor data loads
 
 **The ask (Wayne).** As competitors are added, their Share of Voice should also be calculated and added to the donut; the graphs and donut should update accordingly when competitor data is loaded.
