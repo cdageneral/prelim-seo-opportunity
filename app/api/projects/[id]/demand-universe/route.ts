@@ -123,6 +123,10 @@ export async function POST(
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const linesPerSeed = Math.min(Math.max(parseInt(body?.linesPerSeed, 10) || DEFAULT_LINES, 1), MAX_LINES);
+  // v7.244: optional minimum-volume floor (Wayne, explicit opt-in per Const I.6). Only
+  // keywords whose REAL Semrush monthly volume is >= minVolume are kept; this is a filter
+  // on real source rows, never a modeled value. 0 = no floor (full footprint, the default).
+  const minVolume = Math.max(0, parseInt(body?.minVolume, 10) || 0);
 
   if (!process.env.SEMRUSH_API_KEY) {
     return NextResponse.json(
@@ -186,7 +190,7 @@ export async function POST(
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        send({ type: 'start', total: seeds.length, mode, productCount: product.length, problemCount: problem.length });
+        send({ type: 'start', total: seeds.length, mode, minVolume, productCount: product.length, problemCount: problem.length });
 
         const universe = await buildDemandUniverse(seeds, linesPerSeed, database, (done, total, seed) => {
           send({ type: 'progress', done, total, seed });
@@ -200,10 +204,22 @@ export async function POST(
           return;
         }
 
+        // v7.244: apply the optional minimum-volume floor to THIS run's pulled topics
+        // (real Semrush rows only). The preserved other lane keeps whatever floor it was
+        // built with. If nothing clears the floor, surface an honest gap (do not persist).
+        const pulledTopics = minVolume > 0
+          ? universe.topics.filter(t => (t.searchVolume ?? 0) >= minVolume)
+          : universe.topics;
+        if (pulledTopics.length === 0) {
+          send({ type: 'error', error: `No keywords at or above ${minVolume.toLocaleString()}/mo for the ${mode === 'pre' ? 'pre-product' : mode} pass — lower the minimum volume and try again.` });
+          controller.close();
+          return;
+        }
+
         // Merge: keep existing topics from lanes NOT rebuilt, then overlay this run's
         // topics (new wins on a keyword collision, taking the max real volume). Pure
         // helper in demandExpansion.ts (unit-checked in the retained regression suite).
-        const mergedTopics = mergeDemandLanes(existingTopics, universe.topics, mode, productSet);
+        const mergedTopics = mergeDemandLanes(existingTopics, pulledTopics, mode, productSet);
         const productTopicCount = mergedTopics.filter(t => laneOf(t) === 'product').length;
         const problemTopicCount = mergedTopics.length - productTopicCount;
 
@@ -216,8 +232,9 @@ export async function POST(
           topics:      mergedTopics,
           topicCount:  mergedTopics.length,
           lastMode:    mode,                 // v7.241: which pass last ran
+          minVolume,                         // v7.244: the floor applied to the last pass (0 = none)
           productTopicCount, problemTopicCount,
-          status: `${mergedTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · last pass: ${mode}`,
+          status: `${mergedTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · last pass: ${mode}${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
         };
 
         // v7.243: PRODUCT-lane expansion keeps each keyword INSIDE the existing base

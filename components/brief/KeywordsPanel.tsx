@@ -507,6 +507,9 @@ export default function KeywordsPanel({
   type ClearKind = 'base' | 'competitor' | 'product' | 'pre';
   const [confirmClear, setConfirmClear] = useState<ClearKind | null>(null);
   const [clearingBox,  setClearingBox]  = useState<ClearKind | null>(null);
+  // v7.244: shared minimum-volume floor for the product & pre-product builds (Const I.6
+  // opt-in). 0 = no floor. Applied to both "Run expansion" and "Run build".
+  const [minVolume, setMinVolume] = useState<number>(0);
 
   // ── Fetch DB keywords on mount ──
   const fetchDb = useCallback(async () => {
@@ -646,7 +649,7 @@ export default function KeywordsPanel({
     try {
       const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, linesPerSeed: 50 }),
+        body: JSON.stringify({ mode, linesPerSeed: 50, minVolume }),   // v7.244: opt-in volume floor
       });
       if (!r.ok || !r.body) {
         let msg = `Build failed (${r.status})`;
@@ -1465,7 +1468,7 @@ export default function KeywordsPanel({
             clearKind: 'product', canClear: productDone,
             body: productDone
               ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
-              : 'Expand each product category into full-funnel demand',
+              : `Expand each product category into full-funnel demand${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
           },
           {
             n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', bgAct: 'var(--ca-34-211-238-0_1)', glow: 'var(--ca-34-211-238-0_2)', icon: 'ti-route',
@@ -1474,7 +1477,7 @@ export default function KeywordsPanel({
             clearKind: 'pre', canClear: preDone,
             body: preDone
               ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
-              : 'Surface problem-aware demand before the product is known',
+              : `Surface problem-aware demand before the product is known${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
           },
         ];
         const actionCount = stages.filter(s => s.status === 'action').length;
@@ -1491,6 +1494,51 @@ export default function KeywordsPanel({
                 </span>
               )}
               <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>base → competitors → product demand → pre-product demand</span>
+
+              {/* v7.244: shared minimum-volume floor for steps 3 & 4 (opt-in, Const I.6). */}
+              {(() => {
+                const presets = [
+                  { label: 'None', v: 0 }, { label: '500', v: 500 }, { label: '1K', v: 1000 },
+                  { label: '1.9K', v: 1900 }, { label: '2.4K', v: 2400 }, { label: '3.6K', v: 3600 }, { label: '4.4K', v: 4400 },
+                ];
+                const disabled = !!buildMode;
+                return (
+                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', opacity: disabled ? 0.55 : 1 }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-585878)' }} title="Only pull keywords with at least this monthly search volume (steps 3 & 4)">
+                      Min volume · steps 3 &amp; 4
+                    </span>
+                    {presets.map(p => {
+                      const on = minVolume === p.v;
+                      return (
+                        <button
+                          key={p.v}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => setMinVolume(p.v)}
+                          style={{
+                            fontSize: 10.5, fontWeight: 700, lineHeight: 1, padding: '4px 8px', borderRadius: 6,
+                            cursor: disabled ? 'default' : 'pointer', whiteSpace: 'nowrap',
+                            background: on ? 'var(--c-1e1e38)' : 'transparent',
+                            border: `1px solid ${on ? 'var(--c-9b96ff)' : 'var(--c-2a2a45)'}`,
+                            color: on ? 'var(--c-c8c8e8)' : 'var(--c-9090b8)',
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="number" min={0} step={100} disabled={disabled}
+                      value={minVolume > 0 ? minVolume : ''}
+                      placeholder="custom"
+                      onChange={e => setMinVolume(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                      title="Custom minimum monthly volume — keywords below this are not pulled"
+                      style={{ width: 78, fontSize: 11, padding: '4px 8px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', color: 'var(--c-c8c8e8)', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: 10, color: 'var(--c-585878)' }}>/mo</span>
+                  </div>
+                );
+              })()}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
               {stages.map(s => {

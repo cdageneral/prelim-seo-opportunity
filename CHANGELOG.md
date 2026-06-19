@@ -1,5 +1,15 @@
 # OrbitIQ Changelog
 
+## v7.244 — 2026-06-18 · Optional minimum-volume floor for the product & pre-product builds (steps 3 & 4)
+
+**The ask (Wayne).** When running steps 3 ("Expand product data") and 4 ("Build pre-product journey"), be able to set a volume threshold so keywords below X aren't pulled — either by typing a custom value or picking a preset (500 / 1,000 / 1,900 / 2,400 / 3,600 / 4,400).
+
+**What changed.** A shared **"Min volume · steps 3 & 4"** control now sits in the Build-workflow header: preset chips (None / 500 / 1K / 1.9K / 2.4K / 3.6K / 4.4K) plus a free **custom** number input. The chosen floor is sent to the build; only keywords whose **real Semrush monthly volume is ≥ the floor** are kept (`demand-universe` route now accepts `minVolume`, filters the freshly-pulled lane before merge, records it on `_demandUniverse.minVolume`, and surfaces an honest gap if nothing clears the floor). The floor is **opt-in** per Const I.6 (default 0 = full footprint, unchanged); it is a filter on real source rows, never a modeled value (Const I.1). Each build's active floor also shows in the step 3 / 4 card text and the universe status string.
+
+**Verified (own debugging agent + Const V.6 regression gate).** esbuild + isolated `tsc` over both edited files = **0 errors**. SSR render confirms the control renders with all presets + custom input + "/mo" and the four build buttons remain intact. **Full retained regression suite PASS** (all prior checks v7.235–243 + lane-merge + product-expansion). No new colors (existing CSS-var tokens) → dual-theme parity holds.
+
+**Action for Wayne:** deploy v7.244. Before running step 3 or 4, set a Min volume (pick a preset or type a custom number); the build will only pull keywords at or above that monthly volume. Leave it on "None" for the full footprint.
+
 ## v7.243 — 2026-06-18 · Per-box "Clear all" (true delete); product expansion now stays inside existing categories (no more "Other")
 
 **The asks (Wayne).** (1) Each of the four workflow boxes needs a **Clear all** that genuinely DELETES that box's data (not hide). (2) "Expand product data" was dumping every expanded keyword into a single top-level **"Other"** category. The rule for that action is to expand each EXISTING product category into upper/mid-funnel demand **within the same hierarchy — never invent new categories**.
