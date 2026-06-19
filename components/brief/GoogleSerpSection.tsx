@@ -757,9 +757,13 @@ export function ctrAt(p: number): number {
 interface SovRawEntry {
   domain:  string;
   traffic: number;
-  type:    'client' | 'open';
+  type:    'client' | 'competitor' | 'open';
   color:   string;
 }
+
+// v7.246: competitor slice palette (cyan family — distinct from client purple,
+// muted-open). Cycles if more competitors than colors.
+const SOV_COMP_COLORS = ['var(--c-06b6d4)', 'var(--c-0891b2)', 'var(--c-22d3ee)', 'var(--c-0e7490)', 'var(--c-67e8f9)'];
 
 interface SovArc extends SovRawEntry {
   pct:        number;
@@ -823,7 +827,15 @@ export interface SovComputed {
   totalKwCount:    number;
   clientDisplay:   string;
   ctrSource:       string;
-  // donut slices: [client captured, open/uncaptured]
+  // v7.246 — competitor capture on the SAME footprint/denominator. Each competitor's
+  // slice = Σ(footprint-keyword volume × CTR at the competitor's position, pos ≤ 10)
+  // over the keywords it shares with the client footprint. Stable denominator means
+  // the client's own % does not move when a competitor is added; their slice eats
+  // into "open" instead. Competitors with rows but no usable page-1 overlap are
+  // surfaced as honest gaps (I.5), never given a modeled or zero slice as fact.
+  compEntries:     Array<{ domain: string; capturedClicks: number; pct: number; kwCount: number }>;
+  compGaps:        Array<{ domain: string; rows: number; hasPositions: boolean; minPos: number | null }>;
+  // donut slices: [client captured, ...competitors, open/uncaptured]
   rawEntries:      SovRawEntry[];
   total:           number;   // = availableClicks (donut denominator)
 }
@@ -869,12 +881,72 @@ export function computeSov(
   // so their uncaptured clicks correctly sit in "open demand", not the numerator.
   const availableClicks = totalVolMonthly * PAGE1_CTR_SUM;
   const sovPct          = availableClicks > 0 ? capturedClicks / availableClicks : 0;
-  const openClicks      = Math.max(0, availableClicks - capturedClicks);
+
+  // ── v7.246: competitor capture on the SAME footprint + denominator ──────────
+  // A competitor's slice = Σ(footprint volume × CTR at competitor position, pos
+  // ≤ 10) over the keywords it shares with the client footprint. Volume is the
+  // footprint's measured value (one number per keyword, position-independent), so
+  // every player is scored on the same real volumes (Const I.1) and the same
+  // denominator (II.7). Competitor rankings are real uploaded rows (project_keywords
+  // with domain = competitor + a Position); a competitor with rows but no page-1
+  // overlap — or no positions at all — gets NO slice and is reported as an honest
+  // gap (I.5), never a modeled or silent-zero share.
+  const footprintVol = new Map<string, number>();
+  for (const i of ranked) {
+    const k = (i.keyword ?? '').toLowerCase().trim();
+    if (k) footprintVol.set(k, i.searchVolume ?? 0);
+  }
+  const clientNorm = normSovDomain(clientDomain);
+  const compCap = new Map<string, number>();   // domain → captured clicks
+  const compKw  = new Map<string, number>();    // domain → page-1 overlap kw count
+  const compDiag = new Map<string, { rows: number; withPos: number; minPos: number }>();
+  for (const r of (dbKeywords ?? [])) {
+    const dom = normSovDomain((r as any).domain ?? '');
+    if (!dom || dom === clientNorm || (r as any).source === 'blocked') continue;
+    let d = compDiag.get(dom);
+    if (!d) { d = { rows: 0, withPos: 0, minPos: Infinity }; compDiag.set(dom, d); }
+    d.rows++;
+    const p = (r as any).position;
+    if (p != null) { d.withPos++; if (p < d.minPos) d.minPos = p; }
+    if (p == null || p < 1 || p > 10) continue;
+    const k = ((r as any).keyword ?? '').toLowerCase().trim();
+    if (!footprintVol.has(k)) continue;   // overlap only — keeps the denominator stable
+    const vol = footprintVol.get(k) ?? 0;
+    compCap.set(dom, (compCap.get(dom) ?? 0) + vol * ctrAt(p));
+    compKw.set(dom,  (compKw.get(dom)  ?? 0) + 1);
+  }
+  const compEntries = Array.from(compCap.entries())
+    .filter(([, c]) => c > 0)
+    .map(([domain, capturedClicks]) => ({
+      domain,
+      capturedClicks,
+      pct:     availableClicks > 0 ? capturedClicks / availableClicks : 0,
+      kwCount: compKw.get(domain) ?? 0,
+    }))
+    .sort((a, b) => b.capturedClicks - a.capturedClicks);
+  const sliced = new Set(compEntries.map(c => c.domain));
+  const compGaps = Array.from(compDiag.entries())
+    .filter(([dom]) => !sliced.has(dom))   // had rows but earned no page-1-overlap slice
+    .map(([domain, d]) => ({
+      domain,
+      rows:         d.rows,
+      hasPositions: d.withPos > 0,
+      minPos:       isFinite(d.minPos) ? d.minPos : null,
+    }));
+
+  const compCapTotal = compEntries.reduce((s, c) => s + c.capturedClicks, 0);
+  const openClicks   = Math.max(0, availableClicks - capturedClicks - compCapTotal);
 
   const rawEntries: SovRawEntry[] = availableClicks > 0
     ? [
         { domain: clientDisplay, traffic: capturedClicks, type: 'client', color: 'var(--c-6c63ff)' },
-        { domain: 'Open / uncaptured demand', traffic: openClicks, type: 'open', color: 'var(--c-2a2a44)' },
+        ...compEntries.map((c, idx) => ({
+          domain:  c.domain,
+          traffic: c.capturedClicks,
+          type:    'competitor' as const,
+          color:   SOV_COMP_COLORS[idx % SOV_COMP_COLORS.length],
+        })),
+        { domain: 'Open / uncaptured demand', traffic: openClicks, type: 'open' as const, color: 'var(--c-2a2a44)' },
       ]
     : [];
 
@@ -889,6 +961,8 @@ export function computeSov(
     totalKwCount:    ranked.length,
     clientDisplay,
     ctrSource:       CTR_SOURCE_LABEL,
+    compEntries,
+    compGaps,
     rawEntries,
     total:           availableClicks,
   };
@@ -899,6 +973,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
   const {
     basis, rawEntries, total, sovPct, capturedClicks, availableClicks,
     totalVolMonthly, page1VolMonthly, page1KwCount, totalKwCount, clientDisplay, ctrSource,
+    compEntries, compGaps,
   } = computeSov({ analysis, competitors, dbKeywords, clientLabel });
 
   // Honest-gap empty state (Const I.5) — no footprint volume to compute over.
@@ -925,6 +1000,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
     return { ...e, pct, dash, dashOffset };
   });
   const clientArc = arcs.find(a => a.type === 'client');
+  const compArcs  = arcs.filter(a => a.type === 'competitor');
   const openArc   = arcs.find(a => a.type === 'open');
   const sovDisplay = sovPct > 0 && sovPct < 0.01 ? (sovPct * 100).toFixed(1) : String(Math.round(sovPct * 100));
 
@@ -972,13 +1048,47 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
         {/* Legend */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {clientArc && <LegendRow arc={clientArc} />}
-          {openArc && <LegendRow arc={openArc} />}
-          <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, marginTop: 6, margin: '6px 0 0' }}>
-            Wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
-            {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint.
+
+          {compArcs.length > 0 && (
+            <>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
+                Competitors (page-1 capture)
+              </p>
+              {compArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+            </>
+          )}
+
+          {openArc && (
+            <div style={{ marginTop: compArcs.length > 0 ? '7px' : '0', paddingTop: compArcs.length > 0 ? '5px' : '0', borderTop: compArcs.length > 0 ? '1px solid var(--c-1a1a2e)' : 'none' }}>
+              <LegendRow arc={openArc} />
+            </div>
+          )}
+
+          <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, margin: '6px 0 0' }}>
+            Client wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
+            {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint
+            {compArcs.length > 0 ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
           </p>
         </div>
       </div>
+
+      {/* v7.246: competitors on file with no usable page-1 ranking on shared
+          keywords — shown as an honest gap (Const I.5), never a modeled/zero slice. */}
+      {compGaps.length > 0 && (
+        <div style={{
+          background: 'var(--ca-245-158-11-0_06)', border: '1px solid var(--ca-245-158-11-0_25)',
+          borderRadius: '8px', padding: '8px 10px',
+        }}>
+          {compGaps.map(g => (
+            <p key={g.domain} style={{ fontSize: '10px', color: 'var(--c-d9a23f)', lineHeight: 1.5, margin: 0 }}>
+              <span style={{ fontWeight: 600 }}>{g.domain.replace(/^www\./, '')}</span>: {g.rows.toLocaleString()} keyword{g.rows === 1 ? '' : 's'} on file
+              {g.hasPositions
+                ? ` — none rank page 1 on your footprint (best position ${g.minPos ?? '—'}), so no Share-of-Voice slice yet.`
+                : ' — no ranking positions uploaded, so its Share-of-Voice cannot be computed. Re-upload its CSV including a Position column.'}
+            </p>
+          ))}
+        </div>
+      )}
 
       {/* Modeled-estimate disclosure (Const I.1 / Art. IX labeled CTR exception) */}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const, alignItems: 'center' }}>

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.246 — 2026-06-19 · Competitor Share of Voice — slices added to the donut, auto-updating as competitor data loads
+
+**The ask (Wayne).** As competitors are added, their Share of Voice should also be calculated and added to the donut; the graphs and donut should update accordingly when competitor data is loaded.
+
+**What changed.** `computeSov` now computes a **page-1 capture slice per competitor** on the **same footprint and the same denominator** as the client: a competitor's slice = `Σ(footprint-keyword volume × CTR at the competitor's ranking position, pos ≤ 10)` over the keywords it shares with the client footprint. The donut (both the Google-Rank panel and the Executive Summary, which share `computeSov`) now renders **client + each competitor + open/uncaptured**, with a "Competitors (page-1 capture)" legend group. Because the brief reads competitor keyword rows from the live `dbKeywords` fetch (refetched on `kwVersion`), **the donut updates automatically** as competitor CSVs (with positions) are uploaded.
+
+**Stable denominator (design choice, stated to Wayne).** The denominator stays "all page-1 clicks available across **your** footprint", so **the client's own SoV % does not move when a competitor is added** — a competitor's slice eats into the "open / uncaptured" wedge instead. This keeps the client number stable and reconciling with the header (Const II.7), and frames competitors as "how much of *your* footprint's page-1 clicks they're taking." (Competitor gap keywords outside your footprint remain a separate lens.)
+
+**Honest gaps (Const I.5).** A competitor's slice needs **real ranking positions** (uploaded competitor rows with a Position column). A competitor that has keywords on file but **no page-1 overlap** on your footprint, or **no positions at all**, gets **no slice** and is surfaced explicitly ("none rank page 1 on your footprint…" / "no ranking positions uploaded — re-upload its CSV including a Position column"). Never a modeled or silent-zero slice presented as fact (volume + position stay real Semrush/CSV rows; only the CTR multiplier is the labeled model, Const I.5a).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors**. SSR render harness with a real-shaped client footprint + competitor rows confirms: client SoV % is **identical with and without competitors** (stable denominator); a competitor with page-1 overlap earns a real slice (160 overlap kws); client+competitors+open sum to 100%; open never goes negative and shrinks as competitors capture; a positionless competitor and a no-overlap competitor both render as honest gaps. **Full retained regression suite PASS** — all prior checks (v7.235–245 + v7.245 SoV invariants) plus new competitor-SoV invariants (stable client %, real overlap slice, honest-gap for no-overlap/no-positions, slices sum to 100%, open ≥ 0). Only existing CSS-var tokens → dual-theme parity (V.5/IV.6) holds.
+
+**Action for Wayne:** deploy v7.246. Upload each competitor's keyword CSV **including the Position column** — their page-1 capture slice will appear in the donut automatically, with the uncaptured remainder shown as "open." Competitors without positions are flagged with the fix.
+
 ## v7.245 — 2026-06-19 · Share of Voice fixed: page-1 click capture, not a meaningless 100%
 
 **The ask (Wayne).** On the Google-Rank panel, Share of Voice showed **100% CLIENT SOV** even though ~180M+ of annual volume sits *outside* page 1 and the Pg-1 Vol Share card right beside it read **32%**. 100% can't be right — there's no way the client owns all the voice.
