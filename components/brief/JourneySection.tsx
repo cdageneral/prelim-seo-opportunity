@@ -2683,48 +2683,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           )}
         </div>
 
-        {/* Right — status badge + provenance + note (v7.241: the build now lives on the */}
-        {/* Keyword panel's workflow bar — "Expand product data" + "Build pre-product    */}
-        {/* journey" — so this panel is display-only for the build).                     */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, minWidth: 220, flex: '0 0 auto', maxWidth: 280 }}>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-7a7aa0)', textAlign: 'right', justifyContent: 'flex-end' }}>
-            <i className="ti ti-info-circle" aria-hidden="true" />
-            Build the deep journey from the <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>Keyword&nbsp;panel</span> &mdash; “Expand product data” &amp; “Build pre-product journey”.
-          </span>
-
-          {/* run-status badge: never run · building · last run [date] */}
-          {building ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-22d3ee)', background: 'var(--ca-34-211-238-0_12)', border: '1px solid var(--c-22d3ee55)', borderRadius: 8, padding: '3px 9px' }}>
-              <i className="ti ti-loader-2" /> Building…
-            </span>
-          ) : demandMode ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-34d399)', background: 'var(--ca-52-211-153-0_12)', border: '1px solid var(--c-34d39955)', borderRadius: 8, padding: '3px 9px' }}>
-              <i className="ti ti-circle-check" /> {demandUniverse?.builtAt ? `Last run ${new Date(demandUniverse.builtAt).toLocaleDateString()}` : 'Built'}
-            </span>
-          ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: 'var(--c-8a8aa8)', background: 'var(--ca-120-120-150-0_12)', border: '1px solid var(--c-2a2a40)', borderRadius: 8, padding: '3px 9px' }}>
-              <i className="ti ti-circle-dashed" /> Never run
-            </span>
-          )}
-
-          {!building && (demandMode ? (
-            <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', textAlign: 'right' }}>
-              <span style={{ color: 'var(--c-34d399)', fontWeight: 600 }}>Demand universe</span> · {(demandUniverse?.topicCount ?? demandUniverse?.topics?.length ?? 0).toLocaleString()} volume-backed topics
-              {demandUniverse?.seedCount ? ` from ${demandUniverse.seedCount} seeds` : ''}
-              {' '}(Semrush)
-            </span>
-          ) : (
-            <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', textAlign: 'right' }}>
-              Showing your <span style={{ color: 'var(--c-a78bfa)' }}>ranking footprint</span> only &mdash; build the deep journey from the Keyword panel to map the full search-volume-backed demand.
-            </span>
-          ))}
-          {building && <DemandProgress progress={progress} />}
-          {buildError && (
-            <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: 0, textAlign: 'right' }}>
-              <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} />{buildError}
-            </p>
-          )}
-        </div>
+        {/* v7.242: build-status / "build deep journey" control fully removed from the */}
+        {/* Journey panel (Wayne). The build lives only on the Keyword panel's workflow */}
+        {/* bar; this panel is purely a display of the journey.                          */}
       </div>
 
       <Legend />

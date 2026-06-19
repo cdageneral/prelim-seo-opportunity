@@ -1368,7 +1368,11 @@ export default function KeywordsPanel({
       {/* status is derived from REAL data; volumes come from Semrush (Const I.1).    */}
       {(() => {
         const baseDone = (kwSummary.clientCount ?? 0) > 0;
-        const compDone = (competitorDomains?.length ?? 0) > 0;
+        // v7.242: "Competitor data" is COMPLETE only when real competitor KEYWORD data
+        // exists (competitor-gap rows), NOT merely when competitor domains are listed.
+        // Adding a domain without uploading/pulling its keywords leaves this ACTION-NEEDED.
+        const compHasDomains = (competitorDomains?.length ?? 0) > 0;
+        const compDone       = (kwSummary.gapCount ?? 0) > 0;
         const du       = analysis?.semrushSnapshot?._demandUniverse;
         const duTopics: any[] = Array.isArray(du?.topics) ? du.topics : [];
         const productTopics = duTopics.filter(t => t?.laneHint === 'product').length;
@@ -1381,119 +1385,105 @@ export default function KeywordsPanel({
           ? Math.round((elapsed / buildProgress.done) * (buildProgress.total - buildProgress.done))
           : null;
 
-        // Chip shown top-right of each card.
-        const Chip = ({ kind, label }: { kind: 'done' | 'active' | 'idle' | 'run'; label: string }) => {
-          const c = kind === 'done'
-            ? { fg: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_12)', bd: 'var(--c-34d39955)', ic: 'ti-circle-check' }
-            : kind === 'run'
-            ? { fg: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_12)', bd: 'var(--c-22d3ee55)', ic: 'ti-loader-2' }
-            : kind === 'active'
-            ? { fg: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_12)', bd: 'var(--c-f59e0b55)', ic: 'ti-arrow-right' }
-            : { fg: 'var(--c-8a8aa8)', bg: 'var(--ca-120-120-150-0_12)', bd: 'var(--c-2a2a40)', ic: 'ti-circle-dashed' };
-          return (
-            <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: c.fg, background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
-              <i className={`ti ${c.ic}`} style={{ fontSize: 10 }} aria-hidden="true" />{label}
-            </span>
-          );
-        };
-
+        // status: 'done' (calm green) | 'building' (cyan, in-progress) | 'action' (bright accent CTA)
         type Stage = {
-          n: number; title: string; accent: string; icon: string;
-          chip: { kind: 'done' | 'active' | 'idle' | 'run'; label: string };
+          n: number; title: string; accent: string; bgAct: string; glow: string; icon: string;
+          status: 'done' | 'building' | 'action';
+          doneLabel: string; cta: string;
           body: React.ReactNode;
-          onClick?: () => void;
-          disabled?: boolean;
-          progress?: boolean;
+          onClick?: () => void; disabled?: boolean;
         };
         const stages: Stage[] = [
           {
-            n: 1, title: 'Client base keywords', accent: 'var(--c-34d399)', icon: 'ti-file-upload',
-            chip: baseDone ? { kind: 'done', label: 'Completed' } : { kind: 'active', label: 'Upload' },
+            n: 1, title: 'Client base keywords', accent: 'var(--c-34d399)', bgAct: 'var(--ca-52-211-153-0_1)', glow: 'var(--ca-52-211-153-0_2)', icon: 'ti-file-upload',
+            status: baseDone ? 'done' : 'action', doneLabel: 'Completed', cta: 'Upload CSV',
             onClick: baseDone ? undefined : () => csvRef.current?.click(),
-            body: (
-              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
-                {baseDone
-                  ? `${(kwSummary.clientCount ?? 0).toLocaleString()} base keywords on file (CSV)`
-                  : 'Upload your base keyword CSV to begin'}
-              </span>
-            ),
+            body: baseDone
+              ? `${(kwSummary.clientCount ?? 0).toLocaleString()} base keywords on file (CSV)`
+              : 'Upload your base keyword CSV to begin',
           },
           {
-            n: 2, title: 'Competitor data', accent: 'var(--c-f59e0b)', icon: 'ti-users',
-            chip: compDone ? { kind: 'done', label: 'Completed' } : { kind: 'active', label: 'Add' },
+            n: 2, title: 'Competitor data', accent: 'var(--c-f59e0b)', bgAct: 'var(--ca-245-158-11-0_10)', glow: 'var(--ca-245-158-11-0_2)', icon: 'ti-users',
+            status: compDone ? 'done' : 'action', doneLabel: 'Completed', cta: compHasDomains ? 'Upload data' : 'Add competitors',
             onClick: () => onOpenCompetitors?.(),
-            body: (
-              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
-                {compDone
-                  ? `${competitorDomains.length} competitor${competitorDomains.length === 1 ? '' : 's'} added — click to manage`
-                  : 'Add competitor domains & upload their keyword CSVs'}
-              </span>
-            ),
+            body: compDone
+              ? `Competitor keyword data loaded — click to manage`
+              : compHasDomains
+                ? `${competitorDomains.length} competitor${competitorDomains.length === 1 ? '' : 's'} added, no keyword data yet — upload it`
+                : 'Add competitor domains & upload their keyword CSVs',
           },
           {
-            n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', icon: 'ti-sparkles',
-            chip: buildMode === 'product' ? { kind: 'run', label: 'Building' } : productDone ? { kind: 'done', label: 'Built' } : { kind: 'idle', label: 'Not run' },
-            onClick: () => runDeepBuild('product'),
-            disabled: !!buildMode,
-            progress: buildMode === 'product',
-            body: (
-              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
-                {productDone
-                  ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
-                  : 'Expand each product category into full-funnel demand'}
-              </span>
-            ),
+            n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', bgAct: 'var(--ca-155-150-255-0_10)', glow: 'var(--ca-155-150-255-0_20)', icon: 'ti-sparkles',
+            status: buildMode === 'product' ? 'building' : productDone ? 'done' : 'action', doneLabel: 'Built', cta: productDone ? 'Re-run' : 'Run expansion',
+            onClick: () => runDeepBuild('product'), disabled: !!buildMode,
+            body: productDone
+              ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
+              : 'Expand each product category into full-funnel demand',
           },
           {
-            n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', icon: 'ti-route',
-            chip: buildMode === 'pre' ? { kind: 'run', label: 'Building' } : preDone ? { kind: 'done', label: 'Built' } : { kind: 'idle', label: 'Not run' },
-            onClick: () => runDeepBuild('pre'),
-            disabled: !!buildMode,
-            progress: buildMode === 'pre',
-            body: (
-              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
-                {preDone
-                  ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
-                  : 'Surface problem-aware demand before the product is known'}
-              </span>
-            ),
+            n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', bgAct: 'var(--ca-34-211-238-0_1)', glow: 'var(--ca-34-211-238-0_2)', icon: 'ti-route',
+            status: buildMode === 'pre' ? 'building' : preDone ? 'done' : 'action', doneLabel: 'Built', cta: preDone ? 'Re-run' : 'Run build',
+            onClick: () => runDeepBuild('pre'), disabled: !!buildMode,
+            body: preDone
+              ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
+              : 'Surface problem-aware demand before the product is known',
           },
         ];
+        const actionCount = stages.filter(s => s.status === 'action').length;
 
         return (
           <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-9090c0)' }}>
                 Build workflow
               </span>
+              {actionCount > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--c-f59e0b44)', borderRadius: 20, padding: '2px 8px' }}>
+                  {actionCount} action{actionCount === 1 ? '' : 's'} needed
+                </span>
+              )}
               <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>base → competitors → product demand → pre-product demand</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
               {stages.map(s => {
                 const clickable = !!s.onClick && !s.disabled;
+                const emphasize = s.status === 'action' || s.status === 'building';
+                const chip = s.status === 'done'
+                  ? { fg: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_12)', bd: 'var(--c-34d39955)', ic: 'ti-circle-check', label: s.doneLabel }
+                  : s.status === 'building'
+                  ? { fg: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_12)', bd: 'var(--c-22d3ee55)', ic: 'ti-loader-2', label: 'Building…' }
+                  : { fg: s.accent, bg: 'transparent', bd: s.accent, ic: 'ti-alert-circle', label: 'Action needed' };
                 return (
                   <button
                     key={s.n}
                     onClick={clickable ? s.onClick : undefined}
                     disabled={s.disabled}
                     style={{
-                      display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch',
-                      padding: '12px 13px', borderRadius: 10, textAlign: 'left', width: '100%',
-                      background: 'var(--c-0c0c16)',
-                      border: `1px solid ${s.chip.kind === 'active' ? 'var(--c-f59e0b55)' : s.chip.kind === 'run' ? 'var(--c-22d3ee55)' : 'var(--c-1e1e34)'}`,
-                      cursor: clickable ? 'pointer' : 'default', outline: 'none', transition: 'all 0.15s', opacity: s.disabled && !s.progress ? 0.55 : 1,
+                      position: 'relative', display: 'flex', flexDirection: 'column', gap: 9, alignItems: 'stretch',
+                      padding: '13px 14px 14px', borderRadius: 11, textAlign: 'left', width: '100%',
+                      background: emphasize ? s.bgAct : 'var(--c-0c0c16)',
+                      border: `1px solid ${emphasize ? s.accent : 'var(--c-1e1e34)'}`,
+                      boxShadow: s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none',
+                      cursor: clickable ? 'pointer' : 'default', outline: 'none', transition: 'all 0.15s',
+                      opacity: s.disabled ? 0.5 : 1,
                     }}
-                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.borderColor = s.accent; }}
-                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.borderColor = s.chip.kind === 'active' ? 'var(--c-f59e0b55)' : s.chip.kind === 'run' ? 'var(--c-22d3ee55)' : 'var(--c-1e1e34)'; }}
+                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 0 0 1px ${s.glow}, 0 12px 26px -8px ${s.glow}`; }}
+                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.boxShadow = s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none'; }}
                   >
+                    {/* accent stripe on action cards */}
+                    {s.status === 'action' && <span style={{ position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 3, background: s.accent }} aria-hidden="true" />}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      <span style={{ width: 18, height: 18, borderRadius: 5, background: 'var(--c-14142a)', color: s.accent, fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</span>
-                      <i className={`ti ${s.icon}`} style={{ fontSize: 13, color: s.accent }} aria-hidden="true" />
-                      <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-c8c8e8)' }}>{s.title}</span>
-                      <Chip kind={s.chip.kind} label={s.chip.label} />
+                      <span style={{ width: 19, height: 19, borderRadius: 5, background: emphasize ? s.accent : 'var(--c-14142a)', color: emphasize ? 'var(--c-08080f)' : s.accent, fontSize: 10.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</span>
+                      <i className={`ti ${s.icon}`} style={{ fontSize: 14, color: s.accent }} aria-hidden="true" />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: emphasize ? 'var(--c-e8e8ff)' : 'var(--c-c8c8e8)' }}>{s.title}</span>
+                      <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: chip.fg, background: chip.bg, border: `1px solid ${chip.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                        <i className={`ti ${chip.ic}`} style={{ fontSize: 10 }} aria-hidden="true" />{chip.label}
+                      </span>
                     </div>
-                    {s.body}
-                    {s.progress && buildProgress && (
+                    <span style={{ fontSize: 11, color: emphasize ? 'var(--c-a8a8cc)' : 'var(--c-7a7aa0)', lineHeight: 1.45 }}>{s.body}</span>
+
+                    {/* in-progress bar */}
+                    {s.status === 'building' && buildProgress && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ height: 5, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
                           <div style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}%`, height: '100%', background: s.accent, transition: 'width 0.3s' }} />
@@ -1504,6 +1494,19 @@ export default function KeywordsPanel({
                           {buildProgress.seed ? ` · ${buildProgress.seed}` : ''}
                         </span>
                       </div>
+                    )}
+
+                    {/* prominent CTA pill on action cards */}
+                    {s.status === 'action' && (
+                      <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-08080f)', background: s.accent, borderRadius: 7, padding: '6px 11px' }}>
+                        {s.cta} <i className="ti ti-arrow-right" style={{ fontSize: 12 }} aria-hidden="true" />
+                      </span>
+                    )}
+                    {/* re-run affordance on completed builds (3 & 4) */}
+                    {s.status === 'done' && clickable && (s.n === 3 || s.n === 4) && (
+                      <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 600, color: s.accent, border: `1px solid ${s.accent}`, borderRadius: 7, padding: '4px 9px' }}>
+                        <i className="ti ti-refresh" style={{ fontSize: 11 }} aria-hidden="true" />{s.cta}
+                      </span>
                     )}
                   </button>
                 );

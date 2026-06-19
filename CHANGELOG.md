@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.242 — 2026-06-18 · Workflow-bar fixes: Journey build-status fully removed, competitor "done" = real data, action buttons made prominent
+
+**The asks (Wayne, on v7.241).** (1) The Journey panel *still* showed a build-status block (the "Build the deep journey from the Keyword panel" note + a "Never run" badge + the ranking-footprint provenance) — it wasn't actually deleted. (2) The "Competitor data" button read **Completed** even though no competitor data was uploaded (only competitor domains were listed; the Competitor Gap card was 0). (3) The 4 workflow buttons were too subtle — the ones that need action should stand out.
+
+**What changed.**
+- **`components/brief/JourneySection.tsx`** — the entire right-column build-status block (note, run-status badge, demand-universe provenance, progress, error) is **fully removed**. The Journey panel is now purely a display of the journey; nothing build-related remains on it.
+- **`components/brief/KeywordsPanel.tsx`**
+  - **Competitor "done" now means real competitor keyword data exists** — `compDone = (competitor-gap keyword count) > 0`, not merely that competitor *domains* are listed. Adding a domain without uploading/pulling its keywords now correctly stays **Action needed** ("N competitors added, no keyword data yet — upload it") instead of falsely showing Completed. (Const I.1 — status reflects real data.)
+  - **Prominence redesign.** Each stage is now `done` (calm green check), `building` (cyan, live progress bar), or `action` (bright). Action cards get an accent-tinted fill, a full-accent border, a soft glow, an accent left-stripe, a solid accent number badge, an "Action needed" chip, and a filled **CTA pill** ("Upload CSV", "Add competitors / Upload data", "Run expansion", "Run build"). The header shows a "**N actions needed**" badge. Completed builds (3 & 4) keep a subtle "Re-run" affordance. All colors are existing CSS-var tokens → dual-theme parity holds (also fixed two undefined amber/purple border tokens from v7.241).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over every edited file = **0 errors**. SSR render of the real `KeywordsPanel` confirms: the four buttons, single scroll container, "Action needed" chips + "N actions needed" header badge + all CTA pills render; **a competitor domain with no keyword data is NOT "Completed" and prompts upload**; built state shows "Built" + "Re-run" + volume-backed topics. JourneySection compiles with the block gone. Full **retained regression suite (v7.235–241 + lane-merge) PASS**. Only CSS-var tokens used → V.5/IV.6 parity holds.
+
+**Action for Wayne:** deploy v7.242. The Journey panel no longer shows any build control; on the Keyword panel the action-needed buttons now clearly stand out, and "Competitor data" only reads Completed once real competitor keyword data is loaded.
+
 ## v7.241 — 2026-06-18 · Build workflow moves to the Keyword panel: 4-stage bar; Journey/Cluster build buttons removed
 
 **The ask (Wayne).** On the Keyword panel, between the summary cards and the journey toggle, add **4 buttons**: (1) **client base keywords** — usually already complete (the project starts from a base-keyword CSV upload); (2) **competitor data** — active until competitor data exists, opens the Competitors panel on click; (3) **Expand product data** — expand each existing product category into full-funnel demand (awareness → education → comparisons → … → FAQs) within the same hierarchy; (4) **Build pre-product journey** — surface problem-/trigger-aware demand *before* the product is known (life events, need states, frustrations, goals), never naming the product/category/brand. Then **remove** the Journey panel's "Build deep journey" button and the Cluster pane's "Refine clusters with AI" button.
