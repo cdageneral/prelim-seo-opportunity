@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
+import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
@@ -794,6 +795,18 @@ export default function KeywordsPanel({
     };
   }, [scopedSummaryRows]);
 
+  // ── v7.252: READ-ONLY provenance of the All Keywords count ──────────────────
+  // Partitions the SAME rows the All Keywords card counts by their REAL source so
+  // the headline number is traceable (Const I.2) and we can see exactly where every
+  // keyword came from — your uploaded CSV, the Semrush crawl (topKeywords, only
+  // populated by "Run Analysis"), the deep-journey "missing demand" universe, or a
+  // competitor gap. This reads existing data only; it writes nothing and changes no
+  // count. `rawDbRows` vs `distinctDb` surfaces any duplicate keyword rows.
+  const provenance = useMemo(
+    () => keywordProvenance(scopedSummaryRows as any, dbKeywords as any),
+    [scopedSummaryRows, dbKeywords],
+  );
+
   // ── Client rank distribution from the REAL keyword pool (v7.141) ───────────
   // Reconciles the chart with the cards. The client side is now built from the
   // SAME keyword ROWS the summary cards use (crawl topKeywords + CSV uploads),
@@ -1409,6 +1422,37 @@ export default function KeywordsPanel({
                 </button>
               );
             })}
+          </div>
+        );
+      })()}
+
+      {/* ── v7.252: READ-ONLY provenance strip — where the All Keywords count comes from. */}
+      {/* Reads existing data only; adds nothing. Lets you trace the headline to its real  */}
+      {/* sources (Const I.2) and spot any unexpected source or duplicate rows.            */}
+      {dbLoaded && (() => {
+        const p = provenance;
+        const chips: Array<{ label: string; n: number; color: string }> = [
+          { label: 'your CSV upload', n: p.upload, color: 'var(--c-9b96ff)' },
+          { label: 'Semrush crawl',   n: p.crawl,  color: 'var(--c-38bdf8)' },
+          { label: 'missing demand',  n: p.demand, color: 'var(--c-22d3ee)' },
+          { label: 'competitor gap',  n: p.gap,    color: 'var(--c-f59e0b)' },
+        ].filter(c => c.n > 0);
+        const dupRows = p.rawDbRows - p.distinctDb;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <i className="ti ti-route" /> Source of count
+            </span>
+            {chips.length ? chips.map(c => (
+              <span key={c.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-c8c8e8)' }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: c.color, display: 'inline-block' }} />
+                <b style={{ fontFamily: 'monospace', color: c.color }}>{c.n.toLocaleString()}</b> {c.label}
+              </span>
+            )) : <span style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>No keywords loaded yet.</span>}
+            <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--c-6a6a90)', fontFamily: 'monospace' }}>
+              {p.distinctDb.toLocaleString()} distinct of {p.rawDbRows.toLocaleString()} uploaded rows
+              {dupRows > 0 && <span style={{ color: 'var(--c-f59e0b)', marginLeft: 6 }}>· {dupRows.toLocaleString()} duplicate rows</span>}
+            </span>
           </div>
         );
       })()}

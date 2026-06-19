@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.252 — 2026-06-19 · Read-only provenance strip — trace the "All Keywords" count to its real sources
+
+**The ask (Wayne).** The "All Keywords" count read ~1,346 and is now 5,796 with no upload and nothing run — "where did all the new keywords come from? We cannot be adding data."
+
+**What I verified first (no code shipped for this part).** I diffed every count-relevant function — `buildKwPool` and the KeywordsPanel `summaryRows` / `kwSummary` / `buildRows` — across v7.244 → v7.251. They are **byte-identical except for the v7.251 URL field**. The keyword count math has not changed, there is **no auto-enrichment** (the only keyword-pulling calls, `/analyze` and `/demand-universe`, fire from explicit buttons, never on load/upload), and the pool **dedupes by keyword** (duplicate rows can't inflate the headline). So nothing in recent releases adds keywords; the count reflects the distinct keywords actually stored in the project.
+
+**What this release adds (read-only — adds no data).** A **provenance strip** under the summary cards that partitions the All Keywords count by its REAL source so the number is fully traceable (Const I.2): **your CSV upload · Semrush crawl (topKeywords, only populated by "Run Analysis") · missing demand · competitor gap**, plus **"N distinct of M uploaded rows"** which surfaces any duplicate keyword rows. Each pool row lands in exactly one bucket (no double counting, I.3) and the buckets sum to the headline. The partition is a new pure lib `lib/utils/keywordProvenance.ts` (so it is unit-tested against the real compiled code). It reads existing data only — it writes nothing and changes no count.
+
+**How it resolves your question.** Open the Keyword panel and read the strip: it tells you exactly where the 5,796 come from. If it reads "5,796 your CSV", the footprint table genuinely holds that many distinct keywords (a larger CSV / more than one upload over time) — not data we invented. If "Semrush crawl" or "missing demand" is non-zero, a Run Analysis or a journey build populated them. Either way the source is now visible rather than hidden behind one "client" label.
+
+**Verified.** Isolated `tsc` = **0 errors** (KeywordsPanel, ThemeClustersPanel, ContentPlanSection, contentPlan, graph, kwVolume, keywordProvenance). New retained `provenance:` invariants — correct upload/crawl/demand/gap attribution, buckets sum to total (I.3), duplicate + blocked rows surfaced. **Full retained suite PASS (73 checks, 0 fail).** Strip uses CSS-var tokens only → theme parity (IV.6) holds.
+
+**Action for Wayne:** deploy v7.252 and read the provenance strip on the Keyword panel. Tell me what the split says and I'll resolve it from there (e.g. if "missing demand" is folded in, I'll pull it out of the client headline per Const I.4; if it's all CSV, we confirm the upload history).
+
 ## v7.251 — 2026-06-19 · Persist the uploaded CSV's ranking URL (the real fix behind "no URL in the dataset")
 
 **The ask (Wayne).** A ranked page still showed "no URL in the dataset" even though the uploaded CSV has a keyword **and** a ranking URL for every row — and that CSV is the only data in the project, so a URL should exist.
