@@ -25,6 +25,7 @@ import { db } from '@/db';
 import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { buildDemandUniverse, mergeDemandLanes } from '@/lib/apis/demandExpansion';
+import { assignProductExpansionPaths, isFunnelStageLabel } from '@/lib/category/productExpansion';
 
 export const maxDuration = 300;
 
@@ -219,8 +220,37 @@ export async function POST(
           status: `${mergedTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · last pass: ${mode}`,
         };
 
+        // v7.243: PRODUCT-lane expansion keeps each keyword INSIDE the existing base
+        // category it was seeded from, under a deterministic funnel-stage sub-node
+        // (Wayne's spec: never invent a new category). Persist that as STORED membership
+        // in `_categoryBreakdown.keywordPaths` + `keywordCategories` (Const II.8) so the
+        // Keyword/Cluster panels nest them under the real category instead of "Other".
+        const snap = (analysis.semrushSnapshot as any) ?? {};
+        const cb   = snap._categoryBreakdown ?? {};
+        let nextCb = cb;
+        if (rebuiltLanes.includes('product')) {
+          const catNames: string[] = (cb.categories ?? [])
+            .filter((c: any) => (c?.type ?? 'procedure') === 'procedure')
+            .map((c: any) => String(c?.name ?? '').trim())
+            .filter(Boolean);
+          const parentOf: Record<string, string> = {};
+          for (const c of (cb.categories ?? [])) {
+            const nm = String(c?.name ?? '').trim(); const par = String(c?.parent ?? '').trim();
+            if (nm && par) parentOf[nm.toLowerCase()] = par;
+          }
+          const prevPaths: Record<string, string[]> = { ...(cb.keywordPaths ?? {}) };
+          const prevCats:  Record<string, string>   = { ...(cb.keywordCategories ?? {}) };
+          const { paths, cats, assigned } = assignProductExpansionPaths(
+            mergedTopics as any, catNames, parentOf, prevPaths,
+          );
+          if (assigned > 0) {
+            nextCb = { ...cb, keywordPaths: { ...prevPaths, ...paths }, keywordCategories: { ...prevCats, ...cats } };
+            console.log(`[OrbitIQ] Product expansion: filed ${assigned} keywords under existing categories (no new categories created).`);
+          }
+        }
+
         await db.update(analyses)
-          .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _demandUniverse: demandUniverse } as any })
+          .set({ semrushSnapshot: { ...snap, _demandUniverse: demandUniverse, _categoryBreakdown: nextCb } as any })
           .where(eq(analyses.id, analysis.id));
 
         console.log(`[OrbitIQ] Demand-universe stored (mode=${mode}): ${demandUniverse.topicCount} topics (${demandUniverse.status})`);
@@ -241,4 +271,75 @@ export async function POST(
       'X-Accel-Buffering': 'no',
     },
   });
+}
+
+/**
+ * DELETE /api/projects/[id]/demand-universe — v7.243: per-lane "Clear all" for the
+ * Keyword-panel workflow boxes 3 & 4. GENUINELY deletes that lane's topics (does not
+ * hide them): rewrites `_demandUniverse` with the lane removed, clears its seed list,
+ * and — for the product lane — strips the funnel-stage membership this build authored
+ * from `_categoryBreakdown` (base footprint paths, which never end in a funnel stage,
+ * are left intact). Body: { mode: 'product' | 'pre' }.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } },
+) {
+  const projectId = params.id;
+  setUsageProject(projectId);
+
+  let body: any = {};
+  try { body = await req.json(); } catch { /* empty */ }
+  const mode: 'product' | 'pre' = body?.mode === 'pre' ? 'pre' : 'product';
+  const lane: 'product' | 'problem' = mode === 'pre' ? 'problem' : 'product';
+
+  const recent = await db.query.analyses.findMany({
+    where:   eq(analyses.projectId, projectId),
+    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+    limit:   5,
+  });
+  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  if (!analysis) return NextResponse.json({ error: 'No analysis found.' }, { status: 400 });
+
+  const snap = (analysis.semrushSnapshot as any) ?? {};
+  const du   = snap._demandUniverse ?? null;
+  const laneOf = (t: any): 'product' | 'problem' => (t?.laneHint === 'product' ? 'product' : 'problem');
+
+  const allTopics: any[] = Array.isArray(du?.topics) ? du.topics : [];
+  const keptTopics  = allTopics.filter(t => laneOf(t) !== lane);
+  const clearedKws  = new Set(allTopics.filter(t => laneOf(t) === lane).map(t => String(t.keyword ?? '').toLowerCase().trim()));
+
+  const productTopicCount = keptTopics.filter(t => laneOf(t) === 'product').length;
+  const problemTopicCount = keptTopics.length - productTopicCount;
+  const nextDU = du ? {
+    ...du,
+    topics:       keptTopics,
+    topicCount:   keptTopics.length,
+    productSeeds: lane === 'product' ? [] : (du.productSeeds ?? []),
+    problemSeeds: lane === 'problem' ? [] : (du.problemSeeds ?? []),
+    productTopicCount, problemTopicCount,
+    status: `${keptTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · cleared: ${mode}`,
+  } : null;
+
+  // Strip the funnel-stage membership the product build authored (only entries whose
+  // deepest node is a funnel stage AND whose keyword was in the cleared lane).
+  let nextCb = snap._categoryBreakdown ?? {};
+  if (lane === 'product' && nextCb && nextCb.keywordPaths) {
+    const paths = { ...(nextCb.keywordPaths as Record<string, string[]>) };
+    const cats  = { ...((nextCb.keywordCategories as Record<string, string>) ?? {}) };
+    let removed = 0;
+    for (const kw of Array.from(clearedKws)) {
+      const p = paths[kw];
+      if (Array.isArray(p) && p.length > 0 && isFunnelStageLabel(p[p.length - 1])) {
+        delete paths[kw]; delete cats[kw]; removed++;
+      }
+    }
+    if (removed > 0) nextCb = { ...nextCb, keywordPaths: paths, keywordCategories: cats };
+  }
+
+  await db.update(analyses)
+    .set({ semrushSnapshot: { ...snap, _demandUniverse: nextDU, _categoryBreakdown: nextCb } as any })
+    .where(eq(analyses.id, analysis.id));
+
+  return NextResponse.json({ cleared: mode, remaining: keptTopics.length });
 }

@@ -503,6 +503,10 @@ export default function KeywordsPanel({
   const [buildMode,     setBuildMode]     = useState<null | 'product' | 'pre'>(null);
   const [buildProgress, setBuildProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [buildError,    setBuildError]    = useState<string | null>(null);
+  // v7.243: per-box "Clear all" (genuinely deletes the box's data, never hides).
+  type ClearKind = 'base' | 'competitor' | 'product' | 'pre';
+  const [confirmClear, setConfirmClear] = useState<ClearKind | null>(null);
+  const [clearingBox,  setClearingBox]  = useState<ClearKind | null>(null);
 
   // ── Fetch DB keywords on mount ──
   const fetchDb = useCallback(async () => {
@@ -680,6 +684,45 @@ export default function KeywordsPanel({
     } finally {
       setBuildMode(null);
       setBuildProgress(null);
+    }
+  }
+
+  // ── v7.243: per-box "Clear all" — genuinely DELETES that box's data (Wayne) ──────
+  // base       → delete client base keyword rows (keywords/clear scope:client)
+  // competitor → delete competitor keyword rows + competitor entries
+  // product    → DELETE the product lane of the demand universe (+ its funnel paths)
+  // pre        → DELETE the pre-product lane of the demand universe
+  // After any clear we trigger a FULL refresh so every panel reflects the deletion.
+  async function clearBox(kind: ClearKind) {
+    if (clearingBox) return;
+    setClearingBox(kind);
+    setBuildError(null);
+    try {
+      if (kind === 'base') {
+        await fetch(`/api/projects/${projectId}/keywords/clear`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'client' }),
+        });
+      } else if (kind === 'competitor') {
+        await fetch(`/api/projects/${projectId}/keywords/clear`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'competitor' }),
+        });
+        await fetch(`/api/projects/${projectId}/competitors`, { method: 'DELETE' });
+      } else {
+        await fetch(`/api/projects/${projectId}/demand-universe`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: kind }),
+        });
+      }
+      await fetchDb();
+      onKeywordsChanged?.();      // refetch keywords across panels
+      onDeepJourneyBuilt?.();     // refetch project + analysis (competitors / demand)
+    } catch (e) {
+      setBuildError(`Clear failed: ${String((e as any)?.message ?? e)}`);
+    } finally {
+      setClearingBox(null);
+      setConfirmClear(null);
     }
   }
   // Segment rows: summary-card filter only (no rank filter) — the category
@@ -1392,12 +1435,14 @@ export default function KeywordsPanel({
           doneLabel: string; cta: string;
           body: React.ReactNode;
           onClick?: () => void; disabled?: boolean;
+          clearKind: ClearKind; canClear: boolean;
         };
         const stages: Stage[] = [
           {
             n: 1, title: 'Client base keywords', accent: 'var(--c-34d399)', bgAct: 'var(--ca-52-211-153-0_1)', glow: 'var(--ca-52-211-153-0_2)', icon: 'ti-file-upload',
             status: baseDone ? 'done' : 'action', doneLabel: 'Completed', cta: 'Upload CSV',
             onClick: baseDone ? undefined : () => csvRef.current?.click(),
+            clearKind: 'base', canClear: baseDone,
             body: baseDone
               ? `${(kwSummary.clientCount ?? 0).toLocaleString()} base keywords on file (CSV)`
               : 'Upload your base keyword CSV to begin',
@@ -1406,6 +1451,7 @@ export default function KeywordsPanel({
             n: 2, title: 'Competitor data', accent: 'var(--c-f59e0b)', bgAct: 'var(--ca-245-158-11-0_10)', glow: 'var(--ca-245-158-11-0_2)', icon: 'ti-users',
             status: compDone ? 'done' : 'action', doneLabel: 'Completed', cta: compHasDomains ? 'Upload data' : 'Add competitors',
             onClick: () => onOpenCompetitors?.(),
+            clearKind: 'competitor', canClear: compHasDomains || compDone,
             body: compDone
               ? `Competitor keyword data loaded — click to manage`
               : compHasDomains
@@ -1416,6 +1462,7 @@ export default function KeywordsPanel({
             n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', bgAct: 'var(--ca-155-150-255-0_10)', glow: 'var(--ca-155-150-255-0_20)', icon: 'ti-sparkles',
             status: buildMode === 'product' ? 'building' : productDone ? 'done' : 'action', doneLabel: 'Built', cta: productDone ? 'Re-run' : 'Run expansion',
             onClick: () => runDeepBuild('product'), disabled: !!buildMode,
+            clearKind: 'product', canClear: productDone,
             body: productDone
               ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
               : 'Expand each product category into full-funnel demand',
@@ -1424,6 +1471,7 @@ export default function KeywordsPanel({
             n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', bgAct: 'var(--ca-34-211-238-0_1)', glow: 'var(--ca-34-211-238-0_2)', icon: 'ti-route',
             status: buildMode === 'pre' ? 'building' : preDone ? 'done' : 'action', doneLabel: 'Built', cta: preDone ? 'Re-run' : 'Run build',
             onClick: () => runDeepBuild('pre'), disabled: !!buildMode,
+            clearKind: 'pre', canClear: preDone,
             body: preDone
               ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
               : 'Surface problem-aware demand before the product is known',
@@ -1446,7 +1494,9 @@ export default function KeywordsPanel({
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
               {stages.map(s => {
-                const clickable = !!s.onClick && !s.disabled;
+                const confirming = confirmClear === s.clearKind;
+                const isClearing = clearingBox === s.clearKind;
+                const clickable = !!s.onClick && !s.disabled && !confirming && !clearingBox;
                 const emphasize = s.status === 'action' || s.status === 'building';
                 const chip = s.status === 'done'
                   ? { fg: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_12)', bd: 'var(--c-34d39955)', ic: 'ti-circle-check', label: s.doneLabel }
@@ -1454,10 +1504,12 @@ export default function KeywordsPanel({
                   ? { fg: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_12)', bd: 'var(--c-22d3ee55)', ic: 'ti-loader-2', label: 'Building…' }
                   : { fg: s.accent, bg: 'transparent', bd: s.accent, ic: 'ti-alert-circle', label: 'Action needed' };
                 return (
-                  <button
+                  <div
                     key={s.n}
+                    role="button"
+                    tabIndex={clickable ? 0 : -1}
                     onClick={clickable ? s.onClick : undefined}
-                    disabled={s.disabled}
+                    onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.onClick?.(); } }) : undefined}
                     style={{
                       position: 'relative', display: 'flex', flexDirection: 'column', gap: 9, alignItems: 'stretch',
                       padding: '13px 14px 14px', borderRadius: 11, textAlign: 'left', width: '100%',
@@ -1465,10 +1517,10 @@ export default function KeywordsPanel({
                       border: `1px solid ${emphasize ? s.accent : 'var(--c-1e1e34)'}`,
                       boxShadow: s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none',
                       cursor: clickable ? 'pointer' : 'default', outline: 'none', transition: 'all 0.15s',
-                      opacity: s.disabled ? 0.5 : 1,
+                      opacity: (s.disabled || (!!clearingBox && !isClearing)) ? 0.5 : 1,
                     }}
-                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.boxShadow = `0 0 0 1px ${s.glow}, 0 12px 26px -8px ${s.glow}`; }}
-                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.boxShadow = s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none'; }}
+                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLDivElement).style.boxShadow = `0 0 0 1px ${s.glow}, 0 12px 26px -8px ${s.glow}`; }}
+                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLDivElement).style.boxShadow = s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none'; }}
                   >
                     {/* accent stripe on action cards */}
                     {s.status === 'action' && <span style={{ position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 3, background: s.accent }} aria-hidden="true" />}
@@ -1479,36 +1531,68 @@ export default function KeywordsPanel({
                       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: chip.fg, background: chip.bg, border: `1px solid ${chip.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                         <i className={`ti ${chip.ic}`} style={{ fontSize: 10 }} aria-hidden="true" />{chip.label}
                       </span>
+                      {/* Clear-all (deletes) — only when there's data to clear */}
+                      {s.canClear && s.status !== 'building' && (
+                        <button
+                          type="button"
+                          title="Clear all — permanently deletes this box's data"
+                          aria-label={`Clear ${s.title}`}
+                          onClick={e => { e.stopPropagation(); setConfirmClear(confirming ? null : s.clearKind); }}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, border: '1px solid var(--c-2a2a40)', background: 'transparent', color: 'var(--c-8a8aa8)', cursor: 'pointer', flexShrink: 0 }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-f87171)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-f87171)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-8a8aa8)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-2a2a40)'; }}
+                        >
+                          <i className="ti ti-trash" style={{ fontSize: 11 }} aria-hidden="true" />
+                        </button>
+                      )}
                     </div>
                     <span style={{ fontSize: 11, color: emphasize ? 'var(--c-a8a8cc)' : 'var(--c-7a7aa0)', lineHeight: 1.45 }}>{s.body}</span>
 
-                    {/* in-progress bar */}
-                    {s.status === 'building' && buildProgress && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <div style={{ height: 5, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
-                          <div style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}%`, height: '100%', background: s.accent, transition: 'width 0.3s' }} />
-                        </div>
-                        <span style={{ fontSize: 10, color: 'var(--c-8080a8)', fontVariantNumeric: 'tabular-nums' }}>
-                          {buildProgress.total > 0 ? `seed ${buildProgress.done}/${buildProgress.total}` : 'starting…'}
-                          {eta !== null ? ` · ~${eta}s left` : ''}
-                          {buildProgress.seed ? ` · ${buildProgress.seed}` : ''}
-                        </span>
+                    {/* confirm "clear all" — genuinely deletes */}
+                    {confirming ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}
+                           onClick={e => e.stopPropagation()}>
+                        <span style={{ fontSize: 10.5, color: 'var(--c-f87171)', fontWeight: 600 }}>Delete this data permanently?</span>
+                        <button type="button" disabled={isClearing}
+                          onClick={e => { e.stopPropagation(); clearBox(s.clearKind); }}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--c-f87171)', background: 'var(--ca-248-113-113-0_2)', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 9px', cursor: isClearing ? 'default' : 'pointer' }}>
+                          <i className={`ti ${isClearing ? 'ti-loader-2' : 'ti-trash'}`} style={{ fontSize: 11 }} aria-hidden="true" />{isClearing ? 'Clearing…' : 'Clear all'}
+                        </button>
+                        <button type="button" disabled={isClearing}
+                          onClick={e => { e.stopPropagation(); setConfirmClear(null); }}
+                          style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 9px', cursor: 'pointer' }}>
+                          Cancel
+                        </button>
                       </div>
-                    )}
+                    ) : (<>
+                      {/* in-progress bar */}
+                      {s.status === 'building' && buildProgress && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ height: 5, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
+                            <div style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}%`, height: '100%', background: s.accent, transition: 'width 0.3s' }} />
+                          </div>
+                          <span style={{ fontSize: 10, color: 'var(--c-8080a8)', fontVariantNumeric: 'tabular-nums' }}>
+                            {buildProgress.total > 0 ? `seed ${buildProgress.done}/${buildProgress.total}` : 'starting…'}
+                            {eta !== null ? ` · ~${eta}s left` : ''}
+                            {buildProgress.seed ? ` · ${buildProgress.seed}` : ''}
+                          </span>
+                        </div>
+                      )}
 
-                    {/* prominent CTA pill on action cards */}
-                    {s.status === 'action' && (
-                      <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-08080f)', background: s.accent, borderRadius: 7, padding: '6px 11px' }}>
-                        {s.cta} <i className="ti ti-arrow-right" style={{ fontSize: 12 }} aria-hidden="true" />
-                      </span>
-                    )}
-                    {/* re-run affordance on completed builds (3 & 4) */}
-                    {s.status === 'done' && clickable && (s.n === 3 || s.n === 4) && (
-                      <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 600, color: s.accent, border: `1px solid ${s.accent}`, borderRadius: 7, padding: '4px 9px' }}>
-                        <i className="ti ti-refresh" style={{ fontSize: 11 }} aria-hidden="true" />{s.cta}
-                      </span>
-                    )}
-                  </button>
+                      {/* prominent CTA pill on action cards */}
+                      {s.status === 'action' && (
+                        <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-08080f)', background: s.accent, borderRadius: 7, padding: '6px 11px' }}>
+                          {s.cta} <i className="ti ti-arrow-right" style={{ fontSize: 12 }} aria-hidden="true" />
+                        </span>
+                      )}
+                      {/* re-run affordance on completed builds (3 & 4) */}
+                      {s.status === 'done' && (s.n === 3 || s.n === 4) && (
+                        <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 600, color: s.accent, border: `1px solid ${s.accent}`, borderRadius: 7, padding: '4px 9px' }}>
+                          <i className="ti ti-refresh" style={{ fontSize: 11 }} aria-hidden="true" />{s.cta}
+                        </span>
+                      )}
+                    </>)}
+                  </div>
                 );
               })}
             </div>

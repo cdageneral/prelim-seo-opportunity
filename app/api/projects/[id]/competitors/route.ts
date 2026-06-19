@@ -60,3 +60,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   return NextResponse.json({ competitor }, { status: 201 });
 }
+
+// v7.243: bulk DELETE — removes ALL competitor entries for the project. Used by the
+// Keyword-panel "Competitor data" box "Clear all" (alongside a competitor-scope
+// keywords/clear), so the box fully resets. Genuinely deletes (no hiding).
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const deleted = await db.delete(competitors)
+    .where(eq(competitors.projectId, params.id))
+    .returning({ id: competitors.id });
+  return NextResponse.json({ deleted: deleted.length });
+}

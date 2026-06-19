@@ -17,7 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db }              from '@/db';
 import { projectKeywords } from '@/db/schema';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, isNotNull, sql } from 'drizzle-orm';
 
 async function ensureTable() {
   try {
@@ -58,12 +58,28 @@ export async function POST(
       ? body.domain.trim().toLowerCase()
       : null;
 
+  // v7.243: per-box "Clear all" scope for the Keyword-panel workflow bar.
+  //   scope:'client'     → only the CLIENT base rows (no competitor domain attached)
+  //   scope:'competitor' → only COMPETITOR rows (any source, a domain attached)
+  // Both genuinely DELETE the rows (no hiding). When scope is absent the legacy
+  // source/domain behaviour is unchanged.
+  const scope: 'client' | 'competitor' | null =
+    body.scope === 'client' || body.scope === 'competitor' ? body.scope : null;
+  const scopeCond =
+    scope === 'client'     ? [isNull(projectKeywords.domain)]
+    : scope === 'competitor' ? [isNotNull(projectKeywords.domain)]
+    : [];
+  // For a competitor-scope clear we delete across ALL sources (csv uploads come in as
+  // 'csv' WITH a domain); the domain filter is what isolates competitor rows.
+  const sourceCond = scope === 'competitor' ? [] : [inArray(projectKeywords.source, sources)];
+
   const deleted = await db
     .delete(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, params.id),
-      inArray(projectKeywords.source, sources),
+      ...sourceCond,
       ...(domain ? [eq(projectKeywords.domain, domain)] : []),
+      ...scopeCond,
     ))
     .returning({ id: projectKeywords.id });
 
