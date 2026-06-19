@@ -90,6 +90,13 @@ interface Props {
   serpScanRunning?:  boolean;
   serpScanProgress?: { done: number; total: number } | null;
   onStartSerpScan?:  () => void;
+  // v7.241: the 4-button workflow bar between the summary cards and the journey
+  // toggle. Buttons 3 & 4 build the deep journey from HERE (the Journey panel's own
+  // build button is removed). onOpenCompetitors opens the global Competitors modal
+  // (button 2); onDeepJourneyBuilt tells the page to refetch the analysis so the new
+  // demand topics backfill into every panel (Const II.3).
+  onOpenCompetitors?:  () => void;
+  onDeepJourneyBuilt?: () => void;
 }
 
 // ─── Category breakdown types ─────────────────────────────────────────────────
@@ -450,6 +457,7 @@ export default function KeywordsPanel({
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
+  onOpenCompetitors, onDeepJourneyBuilt,
 }: Props) {
   const clientDomain      = (analysis?.semrushSnapshot?.domain as string) || domain || '';
   const competitorDomains = competitors;
@@ -487,6 +495,14 @@ export default function KeywordsPanel({
   const [clearStep,            setClearStep]            = useState('');
   // v7.101: competitor CSV upload moved to CompetitorsModal (top global nav)
   const csvRef = useRef<HTMLInputElement>(null);
+
+  // ── v7.241: deep-journey build state for the workflow bar (buttons 3 & 4) ──────
+  // Two independent passes. Each streams determinate progress (Const IV.2) from the
+  // demand-universe endpoint with mode:'product' | 'pre'. No invented data — Semrush
+  // fills every volume (Const I.1).
+  const [buildMode,     setBuildMode]     = useState<null | 'product' | 'pre'>(null);
+  const [buildProgress, setBuildProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
+  const [buildError,    setBuildError]    = useState<string | null>(null);
 
   // ── Fetch DB keywords on mount ──
   const fetchDb = useCallback(async () => {
@@ -610,6 +626,60 @@ export default function KeywordsPanel({
       setScanError('Scan failed — network error.');
     } finally {
       setScanLoading(false);
+    }
+  }
+
+  // ── v7.241: run a single-lane deep-journey build (button 3 product / button 4 pre) ──
+  // Streams NDJSON progress from /demand-universe so the bar shows "seed X of N" + ETA
+  // (Const IV.2), never a bare spinner. On done it tells the page to refetch the
+  // analysis (onDeepJourneyBuilt) so the new Semrush-backed topics backfill into this
+  // panel and the Cluster/Journey/Content panels (Const II.3). No invented data.
+  async function runDeepBuild(mode: 'product' | 'pre') {
+    if (buildMode) return;   // one pass at a time
+    setBuildMode(mode);
+    setBuildError(null);
+    setBuildProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    try {
+      const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, linesPerSeed: 50 }),
+      });
+      if (!r.ok || !r.body) {
+        let msg = `Build failed (${r.status})`;
+        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+        setBuildError(msg);
+        return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: any;
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'start') {
+            setBuildProgress(p => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'progress') {
+            setBuildProgress(p => ({ done: ev.done, total: ev.total, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'error') {
+            setBuildError(ev.error ?? 'Build failed');
+          } else if (ev.type === 'done') {
+            onDeepJourneyBuilt?.();   // page refetches analysis → backfill everywhere
+          }
+        }
+      }
+    } catch (e) {
+      setBuildError(String((e as any)?.message ?? e));
+    } finally {
+      setBuildMode(null);
+      setBuildProgress(null);
     }
   }
   // Segment rows: summary-card filter only (no rank filter) — the category
@@ -1285,6 +1355,165 @@ export default function KeywordsPanel({
                 </button>
               );
             })}
+          </div>
+        );
+      })()}
+
+      {/* ── v7.241: Workflow bar — 4 build stages (Wayne). Sits between the summary */}
+      {/* cards and the journey toggle. (1) client base keywords — status only,     */}
+      {/* completed once base rows exist; (2) competitor data — opens the Competitors */}
+      {/* modal, active until competitor data exists; (3) Expand product data —      */}
+      {/* product-lane deep build; (4) Build pre-product journey — pre-product deep   */}
+      {/* build. Buttons 3 & 4 replace the Journey panel's old build button. Every    */}
+      {/* status is derived from REAL data; volumes come from Semrush (Const I.1).    */}
+      {(() => {
+        const baseDone = (kwSummary.clientCount ?? 0) > 0;
+        const compDone = (competitorDomains?.length ?? 0) > 0;
+        const du       = analysis?.semrushSnapshot?._demandUniverse;
+        const duTopics: any[] = Array.isArray(du?.topics) ? du.topics : [];
+        const productTopics = duTopics.filter(t => t?.laneHint === 'product').length;
+        const preTopics     = duTopics.filter(t => t?.laneHint && t.laneHint !== 'product').length;
+        const productDone   = productTopics > 0;
+        const preDone       = preTopics > 0;
+
+        const elapsed = buildProgress ? (Date.now() - buildProgress.startedAt) / 1000 : 0;
+        const eta = buildProgress && buildProgress.done > 0 && buildProgress.total > buildProgress.done
+          ? Math.round((elapsed / buildProgress.done) * (buildProgress.total - buildProgress.done))
+          : null;
+
+        // Chip shown top-right of each card.
+        const Chip = ({ kind, label }: { kind: 'done' | 'active' | 'idle' | 'run'; label: string }) => {
+          const c = kind === 'done'
+            ? { fg: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_12)', bd: 'var(--c-34d39955)', ic: 'ti-circle-check' }
+            : kind === 'run'
+            ? { fg: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_12)', bd: 'var(--c-22d3ee55)', ic: 'ti-loader-2' }
+            : kind === 'active'
+            ? { fg: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_12)', bd: 'var(--c-f59e0b55)', ic: 'ti-arrow-right' }
+            : { fg: 'var(--c-8a8aa8)', bg: 'var(--ca-120-120-150-0_12)', bd: 'var(--c-2a2a40)', ic: 'ti-circle-dashed' };
+          return (
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: c.fg, background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+              <i className={`ti ${c.ic}`} style={{ fontSize: 10 }} aria-hidden="true" />{label}
+            </span>
+          );
+        };
+
+        type Stage = {
+          n: number; title: string; accent: string; icon: string;
+          chip: { kind: 'done' | 'active' | 'idle' | 'run'; label: string };
+          body: React.ReactNode;
+          onClick?: () => void;
+          disabled?: boolean;
+          progress?: boolean;
+        };
+        const stages: Stage[] = [
+          {
+            n: 1, title: 'Client base keywords', accent: 'var(--c-34d399)', icon: 'ti-file-upload',
+            chip: baseDone ? { kind: 'done', label: 'Completed' } : { kind: 'active', label: 'Upload' },
+            onClick: baseDone ? undefined : () => csvRef.current?.click(),
+            body: (
+              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
+                {baseDone
+                  ? `${(kwSummary.clientCount ?? 0).toLocaleString()} base keywords on file (CSV)`
+                  : 'Upload your base keyword CSV to begin'}
+              </span>
+            ),
+          },
+          {
+            n: 2, title: 'Competitor data', accent: 'var(--c-f59e0b)', icon: 'ti-users',
+            chip: compDone ? { kind: 'done', label: 'Completed' } : { kind: 'active', label: 'Add' },
+            onClick: () => onOpenCompetitors?.(),
+            body: (
+              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
+                {compDone
+                  ? `${competitorDomains.length} competitor${competitorDomains.length === 1 ? '' : 's'} added — click to manage`
+                  : 'Add competitor domains & upload their keyword CSVs'}
+              </span>
+            ),
+          },
+          {
+            n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', icon: 'ti-sparkles',
+            chip: buildMode === 'product' ? { kind: 'run', label: 'Building' } : productDone ? { kind: 'done', label: 'Built' } : { kind: 'idle', label: 'Not run' },
+            onClick: () => runDeepBuild('product'),
+            disabled: !!buildMode,
+            progress: buildMode === 'product',
+            body: (
+              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
+                {productDone
+                  ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
+                  : 'Expand each product category into full-funnel demand'}
+              </span>
+            ),
+          },
+          {
+            n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', icon: 'ti-route',
+            chip: buildMode === 'pre' ? { kind: 'run', label: 'Building' } : preDone ? { kind: 'done', label: 'Built' } : { kind: 'idle', label: 'Not run' },
+            onClick: () => runDeepBuild('pre'),
+            disabled: !!buildMode,
+            progress: buildMode === 'pre',
+            body: (
+              <span style={{ fontSize: 11, color: 'var(--c-7a7aa0)' }}>
+                {preDone
+                  ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
+                  : 'Surface problem-aware demand before the product is known'}
+              </span>
+            ),
+          },
+        ];
+
+        return (
+          <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
+                Build workflow
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>base → competitors → product demand → pre-product demand</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+              {stages.map(s => {
+                const clickable = !!s.onClick && !s.disabled;
+                return (
+                  <button
+                    key={s.n}
+                    onClick={clickable ? s.onClick : undefined}
+                    disabled={s.disabled}
+                    style={{
+                      display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'stretch',
+                      padding: '12px 13px', borderRadius: 10, textAlign: 'left', width: '100%',
+                      background: 'var(--c-0c0c16)',
+                      border: `1px solid ${s.chip.kind === 'active' ? 'var(--c-f59e0b55)' : s.chip.kind === 'run' ? 'var(--c-22d3ee55)' : 'var(--c-1e1e34)'}`,
+                      cursor: clickable ? 'pointer' : 'default', outline: 'none', transition: 'all 0.15s', opacity: s.disabled && !s.progress ? 0.55 : 1,
+                    }}
+                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.borderColor = s.accent; }}
+                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLButtonElement).style.borderColor = s.chip.kind === 'active' ? 'var(--c-f59e0b55)' : s.chip.kind === 'run' ? 'var(--c-22d3ee55)' : 'var(--c-1e1e34)'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 5, background: 'var(--c-14142a)', color: s.accent, fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</span>
+                      <i className={`ti ${s.icon}`} style={{ fontSize: 13, color: s.accent }} aria-hidden="true" />
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-c8c8e8)' }}>{s.title}</span>
+                      <Chip kind={s.chip.kind} label={s.chip.label} />
+                    </div>
+                    {s.body}
+                    {s.progress && buildProgress && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <div style={{ height: 5, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
+                          <div style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}%`, height: '100%', background: s.accent, transition: 'width 0.3s' }} />
+                        </div>
+                        <span style={{ fontSize: 10, color: 'var(--c-8080a8)', fontVariantNumeric: 'tabular-nums' }}>
+                          {buildProgress.total > 0 ? `seed ${buildProgress.done}/${buildProgress.total}` : 'starting…'}
+                          {eta !== null ? ` · ~${eta}s left` : ''}
+                          {buildProgress.seed ? ` · ${buildProgress.seed}` : ''}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {buildError && (
+              <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: '8px 0 0' }}>
+                <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} aria-hidden="true" />{buildError}
+              </p>
+            )}
           </div>
         );
       })()}

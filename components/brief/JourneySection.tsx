@@ -1633,7 +1633,7 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
   const H = HEAD_H + PAD * 2 + rows.length * (NODE_H + ROW_GAP);
 
   if (!graph.nodes.length) {
-    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
+    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey from the Keyword panel to populate it.</p>;
   }
 
   const byId = new Map(graph.nodes.map((n: JGNode) => [n.id, n] as [string, JGNode]));
@@ -1824,7 +1824,7 @@ function ConnectedMap({ graph, onSelect, onClear, selectedId }: {
   };
 
   if (!graph.nodes.length) {
-    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey to populate it.</p>;
+    return <p style={{ fontSize: 12, color: 'var(--c-3a3a5a)', fontStyle: 'italic', padding: '24px 4px' }}>No topics mapped to this journey yet — build the deep journey from the Keyword panel to populate it.</p>;
   }
 
   const validEdges = graph.edges.filter((e) => pos[e.from] && pos[e.to]);
@@ -2683,17 +2683,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           )}
         </div>
 
-        {/* Right — build control + status badge + provenance + progress + error */}
+        {/* Right — status badge + provenance + note (v7.241: the build now lives on the */}
+        {/* Keyword panel's workflow bar — "Expand product data" + "Build pre-product    */}
+        {/* journey" — so this panel is display-only for the build).                     */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, minWidth: 220, flex: '0 0 auto', maxWidth: 280 }}>
-          <button onClick={buildDeepJourney} disabled={building}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 13px', fontSize: 12, fontWeight: 600,
-              color: building ? 'var(--c-6a6a90)' : 'var(--c-0d0d22)', background: building ? 'transparent' : 'var(--c-22d3ee)',
-              border: `1px solid ${building ? 'var(--c-1a1a30)' : 'var(--c-22d3ee)'}`, borderRadius: 8, cursor: building ? 'default' : 'pointer',
-            }}>
-            <i className={`ti ${building ? 'ti-loader-2' : (demandMode ? 'ti-refresh' : 'ti-sparkles')}`} />
-            {building ? 'Building deep journey…' : (demandMode ? 'Rebuild deep journey' : 'Build deep journey')}
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-7a7aa0)', textAlign: 'right', justifyContent: 'flex-end' }}>
+            <i className="ti ti-info-circle" aria-hidden="true" />
+            Build the deep journey from the <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>Keyword&nbsp;panel</span> &mdash; “Expand product data” &amp; “Build pre-product journey”.
+          </span>
 
           {/* run-status badge: never run · building · last run [date] */}
           {building ? (
@@ -2718,7 +2715,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
             </span>
           ) : (
             <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', textAlign: 'right' }}>
-              Showing your <span style={{ color: 'var(--c-a78bfa)' }}>ranking footprint</span> only &mdash; build the deep journey to map the full search-volume-backed demand.
+              Showing your <span style={{ color: 'var(--c-a78bfa)' }}>ranking footprint</span> only &mdash; build the deep journey from the Keyword panel to map the full search-volume-backed demand.
             </span>
           ))}
           {building && <DemandProgress progress={progress} />}

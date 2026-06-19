@@ -336,7 +336,7 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
         <div style={{ padding: '48px 24px', textAlign: 'center', maxWidth: 520, margin: '0 auto' }}>
           <div style={{ fontSize: 34, marginBottom: 12 }}>🗺️</div>
           <p style={{ color: COL.mut, fontSize: 13, lineHeight: 1.6 }}>
-            The Content Plan is built from the deep journey. Open <b style={{ color: COL.cyan }}>Journeys</b> and click <b style={{ color: COL.cyan }}>Build deep journey</b> to populate it &mdash; then every topic shows here as a prioritised, writer-ready brief.
+            The Content Plan is built from the deep journey. Open the <b style={{ color: COL.cyan }}>Keyword</b> panel and run <b style={{ color: COL.cyan }}>Expand product data</b> &amp; <b style={{ color: COL.cyan }}>Build pre-product journey</b> to populate it &mdash; then every topic shows here as a prioritised, writer-ready brief.
           </p>
         </div>
       ) : (

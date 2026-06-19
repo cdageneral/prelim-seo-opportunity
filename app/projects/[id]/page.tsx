@@ -1341,6 +1341,8 @@ export default function ProjectBriefPage() {
               serpScanRunning={serpScan.running || serpScan.checking}
               serpScanProgress={serpScan.running ? { done: serpScan.done, total: serpScan.total } : null}
               onStartSerpScan={requestSerpScan}                  // v7.132: button delegates to the page-level auto-batch loop
+              onOpenCompetitors={() => setShowCompetitors(true)}                 // v7.241: workflow button 2 → Competitors modal
+              onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}  // v7.241: workflow buttons 3 & 4 → refetch analysis so new demand backfills everywhere
             />
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (

@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.241 — 2026-06-18 · Build workflow moves to the Keyword panel: 4-stage bar; Journey/Cluster build buttons removed
+
+**The ask (Wayne).** On the Keyword panel, between the summary cards and the journey toggle, add **4 buttons**: (1) **client base keywords** — usually already complete (the project starts from a base-keyword CSV upload); (2) **competitor data** — active until competitor data exists, opens the Competitors panel on click; (3) **Expand product data** — expand each existing product category into full-funnel demand (awareness → education → comparisons → … → FAQs) within the same hierarchy; (4) **Build pre-product journey** — surface problem-/trigger-aware demand *before* the product is known (life events, need states, frustrations, goals), never naming the product/category/brand. Then **remove** the Journey panel's "Build deep journey" button and the Cluster pane's "Refine clusters with AI" button.
+
+**Data-integrity gate (Const Art. X + Art. I).** Buttons 3 & 4 are written as "generate keywords" prompts, which would violate I.1/I.2 if the model's text were shown as keyword data with invented volumes. Confirmed with Wayne: the chosen path is **LLM seeds → Semrush fills volume** — each pass produces seed/structure terms (product categories, problem head-terms) and Semrush's `phrase_questions`/`phrase_related` return the real, volume-backed keywords. **No modeled or simulated numbers are ever shown** (I.1); every topic traces to a real Semrush row (I.2).
+
+**What changed.**
+- **`app/api/projects/[id]/demand-universe/route.ts`** — now accepts `mode: 'product' | 'pre' | 'all'` (default `all` = legacy combined build). A single-lane pass expands only that lane's seeds and **merges into the existing `_demandUniverse`**, so running one lane never wipes the other (Const II.3 backfill). Each keyword is kept once and the higher **real** volume wins on a collision (I.3 / I.1).
+- **New `lib/apis/demandLaneMerge.ts`** — the pure, dependency-free `mergeDemandLanes` helper (so it's unit-checkable in the regression suite); re-exported from `demandExpansion.ts`.
+- **`components/brief/KeywordsPanel.tsx`** — the 4-stage **Build workflow** bar. Statuses are derived from **real data**, never a hardcoded "completed": base = client footprint rows present; competitor = competitor domains present; product/pre = `_demandUniverse` topics in that lane. Buttons 3 & 4 stream determinate progress ("seed X of N" + ETA, Const IV.2). On completion the page refetches so new demand backfills every panel.
+- **`app/projects/[id]/page.tsx`** — wires `onOpenCompetitors` (opens the Competitors modal) and `onDeepJourneyBuilt` (refetch analysis).
+- **`components/brief/JourneySection.tsx`** — "Build / Rebuild deep journey" button removed; the panel is now display-only with a note pointing to the Keyword panel.
+- **`components/brief/ThemeClustersPanel.tsx`** — "Refine clusters with AI" button + block removed; the cluster pane is display-only.
+- **`components/brief/ContentPlanSection.tsx`** — empty-state copy now points to the Keyword panel's two build buttons.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over every edited file (with React/Node types fully resolved) = **0 errors**. SSR render of the real `KeywordsPanel` mounts cleanly and shows all four buttons, a single scroll container, and the correct status chips in both empty ("Upload"/"Add"/"Not run") and built ("Built"/"Completed"/volume-backed topics) states. The **full retained regression suite** — every prior check (v7.235–240) **plus** new lane-merge invariants (rebuilds only its lane, preserves the other lane, no double-count, max-real-volume on collision) — **PASS** on real compiled code. No raw colors introduced (only existing CSS-var tokens) → dual-theme parity holds (IV.6 / V.5).
+
+**Action for Wayne:** deploy v7.241. On the Keyword panel, the new Build workflow bar drives the deep journey; "Expand product data" pulls the product-funnel demand and "Build pre-product journey" pulls the problem/trigger demand — each volume-backed by Semrush. The old Journey and Cluster build buttons are gone.
+
 ## v7.240 — 2026-06-18 · Journey + Content panels now use the same base taxonomy as Keyword + Cluster
 
 **The ask (Wayne).** "Now let's bring this base categorization into the journey panel." Phase 2 of the unification.

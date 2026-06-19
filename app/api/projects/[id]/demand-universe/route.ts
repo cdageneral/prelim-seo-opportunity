@@ -24,7 +24,7 @@ import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
 import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { buildDemandUniverse } from '@/lib/apis/demandExpansion';
+import { buildDemandUniverse, mergeDemandLanes } from '@/lib/apis/demandExpansion';
 
 export const maxDuration = 300;
 
@@ -145,52 +145,85 @@ export async function POST(
 
   const database = String((project as any).semrushDatabase ?? 'us');
   const { product, problem } = deriveSeeds(analysis);
-  const seeds = [...product, ...problem];
+
+  // v7.241: two independent passes (Wayne). The Keyword panel's "Expand product
+  // data" button posts mode:'product' (product/procedure seeds only) and "Build
+  // pre-product journey" posts mode:'pre' (problem/life-trigger seeds only). The
+  // legacy combined build is mode:'all' (default) — unchanged. Each pass rebuilds
+  // ONLY its lane and MERGES into the existing _demandUniverse, so running one
+  // never wipes the other (Const II.3 backfill); volumes still come straight from
+  // Semrush (Const I.1) and each keyword is kept once (Const I.3, no double count).
+  const mode: 'product' | 'pre' | 'all' =
+    body?.mode === 'product' ? 'product' : body?.mode === 'pre' ? 'pre' : 'all';
+  const seeds = mode === 'product' ? product : mode === 'pre' ? problem : [...product, ...problem];
+  const rebuiltLanes: Array<'product' | 'problem'> =
+    mode === 'product' ? ['product'] : mode === 'pre' ? ['problem'] : ['product', 'problem'];
 
   if (seeds.length === 0) {
-    return NextResponse.json({ error: 'No procedure or problem seeds found on this analysis to expand.' }, { status: 400 });
+    const what = mode === 'pre'
+      ? 'No problem / life-trigger seeds found on this analysis. Pre-product expansion needs audience segment language — run an analysis that builds audience segments first.'
+      : mode === 'product'
+        ? 'No procedure seeds (product categories) found on this analysis to expand.'
+        : 'No procedure or problem seeds found on this analysis to expand.';
+    return NextResponse.json({ error: what }, { status: 400 });
   }
 
-  console.log(`[OrbitIQ] Demand-universe build: ${seeds.length} seeds (${product.length} product + ${problem.length} problem), ${linesPerSeed} lines/seed, db=${database}`);
+  console.log(`[OrbitIQ] Demand-universe build (mode=${mode}): ${seeds.length} seeds (${product.length} product + ${problem.length} problem), ${linesPerSeed} lines/seed, db=${database}`);
 
   // v7.156: stream progress as NDJSON so the panel shows a determinate bar + ETA
   // ("seed X of N") instead of an indefinite spinner. One event per finished seed;
   // a final {type:'done', demandUniverse} carries the result (also persisted).
   const productSet = new Set(product.map(s => s.toLowerCase()));
+  // v7.241: the lane this run does NOT rebuild is preserved verbatim from the
+  // existing universe so a single-lane pass never destroys the other lane's topics.
+  const existingUniverse = (analysis.semrushSnapshot as any)?._demandUniverse ?? null;
+  const existingTopics: any[] = Array.isArray(existingUniverse?.topics) ? existingUniverse.topics : [];
+  const laneOf = (t: any): 'product' | 'problem' => (t?.laneHint === 'product' ? 'product' : 'problem');
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        send({ type: 'start', total: seeds.length, productCount: product.length, problemCount: problem.length });
+        send({ type: 'start', total: seeds.length, mode, productCount: product.length, problemCount: problem.length });
 
         const universe = await buildDemandUniverse(seeds, linesPerSeed, database, (done, total, seed) => {
           send({ type: 'progress', done, total, seed });
         });
 
         if (universe.topicCount === 0) {
-          send({ type: 'error', error: `Semrush returned no topics — likely out of API units or an invalid database. (${universe.status})` });
+          // Honest gap (Const I.5): this lane returned nothing — do NOT persist, so the
+          // existing (other-lane) universe is left untouched rather than overwritten.
+          send({ type: 'error', error: `Semrush returned no topics for the ${mode === 'pre' ? 'pre-product' : mode} pass — likely out of API units or an invalid database. (${universe.status})` });
           controller.close();
           return;
         }
 
+        // Merge: keep existing topics from lanes NOT rebuilt, then overlay this run's
+        // topics (new wins on a keyword collision, taking the max real volume). Pure
+        // helper in demandExpansion.ts (unit-checked in the retained regression suite).
+        const mergedTopics = mergeDemandLanes(existingTopics, universe.topics, mode, productSet);
+        const productTopicCount = mergedTopics.filter(t => laneOf(t) === 'product').length;
+        const problemTopicCount = mergedTopics.length - productTopicCount;
+
         const demandUniverse = {
           ...universe,
           engine: DEMAND_ENGINE,   // v7.187: stale-universe invalidation tag
-          productSeeds: product,
-          problemSeeds: problem,
-          topics: universe.topics.map(t => ({
-            ...t,
-            laneHint: t.seeds.some(s => productSet.has(s.toLowerCase())) ? 'product' : 'problem',
-          })),
+          // Seed lists: update only the rebuilt lane(s); preserve the other lane's seeds.
+          productSeeds: rebuiltLanes.includes('product') ? product : (existingUniverse?.productSeeds ?? []),
+          problemSeeds: rebuiltLanes.includes('problem') ? problem : (existingUniverse?.problemSeeds ?? []),
+          topics:      mergedTopics,
+          topicCount:  mergedTopics.length,
+          lastMode:    mode,                 // v7.241: which pass last ran
+          productTopicCount, problemTopicCount,
+          status: `${mergedTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · last pass: ${mode}`,
         };
 
         await db.update(analyses)
           .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _demandUniverse: demandUniverse } as any })
           .where(eq(analyses.id, analysis.id));
 
-        console.log(`[OrbitIQ] Demand-universe stored: ${demandUniverse.topicCount} topics (${universe.status})`);
+        console.log(`[OrbitIQ] Demand-universe stored (mode=${mode}): ${demandUniverse.topicCount} topics (${demandUniverse.status})`);
         send({ type: 'done', demandUniverse });
         controller.close();
       } catch (err) {

@@ -63,6 +63,12 @@ function mergeInto(
   }
 }
 
+// v7.241: the single-lane merge is a pure, dependency-free helper (so the retained
+// regression suite can unit-check it without pulling the DB driver into the graph).
+// Re-exported here for the route, which builds the universe and then merges.
+export { mergeDemandLanes } from '@/lib/apis/demandLaneMerge';
+export type { LaneHint, MergedLaneTopic, LaneTopic } from '@/lib/apis/demandLaneMerge';
+
 /**
  * Expand the demand universe for the given seeds.
  * @param seeds        phrases to expand (procedures + life problems)

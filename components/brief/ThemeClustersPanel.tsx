@@ -2072,57 +2072,8 @@ function ClustersTab({
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px' }}>
 
-      {/* ── v7.199: Refine with AI — merge synonym intents + strip brand terms ───── */}
-      {onRefine && (() => {
-        const total = refineProgress?.total ?? 0;
-        const done  = refineProgress?.done ?? 0;
-        const frac  = total > 0 ? Math.min(1, done / total) : 0;
-        const elapsed = refineProgress ? (Date.now() - refineProgress.startedAt) / 1000 : 0;
-        const eta = done > 0 && total > done ? Math.round((elapsed / done) * (total - done)) : null;
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12,
-                        padding: '10px 12px', background: 'var(--c-0c0c16)', border: '1px solid var(--c-1e1e34)', borderRadius: 10 }}>
-            <button
-              onClick={() => onRefine(aiRefined)}
-              disabled={refining}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 14px', borderRadius: 8,
-                border: '1px solid var(--c-22d3ee)', background: refining ? 'var(--c-062a32)' : 'var(--c-22d3ee)',
-                color: refining ? 'var(--c-22d3ee)' : 'var(--c-08080f)', fontSize: 12.5, fontWeight: 700,
-                cursor: refining ? 'default' : 'pointer', whiteSpace: 'nowrap',
-              }}
-            >
-              <i className={`ti ${refining ? 'ti-loader-2' : 'ti-sparkles'}`} style={{ fontSize: 14 }} aria-hidden="true" />
-              {refining ? 'Refining…' : (aiRefined ? 'Re-run AI refine' : 'Refine clusters with AI')}
-            </button>
-
-            {!refining && !aiRefined && (
-              <span style={{ fontSize: 11.5, color: 'var(--c-8080a8)' }}>
-                Merge synonym intents (e.g. “529 account” = “529 college plan”) and strip brand terms.
-              </span>
-            )}
-            {aiRefined && !refining && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-4ade80)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <i className="ti ti-check" aria-hidden="true" /> AI-refined
-              </span>
-            )}
-
-            {refining && (
-              <div style={{ flex: 1, minWidth: 220, display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ flex: 1, height: 6, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{ width: `${Math.round(frac * 100)}%`, height: '100%', background: 'var(--c-22d3ee)', transition: 'width 0.3s' }} />
-                </div>
-                <span style={{ fontSize: 11, color: 'var(--c-9090b8)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                  {total > 0 ? `${done}/${total} categories` : 'starting…'}{eta !== null ? ` · ~${eta}s left` : ''}
-                </span>
-              </div>
-            )}
-            {refineError && !refining && (
-              <span style={{ fontSize: 11.5, color: 'var(--c-f472b6)' }}>{refineError}</span>
-            )}
-          </div>
-        );
-      })()}
+      {/* v7.241: "Refine clusters with AI" button removed (Wayne). The cluster pane is */}
+      {/* display-only; the build/expansion lives on the Keyword panel's workflow bar.   */}
 
       {/* ── Top cards: total hero (left) · group cards (middle) · funnel (right) ── */}
       {/* v7.148: 3-col layout — clickable total hero filters to 'all'; the three  */}
