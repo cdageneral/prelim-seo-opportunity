@@ -730,13 +730,34 @@ function FeaturePill({ feature }: { feature: string }) {
 
 // ── Share of Voice ─────────────────────────────────────────────────────────────
 
-const SOV_SERP_COLORS  = ['var(--c-06b6d4)', 'var(--c-0891b2)', 'var(--c-0e7490)'];
-const SOV_BRAND_COLORS = ['var(--c-f59e0b)', 'var(--c-d97706)', 'var(--c-b45309)'];
+// ── CTR-by-position model (Const I.1 labeled-estimate exception — Art. IX, 2026-06-19) ──
+// Organic click-through rate by Google ranking position. SOURCE: GrowthSRC 2025
+// "Google Organic CTR" study — 200,000 keywords across 30+ sites, GSC-derived,
+// post-AI-Overviews. Per-position values 1–10 as tabulated by theStacc (attributing
+// GrowthSRC); note GrowthSRC's own article states pos1=19.0%, pos2=12.6% (theStacc's
+// table shows 13.1% for pos2 — minor secondary-transcription delta, logged in the
+// version log). These are INDUSTRY-MODELED rates, NOT measured client data: keyword
+// volume and ranking position trace to real Semrush rows (I.1); the CTR multiplier
+// is a labeled model estimate, never presented as measured data (parallels III.7).
+// Single source of truth — also imported by ExecutiveSummarySection value-at-stake.
+export const CTR_BY_POSITION: Record<number, number> = {
+  1: 0.190, 2: 0.131, 3: 0.098, 4: 0.077, 5: 0.053,
+  6: 0.041, 7: 0.033, 8: 0.027, 9: 0.022, 10: 0.019,
+};
+// Total organic clicks available per search on page 1 = Σ CTR(pos 1–10) ≈ 0.691.
+export const PAGE1_CTR_SUM = Object.values(CTR_BY_POSITION).reduce((s, v) => s + v, 0);
+export const CTR_SOURCE_LABEL = 'GrowthSRC 2025 · 200K-kw study';
+// CTR at a position. Page-1 (1–10) uses the study curve; a small page-2+ tail is
+// kept ONLY for the Exec value-at-stake climber math (not used in the SoV page-1
+// capture denominator, which is bounded to positions 1–10).
+export function ctrAt(p: number): number {
+  return CTR_BY_POSITION[p] ?? (p <= 20 ? 0.01 : 0.005);
+}
 
 interface SovRawEntry {
   domain:  string;
   traffic: number;
-  type:    'client' | 'serp' | 'brand';
+  type:    'client' | 'open';
   color:   string;
 }
 
@@ -779,237 +800,149 @@ function normSovDomain(d: string): string {
 // computed its own organic-traffic-only share, truncated to the top 4
 // competitors, which disagreed with this panel (different basis, different
 // denominator). Both now call computeSov(), so they reconcile by construction.
+// v7.245 — Share of Voice REDEFINED (Wayne, 2026-06-19) as page-1 click CAPTURE,
+// not competitor-relative share. The old definition divided the client's page-1
+// volume by the volume of whatever competitor rankings happened to be on file —
+// so a client with NO competitor data scored a meaningless 100% even while most of
+// its demand sat below page 1. The new metric answers "what share of the clicks
+// available on page 1 across this footprint is the client actually winning?":
+//   SoV = Σ(volume × CTR at client's position, pos ≤ 10)  ÷  Σ(volume × PAGE1_CTR_SUM)
+// Numerator = modeled clicks the client captures; denominator = all page-1 clicks
+// available across the SAME footprint the Google-Rank header counts (built via the
+// shared buildKwPool, so it reconciles with Total/Ranked/Pg-1 cards — Const II.7).
+// The CTR curve is a labeled model estimate (Art. IX); volumes/positions are real.
 export interface SovComputed {
-  basis:         'traffic' | 'volume' | 'tracked' | 'gapOnly';
-  rawEntries:    SovRawEntry[];   // client first, then competitors sorted by voice desc
-  total:         number;
-  clientVoice:   number;
-  clientKwsUsed: number;
-  compEntries:   Array<{ domain: string; voice: number }>;
-  rowsByComp:    Map<string, number>;
-  zeroP1Domains: Array<{ domain: string; rows: number; minPos: number }>;
-  compRows:      any[];
-  clientDisplay: string;
+  basis:           'capture' | 'empty';
+  sovPct:          number;   // capturedClicks / availableClicks (0..1) — modeled
+  capturedClicks:  number;   // monthly modeled clicks the client wins on page 1
+  availableClicks: number;   // monthly modeled total page-1 clicks across the footprint
+  // real, measured inputs (Semrush rows) — surfaced for on-screen verifiability (I.1)
+  totalVolMonthly: number;
+  page1VolMonthly: number;
+  page1KwCount:    number;
+  totalKwCount:    number;
+  clientDisplay:   string;
+  ctrSource:       string;
+  // donut slices: [client captured, open/uncaptured]
+  rawEntries:      SovRawEntry[];
+  total:           number;   // = availableClicks (donut denominator)
 }
 
 export function computeSov(
   { analysis, competitors, dbKeywords, clientLabel }:
   { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string }
 ): SovComputed {
-  const manualDomains = new Set((competitors ?? []).map(d => normSovDomain(d)));
-  const clientTraffic = (analysis.semrushSnapshot?.overview?.organicTraffic ?? 0) as number;
-  const semComps      = (analysis.semrushSnapshot?.competitors ?? []) as Array<{ domain: string; organicTraffic: number }>;
-
-  // ── v7.88/v7.89: voice basis ────────────────────────────────────────────────
-  // 1. Semrush auto-discovery snapshots carry organicTraffic per domain → use it.
-  // 2. CSV-upload snapshots have NO traffic data. Voice = page-1 monthly search
-  //    volume per domain. Client side: snapshot topKeywords pos ≤ 10.
-  //    Competitor side (v7.89 fix): the UPLOADED competitor keyword rows
-  //    (project_keywords.domain = competitor) — these carry each competitor's
-  //    FULL rankings, INCLUDING keywords the client also ranks for. The v7.88
-  //    version wrongly used gapKeywords, which exclude every client-overlap
-  //    keyword and so understated competitors to ~0%.
-  // 3. Last resort (no uploaded competitor rows): gap keywords — labeled as
-  //    gap-only so the limitation is visible.
-  // All bases are actual fetched data, never modeled.
-  const trafficTotal = clientTraffic + semComps.reduce((s, c) => s + (c.organicTraffic ?? 0), 0);
-
-  let basis: 'traffic' | 'volume' | 'tracked' | 'gapOnly';
-  let clientVoice: number;
-  let compEntries: Array<{ domain: string; voice: number }>;
-  // v7.91: per-domain data readout (row counts + monthly volume) rendered under
-  // the panel so the basis data is always visible and verifiable on screen.
-  let clientKwsUsed = 0;
-  const rowsByComp  = new Map<string, number>();
-
-  const snap       = analysis.semrushSnapshot ?? {};
-  const clientNorm = normSovDomain(snap.domain ?? '');
-  const topKws     = (snap.topKeywords ?? []) as any[];
-  const compRows   = (dbKeywords ?? []).filter(r =>
-    r?.domain && r.source !== 'blocked' && normSovDomain(r.domain) !== clientNorm
-  );
-  const compRowsWithPos = compRows.filter(r => r.position != null);
-
-  // v7.111: per-domain position diagnostics over ALL rows with positions.
-  // A competitor whose uploaded rows never hit position ≤ 10 previously
-  // vanished SILENTLY from the legend and readout (rowsByComp only counted
-  // page-1 rows) — Wayne's AirSculpt case. Now such domains are listed
-  // explicitly with their best position so the exclusion is visible and the
-  // underlying data (real page-2+ rankings vs a misparsed Position column)
-  // can be judged on screen.
-  const compDiag = new Map<string, { rows: number; p1: number; minPos: number }>();
-  for (const r of compRowsWithPos) {
-    const d = normSovDomain(r.domain);
-    let e = compDiag.get(d);
-    if (!e) { e = { rows: 0, p1: 0, minPos: Infinity }; compDiag.set(d, e); }
-    e.rows++;
-    if (r.position <= 10) e.p1++;
-    if (r.position < e.minPos) e.minPos = r.position;
-  }
-  const zeroP1Domains = Array.from(compDiag.entries())
-    .filter(([, e]) => e.p1 === 0)
-    .map(([d, e]) => ({ domain: d, rows: e.rows, minPos: e.minPos }));
-
-  if (trafficTotal > 0) {
-    basis       = 'traffic';
-    clientVoice = clientTraffic;
-    compEntries = semComps.map(c => ({ domain: c.domain, voice: c.organicTraffic ?? 0 }));
-  } else {
-    const byComp = new Map<string, number>();
-    if (compRowsWithPos.length > 0) {
-      // Page-1 share: both sides restricted to positions ≤ 10
-      basis = 'volume';
-      const clientP1 = topKws.filter(k => k?.position != null && k.position <= 10);
-      clientKwsUsed  = clientP1.length;
-      clientVoice    = clientP1.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-      for (const r of compRowsWithPos) {
-        if (r.position > 10) continue;
-        const d = normSovDomain(r.domain);
-        byComp.set(d, (byComp.get(d) ?? 0) + (r.searchVolume ?? 0));
-        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
-      }
-    } else if (compRows.length > 0) {
-      // v7.93: Wayne's definition is final — Share of Voice is PAGE-1 VOLUME
-      // ONLY. Competitor rows without rank positions cannot participate, and
-      // substituting total tracked volume (the v7.90–v7.92 stopgap) overstated
-      // whichever side had the bigger upload. When competitor positions are
-      // missing entirely, the panel renders an explicit fix-it notice instead
-      // of a donut — never a misleading share.
-      basis = 'tracked';   // signals the notice state below; no voice computed
-      clientKwsUsed = 0;
-      clientVoice   = 0;
-    } else {
-      basis = 'gapOnly';
-      const clientP1 = topKws.filter(k => k?.position != null && k.position <= 10);
-      clientKwsUsed  = clientP1.length;
-      clientVoice    = clientP1.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-      for (const g of ((snap.gapKeywords ?? []) as any[])) {
-        if (!g?.competitor) continue;
-        if ((g.competitorPosition ?? 99) > 10) continue;
-        const d = normSovDomain(g.competitor);
-        byComp.set(d, (byComp.get(d) ?? 0) + (g.searchVolume ?? 0));
-        rowsByComp.set(d, (rowsByComp.get(d) ?? 0) + 1);
-      }
-    }
-    compEntries = Array.from(byComp.entries()).map(([domain, voice]) => ({ domain, voice }));
-  }
-
-  // Build entries: client first, then competitors sorted by voice descending.
-  // v7.94: label the client row with the actual client name (or domain) —
-  // never the generic word "Client".
+  const snap          = analysis.semrushSnapshot ?? {};
+  const clientDomain  = (snap.domain ?? '') as string;
   const clientDisplay = (clientLabel ?? '').trim() || snap.domain || 'Client';
-  const rawEntries: SovRawEntry[] = [
-    { domain: clientDisplay, traffic: clientVoice, type: 'client', color: 'var(--c-6c63ff)' },
-  ];
-  let serpIdx = 0;
-  let brandIdx = 0;
-  for (const c of [...compEntries].sort((a, b) => b.voice - a.voice)) {
-    const isBrand = manualDomains.has(normSovDomain(c.domain));
-    rawEntries.push({
-      domain:  c.domain,
-      traffic: c.voice,
-      type:    isBrand ? 'brand' : 'serp',
-      color:   isBrand
-        ? SOV_BRAND_COLORS[brandIdx++ % SOV_BRAND_COLORS.length]
-        : SOV_SERP_COLORS[serpIdx++  % SOV_SERP_COLORS.length],
-    });
+
+  // Build the SAME footprint pool the Google-Rank header + Keyword Landscape use,
+  // so SoV reconciles with the Total/Ranked/Pg-1 cards by construction (Const II.7).
+  // Thresholds 0 = full footprint (matches the panel's default render). Non-gap
+  // items carry the client's real ranking positions.
+  const pool = buildKwPool({
+    semrushSnapshot:   snap,
+    uploadedKeywords:  dbKeywords ?? [],
+    clientDomain,
+    competitorDomains: competitors ?? [],
+    clientVolMin:      0,
+    competitorVolMin:  0,
+  });
+  const ranked = pool.filter(i => !i.isGap);
+
+  let totalVolMonthly = 0;
+  let page1VolMonthly = 0;
+  let page1KwCount    = 0;
+  let capturedClicks  = 0;   // Σ volume × CTR(client position) for pos 1–10 — modeled
+  for (const i of ranked) {
+    const vol = i.searchVolume ?? 0;
+    totalVolMonthly += vol;
+    const p = i.position;
+    if (p != null && p >= 1 && p <= 10) {
+      page1VolMonthly += vol;
+      page1KwCount++;
+      capturedClicks  += vol * ctrAt(p);
+    }
   }
+  // Denominator: all page-1 clicks available across the footprint (Wayne's chosen
+  // definition) = Σ(volume × PAGE1_CTR_SUM). Includes keywords ranking page-2+,
+  // so their uncaptured clicks correctly sit in "open demand", not the numerator.
+  const availableClicks = totalVolMonthly * PAGE1_CTR_SUM;
+  const sovPct          = availableClicks > 0 ? capturedClicks / availableClicks : 0;
+  const openClicks      = Math.max(0, availableClicks - capturedClicks);
 
-  const total = rawEntries.reduce((s, e) => s + e.traffic, 0);
+  const rawEntries: SovRawEntry[] = availableClicks > 0
+    ? [
+        { domain: clientDisplay, traffic: capturedClicks, type: 'client', color: 'var(--c-6c63ff)' },
+        { domain: 'Open / uncaptured demand', traffic: openClicks, type: 'open', color: 'var(--c-2a2a44)' },
+      ]
+    : [];
 
-  return { basis, rawEntries, total, clientVoice, clientKwsUsed, compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay };
+  return {
+    basis:           availableClicks > 0 ? 'capture' : 'empty',
+    sovPct,
+    capturedClicks,
+    availableClicks,
+    totalVolMonthly,
+    page1VolMonthly,
+    page1KwCount,
+    totalKwCount:    ranked.length,
+    clientDisplay,
+    ctrSource:       CTR_SOURCE_LABEL,
+    rawEntries,
+    total:           availableClicks,
+  };
 }
+
 
 export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string }) {
   const {
-    basis, rawEntries, total, clientVoice, clientKwsUsed,
-    compEntries, rowsByComp, zeroP1Domains, compRows, clientDisplay,
+    basis, rawEntries, total, sovPct, capturedClicks, availableClicks,
+    totalVolMonthly, page1VolMonthly, page1KwCount, totalKwCount, clientDisplay, ctrSource,
   } = computeSov({ analysis, competitors, dbKeywords, clientLabel });
 
-  const TOP_N    = 6;
-  const topRaw   = rawEntries.slice(0, TOP_N);
-  const otherT   = rawEntries.slice(TOP_N).reduce((s, e) => s + e.traffic, 0);
-
-  // Compute SVG donut arcs.
-  // Use a <g transform="rotate(-90, cx, cy)"> wrapper so the path starts at 12 o'clock.
-  // With that rotation, dashOffset = cumPct * C (skip forward along path to correct start).
-  const R   = 55;
-  const C   = 2 * Math.PI * R;  // ≈ 345.58
-  const GAP = 1.5;
-  let cumPct = 0;
-
-  const arcs: SovArc[] = topRaw.map(e => {
-    const pct        = total > 0 ? e.traffic / total : 0;
-    const dash       = Math.max(0, pct * C - GAP);
-    const dashOffset = cumPct * C;  // skip forward to correct start position
-    cumPct += pct;
-    return { ...e, pct, dash, dashOffset };
-  });
-
-  // Add "Other" slice for remaining competitors
-  const otherPct = total > 0 ? otherT / total : 0;
-  if (otherPct > 0.005) {
-    arcs.push({
-      domain: 'Other', traffic: otherT, type: 'serp', color: 'var(--c-2a2a44)',
-      pct: otherPct,
-      dash: Math.max(0, otherPct * C - GAP),
-      dashOffset: cumPct * C,
-    });
-  }
-
-  const clientArc   = arcs.find(a => a.type === 'client');
-  const serpArcs    = arcs.filter(a => a.type === 'serp'  && a.domain !== 'Other');
-  const brandArcs   = arcs.filter(a => a.type === 'brand');
-  const otherArc    = arcs.find(a => a.domain === 'Other');
-
-  // v7.93: competitor rows exist but carry no rank positions — page-1 share
-  // of voice cannot be computed. Show the fix, never a misleading donut.
-  if (basis === 'tracked') {
-    return (
-      <div className="orbit-card p-5 flex flex-col gap-3">
-        <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
-        <p style={{ fontSize: '12px', color: 'var(--c-8888b0)', lineHeight: 1.6 }}>
-          Share of Voice is computed from <span style={{ color: 'var(--c-c0c0e8)' }}>page-1 keyword volume per domain</span>, and the uploaded competitor keywords have no rank positions, so it cannot be calculated yet.
-        </p>
-        <p style={{ fontSize: '11px', color: 'var(--c-7070a0)', lineHeight: 1.6 }}>
-          Fix: re-upload each competitor&apos;s keyword CSV including a <span className="font-mono" style={{ color: 'var(--c-9b96ff)' }}>Position</span> column (Semrush exports include it). Existing rows are updated in place — the donut appears automatically once positions exist.
-        </p>
-        <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0 }}>
-          on file: {compRows.length.toLocaleString()} competitor keyword{compRows.length === 1 ? '' : 's'}, 0 with positions
-        </p>
-      </div>
-    );
-  }
-
-  if (total === 0) {
+  // Honest-gap empty state (Const I.5) — no footprint volume to compute over.
+  if (basis === 'empty' || availableClicks <= 0) {
     return (
       <div className="orbit-card p-5 flex flex-col gap-3">
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>
-          No traffic or page-1 keyword data available yet. Run an analysis to populate.
+          No page-1 keyword data available yet. Run an analysis to populate.
         </p>
       </div>
     );
   }
+
+  // Donut = two slices: client captured clicks (the SoV %) + open / uncaptured
+  // page-1 clicks. Rotated -90° so the arc starts at 12 o'clock.
+  const R = 55; const C = 2 * Math.PI * R; const GAP = 1.5;
+  let cumPct = 0;
+  const arcs: SovArc[] = rawEntries.map(e => {
+    const pct        = total > 0 ? e.traffic / total : 0;
+    const dash       = Math.max(0, pct * C - GAP);
+    const dashOffset = cumPct * C;
+    cumPct += pct;
+    return { ...e, pct, dash, dashOffset };
+  });
+  const clientArc = arcs.find(a => a.type === 'client');
+  const openArc   = arcs.find(a => a.type === 'open');
+  const sovDisplay = sovPct > 0 && sovPct < 0.01 ? (sovPct * 100).toFixed(1) : String(Math.round(sovPct * 100));
 
   return (
     <div className="orbit-card p-5 flex flex-col gap-3">
       <div>
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '9px', color: 'var(--c-4a4a70)', marginTop: 2 }}>
-          {basis === 'traffic' && 'by organic traffic (Semrush)'}
-          {basis === 'volume'  && 'by page-1 keyword search volume — monthly, per domain (uploaded rankings)'}
-          {basis === 'gapOnly' && 'by page-1 gap-keyword volume only — competitor rankings on shared keywords not available'}
+          page-1 click capture — modeled clicks won &divide; all page-1 clicks available across the footprint
         </p>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
-
-        {/* Donut SVG — group is rotated -90° so arc path starts at 12 o'clock */}
+        {/* Donut SVG — group rotated -90° so the arc path starts at 12 o'clock */}
         <div style={{ flexShrink: 0 }}>
           <svg width="144" height="144" viewBox="0 0 144 144" role="img"
-            aria-label={`Share of Voice donut. Client holds ${Math.round((clientArc?.pct ?? 0) * 100)}% of organic search visibility.`}>
-            <title>Share of Voice</title>
+            aria-label={`Page-1 Share of Voice. Client captures an estimated ${sovDisplay}% of the page-1 clicks available across its footprint.`}>
+            <title>Page-1 Share of Voice (modeled)</title>
             <g transform="rotate(-90, 72, 72)">
               {arcs.map(arc => arc.dash > 0 ? (
                 <circle key={arc.domain}
@@ -1022,13 +955,16 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
                 />
               ) : null)}
             </g>
-            {/* Inner fill — must be OUTSIDE the rotated group so text renders upright */}
+            {/* Inner fill OUTSIDE the rotated group so text renders upright */}
             <circle cx="72" cy="72" r="45" style={{fill:'var(--c-0f0f1c)'}} />
-            <text x="72" y="68" textAnchor="middle" fontSize="17" fontWeight="700" style={{fill:'var(--c-f0f0ff)'}}>
-              {Math.round((clientArc?.pct ?? 0) * 100)}%
+            <text x="72" y="66" textAnchor="middle" fontSize="17" fontWeight="700" style={{fill:'var(--c-f0f0ff)'}}>
+              {sovDisplay}%
             </text>
-            <text x="72" y="82" textAnchor="middle" fontSize="8.5" style={{fill:'var(--c-555578)'}} letterSpacing=".07em">
-              CLIENT SOV
+            <text x="72" y="80" textAnchor="middle" fontSize="7.5" style={{fill:'var(--c-7878a0)'}} letterSpacing=".06em">
+              PAGE-1 SOV
+            </text>
+            <text x="72" y="90" textAnchor="middle" fontSize="6.5" style={{fill:'var(--c-55557a)'}} letterSpacing=".04em">
+              est.
             </text>
           </svg>
         </div>
@@ -1036,81 +972,31 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
         {/* Legend */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {clientArc && <LegendRow arc={clientArc} />}
-
-          {serpArcs.length > 0 && (
-            <>
-              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
-                SERP Discovered
-              </p>
-              {serpArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
-            </>
-          )}
-
-          {brandArcs.length > 0 && (
-            <>
-              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
-                Brand Competitors
-              </p>
-              {brandArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
-            </>
-          )}
-
-          {otherArc && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '5px', paddingTop: '5px', borderTop: '1px solid var(--c-1a1a2e)' }}>
-              <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: 'var(--c-2a2a44)', flexShrink: 0 }} />
-              <span style={{ fontSize: '11px', color: 'var(--c-555570)', flex: 1 }}>Other</span>
-              <span style={{ fontSize: '10px', color: 'var(--c-444460)' }}>{Math.round(otherArc.pct * 100)}%</span>
-            </div>
-          )}
+          {openArc && <LegendRow arc={openArc} />}
+          <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, marginTop: 6, margin: '6px 0 0' }}>
+            Wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
+            {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint.
+          </p>
         </div>
       </div>
 
-      {/* Type legend pills */}
-      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'var(--ca-6-182-212-0_08)', border: '1px solid var(--ca-6-182-212-0_2)', color: 'var(--c-06b6d4)' }}>
-          <span style={{ width: '5px', height: '5px', background: 'var(--c-06b6d4)', borderRadius: '50%' }} />
-          SERP discovered
-        </span>
+      {/* Modeled-estimate disclosure (Const I.1 / Art. IX labeled CTR exception) */}
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const, alignItems: 'center' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--ca-245-158-11-0_2)', color: 'var(--c-f59e0b)' }}>
           <span style={{ width: '5px', height: '5px', background: 'var(--c-f59e0b)', borderRadius: '50%' }} />
-          Brand / manual
+          modeled estimate
         </span>
+        <span style={{ fontSize: '9px', color: 'var(--c-55557a)' }}>CTR curve: {ctrSource}</span>
       </div>
 
-      {/* v7.91: underlying data readout — keyword counts + monthly volume per
-          domain, so the basis behind every percentage is verifiable on screen */}
-      {basis !== 'traffic' && (
-        <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
-          data: {clientDisplay.replace(/^www\./, '')} {clientKwsUsed.toLocaleString()} kws · {Math.round(clientVoice).toLocaleString()}/mo
-          {compEntries.map(c => (
-            <span key={c.domain}>
-              {' · '}{c.domain.replace(/^www\./, '')} {(rowsByComp.get(normSovDomain(c.domain)) ?? 0).toLocaleString()} kws · {Math.round(c.voice).toLocaleString()}/mo
-            </span>
-          ))}
-          {zeroP1Domains.map(z => (
-            <span key={z.domain}>
-              {' · '}{z.domain} {z.rows.toLocaleString()} kws · 0 page-1
-            </span>
-          ))}
-        </p>
-      )}
-
-      {/* v7.111: explicit warning when an uploaded competitor has NO page-1 rows —
-          previously such domains disappeared from the donut/legend silently */}
-      {basis === 'volume' && zeroP1Domains.length > 0 && (
-        <div style={{
-          background: 'var(--ca-245-158-11-0_06)', border: '1px solid var(--ca-245-158-11-0_25)',
-          borderRadius: '8px', padding: '8px 10px',
-        }}>
-          {zeroP1Domains.map(z => (
-            <p key={z.domain} style={{ fontSize: '10px', color: 'var(--c-d9a23f)', lineHeight: 1.5, margin: 0 }}>
-              <span style={{ fontWeight: 600 }}>{z.domain}</span>: {z.rows.toLocaleString()} uploaded kws, none rank page 1
-              (best position {isFinite(z.minPos) ? z.minPos : '—'}) — excluded from page-1 Share of Voice.
-              If unexpected, open the CSV and verify the Position column values.
-            </p>
-          ))}
-        </div>
-      )}
+      {/* Underlying REAL inputs (Const I.1 verifiability) — volume & position are
+          measured Semrush rows; only the CTR multiplier is modeled. */}
+      <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
+        data: {clientDisplay.replace(/^www\./, '')} · {totalKwCount.toLocaleString()} footprint kws · {page1KwCount.toLocaleString()} rank pg 1 · {fmtAnnual(page1VolMonthly)} pg-1 vol / {fmtAnnual(totalVolMonthly)} total vol·yr
+      </p>
+      <p style={{ fontSize: '9px', color: 'var(--c-44446a)', margin: 0, lineHeight: 1.5 }}>
+        SoV = &Sigma;(volume &times; CTR at client position, pos 1&ndash;10) &divide; &Sigma;(volume &times; {PAGE1_CTR_SUM.toFixed(3)} page-1 CTR sum). Volume &amp; position are measured; CTR is the labeled model curve.
+      </p>
     </div>
   );
 }

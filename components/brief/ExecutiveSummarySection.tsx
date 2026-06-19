@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
-import { SovPanel, computeSov } from '@/components/brief/GoogleSerpSection';
+import { SovPanel, computeSov, ctrAt } from '@/components/brief/GoogleSerpSection';
 import { buildClusters } from '@/components/brief/JourneySection';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -226,29 +226,23 @@ export default function ExecutiveSummarySection({
   const totalAcq   = aioAcq  + paaAcq   + vidAcq;
   const combinedSerpRate = totalAvail > 0 ? Math.round((totalAcq / totalAvail) * 100) : 0;
 
-  // ── Competitor market share ───────────────────────────────────────────────
-  // v7.129 — Now sourced from computeSov() — the SAME computation the Share-of-
-  // Voice donut (SovPanel, nav 06) renders, and the SovPanel shown right below
-  // in this exec. Previously the hero built its own organic-traffic-only share
-  // truncated to the top 4 competitors, so the "topComp holds X%" figure in the
-  // narrative disagreed with the donut beside it. They now reconcile by
-  // construction: identical ranked entries, identical denominator (= sum of all
-  // entry voices), identical basis (traffic when Semrush traffic exists, else
-  // page-1 keyword volume). Pass the SAME competitors (manualDomains) and label
-  // used for this exec's SovPanel render so the two cards match exactly.
-  const clientDomain = normDomain(propClientDomain ?? analysis.domain ?? '');
-  const _sov         = useMemo(
+  // ── Share of Voice (page-1 click capture) ─────────────────────────────────
+  // v7.245 — Sourced from the SAME computeSov() the Google-Rank donut (SovPanel,
+  // nav 06) renders and the SovPanel shown right below in this exec, so the hero
+  // figure and the donut reconcile by construction (Const II.6/II.7). SoV is now
+  // page-1 click CAPTURE (clicks the client wins ÷ all page-1 clicks available
+  // across its footprint), not competitor-relative share — see SovComputed note.
+  // The old competitor-share derivations (topComp / gapVsTop) were removed with
+  // that redefinition; competitor presence for the readiness checklist is now read
+  // directly from the configured/auto-discovered competitor lists, not from SoV.
+  const clientDomain   = normDomain(propClientDomain ?? analysis.domain ?? '');
+  const _sov           = useMemo(
     () => computeSov({ analysis, competitors: manualDomains, dbKeywords, clientLabel: projectName ?? propClientDomain }),
     [analysis, manualDomains, dbKeywords, projectName, propClientDomain],
   );
-  const sovTotal     = _sov.total;
-  const sovClient    = _sov.rawEntries.find(e => e.type === 'client');
-  const sovComps     = _sov.rawEntries.filter(e => e.type !== 'client');  // already sorted by voice desc
-  const _topEntry    = sovTotal > 0 && sovComps.length > 0 ? sovComps[0] : undefined;
-  const topComp      = _topEntry ? { domain: normDomain(_topEntry.domain), traffic: _topEntry.traffic } : undefined;
-  const topCompShare = topComp && sovTotal > 0 ? topComp.traffic / sovTotal : 0;
-  const clientShare  = sovTotal > 0 && sovClient ? sovClient.traffic / sovTotal : captureRate;
-  const gapVsTop     = topCompShare - clientShare;
+  const clientShare    = _sov.availableClicks > 0 ? _sov.sovPct : captureRate;
+  const hasCompetitors = (manualDomains?.length ?? 0) > 0
+    || ((analysis.semrushSnapshot?.competitors?.length ?? 0) > 0);
 
   // ── Journey stage coverage (nav 04) ───────────────────────────────────────
   // v7.128 — Replaces the old `page1Pct > 30 ? '2 of 4' : '1 of 4'` heuristic,
@@ -409,7 +403,7 @@ export default function ExecutiveSummarySection({
   // ── v7.131: Read-confidence meter (which data signals are present) ──────────
   const signals = [
     { key: 'Keywords',          ok: totalKws > 0 },
-    { key: 'Competitors',       ok: sovComps.length > 0 },
+    { key: 'Competitors',       ok: hasCompetitors },
     { key: 'AI Overviews',      ok: aioAvail > 0 },
     { key: 'LLM probe',         ok: overallTotal > 0 },
     { key: 'Journey clusters',  ok: (clusterCount > 0 || categories.length > 0) },
@@ -420,8 +414,9 @@ export default function ExecutiveSummarySection({
   const confColor      = confidencePct >= 80 ? 'var(--c-22c55e)' : confidencePct >= 50 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)';
 
   // ── v7.131: Quick-wins ladder + modeled value-at-stake (CTR-by-position) ────
-  const CTR: Record<number, number> = { 1: .28, 2: .15, 3: .10, 4: .07, 5: .05, 6: .04, 7: .03, 8: .025, 9: .02, 10: .018 };
-  const ctrAt = (p: number) => CTR[p] ?? (p <= 20 ? 0.01 : 0.005);
+  // v7.245: CTR curve unified — uses the shared ctrAt() (GrowthSRC 2025) imported
+  // from GoogleSerpSection, the SAME curve the Share-of-Voice metric uses, so the
+  // exec's value-at-stake and the SoV donut reconcile on one CTR source of truth.
   const nearMiss    = posKws.filter(k => k.position >= 4 && k.position <= 10);
   const climber     = posKws.filter(k => k.position >= 11 && k.position <= 20);
   const nearMissVol = nearMiss.reduce((s, k) => s + k.searchVolume, 0);
@@ -656,7 +651,7 @@ export default function ExecutiveSummarySection({
           ))}
         </div>
         <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
-          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: 'var(--c-8888aa)' }}>modeled</span> from an industry-average organic CTR-by-position curve (pos 1≈28%, pos 3≈10%, pos 8≈2.5%); they show the upside of each move, not a guarantee.
+          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: 'var(--c-8888aa)' }}>modeled</span> from the GrowthSRC 2025 organic CTR-by-position curve (pos 1≈19%, pos 3≈9.8%, pos 8≈2.7%); they show the upside of each move, not a guarantee.
         </p>
       </div>
 
@@ -697,7 +692,7 @@ export default function ExecutiveSummarySection({
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
         <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>
-          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {sovTotal > 0 && sovClient ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
+          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>
 

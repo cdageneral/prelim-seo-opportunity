@@ -1,5 +1,27 @@
 # OrbitIQ Changelog
 
+## v7.245 — 2026-06-19 · Share of Voice fixed: page-1 click capture, not a meaningless 100%
+
+**The ask (Wayne).** On the Google-Rank panel, Share of Voice showed **100% CLIENT SOV** even though ~180M+ of annual volume sits *outside* page 1 and the Pg-1 Vol Share card right beside it read **32%**. 100% can't be right — there's no way the client owns all the voice.
+
+**Root cause.** The old SoV was *competitor-relative*: client page-1 volume ÷ whatever competitor rankings happened to be on file. With no competitor data in this project, the denominator was just the client → a trivial, misleading 100%. It also contradicted the panel's own 32% page-1 capture.
+
+**What changed — SoV is now page-1 click CAPTURE.** Per the formula Wayne specified:
+
+> `SoV % = Σ(keyword volume × CTR at the client's ranking position, pos 1–10) ÷ Σ(volume × page-1 CTR sum)`
+
+The numerator is the modeled clicks the client actually wins on page 1; the denominator is **all** page-1 clicks available across the **same footprint** the Google-Rank header counts (built from the shared `buildKwPool`, so it reconciles with the Total / Ranked / Pg-1 cards — Const II.7). Demand that ranks page-2+ now correctly sits in **"open / uncaptured"**, not in the client's share — so a client capturing a slice of a large off-page-1 footprint lands at a realistic low percentage, never 100%. The donut now reads **PAGE-1 SOV (est.)** with two slices (client captured + open demand), the captured-vs-available click counts, and the underlying real footprint numbers.
+
+**Data integrity (Const I.1 / new Art. I.5a).** A CTR-by-position curve is an industry **model**, so SoV is labeled an **on-panel modeled estimate** with its source shown — exactly the III.7 treatment of confidence. Volume and ranking position remain real Semrush rows; only the CTR multiplier is modeled. Curve = **GrowthSRC 2025** (200K-keyword, post-AI-Overviews GSC study): pos1 19.0%, pos2 13.1% (GrowthSRC's own article states 12.6% for pos2; theStacc's per-position table — used for the full 1–10 curve — shows 13.1%; minor secondary-source delta, noted here), pos3 9.8% … pos10 1.9%; page-1 CTR sum ≈ 0.691. Held in **one shared constant** (`CTR_BY_POSITION` in `GoogleSerpSection`) and reused by the Exec value-at-stake ladder (which previously used a separate ~28% curve), so the whole brief now sits on one CTR source of truth. Sources: GrowthSRC (growthsrc.com/google-organic-ctr-study), per-position table via theStacc (thestacc.com/blog/organic-ctr-by-position).
+
+**Scope (Wayne's choice: replace everywhere).** Both the Google-Rank donut (nav 06) and the Executive Summary SoV use the new metric; the Exec's old competitor-share derivations were removed and its "Competitors" readiness check now reads the configured/auto-discovered competitor lists directly. **Known follow-up (logged, not diverged):** the PDF export's "Share of Voice" section still renders competitor organic-traffic bars (a separate competitor-gap view) — not yet converted to the capture metric.
+
+**Constitution.** Amended to **v0.11**: added **Art. I.5a** (labeled, cited industry models permitted for *derived* metrics, never shown as measured data) and recorded the SoV redefinition. Per Art. X this was a deliberate amend-and-label (Wayne chose it over reworking the request).
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` over both edited components = **0 errors**. SSR render harness on a footprint with a heavy page-2 tail confirms SoV computes **3%** (309,784 captured ÷ 9,526,126 available clicks/mo), strictly 0–100%, equals captured÷available, reconciles page-1=497 / footprint=1381, renders the modeled-estimate label + CTR source + donut. **Full retained regression suite PASS** (all prior checks v7.235–244 + new SoV invariants: never trivial 100%, capture math, header reconciliation, GrowthSRC curve values locked, honest-gap empty state). Only existing CSS-var tokens → dual-theme parity (V.5/IV.6) holds.
+
+**Action for Wayne:** deploy v7.245. The Google-Rank Share of Voice will now show a realistic page-1 capture percentage (labeled a modeled estimate, with the GrowthSRC CTR source shown) instead of 100%, with the uncaptured demand called out as "open."
+
 ## v7.244 — 2026-06-18 · Optional minimum-volume floor for the product & pre-product builds (steps 3 & 4)
 
 **The ask (Wayne).** When running steps 3 ("Expand product data") and 4 ("Build pre-product journey"), be able to set a volume threshold so keywords below X aren't pulled — either by typing a custom value or picking a preset (500 / 1,000 / 1,900 / 2,400 / 3,600 / 4,400).
