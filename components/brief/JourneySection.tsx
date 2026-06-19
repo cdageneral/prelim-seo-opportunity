@@ -543,7 +543,6 @@ export function buildJourneyClassifier(
     }));
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
   const vocab = deriveProblemVocab(analysis);
-  const procWordsByCat = buildProcWordsByCat(categories, vocab.langTokens);
   const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
   const catNames = new Set(categories.map((c) => c.name));
 
@@ -559,12 +558,15 @@ export function buildJourneyClassifier(
       const matched = matchKeywordToCategory(keyword, categories, clientDomain, competitorDomains);
       if (matched && catNames.has(matched)) cand = matched;
     }
-    if (cand) {
-      const catType = categories.find((c) => c.name === cand)!.type;
-      const procWords = procWordsByCat.get(cand) ?? [];
-      if (namesSolutionFor(keyword, catType, procWords, clientDomain, competitorDomains)) return 'product';
-    }
-    // Names no solution → pre-product, but only if topically relevant; else off-topic.
+    // v7.248 (Wayne): a keyword that maps to ANY product/service category — by stored
+    // membership (Const II.8) or the same name match buildClusters uses — is PRODUCT,
+    // full stop. The earlier literal-substring sub-gate (namesSolutionFor) leaked product
+    // keywords filed under broadly-named parents (e.g. "Rewards", "Credit Reports & Scores",
+    // "Payment & Access") into the pre-product lane; Const III.2a forbids ANY client product
+    // or service there, so naming/mapping a product category is decisive.
+    if (cand) return 'product';
+    // Maps to NO product/service category → eligible for pre-product (a need state / life
+    // event / pain point / goal), but only if topically relevant; else off-topic noise.
     return isClientRelevant(keyword, relevanceTokens) ? 'pre-product' : 'offtopic';
   }
   function themeOf(keyword: string): string {

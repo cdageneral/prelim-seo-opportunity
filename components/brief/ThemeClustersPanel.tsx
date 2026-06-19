@@ -1178,6 +1178,11 @@ function buildPreProductClusters(
 
   const byTheme = new Map<string, KwItem[]>();
   for (const kw of pool) {
+    // v7.248 (Wayne): the pre-product journey is the DEEP-JOURNEY BUILD ONLY (Const II.2) —
+    // it is the missing upper-funnel demand you deliberately build, never auto-peeled from
+    // the existing footprint. So only deep-journey demand keywords (origin 'demand') are
+    // eligible; until the deep journey is built the lane is empty (honest gap, I.5).
+    if (kw.origin !== 'demand') continue;
     if (classifier.classify(kw.keyword) !== 'pre-product') continue;
     preProductKws.add(kw.keyword.toLowerCase());
     const theme = classifier.themeOf(kw.keyword);

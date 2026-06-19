@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.248 — 2026-06-19 · Pre-product journey corrected: deep-journey-only, no client products/services
+
+**The ask (Wayne).** Two problems on the Audience Journeys pre-product lane: (1) it had topics even though the deep journey hadn't been built — "how can there be anything in pre-product when we haven't built them yet?"; and (2) it showed client **products/services** (Cashback Credit Cards, loans, checking) when pre-product should be **need states / life events / pain points / goals** with no mention of products or services (Const III.2a).
+
+**Root cause (pre-existing, from the v7.203 design — not the v7.247 change).** The shared classifier (`buildJourneyClassifier`) only counted a keyword as "product" if the *distinctive word of its matched category appeared literally in the keyword*. Keywords filed under broadly-named parents ("Rewards", "Credit Reports & Scores", "Payment & Access") failed that literal test and fell into pre-product even though they clearly name a product. Separately, `buildPreProductClusters` peeled pre-product keywords out of the **existing footprint** on every render — so the lane filled with footprint keywords you already rank for (which is why 30 of 33 read "Existing"), independent of any deep-journey build.
+
+**What changed (both per Wayne's decisions; Constitution amended v0.12).**
+- **Pre-product = the deep-journey build only (Const III.2a-ii).** `buildPreProductClusters` now only considers deep-journey demand keywords (`origin: 'demand'`); footprint keywords never auto-create pre-product topics. Until you build the deep journey the lane is **empty** (honest gap), not back-filled.
+- **Any product/service-category mapping is product (Const III.2a-i).** The shared `classify` now returns **product** for any keyword that maps to a product/service category — by stored membership (Const II.8) or the same name match the cluster builder uses — dropping the literal-substring sub-gate that caused the leak. So "cashback credit cards", "checking account", "personal loan rates" are product, never pre-product. The `ContentMapSection` fork was brought to parity so the Content Map splits the same way.
+
+**Effect.** The change lives in the single-source classifier, so the Keyword, Cluster, and Journey panels all agree. Pre-product now contains only genuine problem/need/trigger demand from the deep-journey build (e.g. "how to stop living paycheck to paycheck", "build an emergency fund"); every client product/service sits in the product lane.
+
+**Verified (own debugging agent + Const V.6 regression gate).** Isolated `tsc` = **0 errors** across JourneySection, ThemeClustersPanel, ContentMapSection, KeywordsPanel. New retained `preproduct:` invariants — product-category keyword under a broad parent ⇒ product; genuine problem keyword ⇒ pre-product; pre-product topics are all `origin=demand`; footprint problem keyword is never pre-product; product keyword is never pre-product. **Full retained suite PASS (58 checks, 0 fail).** Real-pipeline SSR render (buildCanonicalClusterTopics → panel) confirms the 4 product terms route to the product lane and the 3 deep-journey need-states are the only pre-product topics; rendered light + dark (no styling change this release).
+
+**Action for Wayne:** deploy v7.248. The pre-product lane will be empty until you build the deep journey; once built it shows only problem/need/trigger topics, never product names.
+
 ## v7.247 — 2026-06-19 · Journey panel: per-segment slicing restored + Product/Pre-product journey filter
 
 **The ask (Wayne).** Two things on the Audience Journeys panel. (1) **Regression:** clicking an audience segment used to re-slice the summary cards and the topic list to just that persona — it stopped doing that. (2) **New:** add the same **Product journey / Pre-product journey** filter the Theme-Clusters panel has.

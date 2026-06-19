@@ -509,7 +509,6 @@ function buildClusters(
 
   // v7.154/v7.187: route keywords by solution awareness (mirrors JourneySection).
   const vocab = deriveProblemVocab(analysis);
-  const procWordsByCat = buildProcWordsByCat(categories, vocab.langTokens);
 
   const catMap = new Map<string, KwItem[]>();
   categories.forEach((c: { name: string }) => catMap.set(c.name, []));
@@ -526,11 +525,10 @@ function buildClusters(
       const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
       if (matched && catMap.has(matched)) cand = matched;
     }
-    if (cand) {
-      const catType = categories.find((c: { name: string }) => c.name === cand)!.type;
-      const procWords = procWordsByCat.get(cand) ?? [];
-      if (namesSolutionFor(kw.keyword, catType, procWords, clientDomain, competitorDomains)) { catMap.get(cand)!.push(kw); continue; }
-    }
+    // v7.248 (Wayne): mapping to ANY product/service category => product (parity with the
+    // shared classifier). Drops the literal-substring sub-gate that leaked product keywords
+    // filed under broad parents into the pre-product problem pool (Const III.2a).
+    if (cand) { catMap.get(cand)!.push(kw); continue; }
     // v7.173: only keep pre-product keywords that are topically relevant to the
     // client. Off-topic noise (no anchor, no body area, no category/brand token)
     // is dropped from the demand universe so it can't pollute the catch-all
