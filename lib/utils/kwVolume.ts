@@ -442,6 +442,12 @@ export function buildKwPool({
     });
   }
 
+  // v7.254: index the §1 footprint entries by keyword so an uploaded client row
+  // for the SAME keyword can backfill a missing ranking URL (see §2) instead of
+  // being dropped by the dedup. Built here (pool currently holds only §1 client rows).
+  const clientByKw = new Map<string, KwPoolItem>();
+  for (const p of pool) clientByKw.set(p.keyword.toLowerCase().trim(), p);
+
   // ── 2. Uploaded CLIENT keywords (non-gap CSV/manual rows) ──────────────────
   // v7.142: the client's OWN uploaded footprint is authoritative and is added
   // BEFORE the crawl gap set. Reason: an auto-crawl can list a keyword as a
@@ -455,7 +461,19 @@ export function buildKwPool({
     if ((k.source ?? '') === 'blocked') continue;
     if (k.type === 'gap') continue;                 // gap uploads handled in §4
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
-    if (!kwLow || seen.has(kwLow)) continue;
+    if (!kwLow) continue;
+    if (seen.has(kwLow)) {
+      // v7.254: the uploaded CSV is the authoritative source of the client's real
+      // ranking URL (Const I.1). A §1 topKeywords row for the same keyword often
+      // enters URL-less (Semrush rows omit the URL), so rather than drop the
+      // duplicate uploaded row and lose its URL, backfill it onto the §1 entry.
+      // Only fills when the existing entry has no URL; never invents or overwrites.
+      if (typeof k.url === 'string' && k.url.trim()) {
+        const existing = clientByKw.get(kwLow);
+        if (existing && !existing.url) existing.url = k.url.trim();
+      }
+      continue;
+    }
     if (brandCatExcludedKw.has(kwLow)) continue;    // v7.199: AI/category brand term — never include
     if (isAutoCompetitorBrand(k.keyword)) continue; // v7.201: auto-discovered competitor brand
     if (isExcludedBrand(k.keyword)) continue;       // v7.208: user blocklist (even on client uploads)

@@ -1,5 +1,22 @@
 # OrbitIQ Changelog
 
+## v7.254 — 2026-06-21 · The URL was reaching the DB but buildKwPool discarded it — backfill the uploaded ranking URL (verified against the real TD CSV)
+
+**The ask (Wayne).** After v7.253 (and v7.251 before it), deploy + clear + re-upload STILL showed "no URL in the dataset" on existing pages. Three releases, no visible change. Wayne — rightly — asked me to do my own quality checks against his real data before shipping again.
+
+**Ground truth established this time (no guessing, Const I.1).** Using Wayne's actual client CSV (`td-4400-more.csv`, header `Keyword,Position,…,URL,…`) and his live deployment:
+- The v7.253 parser extracts a URL for **5,461 / 5,461** rows — parser is correct.
+- The deployed `/api/projects/.../keywords` response has **zero** `"url":null` and real `https://…` values — the URL **is** persisted in the database.
+- So the loss was downstream. Reproduced it in the **real** `buildKwPool`: with a URL-less `semrushSnapshot.topKeywords` present (which a "Run Analysis" creates), **all 1,429** client keywords come back URL-less; CSV-only (no topKeywords) keeps all 1,429. That is the bug.
+
+**Root cause (the real one, at last).** `buildKwPool` adds §1 `topKeywords` first (recording each keyword in `seen`), then §2 the uploaded CSV rows. Semrush `topKeywords` rows usually arrive **without** a URL, and §2 did `if (seen.has(kw)) continue` — so for every keyword already present from §1, the uploaded row carrying the **real URL was skipped entirely**. The URL was in the DB and on the uploaded row, but the pool builder threw it away before `Topic.pageUrl` could read it. This is why both prior parser fixes (which correctly got the URL into the DB) produced no visible change.
+
+**Fix (`lib/utils/kwVolume.ts`, 1 function).** §2 now **backfills**: when an uploaded client keyword is already in the pool from §1 but that entry has no URL, the uploaded CSV's real URL is written onto the existing entry. The uploaded CSV is the authoritative source of the client's ranking URL (Const I.1). It never invents a URL, never overwrites a URL `topKeywords` already supplied, and adds no new rows — the client keyword count is unchanged.
+
+**Verified against the REAL CSV (own debugging agent).** Bundled the real compiled `buildKwPool` + the real `parseCsvText` and ran Wayne's file end-to-end — **6/6**: (A) CSV-only keeps all 1,429 URLs; (B) the failing case — URL-less `topKeywords` + uploaded — now backfills all 1,429 (`'td bank'` → `https://www.td.com/us/en/personal-banking`); (C) a real `topKeywords` URL is preserved, not overwritten; client-count integrity A===B (no duplicate rows); and the `Topic.pageUrl` derivation (`position!=null && url`) returns the URL. Isolated `tsc --strict` on the patched `kwVolume.ts` = **0 errors**. Pure pool-logic change: no rendered component, styling, scroll, or theme surface touched (IV.1/IV.6/V.5 N/A).
+
+**Action for Wayne:** deploy v7.254. No re-upload needed — the URLs are already in your database; this release stops the pool builder from discarding them. Existing pages will show their real URL in the Content-plan drawer and the open-page icon on each row. (If anything still looks off, hard-refresh so the client re-fetches.)
+
 ## v7.253 — 2026-06-21 · The SECOND CSV parser — uploaded URL now survives the project-page upload (completes the v7.251 fix)
 
 **The ask (Wayne).** After deploying v7.252, clearing keywords, and re-uploading a client CSV whose every row has a keyword **and** a URL (header `URL`), existing pages in the Content plan STILL showed "no URL in the dataset." Deploy + re-upload — the exact remedy v7.251 prescribed — did not help.
