@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.253 — 2026-06-21 · The SECOND CSV parser — uploaded URL now survives the project-page upload (completes the v7.251 fix)
+
+**The ask (Wayne).** After deploying v7.252, clearing keywords, and re-uploading a client CSV whose every row has a keyword **and** a URL (header `URL`), existing pages in the Content plan STILL showed "no URL in the dataset." Deploy + re-upload — the exact remedy v7.251 prescribed — did not help.
+
+**Root cause (the real one).** There are **two** client-side CSV parsers. v7.251 wired the URL end-to-end through the *KeywordsPanel* parser, the batch API, the `project_keywords.url` column, `buildKwPool`, and every topic builder (`Topic.pageUrl` → `ContentTopic.url`). But the **primary upload flow** — the file picker on the project page (`handleFileUpload`) — uses a *different* parser, `parseCsvText` in `app/projects/[id]/page.tsx`, and that one was never updated. It returned only `{ keyword, searchVolume, position }` and never read a URL column, so the URL was dropped at the very first step and never reached the batch payload, the database, or anything downstream. No amount of re-uploading could populate a column the parser threw away before sending.
+
+**Fix.** `parseCsvText` now detects the URL column and carries `url` on each parsed row, using the same header aliases as the KeywordsPanel parser — `url`, `ranking url`, `landing page`, `page`, `page url`, `address`, `current url`, `target url` — plus the Semrush raw code `Ur` (its `Ph`/`Nq`/`Po` siblings were already handled). The existing batch endpoint already accepts and stores per-row `url` (v7.251), so threading it onto the parsed object is all that was missing.
+
+**Still honest when truly absent (Const I.1 / I.5).** No URL is invented. A blank URL cell or a CSV with no URL column yields `url: undefined`; that keyword stays unmapped and the drawer shows the honest "no URL in the dataset" note rather than a fabricated link.
+
+**Verified (own debugging agent).** Isolated `tsc --strict` on the patched `parseCsvText` = **0 errors**. New retained `csvurl2:` functional harness against the REAL compiled function = **10/10**: header `URL` populates `url` on every row (Wayne's exact case, incl. a #84-ranked row), volume/position still parse, blank URL → `undefined`, no-URL-column → `undefined`, Semrush `Ph;Nq;Po;Ur` (semicolon) works, and the `Landing Page` + quoted-value variants resolve. End-to-end assertion replays the v7.252 batch-route persistence logic on the parsed rows and confirms the URL reaches the stored `project_keywords.url` value. Parser-only change: no rendered component, styling, scroll, or theme surface touched (IV.1/IV.6/V.5 N/A). Note: full-project `tsc` not run — the shipped folder carries no toolchain and the change is an isolated pure function with no new dependencies.
+
+**Action for Wayne:** deploy v7.253, then **re-upload your client CSV** (clear first is fine). Rows are re-inserted with the URL parsed from the `URL` column; existing pages will then show their real URL in the Content-plan drawer and the open-page icon on each row.
+
 ## v7.252 — 2026-06-19 · Read-only provenance strip — trace the "All Keywords" count to its real sources
 
 **The ask (Wayne).** The "All Keywords" count read ~1,346 and is now 5,796 with no upload and nothing run — "where did all the new keywords come from? We cannot be adding data."

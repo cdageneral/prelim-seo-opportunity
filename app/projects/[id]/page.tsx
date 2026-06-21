@@ -137,7 +137,7 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
 
 // ── CSV / XLSX parser (client-side) ──────────────────────────────────────────
 
-function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number }[] {
+function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number; url?: string }[] {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const firstLine  = lines[0] ?? '';
@@ -148,13 +148,20 @@ function parseCsvText(text: string): { keyword: string; searchVolume: number; po
     const vals: Record<string, string> = {};
     line.split(delimiter).forEach((v, i) => { vals[headers[i] ?? i] = v.trim().replace(/"/g, ''); });
 
-    // Semrush column aliases: Ph=Keyword, Nq=Volume, Po=Position
+    // Semrush column aliases: Ph=Keyword, Nq=Volume, Po=Position, Ur=URL
     const kw  = (vals['keyword'] || vals['ph'] || vals['phrase'] || '').toLowerCase().trim();
     const vol = parseInt(vals['search volume'] || vals['nq'] || vals['volume'] || vals['searches'] || '0') || 0;
     const posRaw = vals['position'] || vals['po'] || '';
     const pos    = posRaw ? parseInt(posRaw) : undefined;
+    // v7.253: real ranking/landing URL — the project-page upload parser dropped this
+    // column (only KeywordsPanel's parser read it pre-v7.253), so CSV-only projects
+    // never persisted a URL. Same header aliases as the KeywordsPanel parser + Semrush 'Ur'.
+    // Real data only (Const I.1); blank stays unmapped (honest gap, I.5).
+    const rawUrl = (vals['url'] || vals['ur'] || vals['ranking url'] || vals['landing page']
+      || vals['page'] || vals['page url'] || vals['address'] || vals['current url'] || vals['target url'] || '').trim();
+    const url    = rawUrl ? rawUrl : undefined;
 
-    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined };
+    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined, url };
   }).filter(r => r.keyword && r.searchVolume > 0);
 }
 
