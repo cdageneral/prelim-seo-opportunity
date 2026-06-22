@@ -1644,7 +1644,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--c-4a4a6a)', marginBottom: 5 }}>
             Foundation · 05
           </p>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-dcdcf4)', margin: 0 }}>Content Plan</h2>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: 'var(--c-dcdcf4)', margin: 0 }}>Content Map</h2>
           <p style={{ fontSize: 12, color: 'var(--c-5a5a80)', marginTop: 5 }}>
             Each keyword cluster mapped to the page that already ranks for it &mdash; so you can see what to <span style={{ color: 'var(--c-34d399)' }}>optimise</span> versus what to <span style={{ color: 'var(--c-fb923c)' }}>build net&#8209;new</span>.
           </p>

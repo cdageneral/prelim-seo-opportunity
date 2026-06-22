@@ -131,18 +131,44 @@ function SelectBox({ checked, saving, onToggle }: { checked: boolean; saving: bo
   );
 }
 
-function Row({ t, onOpen, selectable, selected, saving, onToggle }: {
+// v7.261: remove-from-plan control shown on Content Plan rows. Clicking deselects the
+// topic (persists), so it leaves the plan and its Content Map checkbox frees up again.
+function RemoveBtn({ saving, onRemove }: { saving: boolean; onRemove: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Remove from content plan"
+      title="Remove from plan"
+      onClick={(e) => { e.stopPropagation(); if (!saving) onRemove(); }}
+      style={{
+        width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        cursor: saving ? 'default' : 'pointer', flexShrink: 0, padding: 0, lineHeight: 1,
+        background: 'transparent', border: '1.5px solid var(--c-4a4a6a)', color: COL.mut,
+      }}
+    >
+      <i className={`ti ${saving ? 'ti-loader-2' : 'ti-x'}`} style={{ fontSize: 12 }} />
+    </button>
+  );
+}
+
+function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onRemove }: {
   t: ContentTopic; onOpen: (t: ContentTopic) => void;
   selectable?: boolean; selected?: boolean; saving?: boolean; onToggle?: (id: string) => void;
+  removable?: boolean; onRemove?: (id: string) => void;
 }) {
   const col = stateColor[t.state];
   const pri = priColor[t.priority];
+  const lead = selectable || removable;   // v7.261: leading control column (checkbox OR ×)
   return (
     <div onClick={() => onOpen(t)} style={{
-      display: 'grid', gridTemplateColumns: (selectable ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, alignItems: 'center', padding: '12px 15px',
+      display: 'grid', gridTemplateColumns: (lead ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, alignItems: 'center', padding: '12px 15px',
       background: COL.panel, border: `1px solid ${selectable && selected ? 'var(--ca-34-211-238-0_3)' : COL.line}`, borderRadius: 10, marginBottom: 7, cursor: 'pointer',
     }}>
-      {selectable && <SelectBox checked={!!selected} saving={!!saving} onToggle={() => onToggle && onToggle(t.id)} />}
+      {selectable
+        ? <SelectBox checked={!!selected} saving={!!saving} onToggle={() => onToggle && onToggle(t.id)} />
+        : removable
+          ? <RemoveBtn saving={!!saving} onRemove={() => onRemove && onRemove(t.id)} />
+          : null}
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: COL.txt2, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
           {t.kind === 'core' && <span style={{ color: COL.purple }}>★</span>}{t.name}
@@ -304,11 +330,14 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove }: {
   plan: ContentPlan; mode: 'content' | 'plan';
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
   // row adds that topic to the Content Plan panel; selection persists to the project DB.
   selectable?: boolean; selectedIds?: Set<string>; onToggleSelect?: (id: string) => void; savingIds?: Set<string>;
+  // v7.261: opt-in remove control (used only by the Content Plan destination). The × on a
+  // row deselects that topic, removing it from the plan and freeing its Content Map checkbox.
+  removable?: boolean; onRemove?: (id: string) => void;
 }) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
   const [cFilter, setCFilter] = useState<'all' | 'existing' | 'build' | 'quickwin'>('all');
@@ -408,8 +437,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       </div>
 
       {/* column header */}
-      <div style={{ display: 'grid', gridTemplateColumns: (selectable ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, padding: '0 15px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: COL.dim }}>
-        {selectable && <div aria-hidden="true" />}
+      <div style={{ display: 'grid', gridTemplateColumns: ((selectable || removable) ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, padding: '0 15px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: COL.dim }}>
+        {(selectable || removable) && <div aria-hidden="true" />}
         <div>{mode === 'plan' ? 'Article topic' : 'Topic'}</div>
         <div className="ovHide">Distance to conversion</div>
         <div className="ovHide">Priority</div>
@@ -422,8 +451,10 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         <Row key={t.id} t={t} onOpen={setSel}
           selectable={selectable}
           selected={selectable ? !!selectedIds?.has(t.id) : false}
-          saving={selectable ? !!savingIds?.has(t.id) : false}
-          onToggle={onToggleSelect} />
+          saving={(selectable || removable) ? !!savingIds?.has(t.id) : false}
+          onToggle={onToggleSelect}
+          removable={removable}
+          onRemove={onRemove} />
       ))
         : <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>}
 
@@ -441,6 +472,8 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   // v7.260: the user's hand-picked selection (ContentTopic.id set). null = still loading
   // from the project DB; an empty set = nothing picked yet (blank plan).
   const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
+  // v7.261: ids whose remove-save is in flight (per-row spinner on the × control).
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!projectId) { setKwLoaded(true); return; }
@@ -486,6 +519,24 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   );
   const selCount = selectedIds ? selectedIds.size : 0;
 
+  // v7.261: remove a topic from the plan (deselect) + persist. Optimistic: the row leaves
+  // the plan immediately; the same id un-checks on the Content Map (which re-reads the
+  // saved selection on its next mount). Reverts on save failure.
+  const removeSelection = (id: string) => {
+    const cur = selectedIds ?? new Set<string>();
+    if (!cur.has(id)) return;
+    const next = new Set(cur); next.delete(id);
+    setSelectedIds(next);   // optimistic
+    const arr = Array.from(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); n.add(id); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: arr }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => setSelectedIds((c: Set<string> | null) => { const n = new Set(c ?? []); n.add(id); return n; }))
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); n.delete(id); return n; }));
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>
       <div style={{ marginBottom: 16 }}>
@@ -517,7 +568,10 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
           </p>
         </div>
       ) : (
-        <ContentExplorer plan={selectedPlan!} mode="plan" />
+        <ContentExplorer plan={selectedPlan!} mode="plan"
+          removable
+          savingIds={savingIds}
+          onRemove={removeSelection} />
       )}
     </div>
   );

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.261 — 2026-06-22 · Content Plan: × to remove a topic, and the source panel is now titled "Content Map"
+
+**The ask (Wayne).** Three follow-ups on v7.260: (1) ticking a checkbox should push the topic into the Content Plan (kept — that is the behaviour); (2) the source panel header should read **Content Map**, not "Content Plan"; (3) in the Content Plan, add an **×** to remove a topic — which deselects it and frees its checkbox back on the Content Map.
+
+**What changed.**
+- **Title (`components/brief/ContentMapSection.tsx`).** The source panel header now reads **Content Map** (was "Content Plan"); it now matches the sub-nav label.
+- **Remove from plan (`components/brief/ContentPlanSection.tsx`).** Each Content Plan row gains an **×** control on the left. Clicking it deselects the topic and persists the smaller set — the row leaves the plan immediately, and because the Content Map re-reads the saved selection when you switch back to it, that topic's checkbox is unticked and available again. A per-row spinner shows while the remove-save is in flight (Const IV.2); the row is restored if the save fails. The × renders only on the Content Plan and the checkbox only on the Content Map — neither control leaks into the other mode.
+- **Behaviour unchanged.** Ticking a checkbox on the Content Map still pushes the topic into the Content Plan and persists to the project — that already worked in v7.260 and is retained.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso261) — **clean**. Full retained regression suite (new + every prior `contentplan:` and earlier check) — **all PASS**. SSR render — Content Plan rows render one × per row with tick/spinner states + aria-labels, Content Map keeps its checkboxes, neither control leaks into the other mode; theme tokens only (Const IV.6/V.5). Panels keep their single vertical scroller (IV.1).
+
+**Action for Wayne:** deploy v7.261. Tick to add on the Content Map; open Content Plan and click × on any row to drop it (its Content Map checkbox frees up again).
+
+
 ## v7.260 — 2026-06-22 · Content Map → Content Plan: tick a topic to push it into your plan
 
 **The ask (Wayne).** On the Content Map, add a checkbox to the left of each topic. Ticking a topic pushes it into the **Content Plan** panel — which should now be a **blank panel** that fills only with the topics you pick. Selections persist (saved to the project), and the Content Plan shows **only** the picked topics.
