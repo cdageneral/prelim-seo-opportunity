@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.260 — 2026-06-22 · Content Map → Content Plan: tick a topic to push it into your plan
+
+**The ask (Wayne).** On the Content Map, add a checkbox to the left of each topic. Ticking a topic pushes it into the **Content Plan** panel — which should now be a **blank panel** that fills only with the topics you pick. Selections persist (saved to the project), and the Content Plan shows **only** the picked topics.
+
+**What changed.**
+- **Content Map (`components/brief/ContentPlanSection.tsx` `ContentExplorer`, used by `ContentMapSection.tsx`).** Each topic row in the Content Map now carries a selection checkbox on the left (shown **only** in the Content Map instance — the destination `mode="plan"` has none). Ticking adds the topic to your plan; a per-row spinner shows while the save is in flight (Const IV.2), and the box reverts if the save fails (never a claimed-but-unsaved pick). A one-line hint above the list and a live "N selected" count make it discoverable.
+- **Content Plan (destination, `ContentPlanSection`).** Now shows **only** the hand-picked topics — a view filtered from the same canonical plan (Const II.7), with the scope cards recomputed through a new shared `scopeOf` so they reconcile **exactly** with the picked rows (Const I.3, no double-count). Blank until you pick: a clear "Your content plan is empty — tick topics on the Content Map" empty state.
+- **Persistence (`db/schema.ts` + new `app/api/projects/[id]/content-plan/route.ts`).** New `content_plan_selections` (jsonb) on `projects`, auto-migrated at runtime via the existing `ADD COLUMN IF NOT EXISTS` pattern — **no manual db:push**. GET returns the saved ids; PUT replaces the set (de-duped, order preserved). Stored on the **project** so the plan survives reloads, devices, and re-analysis. Only topic **ids** are stored — never a copy of the topic data (Const II.7); unknown/stale ids (after a re-analysis) are silently ignored.
+- **One rollup, no fork (`lib/journey/contentPlan.ts`).** Extracted the scope roll-up both plan builders already used into a single `scopeOf`, and added `filterPlanByIds` (selected subset → recomputed scope) — so the picked-plan cards and the full-plan cards share one definition.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso260) — **clean**. Full retained regression suite re-run (**new + every prior check**) — **all PASS**, including 7 new `contentplan:` invariants (filter-by-all reproduces the full plan; `scopeOf` reproduces the builder scope; selection keeps only picked rows in source order; picked scope = exact rollup; empty pick → blank plan; stale id ignored). SSR render check both modes — checkbox renders one-per-row with tick/spinner states, **plan mode has none**, colors are theme tokens with no raw white/#fff (Const IV.6/V.5). Panels keep their single vertical scroller (IV.1).
+
+**Action for Wayne:** deploy v7.260. On the Content Map, tick the topics you want; open the Content Plan tab to see just those, as prioritised briefs. (The `content_plan_selections` column self-creates on first use — no db:push needed.)
+
+
 ## v7.259 — 2026-06-22 · Mind-map: full-width canvas, on-node status badge, keyword data moved below the map
 
 **The ask (Wayne).** On the v7.258 Mind-map: remove the left legend panel and the right "click any node" empty-state panel; put a **small badge on each node showing existing-page vs new-build**; **move the keyword data below the map**; and **extend the map to the full width of the panel**.

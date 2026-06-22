@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import {
-  buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
+  buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, filterPlanByIds, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
@@ -102,14 +102,47 @@ function PChip({ active, onClick, label, count, color }: {
 
 // ─── topic row ───────────────────────────────────────────────────────────────────
 const ROW_COLS = '1fr 122px 86px 104px 96px 74px';
-function Row({ t, onOpen }: { t: ContentTopic; onOpen: (t: ContentTopic) => void }) {
+const SELECT_COL = '30px';   // v7.260: leading checkbox column (Content Map only)
+
+// v7.260: theme-safe selection checkbox. Cyan fill + near-black tick are the same tokens
+// the primary CTA uses, so it reads in BOTH light and dark themes (Const IV.6). Clicking
+// toggles selection only — it never opens the row drawer (stopPropagation).
+function SelectBox({ checked, saving, onToggle }: { checked: boolean; saving: boolean; onToggle: () => void }) {
+  return (
+    <div
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={checked ? 'Remove from content plan' : 'Add to content plan'}
+      tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); if (!saving) onToggle(); }}
+      onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (!saving) onToggle(); } }}
+      style={{
+        width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        cursor: saving ? 'default' : 'pointer', flexShrink: 0,
+        background: checked ? COL.cyan : 'transparent',
+        border: `1.5px solid ${checked ? COL.cyan : 'var(--c-4a4a6a)'}`,
+        transition: 'background 0.12s, border-color 0.12s',
+      }}
+    >
+      {saving
+        ? <i className="ti ti-loader-2" style={{ fontSize: 11, color: checked ? 'var(--c-08080f)' : COL.cyan }} />
+        : (checked ? <i className="ti ti-check" style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-08080f)' }} /> : null)}
+    </div>
+  );
+}
+
+function Row({ t, onOpen, selectable, selected, saving, onToggle }: {
+  t: ContentTopic; onOpen: (t: ContentTopic) => void;
+  selectable?: boolean; selected?: boolean; saving?: boolean; onToggle?: (id: string) => void;
+}) {
   const col = stateColor[t.state];
   const pri = priColor[t.priority];
   return (
     <div onClick={() => onOpen(t)} style={{
-      display: 'grid', gridTemplateColumns: ROW_COLS, gap: 12, alignItems: 'center', padding: '12px 15px',
-      background: COL.panel, border: `1px solid ${COL.line}`, borderRadius: 10, marginBottom: 7, cursor: 'pointer',
+      display: 'grid', gridTemplateColumns: (selectable ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, alignItems: 'center', padding: '12px 15px',
+      background: COL.panel, border: `1px solid ${selectable && selected ? 'var(--ca-34-211-238-0_3)' : COL.line}`, borderRadius: 10, marginBottom: 7, cursor: 'pointer',
     }}>
+      {selectable && <SelectBox checked={!!selected} saving={!!saving} onToggle={() => onToggle && onToggle(t.id)} />}
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: COL.txt2, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
           {t.kind === 'core' && <span style={{ color: COL.purple }}>★</span>}{t.name}
@@ -271,7 +304,12 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'content' | 'plan' }) {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds }: {
+  plan: ContentPlan; mode: 'content' | 'plan';
+  // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
+  // row adds that topic to the Content Plan panel; selection persists to the project DB.
+  selectable?: boolean; selectedIds?: Set<string>; onToggleSelect?: (id: string) => void; savingIds?: Set<string>;
+}) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
   const [cFilter, setCFilter] = useState<'all' | 'existing' | 'build' | 'quickwin'>('all');
   const [posFilter, setPosFilter] = useState<'all' | PosKey>('all');   // v7.249: SERP page filter
@@ -370,7 +408,8 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
       </div>
 
       {/* column header */}
-      <div style={{ display: 'grid', gridTemplateColumns: ROW_COLS, gap: 12, padding: '0 15px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: COL.dim }}>
+      <div style={{ display: 'grid', gridTemplateColumns: (selectable ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, padding: '0 15px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: COL.dim }}>
+        {selectable && <div aria-hidden="true" />}
         <div>{mode === 'plan' ? 'Article topic' : 'Topic'}</div>
         <div className="ovHide">Distance to conversion</div>
         <div className="ovHide">Priority</div>
@@ -379,7 +418,13 @@ export function ContentExplorer({ plan, mode }: { plan: ContentPlan; mode: 'cont
         <div className="ovHide" style={{ textAlign: 'right' }}>Competitor</div>
       </div>
 
-      {rows.length ? rows.map((t: ContentTopic) => <Row key={t.id} t={t} onOpen={setSel} />)
+      {rows.length ? rows.map((t: ContentTopic) => (
+        <Row key={t.id} t={t} onOpen={setSel}
+          selectable={selectable}
+          selected={selectable ? !!selectedIds?.has(t.id) : false}
+          saving={selectable ? !!savingIds?.has(t.id) : false}
+          onToggle={onToggleSelect} />
+      ))
         : <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>}
 
       <Drawer topic={sel} onClose={() => setSel(null)} />
@@ -393,6 +438,9 @@ interface Props { projectId: string; kwVersion?: number; analysis: any; competit
 export default function ContentPlanSection({ projectId, kwVersion, analysis, competitors = [], claudeAssigns = {} }: Props) {
   const [uploadedKeywords, setUploadedKeywords] = useState<any[]>([]);
   const [kwLoaded, setKwLoaded] = useState(false);
+  // v7.260: the user's hand-picked selection (ContentTopic.id set). null = still loading
+  // from the project DB; an empty set = nothing picked yet (blank plan).
+  const [selectedIds, setSelectedIds] = useState<Set<string> | null>(null);
 
   useEffect(() => {
     if (!projectId) { setKwLoaded(true); return; }
@@ -402,6 +450,19 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .then((r: Response) => r.ok ? r.json() : { keywords: [] })
       .then((d: any) => { if (!cancelled) { setUploadedKeywords(d.keywords ?? []); setKwLoaded(true); } })
       .catch(() => { if (!cancelled) setKwLoaded(true); });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  // v7.260: load the saved Content Plan selection from the project. Re-reads on mount —
+  // e.g. after ticking topics on the Content Map tab and switching to this one.
+  useEffect(() => {
+    if (!projectId) { setSelectedIds(new Set()); return; }
+    let cancelled = false;
+    setSelectedIds(null);
+    fetch(`/api/projects/${projectId}/content-plan`)
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => { if (!cancelled) setSelectedIds(new Set<string>(Array.isArray(d.selections) ? d.selections : [])); })
+      .catch(() => { if (!cancelled) setSelectedIds(new Set<string>()); });
     return () => { cancelled = true; };
   }, [projectId, kwVersion]);
 
@@ -416,16 +477,26 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     return planFromSnapshot(analysis, uploadedKeywords);
   }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
 
+  // v7.260: the Content Plan shows ONLY the hand-picked topics — filtered from the same
+  // canonical plan (Const II.7 view; scope recomputed via the shared scopeOf, so the
+  // cards reconcile exactly with the picked rows). Blank until topics are picked.
+  const selectedPlan = useMemo(
+    () => (plan && selectedIds ? filterPlanByIds(plan, selectedIds) : null),
+    [plan, selectedIds],
+  );
+  const selCount = selectedIds ? selectedIds.size : 0;
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>
       <div style={{ marginBottom: 16 }}>
         <p style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: COL.dim, marginBottom: 5 }}>Foundation · 05 · Content Plan</p>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: COL.txt, margin: 0 }}>Content Plan</h2>
         <p style={{ fontSize: 12, color: COL.mut, marginTop: 5, maxWidth: 760 }}>
-          Prioritised, writer-ready briefs from the audience journey. P0 first &mdash; closest to conversion with real demand. Scope cards filter; click a row for the full brief.
+          Your hand-picked plan. Tick topics on the <b style={{ color: COL.cyan }}>Content Map</b> to push them here &mdash; only the topics you select appear, as prioritised, writer-ready briefs. Click a row for the full brief.
+          {selCount > 0 && <span style={{ color: COL.txt2 }}> &nbsp;·&nbsp; {selCount} topic{selCount !== 1 ? 's' : ''} in your plan.</span>}
         </p>
       </div>
-      {!kwLoaded ? (
+      {(!kwLoaded || selectedIds === null) ? (
         <div style={{ padding: '48px 24px', textAlign: 'center' }}>
           <i className="ti ti-loader-2" style={{ color: COL.cyan, fontSize: 18 }} />
           <p style={{ color: COL.mut2, fontSize: 12, marginTop: 10 }}>Loading content plan&hellip;</p>
@@ -434,11 +505,19 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
         <div style={{ padding: '48px 24px', textAlign: 'center', maxWidth: 520, margin: '0 auto' }}>
           <div style={{ fontSize: 34, marginBottom: 12 }}>🗺️</div>
           <p style={{ color: COL.mut, fontSize: 13, lineHeight: 1.6 }}>
-            The Content Plan is built from the deep journey. Open the <b style={{ color: COL.cyan }}>Keyword</b> panel and run <b style={{ color: COL.cyan }}>Expand product data</b> &amp; <b style={{ color: COL.cyan }}>Build pre-product journey</b> to populate it &mdash; then every topic shows here as a prioritised, writer-ready brief.
+            The Content Plan is built from the deep journey. Open the <b style={{ color: COL.cyan }}>Keyword</b> panel and run <b style={{ color: COL.cyan }}>Expand product data</b> &amp; <b style={{ color: COL.cyan }}>Build pre-product journey</b> to populate it &mdash; then tick topics on the <b style={{ color: COL.cyan }}>Content Map</b> to add them here.
+          </p>
+        </div>
+      ) : selCount === 0 ? (
+        <div style={{ padding: '48px 24px', textAlign: 'center', maxWidth: 520, margin: '0 auto' }}>
+          <div style={{ fontSize: 34, marginBottom: 12 }}>🗂️</div>
+          <p style={{ color: COL.txt2, fontSize: 14, fontWeight: 600, margin: '0 0 6px' }}>Your content plan is empty</p>
+          <p style={{ color: COL.mut, fontSize: 13, lineHeight: 1.6 }}>
+            Go to the <b style={{ color: COL.cyan }}>Content Map</b> tab and tick the checkbox next to any topic to push it into your plan. Only the topics you pick appear here &mdash; as prioritised, writer-ready briefs.
           </p>
         </div>
       ) : (
-        <ContentExplorer plan={plan} mode="plan" />
+        <ContentExplorer plan={selectedPlan!} mode="plan" />
       )}
     </div>
   );

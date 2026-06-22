@@ -78,6 +78,39 @@ export interface ContentPlan {
   };
 }
 
+// v7.260: single scope-rollup helper. The content-plan scope is purely a roll-up of
+// its topic list, so both builders below AND the Content-Plan selection filter
+// (filterPlanByIds) compute it through this ONE function — no forked rollups, exact
+// TS sums of real source rows (Const I.1/I.3).
+export function scopeOf(topics: ContentTopic[]): ContentPlan['scope'] {
+  const sum = (arr: ContentTopic[]) => arr.reduce((s, t) => s + t.totalVol, 0);
+  const existing = topics.filter((t) => t.state === 'existing');
+  const build = topics.filter((t) => t.state !== 'existing');
+  const qw = topics.filter((t) => t.quickWin);
+  const p0 = topics.filter((t) => t.priority === 'P0');
+  const p1 = topics.filter((t) => t.priority === 'P1');
+  const p2 = topics.filter((t) => t.priority === 'P2');
+  return {
+    total: topics.length, totalVol: sum(topics),
+    existing: existing.length, existingVol: sum(existing),
+    build: build.length, buildVol: sum(build),
+    quickWins: qw.length, quickWinVol: sum(qw),
+    p0: p0.length, p0Vol: sum(p0),
+    p1: p1.length, p1Vol: sum(p1),
+    p2: p2.length, p2Vol: sum(p2),
+  };
+}
+
+// v7.260: Content Plan = the user's hand-picked subset of the full content plan. Filter
+// the canonical topics to the selected ids and recompute scope through scopeOf, so the
+// destination panel's cards reconcile EXACTLY with the picked rows (Const II.7 view of
+// one source of truth; I.3 no double-count). Source order is preserved.
+export function filterPlanByIds(plan: ContentPlan, ids: Iterable<string>): ContentPlan {
+  const set = ids instanceof Set ? ids : new Set(ids);
+  const topics = plan.topics.filter((t) => set.has(t.id));
+  return { topics, scope: scopeOf(topics) };
+}
+
 export const DISTANCE_LABEL: Record<number, string> = {
   1: 'At decision', 2: 'Evaluating', 3: 'Researching', 4: 'Just aware',
 };
@@ -270,27 +303,8 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
     });
   }
 
-  // scope rollup
-  const sum = (arr: ContentTopic[]) => arr.reduce((s, t) => s + t.totalVol, 0);
-  const existing = topics.filter((t) => t.state === 'existing');
-  const build = topics.filter((t) => t.state !== 'existing');
-  const qw = topics.filter((t) => t.quickWin);
-  const p0 = topics.filter((t) => t.priority === 'P0');
-  const p1 = topics.filter((t) => t.priority === 'P1');
-  const p2 = topics.filter((t) => t.priority === 'P2');
-
-  return {
-    topics,
-    scope: {
-      total: topics.length, totalVol: sum(topics),
-      existing: existing.length, existingVol: sum(existing),
-      build: build.length, buildVol: sum(build),
-      quickWins: qw.length, quickWinVol: sum(qw),
-      p0: p0.length, p0Vol: sum(p0),
-      p1: p1.length, p1Vol: sum(p1),
-      p2: p2.length, p2Vol: sum(p2),
-    },
-  };
+  // scope rollup (v7.260: via the shared scopeOf helper — single rollup definition)
+  return { topics, scope: scopeOf(topics) };
 }
 
 export const PRIORITY_LABEL: Record<Priority, string> = { P0: 'Do first', P1: 'Next', P2: 'Later' };
@@ -395,25 +409,8 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
     out[i].brief.links = siblings.map(s => ({ name: s.name, dir: 'to' as const, why: 'Same theme — cross-link' }));
   }
 
-  const sum = (arr: ContentTopic[]) => arr.reduce((s, t) => s + t.totalVol, 0);
-  const existing = out.filter(t => t.state === 'existing');
-  const build = out.filter(t => t.state !== 'existing');
-  const qw = out.filter(t => t.quickWin);
-  const p0 = out.filter(t => t.priority === 'P0');
-  const p1 = out.filter(t => t.priority === 'P1');
-  const p2 = out.filter(t => t.priority === 'P2');
-  return {
-    topics: out,
-    scope: {
-      total: out.length, totalVol: sum(out),
-      existing: existing.length, existingVol: sum(existing),
-      build: build.length, buildVol: sum(build),
-      quickWins: qw.length, quickWinVol: sum(qw),
-      p0: p0.length, p0Vol: sum(p0),
-      p1: p1.length, p1Vol: sum(p1),
-      p2: p2.length, p2Vol: sum(p2),
-    },
-  };
+  // v7.260: scope via the shared scopeOf helper — single rollup definition
+  return { topics: out, scope: scopeOf(out) };
 }
 
 // ─── Single wiring point: analysis snapshot → content plan ──────────────────────

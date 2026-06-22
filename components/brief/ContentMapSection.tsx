@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, Fragment } from 'react';
+import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { planFromSnapshot, buildContentPlanFromTopics, briefTitleFromKeywords } from '@/lib/journey/contentPlan';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
@@ -1357,6 +1357,48 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   const [buildErr, setBuildErr] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; startedAt: number } | null>(null);
 
+  // v7.260: Content Plan selection — the topics the user pushed into the Content Plan
+  // panel (by ContentTopic.id). Persisted to the project DB so it survives reload/device/
+  // re-analysis. selRef mirrors the live set so rapid sequential toggles chain correctly
+  // (each PUT sends the full set; last-write-wins would otherwise drop a quick prior pick).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [savingIds,   setSavingIds]   = useState<Set<string>>(new Set());
+  const selRef = useRef<Set<string>>(new Set());
+  useEffect(() => { selRef.current = selectedIds; }, [selectedIds]);
+
+  // Load the saved selection from the project on mount / project change.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/content-plan`)
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => { if (!cancelled) setSelectedIds(new Set<string>(Array.isArray(d.selections) ? d.selections : [])); })
+      .catch(() => { /* honest gap: leave selection empty on failure */ });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  // Toggle a topic in/out of the plan + persist (full-set PUT, idempotent replace).
+  const toggleSelect = (id: string) => {
+    const next = new Set(selRef.current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    selRef.current = next;
+    setSelectedIds(next);   // optimistic
+    const arr = Array.from(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); n.add(id); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: arr }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => {
+        // Revert this id on failure so the UI never claims a save that didn't happen.
+        const reverted = new Set(selRef.current);
+        if (reverted.has(id)) reverted.delete(id); else reverted.add(id);
+        selRef.current = reverted;
+        setSelectedIds(reverted);
+      })
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); n.delete(id); return n; }));
+  };
+
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const segments: AudienceSegment[] = useMemo(
     () => (analysis?.semrushSnapshot as any)?._audienceSegments ?? [],
@@ -1642,7 +1684,16 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* v7.176: the redesigned, journey-fed content experience leads the panel. */}
       {plan && (
         <div style={{ marginBottom: 26 }}>
-          <ContentExplorer plan={plan} mode="content" />
+          {/* v7.260: tick a topic to push it into the Content Plan panel. */}
+          <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-checkbox" style={{ fontSize: 13, color: 'var(--c-22d3ee)' }} />
+            Tick a topic to add it to your <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>Content Plan</span>{selectedIds.size > 0 ? ` · ${selectedIds.size} selected` : ''}
+          </p>
+          <ContentExplorer plan={plan} mode="content"
+            selectable
+            selectedIds={selectedIds}
+            savingIds={savingIds}
+            onToggleSelect={toggleSelect} />
         </div>
       )}
       {plan && (

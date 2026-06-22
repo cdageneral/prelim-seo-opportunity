@@ -42,6 +42,13 @@ export const projects = pgTable('projects', {
   // Competitors/upload manager. Auto-migrated at runtime (ADD COLUMN IF NOT EXISTS).
   excludedBrands:           jsonb('excluded_brands').$type<string[]>(),
   excludedBrandsUpdatedAt:  timestamp('excluded_brands_updated_at'),
+  // v7.260: Content Plan hand-picked topic selection — the editorial subset of the
+  // canonical content topics the user pushed into the Content Plan panel, stored as an
+  // array of ContentTopic.id (Const II.7: a view over one source of truth, not a copy).
+  // Lives on the project so it survives reloads, devices, and re-analysis. Auto-migrated
+  // at runtime via the ADD COLUMN IF NOT EXISTS pattern — no manual db:push.
+  contentPlanSelections:          jsonb('content_plan_selections').$type<string[]>(),
+  contentPlanSelectionsUpdatedAt: timestamp('content_plan_selections_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
