@@ -1,6 +1,25 @@
 # OrbitIQ Changelog
 
-## v7.257 — 2026-06-22 · Mind-map view redesigned as a node-link "Content Topic Explorer" (matches Wayne's reference)
+## v7.258 — 2026-06-22 · Mind-map = umbrella → category → topic hierarchy, click any node for its keywords + volume (Wayne's Option 3)
+
+**The ask (Wayne).** Two problems with the v7.257 explorer: (1) the node titles were unreadable, and (2) it focused one category laid out by funnel stage, so it "looked like it's selecting individual topics" rather than showing a **full branch from the parent category all the way down**. After comparing three depth options, Wayne picked **Option 3 — Umbrella → Category → Topic** (top-down tree), and asked that **clicking a node show that node's keywords and volume**.
+
+**Bug fixed — unreadable titles.** The v7.256/7.257 node text used color tokens that don't exist in the theme (`--c-e0e0f4`, `--c-0a0a1e`, `--c-c0c0dc`, …), so the title text fell back to black on a dark canvas. All node/detail text now uses **valid tokens** (`--c-e0e0f8`, `--c-08081a`, `--c-d8d8f0`, the stage/level palette), legible in both themes. (The dual-theme render check now also greps for unknown `var(--c-…)` tokens so this can't recur.)
+
+**Rebuilt (`components/brief/JourneySection.tsx`).** The Mind-map view is now a **top-down hierarchy tree** read straight from the stored taxonomy (Const III.1b / II.8 — umbrella = `path[0]`, never re-derived):
+- **Umbrella → Category → Topic**, three rows top→bottom with level labels down the left gutter (amber umbrella → purple category → cyan topic, matching the approved preview). Topic nodes carry a green/red status spine (existing/optimize vs. net-new/build).
+- **Click any node → keywords + real volume.** The right-hand detail panel lists that node's keywords with their real Semrush volume (Const I.1). A topic shows its own keywords; a category aggregates its topics' keywords; the umbrella aggregates the whole branch (deduped, max real volume — no double counting, Const I.3).
+- **"Branch for" picker** chooses which umbrella's full branch is on the canvas (default = highest-volume). Journey-scope pills (All / Product / Pre-product) still apply.
+- **Scale-safe.** Only the focused umbrella's branch is drawn; large categories show their top 8 topics with a **"+N more topics"** node that expands on click (count always shown; nothing capped — Const I.6). Computed deterministic layout (no DOM measurement). Canvas scrolls in its own box; the panel keeps its single vertical scroller (Const IV.1).
+
+No funnel edges or modeled weights — this is the stored parent→child hierarchy, and all volumes are real Semrush (Const I.1). The List view is unchanged.
+
+**Verified (own debugging agent, real compiled code).** Full retained regression suite re-run — **all PASS**. Isolated `tsc` — **no real type errors** in the changed file. SSR-rendered in **both light and dark** (`orbitiq-v7.258-RENDER.html`), **no React warnings**; checked geometry: canvas in-bounds, **zero** `NaN` paths, no `undefined`, all three level labels + node titles render. Uses only valid theme tokens → parity (IV.6/V.5) holds.
+
+**Action for Wayne:** deploy v7.258. Journey panel → **View → Mind-map** → **Branch for** picks the umbrella; click any node to see its keywords and volume.
+
+
+## v7.257 — 2026-06-22 · Mind-map view redesigned as a node-link "Content Topic Explorer" (matches Wayne's reference) 2026-06-22 · Mind-map view redesigned as a node-link "Content Topic Explorer" (matches Wayne's reference)
 
 **The ask (Wayne).** After v7.256 shipped the Mind-map as boxed stage-columns, Wayne shared two reference visuals — a classic radial mind map and, more precisely, a **"User Journey Map – Content Topic Explorer"**: a node-link graph where each topic is a pill, the funnel runs top→bottom (trigger → problem → category discovery → product evaluation → usage → advanced), connections are typed and colored (Next step / Compare / Broader), a legend sits on the left, and a detail panel describes the selected node. "I was looking at visuals more like this."
 

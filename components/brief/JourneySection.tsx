@@ -2248,41 +2248,28 @@ export function JourneyViewToggle({ view, onChange }: { view: 'list' | 'mindmap'
   );
 }
 
-// ─── v7.256: Behavioral journey mind-map / knowledge graph ───────────────────────
-// A scale-safe behavioral graph over the SAME canonical topics the list reads (Const
-// II.7). The spine is the funnel itself (Awareness → Consideration → Decision →
-// Retention) — "what users learn first → what they compare → what they decide". Within
-// each stage, topics group by category (collapsible, so thousands of topics never render
-// flat — the durable scale constraint). Connections are journey-stage progression
-// (NEXT_STEP / PREVIOUS_STEP) and same-stage siblings (COMPARE); every node and edge is
-// weighted by REAL Semrush volume — no modeled probability is shown (Const I.1).
+// ─── v7.258: Mind-map = umbrella → category → topic hierarchy (Option 3, Wayne 2026-06-22) ───
+// A scale-safe top-down TREE over the SAME canonical topics the list reads (Const II.7): the
+// stored taxonomy umbrella → category → topic (READ, never re-derived — Const III.1b / II.8).
+// Click ANY node to see its real keywords + Semrush volume (Const I.1). No funnel edges, no
+// modeled weights — pure stored hierarchy; only the focused umbrella's branch is drawn so the
+// canvas never renders thousands of nodes flat (the durable scale constraint).
 type MindRow = { t: CanonicalJourneyTopic; lane: JourneyType; state: NodeState; action: 'optimize' | 'build' };
-
-const MIND_REL = {
-  next:    { label: 'Next step',     color: 'var(--c-34d399)', icon: 'ti-arrow-right' },
-  compare: { label: 'Compare',       color: 'var(--c-f59e0b)', icon: 'ti-arrows-left-right' },
-  prev:    { label: 'Leads here',    color: 'var(--c-22d3ee)', icon: 'ti-arrow-back-up' },
-};
-
-// v7.256: stage → reference "journey row" label, so the funnel reads like a user journey
-// (Awareness = Category Discovery, etc.) while staying our canonical 4-stage model.
-const MIND_STAGE_ROW: Record<JourneyStage, string> = {
-  awareness: 'Category Discovery', consideration: 'Product Evaluation', decision: 'Usage & Decision', retention: 'Advanced / Retention',
-};
-// relationship edge types we actually compute (no invented likelihoods — Const I.1).
-const MIND_EDGE = {
-  next:    { label: 'Next step (most likely)', color: 'var(--c-34d399)', dashed: false },
-  compare: { label: 'Compare / alternative',   color: 'var(--c-a78bfa)', dashed: false },
-  broader: { label: 'Broader / intro',         color: 'var(--c-5a5a80)', dashed: true  },
-};
-function truncLabel(s: string, n = 24): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function truncLabel(s: string, n = 22): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+// level palette: umbrella (amber) → category (purple) → topic (cyan), matching the Option 3 preview.
+const MIND_LEVEL = [
+  { border: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_06)', label: 'Umbrella' },
+  { border: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_06)', label: 'Category' },
+  { border: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_06)', label: 'Topic' },
+];
 
 export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null, clientDomain = '' }: {
   topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; clientDomain?: string;
 }) {
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
+  const [focusUmbrella, setFocusUmbrella] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [focusKey, setFocusKey] = useState<string | null>(null);   // which category's journey is on the canvas
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());   // categories showing ALL topics (beyond cap)
 
   const problemSet = useMemo(() => new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim())), [problemSeeds]);
   const isPreProduct = (t: CanonicalJourneyTopic): boolean =>
@@ -2303,303 +2290,229 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   :                             rows,
   [rows, journeyScope]);
 
-  // lane → stage → category → rows[] (the behavioral tree).
-  const byId = useMemo(() => new Map(rows.map(r => [r.t.id, r])), [rows]);
-  const tree = useMemo(() => {
-    const m = new Map<JourneyType, Map<JourneyStage, Map<string, MindRow[]>>>();
-    for (const r of scopedRows) {
-      const sm = m.get(r.lane) ?? m.set(r.lane, new Map()).get(r.lane)!;
-      const cm = sm.get(r.t.stage) ?? sm.set(r.t.stage, new Map()).get(r.t.stage)!;
-      const key = r.t.parentName || '(uncategorized)';
-      (cm.get(key) ?? cm.set(key, []).get(key)!).push(r);
-    }
-    return m;
-  }, [scopedRows]);
+  // stored taxonomy: each topic's umbrella is read (path[0]); fall back to its category.
+  const umbrellaOf = (t: CanonicalJourneyTopic): string =>
+    (((t as any).umbrella as string | undefined)?.trim()) || t.parentName || '(uncategorized)';
 
-  // behavioral links for the selected topic — same lane + category, by stage adjacency.
-  const selectedRow = selectedId ? byId.get(selectedId) ?? null : null;
-  const links = useMemo(() => {
-    if (!selectedRow) return null;
-    const { lane, t } = selectedRow;
-    const cat = t.parentName || '(uncategorized)';
-    const stageIdx = JOURNEY_STAGE_ORDER.indexOf(t.stage);
-    const sameCat = rows.filter(r => r.lane === lane && (r.t.parentName || '(uncategorized)') === cat && r.t.id !== t.id);
-    const atStage = (idx: number) => idx >= 0 && idx < JOURNEY_STAGE_ORDER.length
-      ? sameCat.filter(r => r.t.stage === JOURNEY_STAGE_ORDER[idx]).sort((a, b) => b.t.totalVolume - a.t.totalVolume)
-      : [];
-    return {
-      cat,
-      next:    atStage(stageIdx + 1),
-      compare: sameCat.filter(r => r.t.stage === t.stage).sort((a, b) => b.t.totalVolume - a.t.totalVolume),
-      prev:    atStage(stageIdx - 1),
-    };
-  }, [selectedRow, rows]);
-  const relatedIds = useMemo(() => {
-    const s = new Set<string>();
-    if (links) { for (const g of [links.next, links.compare, links.prev]) for (const r of g) s.add(r.t.id); }
-    return s;
-  }, [links]);
-
-  // categories within the current scope; each = one (lane, parentName) whose topics span stages.
-  const categories = useMemo(() => {
-    const m = new Map<string, { key: string; lane: JourneyType; name: string; rows: MindRow[]; vol: number }>();
+  // umbrella → category → rows[]
+  const umbrellas = useMemo(() => {
+    const m = new Map<string, { name: string; vol: number; cats: Map<string, MindRow[]> }>();
     for (const r of scopedRows) {
-      const name = r.t.parentName || '(uncategorized)';
-      const key = r.lane + '|||' + name;
-      const e = m.get(key) ?? m.set(key, { key, lane: r.lane, name, rows: [], vol: 0 }).get(key)!;
-      e.rows.push(r); e.vol += r.t.totalVolume;
+      const u = umbrellaOf(r.t);
+      const e = m.get(u) ?? m.set(u, { name: u, vol: 0, cats: new Map() }).get(u)!;
+      e.vol += r.t.totalVolume;
+      const cat = r.t.parentName || '(uncategorized)';
+      (e.cats.get(cat) ?? e.cats.set(cat, []).get(cat)!).push(r);
     }
     return Array.from(m.values()).sort((a, b) => b.vol - a.vol);
-  }, [scopedRows]);
+  }, [scopedRows]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const effectiveFocusKey = (focusKey && categories.some(c => c.key === focusKey)) ? focusKey : (categories[0]?.key ?? null);
-  const focused = categories.find(c => c.key === effectiveFocusKey) ?? null;
+  const effectiveUmbrella = (focusUmbrella && umbrellas.some(u => u.name === focusUmbrella)) ? focusUmbrella : (umbrellas[0]?.name ?? null);
+  const focused = umbrellas.find(u => u.name === effectiveUmbrella) ?? null;
 
-  const focusedStages = useMemo(() => {
-    if (!focused) return [] as Array<{ stage: JourneyStage; rows: MindRow[] }>;
-    const bs = new Map<JourneyStage, MindRow[]>();
-    for (const r of focused.rows) (bs.get(r.t.stage) ?? bs.set(r.t.stage, []).get(r.t.stage)!).push(r);
-    return JOURNEY_STAGE_ORDER.filter(s => bs.has(s)).map(s => ({ stage: s, rows: bs.get(s)!.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume) }));
-  }, [focused]);
+  // keyword aggregation (real Semrush volume — Const I.1; dedup keeps the max real volume, no double count)
+  const kwAgg = (rs: MindRow[]) => {
+    const m = new Map<string, number>();
+    for (const r of rs) for (const k of r.t.keywords) m.set(k.keyword, Math.max(m.get(k.keyword) ?? 0, k.searchVolume));
+    return Array.from(m.entries()).map(([keyword, searchVolume]) => ({ keyword, searchVolume })).sort((a, b) => b.searchVolume - a.searchVolume);
+  };
 
-  // deterministic top→bottom layout — a root "entry" node, then one row per funnel stage.
-  // Positions are COMPUTED (no DOM measurement — what kept the earlier flat maps fragile),
-  // and only the focused category's topics are drawn, so it never renders thousands of nodes.
+  const TCAP = 8;
   const layout = useMemo(() => {
-    const NW = 158, NH = 46, COLW = 184, ROWGAP = 124, LM = 132, TOPPAD = 34;
-    type LNode = { id: string; kind: 'root' | 'topic'; x: number; y: number; label: string; sub: string; stage: JourneyStage | null; row?: MindRow };
-    type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; kind: keyof typeof MIND_EDGE; vol: number; from: string; to: string };
-    if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width: 720, height: 200, NW, NH, maxVol: 1 };
-    const maxCols = Math.max(1, ...focusedStages.map(s => s.rows.length));
-    const width = Math.max(720, LM + maxCols * COLW + 40);
-    const innerW = width - LM - 40;
-    const rowY = (i: number) => TOPPAD + NH / 2 + i * ROWGAP;
-    const colX = (j: number, n: number) => LM + innerW * (j + 0.5) / n;
-    const maxVol = Math.max(1, ...focusedStages.flatMap(s => s.rows.map(r => r.t.totalVolume)));
+    const NW = [174, 158, 150], NH = 48, leafStep = 176, levelH = 122, padX = 28, topPad = 22;
+    type Kind = 'umbrella' | 'category' | 'topic' | 'more';
+    type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build' };
+    type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
+    if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width: 640, height: 200, NW, NH };
+    const cats = Array.from(focused.cats.entries()).sort((a, b) =>
+      b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0));
+    let leaf = 0;
     const nodes: LNode[] = [];
     const edges: LEdge[] = [];
-    const rootId = 'root:' + focused.key;
-    const rootX = LM + innerW / 2, rootY = rowY(0);
-    nodes.push({ id: rootId, kind: 'root', x: rootX, y: rootY, label: focused.name, sub: `${fmtVol(focused.vol)}/mo`, stage: null });
-    const posById = new Map<string, { x: number; y: number }>();
-    focusedStages.forEach((srow, si) => {
-      const y = rowY(si + 1);
-      srow.rows.forEach((r, j) => {
-        const x = colX(j, srow.rows.length);
-        nodes.push({ id: r.t.id, kind: 'topic', x, y, label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, stage: r.t.stage, row: r });
-        posById.set(r.t.id, { x, y });
+    const rowY = (lvl: number) => topPad + NH / 2 + lvl * levelH;
+    const catXs: number[] = [];
+    cats.forEach(([cat, rs]) => {
+      const sorted = rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume);
+      const showAll = expandedCats.has(cat);
+      const shown = showAll ? sorted : sorted.slice(0, TCAP);
+      const childXs: number[] = [];
+      shown.forEach(r => {
+        const x = padX + (leaf++) * leafStep + leafStep / 2;
+        childXs.push(x);
+        nodes.push({ id: r.t.id, kind: 'topic', level: 2, x, y: rowY(2), label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
       });
-    });
-    if (focusedStages[0]) for (const r of focusedStages[0].rows) {
-      const p = posById.get(r.t.id)!;
-      edges.push({ id: 'b:' + r.t.id, x1: rootX, y1: rootY + NH / 2, x2: p.x, y2: p.y - NH / 2, kind: 'broader', vol: 0, from: rootId, to: r.t.id });
-    }
-    for (let i = 0; i < focusedStages.length - 1; i++) {
-      const up = focusedStages[i].rows, down = focusedStages[i + 1].rows;
-      const full = up.length * down.length <= 24;
-      for (const u of up) for (const d of (full ? down : down.slice(0, 2))) {
-        const pu = posById.get(u.t.id)!, pd = posById.get(d.t.id)!;
-        edges.push({ id: `n:${u.t.id}:${d.t.id}`, x1: pu.x, y1: pu.y + NH / 2, x2: pd.x, y2: pd.y - NH / 2, kind: 'next', vol: d.t.totalVolume, from: u.t.id, to: d.t.id });
+      if (!showAll && sorted.length > TCAP) {
+        const x = padX + (leaf++) * leafStep + leafStep / 2;
+        childXs.push(x);
+        nodes.push({ id: 'more:' + cat, kind: 'more', level: 2, x, y: rowY(2), label: `+${sorted.length - TCAP} more topics`, sub: '' });
       }
-    }
-    for (const srow of focusedStages) for (let j = 0; j < srow.rows.length - 1; j++) {
-      const a = srow.rows[j], b = srow.rows[j + 1];
-      const pa = posById.get(a.t.id)!, pb = posById.get(b.t.id)!;
-      edges.push({ id: `c:${a.t.id}:${b.t.id}`, x1: pa.x + NW / 2, y1: pa.y, x2: pb.x - NW / 2, y2: pb.y, kind: 'compare', vol: 0, from: a.t.id, to: b.t.id });
-    }
-    const height = rowY(focusedStages.length) + NH;
-    return { nodes, edges, width, height, NW, NH, maxVol };
-  }, [focused, focusedStages]);
+      const cx = childXs.length ? (childXs[0] + childXs[childXs.length - 1]) / 2 : (padX + (leaf++) * leafStep + leafStep / 2);
+      catXs.push(cx);
+      const catVol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
+      nodes.push({ id: 'cat:' + cat, kind: 'category', level: 1, x: cx, y: rowY(1), label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics` });
+      for (const x of childXs) edges.push({ id: `e1:${cat}:${x}`, x1: cx, y1: rowY(1) + NH / 2, x2: x, y2: rowY(2) - NH / 2, level: 2 });
+    });
+    const rootX = catXs.length ? (catXs[0] + catXs[catXs.length - 1]) / 2 : padX + leafStep / 2;
+    nodes.push({ id: 'umb:' + focused.name, kind: 'umbrella', level: 0, x: rootX, y: rowY(0), label: focused.name, sub: `${fmtVol(focused.vol)}/mo` });
+    for (const cx of catXs) edges.push({ id: `e0:${cx}`, x1: rootX, y1: rowY(0) + NH / 2, x2: cx, y2: rowY(1) - NH / 2, level: 1 });
+    const width = Math.max(640, padX * 2 + leaf * leafStep);
+    const height = rowY(2) + NH;
+    return { nodes, edges, width, height, NW, NH };
+  }, [focused, expandedCats]);
 
-  const totalVol = scopedRows.reduce((s, r) => s + r.t.totalVolume, 0);
+  // selected node → keywords + volume (Const I.1)
+  const selected = useMemo(() => {
+    if (!selectedId || !focused) return null;
+    if (selectedId.startsWith('umb:')) {
+      const rs = Array.from(focused.cats.values()).flat();
+      return { kind: 'Umbrella', label: focused.name, vol: focused.vol, kws: kwAgg(rs), topics: rs.length, action: null as ('optimize'|'build'|null) };
+    }
+    if (selectedId.startsWith('cat:')) {
+      const cat = selectedId.slice(4);
+      const rs = focused.cats.get(cat) ?? [];
+      return { kind: 'Category', label: cat, vol: rs.reduce((s, r) => s + r.t.totalVolume, 0), kws: kwAgg(rs), topics: rs.length, action: null as ('optimize'|'build'|null) };
+    }
+    const r = rows.find(x => x.t.id === selectedId);
+    if (!r) return null;
+    return { kind: 'Topic', label: r.t.product, vol: r.t.totalVolume, kws: kwAgg([r]), topics: 0, action: r.action };
+  }, [selectedId, focused, rows]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onNodeClick = (id: string) => {
+    if (id.startsWith('more:')) { const cat = id.slice(5); setExpandedCats(prev => { const n = new Set(prev); n.add(cat); return n; }); return; }
+    setSelectedId(prev => (prev === id ? null : id));
+  };
 
   return (
     <div>
-      {/* scope control — identical behavior to the list view (single source, Const II.7) */}
-      {(() => {
-        const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; accent: string; dot?: boolean }> = [
-          { key: 'all',     label: 'All journeys',        count: productN + preN, accent: 'var(--c-c8c8e8)' },
-          { key: 'product', label: 'Product journey',     count: productN,        accent: 'var(--c-9b96ff)', dot: true },
-          { key: 'pre',     label: 'Pre-product journey', count: preN,            accent: 'var(--c-34d399)', dot: true },
-        ];
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Journey</span>
-            <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
-              {SCOPES.map(s => {
-                const on = journeyScope === s.key;
-                return (
-                  <button key={s.key} onClick={() => { setJourneyScope(s.key); setSelectedId(null); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, lineHeight: 1, padding: '7px 13px', borderRadius: 8, cursor: 'pointer', border: 'none', outline: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s', background: on ? 'var(--c-1e1e38)' : 'transparent', boxShadow: on ? `inset 0 0 0 1px ${s.accent}` : 'none', color: on ? s.accent : 'var(--c-9090b8)' }}
-                    onMouseEnter={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-c8c8e8)'; }}
-                    onMouseLeave={e => { if (!on) (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-9090b8)'; }}>
-                    {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
-                    {s.label}
-                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>{s.count.toLocaleString()}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {segmentLabel && (
-              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--c-a78bfa)', background: 'var(--ca-167-139-250-0_1)', border: '1px solid var(--ca-167-139-250-0_2)', borderRadius: 20, padding: '2px 9px' }}>
-                <i className="ti ti-user" style={{ marginRight: 5 }} />{segmentLabel}
-              </span>
-            )}
-          </div>
-        );
-      })()}
+      {/* scope control */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Journey</span>
+        <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
+          {([['all', 'All journeys', productN + preN, 'var(--c-c8c8e8)'], ['product', 'Product journey', productN, 'var(--c-9b96ff)'], ['pre', 'Pre-product journey', preN, 'var(--c-34d399)']] as Array<['all'|'product'|'pre', string, number, string]>).map(([key, label, count, accent]) => {
+            const on = journeyScope === key;
+            return (
+              <button key={key} onClick={() => { setJourneyScope(key); setSelectedId(null); setFocusUmbrella(null); }}
+                style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 600, lineHeight: 1, padding: '7px 13px', borderRadius: 8, cursor: 'pointer', border: 'none', outline: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s', background: on ? 'var(--c-1e1e38)' : 'transparent', boxShadow: on ? `inset 0 0 0 1px ${accent}` : 'none', color: on ? accent : 'var(--c-9090b8)' }}>
+                {key !== 'all' && <span style={{ width: 7, height: 7, borderRadius: '50%', background: accent, flexShrink: 0 }} />}
+                {label}<span style={{ fontSize: 11, fontWeight: 600, color: on ? accent : 'var(--c-585878)' }}>{count.toLocaleString()}</span>
+              </button>
+            );
+          })}
+        </div>
+        {segmentLabel && (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--c-a78bfa)', background: 'var(--ca-167-139-250-0_1)', border: '1px solid var(--ca-167-139-250-0_2)', borderRadius: 20, padding: '2px 9px' }}>
+            <i className="ti ti-user" style={{ marginRight: 5 }} />{segmentLabel}
+          </span>
+        )}
+      </div>
 
-      {/* explorer header — title + the volume-weighting note (no modeled %, Const I.1) */}
-      <div style={{ marginTop: 14, padding: '11px 14px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)' }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>User Journey Map — Content Topic Explorer</div>
-        <div style={{ fontSize: 10.5, color: 'var(--c-7a7a9a)', marginTop: 2 }}>
-          Visualize how users explore topics and what they&rsquo;re most likely to do next.
-          <span style={{ color: 'var(--c-585878)', marginLeft: 6 }}><i className="ti ti-database" style={{ marginRight: 4 }} />Connections weighted by real Semrush volume — {totalVol.toLocaleString()}/mo across {scopedRows.length.toLocaleString()} topics. No modeled probabilities.</span>
+      {/* header */}
+      <div style={{ marginTop: 12, padding: '11px 14px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)' }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>User Journey Map — Topic Hierarchy</div>
+        <div style={{ fontSize: 10.5, color: 'var(--c-9090b8)', marginTop: 2 }}>
+          A full branch from the product-line umbrella down to every topic. <strong style={{ color: 'var(--c-d8d8f0)' }}>Click any node</strong> to see its keywords &amp; real Semrush volume. Built from the stored taxonomy — nothing modeled.
         </div>
       </div>
 
-      {/* category picker — which category's journey is on the canvas */}
+      {/* umbrella picker */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
-        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Journey for</span>
-        <select value={effectiveFocusKey ?? ''} onChange={e => { setFocusKey(e.target.value); setSelectedId(null); }}
-          style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 8, padding: '7px 10px', maxWidth: 360, cursor: 'pointer' }}>
-          {categories.map(c => (
-            <option key={c.key} value={c.key}>{(c.lane === 'pre-product' ? '◆ ' : '● ')}{c.name} — {fmtVol(c.vol)}/mo · {c.rows.length} topics</option>
+        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Branch for</span>
+        <select value={effectiveUmbrella ?? ''} onChange={e => { setFocusUmbrella(e.target.value); setSelectedId(null); setExpandedCats(new Set()); }}
+          style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 8, padding: '7px 10px', maxWidth: 380, cursor: 'pointer' }}>
+          {umbrellas.map(u => (
+            <option key={u.name} value={u.name}>{u.name} — {fmtVol(u.vol)}/mo · {u.cats.size} categories</option>
           ))}
         </select>
-        {focused && (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', borderRadius: 20, padding: '2px 9px', color: focused.lane === 'pre-product' ? 'var(--c-22d3ee)' : 'var(--c-a78bfa)', border: `1px solid ${focused.lane === 'pre-product' ? 'var(--ca-34-211-238-0_2)' : 'var(--ca-167-139-250-0_2)'}`, background: focused.lane === 'pre-product' ? 'var(--ca-34-211-238-0_1)' : 'var(--ca-167-139-250-0_1)' }}>
-            {focused.lane === 'pre-product' ? 'Problem-aware' : 'Solution-aware'}
-          </span>
-        )}
-        <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>Each node is a content topic; lines show the most likely next step. Click a node for its journey.</span>
+        <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>Umbrella → category → topic.</span>
       </div>
 
-      {/* legend (left) + node-link canvas (right) */}
+      {/* legend + canvas + detail */}
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 12 }}>
-        <div style={{ flex: '0 0 170px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '12px 13px' }}>
-          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 8 }}>Relationship types</div>
-          {(Object.keys(MIND_EDGE) as Array<keyof typeof MIND_EDGE>).map(k => (
-            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
-              <svg width={26} height={8} aria-hidden="true"><line x1={0} y1={4} x2={26} y2={4} style={{ stroke: MIND_EDGE[k].color }} strokeWidth={k === 'next' ? 3 : 2} strokeDasharray={MIND_EDGE[k].dashed ? '4 3' : undefined} /></svg>
-              <span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>{MIND_EDGE[k].label}</span>
+        {/* legend */}
+        <div style={{ flex: '0 0 158px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '12px 13px' }}>
+          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 8 }}>Levels</div>
+          {MIND_LEVEL.map((L, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+              <span style={{ width: 12, height: 12, borderRadius: 3, background: L.bg, border: `1.5px solid ${L.border}`, flexShrink: 0 }} />
+              <span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>{L.label}</span>
             </div>
           ))}
           <div style={{ borderTop: '1px solid var(--c-1a1a30)', margin: '10px 0 0', paddingTop: 10 }}>
-            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 6 }}>Line weight</div>
-            <p style={{ fontSize: 10, color: 'var(--c-7a7a9a)', margin: 0, lineHeight: 1.55 }}>Thicker line = higher <strong>real Semrush volume</strong> for the next topic. No modeled probabilities — only measured demand.</p>
-          </div>
-          <div style={{ borderTop: '1px solid var(--c-1a1a30)', margin: '10px 0 0', paddingTop: 10 }}>
-            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 6 }}>Node status</div>
+            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 6 }}>Topic status</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: STATE_COLOR.existing }} /><span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>Existing — optimize</span></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: STATE_COLOR.missing }} /><span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>Net-new — build</span></div>
           </div>
+          <div style={{ borderTop: '1px solid var(--c-1a1a30)', margin: '10px 0 0', paddingTop: 10, fontSize: 10, color: 'var(--c-7a7a9a)', lineHeight: 1.5 }}>
+            Click any node → its keywords &amp; real Semrush volume.
+          </div>
         </div>
 
-        <div style={{ flex: '1 1 460px', minWidth: 0, border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0a0a1e)', overflow: 'auto', maxHeight: 640 }}>
-          <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%' }} role="img" aria-label="User journey content topic graph">
-            <defs>
-              {(['next', 'compare'] as Array<keyof typeof MIND_EDGE>).map(k => (
-                <marker key={k} id={`arw-${k}`} markerWidth={8} markerHeight={8} refX={6} refY={3} orient="auto">
-                  <path d="M0,0 L6,3 L0,6 Z" style={{ fill: MIND_EDGE[k].color }} />
-                </marker>
-              ))}
-            </defs>
-            {/* funnel-row labels at the left gutter */}
-            {focusedStages.map((s, i) => (
-              <text key={s.stage} x={10} y={34 + layout.NH / 2 + (i + 1) * 124} style={{ fill: STAGE_COLORS[s.stage].text }} fontSize={9} fontWeight={700} letterSpacing="0.05em">
-                {MIND_STAGE_ROW[s.stage].toUpperCase()}
-              </text>
+        {/* canvas */}
+        <div style={{ flex: '1 1 420px', minWidth: 0, border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-08081a)', overflow: 'auto', maxHeight: 600 }}>
+          <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%' }} role="img" aria-label="Topic hierarchy graph">
+            {/* level row labels */}
+            {['UMBRELLA', 'CATEGORY', 'TOPIC'].map((lab, i) => (
+              <text key={lab} x={8} y={22 + layout.NH / 2 + i * 122 + 3} style={{ fill: MIND_LEVEL[i].border }} fontSize={9} fontWeight={700} letterSpacing="0.06em">{lab}</text>
             ))}
-            {/* edges (weighted by real volume) */}
+            {/* edges */}
             {layout.edges.map(e => {
-              const meta = MIND_EDGE[e.kind];
-              const incident = e.from === selectedId || e.to === selectedId;
-              const opacity = selectedId ? (incident ? 0.95 : 0.1) : (e.kind === 'broader' ? 0.4 : 0.55);
-              const w = e.kind === 'next' ? 1.4 + 3 * Math.min(1, e.vol / layout.maxVol) : e.kind === 'compare' ? 1.5 : 1.3;
-              const d = e.kind === 'compare'
-                ? `M${e.x1},${e.y1} C${(e.x1 + e.x2) / 2},${e.y1 - 22} ${(e.x1 + e.x2) / 2},${e.y2 - 22} ${e.x2},${e.y2}`
-                : `M${e.x1},${e.y1} C${e.x1},${(e.y1 + e.y2) / 2} ${e.x2},${(e.y1 + e.y2) / 2} ${e.x2},${e.y2}`;
-              return <path key={e.id} d={d} fill="none" style={{ stroke: meta.color }} strokeWidth={w} strokeDasharray={meta.dashed ? '5 4' : undefined} opacity={opacity} markerEnd={e.kind !== 'broader' ? `url(#arw-${e.kind})` : undefined} />;
+              const col = MIND_LEVEL[e.level].border;
+              const my = (e.y1 + e.y2) / 2;
+              return <path key={e.id} d={`M${e.x1},${e.y1} C${e.x1},${my} ${e.x2},${my} ${e.x2},${e.y2}`} fill="none" style={{ stroke: col }} strokeWidth={2.2} opacity={0.6} />;
             })}
-            {/* edge volume labels for the selected node's next steps */}
-            {selectedId && layout.edges.filter(e => e.kind === 'next' && (e.from === selectedId || e.to === selectedId)).map(e => (
-              <text key={'lbl' + e.id} x={(e.x1 + e.x2) / 2 + 6} y={(e.y1 + e.y2) / 2} style={{ fill: 'var(--c-9090b8)' }} fontSize={9} fontWeight={600} fontFamily="monospace">{fmtVol(e.vol)}/mo</text>
-            ))}
             {/* nodes */}
             {layout.nodes.map(n => {
-              const sc = n.stage ? STAGE_COLORS[n.stage] : { border: 'var(--c-3a3a55)', text: 'var(--c-9090b8)', bg: 'var(--c-14142a)' };
+              const lv = MIND_LEVEL[Math.min(n.level, 2)];
+              const w = layout.NW[Math.min(n.level, 2)];
               const sel = n.id === selectedId;
-              const rel = relatedIds.has(n.id);
-              const stroke = sel ? 'var(--c-34d399)' : rel ? 'var(--c-a78bfa)' : sc.border;
-              const isTopic = n.kind === 'topic';
+              const isMore = n.kind === 'more';
+              const stroke = sel ? 'var(--c-34d399)' : lv.border;
               return (
-                <g key={n.id} style={{ cursor: isTopic ? 'pointer' : 'default' }} onClick={() => { if (isTopic) setSelectedId(sel ? null : n.id); }}>
-                  <rect x={n.x - layout.NW / 2} y={n.y - layout.NH / 2} width={layout.NW} height={layout.NH} rx={n.kind === 'root' ? 22 : 12} style={{ fill: sc.bg }} stroke={stroke} strokeWidth={sel ? 2.4 : 1.3} />
-                  {isTopic && <rect x={n.x - layout.NW / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: n.row!.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing }} opacity={0.9} />}
-                  <text x={n.x} y={n.y - 2} textAnchor="middle" style={{ fill: 'var(--c-e0e0f4)' }} fontSize={11} fontWeight={600}>{truncLabel(n.label, 22)}</text>
-                  <text x={n.x} y={n.y + 12} textAnchor="middle" style={{ fill: sc.text }} fontSize={9} fontWeight={600}>{n.kind === 'root' ? 'ENTRY · ' + n.sub : n.sub}</text>
-                  <title>{n.label}</title>
+                <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
+                  <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 22 : 12}
+                    style={{ fill: isMore ? 'var(--c-14142a)' : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray={isMore ? '4 3' : undefined} />
+                  {n.kind === 'topic' && <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: n.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing }} opacity={0.9} />}
+                  <text x={n.x} y={n.y - (n.sub ? 2 : -4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, n.level === 2 ? 20 : 22)}</text>
+                  {n.sub && <text x={n.x} y={n.y + 13} textAnchor="middle" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>}
+                  <title>{n.sub ? `${n.label} · ${n.sub}` : n.label}</title>
                 </g>
               );
             })}
           </svg>
         </div>
-      </div>
 
-      {/* selected-topic behavioral detail — the "click a node and expand its journey" panel */}
-      {selectedRow && links && (
-        <div style={{ marginTop: 16, border: '1px solid var(--c-2a2a45)', borderRadius: 12, padding: '16px 18px', background: 'var(--c-0d0d1e)' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: STAGE_COLORS[selectedRow.t.stage].text }}>
-                {JOURNEY_STAGE_LABELS[selectedRow.t.stage]} · {links.cat}
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-e8e8fc)', marginTop: 2 }}>{selectedRow.t.product}</div>
-              <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 2 }}>
-                {fmtVol(selectedRow.t.totalVolume)}/mo · {selectedRow.t.keywords.length} keywords · {selectedRow.action === 'optimize' ? 'Existing — optimize' : 'Net-new — build'}
-              </div>
-            </div>
-            <button onClick={() => setSelectedId(null)} title="Close" style={{ background: 'none', border: '1px solid var(--c-2a2a45)', borderRadius: 7, color: 'var(--c-9090b8)', cursor: 'pointer', padding: '4px 8px', fontSize: 12, flexShrink: 0 }}>
-              <i className="ti ti-x" />
-            </button>
-          </div>
-          <p style={{ fontSize: 11.5, color: 'var(--c-8a8ab0)', margin: '6px 0 12px', fontStyle: 'italic' }}>
-            If a user is reading &ldquo;{selectedRow.t.product},&rdquo; here&rsquo;s where they most likely go next — ranked by real search volume within {links.cat}.
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-            {([['next', links.next], ['compare', links.compare], ['prev', links.prev]] as Array<[keyof typeof MIND_REL, MindRow[]]>).map(([rel, group]) => {
-              const meta = MIND_REL[rel];
-              return (
-                <div key={rel} style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 9, padding: '10px 11px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
-                    <i className={`ti ${meta.icon}`} style={{ color: meta.color, fontSize: 13 }} />
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: meta.color }}>{meta.label}</span>
-                    <span style={{ fontSize: 9.5, color: 'var(--c-585878)' }}>{group.length}</span>
-                  </div>
-                  {group.length === 0 ? (
-                    <div style={{ fontSize: 10.5, color: 'var(--c-585878)', fontStyle: 'italic' }}>
-                      {rel === 'next' ? 'End of this category’s funnel' : rel === 'prev' ? 'Entry point — nothing leads here' : 'No sibling topics at this stage'}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {group.slice(0, 7).map(r => (
-                        <button key={r.t.id} onClick={() => setSelectedId(r.t.id)} title={r.t.product}
-                          style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '4px 6px', borderRadius: 6, cursor: 'pointer', textAlign: 'left', background: 'var(--c-14142a)', border: '1px solid var(--c-242440)' }}>
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: r.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing }} />
-                          <span style={{ fontSize: 10.5, color: 'var(--c-c0c0dc)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.product}</span>
-                          <span style={{ fontSize: 9, color: 'var(--c-6a6a90)', flexShrink: 0, fontFamily: 'monospace' }}>{fmtVol(r.t.totalVolume)}/mo</span>
-                        </button>
-                      ))}
-                      {group.length > 7 && <span style={{ fontSize: 9.5, color: 'var(--c-585878)', paddingLeft: 2 }}>+{group.length - 7} more</span>}
-                    </div>
-                  )}
+        {/* detail — keywords + volume of the clicked node */}
+        {selected ? (
+          <div style={{ flex: '0 0 234px', border: '1px solid var(--c-2a2a45)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '13px 14px', maxHeight: 600, overflow: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-9b96ff)' }}>{selected.kind}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)', marginTop: 3, lineHeight: 1.25 }}>{selected.label}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', marginTop: 3 }}>
+                  {fmtVol(selected.vol)}/mo · {selected.kws.length.toLocaleString()} keywords{selected.topics ? ` · ${selected.topics} topics` : ''}{selected.action ? ` · ${selected.action === 'optimize' ? 'Existing' : 'Net-new'}` : ''}
                 </div>
-              );
-            })}
+              </div>
+              <button onClick={() => setSelectedId(null)} title="Close" style={{ background: 'none', border: '1px solid var(--c-2a2a45)', borderRadius: 7, color: 'var(--c-9090b8)', cursor: 'pointer', padding: '3px 7px', fontSize: 12, flexShrink: 0 }}><i className="ti ti-x" /></button>
+            </div>
+            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', margin: '12px 0 6px' }}>Keywords · real volume</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {selected.kws.slice(0, 24).map(k => (
+                <div key={k.keyword} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 7px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-1a1a30)' }}>
+                  <span style={{ fontSize: 10.5, color: 'var(--c-d8d8f0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.keyword}>{k.keyword}</span>
+                  <span style={{ fontSize: 9.5, color: 'var(--c-9090b8)', flexShrink: 0, fontFamily: 'monospace' }}>{fmtVol(k.searchVolume)}</span>
+                </div>
+              ))}
+              {selected.kws.length > 24 && <span style={{ fontSize: 9.5, color: 'var(--c-585878)', paddingLeft: 2, marginTop: 2 }}>+{(selected.kws.length - 24).toLocaleString()} more keywords</span>}
+              {selected.kws.length === 0 && <span style={{ fontSize: 10.5, color: 'var(--c-585878)', fontStyle: 'italic' }}>No keywords on this node.</span>}
+            </div>
           </div>
-        </div>
-      )}
+        ) : (
+          <div style={{ flex: '0 0 234px', border: '1px dashed var(--c-2a2a45)', borderRadius: 10, padding: '20px 16px', color: 'var(--c-6a6a90)', fontSize: 11.5, textAlign: 'center', alignSelf: 'flex-start' }}>
+            <i className="ti ti-click" style={{ fontSize: 18, display: 'block', marginBottom: 6 }} />
+            Click any node to see its keywords &amp; real Semrush volume.
+          </div>
+        )}
+      </div>
 
       {scopedRows.length === 0 && (
         <div style={{ marginTop: 16, border: '1px dashed var(--c-2a2a45)', borderRadius: 12, padding: '28px 18px', textAlign: 'center', color: 'var(--c-6a6a90)', fontSize: 12 }}>
