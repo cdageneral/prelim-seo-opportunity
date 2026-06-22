@@ -1,6 +1,23 @@
 # OrbitIQ Changelog
 
-## v7.258 — 2026-06-22 · Mind-map = umbrella → category → topic hierarchy, click any node for its keywords + volume (Wayne's Option 3)
+## v7.259 — 2026-06-22 · Mind-map: full-width canvas, on-node status badge, keyword data moved below the map
+
+**The ask (Wayne).** On the v7.258 Mind-map: remove the left legend panel and the right "click any node" empty-state panel; put a **small badge on each node showing existing-page vs new-build**; **move the keyword data below the map**; and **extend the map to the full width of the panel**.
+
+**What changed (`components/brief/JourneySection.tsx`, Mind-map view).**
+- **Removed** the left Levels/Topic-status legend column and the right empty-state panel.
+- **On-node status badge** — each topic node now carries a small pill: green **EXISTING** (you rank / have a page — optimize) or red **BUILD** (net-new). The level row labels (Umbrella / Category / Topic) still identify the tiers, so the legend isn't needed. Node height bumped slightly to seat the badge alongside the title and volume.
+- **Full-width canvas** — the map now spans the whole panel (no side columns), centered when narrower than the panel, scrollable when wider.
+- **Keyword data moved below the map** — clicking any node opens the keyword panel **beneath** the canvas, full width, with the keywords laid out in a responsive multi-column grid (up to 60 shown, "+N more" beyond). Each keyword shows its real Semrush volume (Const I.1). The panel appears only after a node is clicked (no permanent empty box).
+
+Pure layout/presentation change — same canonical data, same stored hierarchy, no data logic touched.
+
+**Verified (own debugging agent, real compiled code).** Full retained regression suite — **all PASS**. Isolated `tsc` — **no real type errors** in the changed file. SSR-rendered both themes (`orbitiq-v7.259-RENDER.html`), **no React warnings**; geometry checked: canvas in-bounds, **zero** `NaN` paths, status badges render (EXISTING/BUILD), legend + empty-state confirmed gone. Valid theme tokens throughout → parity (IV.6/V.5) holds; panel keeps its single vertical scroller (IV.1).
+
+**Action for Wayne:** deploy v7.259. The map fills the panel; each topic shows an EXISTING/BUILD badge; click a node and the keywords appear below the map.
+
+
+## v7.258 — 2026-06-22 · Mind-map = umbrella → category → topic hierarchy, click any node for its keywords + volume (Wayne's Option 3) 2026-06-22 · Mind-map = umbrella → category → topic hierarchy, click any node for its keywords + volume (Wayne's Option 3)
 
 **The ask (Wayne).** Two problems with the v7.257 explorer: (1) the node titles were unreadable, and (2) it focused one category laid out by funnel stage, so it "looked like it's selecting individual topics" rather than showing a **full branch from the parent category all the way down**. After comparing three depth options, Wayne picked **Option 3 — Umbrella → Category → Topic** (top-down tree), and asked that **clicking a node show that node's keywords and volume**.
 

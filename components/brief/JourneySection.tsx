@@ -2319,7 +2319,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
 
   const TCAP = 8;
   const layout = useMemo(() => {
-    const NW = [174, 158, 150], NH = 48, leafStep = 176, levelH = 122, padX = 28, topPad = 22;
+    const NW = [174, 158, 154], NH = 56, leafStep = 176, levelH = 124, padX = 28, topPad = 22;
     type Kind = 'umbrella' | 'category' | 'topic' | 'more';
     type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build' };
     type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
@@ -2426,93 +2426,83 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
         <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>Umbrella → category → topic.</span>
       </div>
 
-      {/* legend + canvas + detail */}
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap', marginTop: 12 }}>
-        {/* legend */}
-        <div style={{ flex: '0 0 158px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '12px 13px' }}>
-          <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 8 }}>Levels</div>
-          {MIND_LEVEL.map((L, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
-              <span style={{ width: 12, height: 12, borderRadius: 3, background: L.bg, border: `1.5px solid ${L.border}`, flexShrink: 0 }} />
-              <span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>{L.label}</span>
-            </div>
+      {/* full-width canvas — the hierarchy map (status badge lives on each topic node) */}
+      <div style={{ marginTop: 12, border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-08081a)', overflow: 'auto', maxHeight: 620 }}>
+        <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%', margin: '0 auto' }} role="img" aria-label="Topic hierarchy graph">
+          {/* level row labels */}
+          {['UMBRELLA', 'CATEGORY', 'TOPIC'].map((lab, i) => (
+            <text key={lab} x={8} y={22 + layout.NH / 2 + i * 124 + 3} style={{ fill: MIND_LEVEL[i].border }} fontSize={9} fontWeight={700} letterSpacing="0.06em">{lab}</text>
           ))}
-          <div style={{ borderTop: '1px solid var(--c-1a1a30)', margin: '10px 0 0', paddingTop: 10 }}>
-            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 6 }}>Topic status</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: STATE_COLOR.existing }} /><span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>Existing — optimize</span></div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: STATE_COLOR.missing }} /><span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>Net-new — build</span></div>
-          </div>
-          <div style={{ borderTop: '1px solid var(--c-1a1a30)', margin: '10px 0 0', paddingTop: 10, fontSize: 10, color: 'var(--c-7a7a9a)', lineHeight: 1.5 }}>
-            Click any node → its keywords &amp; real Semrush volume.
-          </div>
-        </div>
-
-        {/* canvas */}
-        <div style={{ flex: '1 1 420px', minWidth: 0, border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-08081a)', overflow: 'auto', maxHeight: 600 }}>
-          <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%' }} role="img" aria-label="Topic hierarchy graph">
-            {/* level row labels */}
-            {['UMBRELLA', 'CATEGORY', 'TOPIC'].map((lab, i) => (
-              <text key={lab} x={8} y={22 + layout.NH / 2 + i * 122 + 3} style={{ fill: MIND_LEVEL[i].border }} fontSize={9} fontWeight={700} letterSpacing="0.06em">{lab}</text>
-            ))}
-            {/* edges */}
-            {layout.edges.map(e => {
-              const col = MIND_LEVEL[e.level].border;
-              const my = (e.y1 + e.y2) / 2;
-              return <path key={e.id} d={`M${e.x1},${e.y1} C${e.x1},${my} ${e.x2},${my} ${e.x2},${e.y2}`} fill="none" style={{ stroke: col }} strokeWidth={2.2} opacity={0.6} />;
-            })}
-            {/* nodes */}
-            {layout.nodes.map(n => {
-              const lv = MIND_LEVEL[Math.min(n.level, 2)];
-              const w = layout.NW[Math.min(n.level, 2)];
-              const sel = n.id === selectedId;
-              const isMore = n.kind === 'more';
-              const stroke = sel ? 'var(--c-34d399)' : lv.border;
-              return (
-                <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
-                  <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 22 : 12}
-                    style={{ fill: isMore ? 'var(--c-14142a)' : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray={isMore ? '4 3' : undefined} />
-                  {n.kind === 'topic' && <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: n.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing }} opacity={0.9} />}
-                  <text x={n.x} y={n.y - (n.sub ? 2 : -4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, n.level === 2 ? 20 : 22)}</text>
-                  {n.sub && <text x={n.x} y={n.y + 13} textAnchor="middle" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>}
-                  <title>{n.sub ? `${n.label} · ${n.sub}` : n.label}</title>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-
-        {/* detail — keywords + volume of the clicked node */}
-        {selected ? (
-          <div style={{ flex: '0 0 234px', border: '1px solid var(--c-2a2a45)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '13px 14px', maxHeight: 600, overflow: 'auto' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-9b96ff)' }}>{selected.kind}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--c-dcdcf4)', marginTop: 3, lineHeight: 1.25 }}>{selected.label}</div>
-                <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', marginTop: 3 }}>
-                  {fmtVol(selected.vol)}/mo · {selected.kws.length.toLocaleString()} keywords{selected.topics ? ` · ${selected.topics} topics` : ''}{selected.action ? ` · ${selected.action === 'optimize' ? 'Existing' : 'Net-new'}` : ''}
-                </div>
-              </div>
-              <button onClick={() => setSelectedId(null)} title="Close" style={{ background: 'none', border: '1px solid var(--c-2a2a45)', borderRadius: 7, color: 'var(--c-9090b8)', cursor: 'pointer', padding: '3px 7px', fontSize: 12, flexShrink: 0 }}><i className="ti ti-x" /></button>
-            </div>
-            <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', margin: '12px 0 6px' }}>Keywords · real volume</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {selected.kws.slice(0, 24).map(k => (
-                <div key={k.keyword} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '4px 7px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-1a1a30)' }}>
-                  <span style={{ fontSize: 10.5, color: 'var(--c-d8d8f0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.keyword}>{k.keyword}</span>
-                  <span style={{ fontSize: 9.5, color: 'var(--c-9090b8)', flexShrink: 0, fontFamily: 'monospace' }}>{fmtVol(k.searchVolume)}</span>
-                </div>
-              ))}
-              {selected.kws.length > 24 && <span style={{ fontSize: 9.5, color: 'var(--c-585878)', paddingLeft: 2, marginTop: 2 }}>+{(selected.kws.length - 24).toLocaleString()} more keywords</span>}
-              {selected.kws.length === 0 && <span style={{ fontSize: 10.5, color: 'var(--c-585878)', fontStyle: 'italic' }}>No keywords on this node.</span>}
-            </div>
-          </div>
-        ) : (
-          <div style={{ flex: '0 0 234px', border: '1px dashed var(--c-2a2a45)', borderRadius: 10, padding: '20px 16px', color: 'var(--c-6a6a90)', fontSize: 11.5, textAlign: 'center', alignSelf: 'flex-start' }}>
-            <i className="ti ti-click" style={{ fontSize: 18, display: 'block', marginBottom: 6 }} />
-            Click any node to see its keywords &amp; real Semrush volume.
-          </div>
-        )}
+          {/* edges */}
+          {layout.edges.map(e => {
+            const col = MIND_LEVEL[e.level].border;
+            const my = (e.y1 + e.y2) / 2;
+            return <path key={e.id} d={`M${e.x1},${e.y1} C${e.x1},${my} ${e.x2},${my} ${e.x2},${e.y2}`} fill="none" style={{ stroke: col }} strokeWidth={2.2} opacity={0.6} />;
+          })}
+          {/* nodes */}
+          {layout.nodes.map(n => {
+            const lv = MIND_LEVEL[Math.min(n.level, 2)];
+            const w = layout.NW[Math.min(n.level, 2)];
+            const sel = n.id === selectedId;
+            const isMore = n.kind === 'more';
+            const isTopic = n.kind === 'topic';
+            const stroke = sel ? 'var(--c-34d399)' : lv.border;
+            const existing = n.action === 'optimize';
+            const statusColor = existing ? STATE_COLOR.existing : STATE_COLOR.missing;
+            const bw = existing ? 52 : 38;
+            return (
+              <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
+                <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 24 : 14}
+                  style={{ fill: isMore ? 'var(--c-14142a)' : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray={isMore ? '4 3' : undefined} />
+                {isTopic && <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: statusColor }} opacity={0.9} />}
+                <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 19 : 22)}</text>
+                {isTopic ? (
+                  <>
+                    <text x={n.x - w / 2 + 12} y={n.y + 13} textAnchor="start" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>
+                    <rect x={n.x + w / 2 - bw - 8} y={n.y + 2} width={bw} height={15} rx={7.5} style={{ fill: existing ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-248-113-113-0_1)' }} stroke={statusColor} strokeWidth={0.9} />
+                    <text x={n.x + w / 2 - 8 - bw / 2} y={n.y + 12.5} textAnchor="middle" style={{ fill: statusColor }} fontSize={8} fontWeight={700} letterSpacing="0.03em">{existing ? 'EXISTING' : 'BUILD'}</text>
+                  </>
+                ) : (n.sub && <text x={n.x} y={n.y + 13} textAnchor="middle" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>)}
+                <title>{n.sub ? `${n.label} · ${n.sub}` : n.label}</title>
+              </g>
+            );
+          })}
+        </svg>
       </div>
+
+      {/* keyword data — BELOW the map, full width (shown once a node is clicked) */}
+      {selected && (
+        <div style={{ marginTop: 14, border: '1px solid var(--c-2a2a45)', borderRadius: 10, background: 'var(--c-0d0d1e)', padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-9b96ff)' }}>
+                {selected.kind}{selected.action ? ` · ${selected.action === 'optimize' ? 'Existing page' : 'Net-new build'}` : ''}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-dcdcf4)', marginTop: 3 }}>{selected.label}</div>
+              <div style={{ fontSize: 11, color: 'var(--c-6a6a90)', marginTop: 3 }}>
+                {fmtVol(selected.vol)}/mo · {selected.kws.length.toLocaleString()} keywords{selected.topics ? ` · ${selected.topics} topics` : ''}
+              </div>
+            </div>
+            <button onClick={() => setSelectedId(null)} title="Close" style={{ background: 'none', border: '1px solid var(--c-2a2a45)', borderRadius: 7, color: 'var(--c-9090b8)', cursor: 'pointer', padding: '4px 8px', fontSize: 12, flexShrink: 0 }}><i className="ti ti-x" /></button>
+          </div>
+          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', marginBottom: 7 }}>Keywords · real Semrush volume</div>
+          {selected.kws.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--c-585878)', fontStyle: 'italic' }}>No keywords on this node.</div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 6 }}>
+                {selected.kws.slice(0, 60).map(k => (
+                  <div key={k.keyword} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '5px 9px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-1a1a30)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--c-d8d8f0)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={k.keyword}>{k.keyword}</span>
+                    <span style={{ fontSize: 10, color: 'var(--c-9090b8)', flexShrink: 0, fontFamily: 'monospace' }}>{fmtVol(k.searchVolume)}</span>
+                  </div>
+                ))}
+              </div>
+              {selected.kws.length > 60 && <div style={{ fontSize: 10, color: 'var(--c-585878)', marginTop: 8 }}>+{(selected.kws.length - 60).toLocaleString()} more keywords</div>}
+            </>
+          )}
+        </div>
+      )}
 
       {scopedRows.length === 0 && (
         <div style={{ marginTop: 16, border: '1px dashed var(--c-2a2a45)', borderRadius: 12, padding: '28px 18px', textAlign: 'center', color: 'var(--c-6a6a90)', fontSize: 12 }}>
