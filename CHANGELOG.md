@@ -1,5 +1,28 @@
 # OrbitIQ Changelog
 
+## v7.255 — 2026-06-22 · The suggested article title now carries the highest-volume target keyword (Const III.8)
+
+**The ask (Wayne).** A Content-plan card was titled **"Stock Investing"** while its top target keyword was **"how to invest in stocks" (673K)** — the suggested title dropped the highest-volume head term for a generic paraphrase of the cluster name. The title should always contain the highest-volume matching keyword. Codified first as **Constitution Art. III.8** (amendment v0.13, 2026-06-22), then implemented here.
+
+**Root cause.** All three article-title builders titled from the *cluster name*, never the keywords:
+- `buildContentPlanFromTopics` (the Content-plan drawer — the panel Wayne screenshotted) set `title: cap(t.product)`.
+- the graph-path `briefTitle(n)` used domain-flavored name templates.
+- `deriveArticleTitle` in `ContentMapSection` templated off `cluster.name` + stage.
+
+The keyword list shown under "Target keywords" was already sorted by real Semrush volume, but the title ignored it.
+
+**Fix (`lib/journey/contentPlan.ts` + `components/brief/ContentMapSection.tsx`).** Added one shared, exported helper `briefTitleFromKeywords(product, keywords)` (single source of truth — both files call it):
+- picks the **highest real-volume** keyword (Const I.1/I.2; volume traces to the canonical pool),
+- ties break to the **more specific / longer** commercially-useful term (Const III.6), then alphabetically for determinism,
+- renders it in **natural title case** ("how to invest in stocks" → "How to Invest in Stocks"), preserving already-styled tokens (APR, VA, 0%),
+- falls back to the product noun **only** when the piece has zero keywords (honest gap, Const I.5).
+Wired into all three sites; the old name-based templates remain solely as the no-keyword fallback. No data is invented — the title is a real target keyword verbatim.
+
+**Verified (own debugging agent, real compiled code).** Added a `title:` block to the retained regression suite (Const V.6) and re-ran the FULL suite: **79/79 PASS, 0 FAIL** — the new III.8 checks plus every prior-release check. The new checks assert the title contains "how to invest in stocks", equals "How to Invest in Stocks", is **not** "Stock Investing", a volume tie resolves to the more specific term, and the no-keyword case falls back to the product noun. Full-project `tsc --strict` (project tsconfig) = **0 errors**. SSR-rendered `ContentExplorer` in **both light and dark** themes — renders OK, computed title = "How to Invest in Stocks". Logic-only change: no color/border/contrast touched, so theme parity (IV.6/V.5) is unaffected; scroll (IV.1) untouched.
+
+**Action for Wayne:** deploy v7.255. Suggested article titles across the Content Plan and Content Map now lead with the highest-volume keyword for each piece. No re-upload needed.
+
+
 ## v7.254 — 2026-06-21 · The URL was reaching the DB but buildKwPool discarded it — backfill the uploaded ranking URL (verified against the real TD CSV)
 
 **The ask (Wayne).** After v7.253 (and v7.251 before it), deploy + clear + re-upload STILL showed "no URL in the dataset" on existing pages. Three releases, no visible change. Wayne — rightly — asked me to do my own quality checks against his real data before shipping again.

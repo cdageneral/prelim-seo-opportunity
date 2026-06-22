@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, Fragment } from 'react';
-import { planFromSnapshot, buildContentPlanFromTopics } from '@/lib/journey/contentPlan';
+import { planFromSnapshot, buildContentPlanFromTopics, briefTitleFromKeywords } from '@/lib/journey/contentPlan';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 
@@ -733,7 +733,9 @@ function buildArticleTopics(clusters: ThemeCluster[], segments: AudienceSegment[
         clusterType:   cluster.type,
         journeyType,
         stage,
-        title:         deriveArticleTitle(cluster, stage, journeyType),
+        // Const III.8 — title carries the highest-volume target keyword (sortedKws is
+        // sorted desc by real volume); deriveArticleTitle is the no-keyword fallback.
+        title:         sortedKws.length ? briefTitleFromKeywords(cluster.name, sortedKws) : deriveArticleTitle(cluster, stage, journeyType),
         keywords:      sortedKws,
         monthlyVolume: totalVol,
         annualVolume:  totalVol * 12,

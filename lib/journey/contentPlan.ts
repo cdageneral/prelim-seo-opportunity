@@ -112,7 +112,11 @@ function isQuestion(k: string): boolean {
 }
 
 // Title suggestion templated from the topic + stage. Editorial scaffolding only.
+// Const III.8 — when the node has real target keywords, the title is anchored on
+// its highest-volume keyword (never a generic paraphrase). The templated forms
+// below are the honest-gap fallback used only when the node carries no keywords.
 function briefTitle(n: GraphNode): string {
+  if (n.keywords && n.keywords.length) return briefTitleFromKeywords(n.seed || n.name, n.keywords);
   const base = n.name.replace(/\s+—\s+.*/, '');   // strip "— Cost & financing" suffix for the core noun
   const productNoun = titleCaseWord(n.seed);
   if (n.kind === 'problem') return `${cap(n.name)}: Causes and What Actually Works`;
@@ -142,6 +146,47 @@ function briefOutline(n: GraphNode): string[] {
 
 function cap(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
 function titleCaseWord(s: string): string { return s.replace(/\b\w/g, (c: string) => c.toUpperCase()); }
+
+// ─── v7.255 / Const III.8 — title carries the highest-volume target keyword ─────
+// The suggested article title MUST contain the highest search-volume keyword among
+// the piece's own matching target keywords (real Semrush volume, Const I.1/I.2) —
+// never a generic paraphrase of the cluster name (the "Stock Investing" vs
+// "how to invest in stocks 673K" case). Returns the top keyword in natural title
+// case. Ties break to the more specific (longer) commercially-useful term (III.6);
+// remaining ties break alphabetically for determinism. Falls back to the product
+// noun only when the piece has zero keywords (honest gap, Const I.5).
+const TITLE_MINOR_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'if', 'in', 'into',
+  'nor', 'of', 'on', 'onto', 'or', 'per', 'the', 'to', 'via', 'vs', 'with',
+]);
+function toNaturalTitleCase(s: string): string {
+  const words = s.trim().split(/\s+/).filter(Boolean);
+  return words
+    .map((w, i) => {
+      const lw = w.toLowerCase();
+      // keep an already-styled token (e.g. "APR", "VA", "0%") as written
+      if (/[A-Z0-9]/.test(w) && w !== lw && w.slice(1) !== w.slice(1).toLowerCase()) return w;
+      if (i !== 0 && i !== words.length - 1 && TITLE_MINOR_WORDS.has(lw)) return lw;
+      return lw.charAt(0).toUpperCase() + lw.slice(1);
+    })
+    .join(' ');
+}
+function topVolumeKeyword<T extends { keyword: string; searchVolume: number }>(keywords: T[]): T | null {
+  if (!keywords.length) return null;
+  return keywords.slice().sort(
+    (a, b) =>
+      (b.searchVolume - a.searchVolume) ||      // 1) highest real volume
+      (b.keyword.length - a.keyword.length) ||  // 2) tie → more specific term (III.6)
+      a.keyword.localeCompare(b.keyword),       // 3) deterministic
+  )[0];
+}
+export function briefTitleFromKeywords(
+  product: string,
+  keywords: Array<{ keyword: string; searchVolume: number }>,
+): string {
+  const top = topVolumeKeyword(keywords);
+  return top ? toNaturalTitleCase(top.keyword) : cap(product);
+}
 
 // Internal links from the graph edges touching this node.
 function linksFor(node: GraphNode, graph: JourneyGraph): InternalLink[] {
@@ -330,7 +375,9 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
       bestPosition,
       distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, quickWin, refresh,
       brief: {
-        title: cap(t.product),
+        // Const III.8 — anchor on the highest-volume real target keyword, not the
+        // cluster-name paraphrase (briefKws is already sorted desc by real volume).
+        title: briefTitleFromKeywords(t.product, t.keywords),
         outline: topicOutline(lane, kind),
         faq: faqKws.length ? faqKws : [cap(t.product) + ' — what should readers know first?'],
         keywords: briefKws,
