@@ -1,5 +1,43 @@
 # OrbitIQ Changelog
 
+## v7.257 — 2026-06-22 · Mind-map view redesigned as a node-link "Content Topic Explorer" (matches Wayne's reference)
+
+**The ask (Wayne).** After v7.256 shipped the Mind-map as boxed stage-columns, Wayne shared two reference visuals — a classic radial mind map and, more precisely, a **"User Journey Map – Content Topic Explorer"**: a node-link graph where each topic is a pill, the funnel runs top→bottom (trigger → problem → category discovery → product evaluation → usage → advanced), connections are typed and colored (Next step / Compare / Broader), a legend sits on the left, and a detail panel describes the selected node. "I was looking at visuals more like this."
+
+**What changed (`components/brief/JourneySection.tsx`).** Replaced the v7.256 boxed-column layout inside the Mind-map view with a true **node-link graph**, rendered as SVG:
+- **Funnel rows top→bottom** — a root *entry* node for the focused category, then one row per stage (Category Discovery = Awareness, Product Evaluation = Consideration, Usage & Decision, Advanced / Retention), with the row labels down the left gutter (mirrors the reference).
+- **Topic nodes** are colored pills (by stage), each with a status spine (green = existing/optimize, red = net-new/build) and its real volume.
+- **Typed, colored connections** — green **Next step** (most likely), purple **Compare / alternative** (same-stage siblings), gray dashed **Broader / intro** (entry → first stage), with arrowheads — plus a left legend explaining each.
+- **Focused, scale-safe** — a category picker drives which category's journey is on the canvas (default = highest-volume), so the graph stays a readable ~10-node neighborhood instead of thousands of nodes. Layout positions are **computed deterministically** (no DOM measurement — the fragility that broke earlier maps). The canvas scrolls inside its own box; the panel keeps its single vertical scroller (Const IV.1).
+- **Click a node** → it highlights its incident connections (others dim), labels the next-step edges with the real volume, and the detail panel shows Next step / Compare / Leads-here, each ranked by real volume.
+
+**Data integrity (unchanged from v7.256, Wayne's standing call).** The reference images show `probability_score` numbers on edges. Those have no real source row, so per Const I.1 and Wayne's rule **none are invented** — connection thickness and ranking come from **real Semrush search volume**, and the legend states it ("No modeled probabilities — only measured demand"). Both views read the same canonical topics (Const II.7).
+
+**Verified (own debugging agent, real compiled code).** Full retained regression suite re-run — **all PASS** (the `journey:`/`preproduct:` blocks compile the edited file). Isolated `tsc` — **no real type errors** in the changed file. SSR-rendered the explorer in **both light and dark** (`orbitiq-v7.257-RENDER.html`); checked the computed SVG geometry: canvas 724×599, all nodes in-bounds, **zero** `NaN` paths, no `undefined`. Uses only existing theme tokens, so parity (IV.6/V.5) holds. List view and all prior behavior unchanged.
+
+**Action for Wayne:** deploy v7.257. Journey panel → **View → Mind-map**, then use **Journey for** to pick a category and click any node to trace its path.
+
+
+## v7.256 — 2026-06-22 · Journey panel gains a Mind-map view (behavioral knowledge graph) alongside the List view 2026-06-22 · Journey panel gains a Mind-map view (behavioral knowledge graph) alongside the List view
+
+**The ask (Wayne).** The Journey panel's list view is good for a hierarchical read of the journey. Add a second presentation — a **Mind-map view** — modeled on a behavioral user-journey knowledge graph: each topic is a node, connected to the most likely *next step* in the user's journey, so it reads like how a person explores a topic, not how a site is organized. Keep the current list as one option and add the mind-map as the other. (Earlier flat-map visuals had been removed; this is a fresh, scale-safe one.)
+
+**What shipped (`components/brief/JourneySection.tsx`).** A `View` toggle (**List ⇄ Mind-map**) now sits at the top of the canonical Journey view; List is the current collapsible content plan, Mind-map is new. Both render from the **same canonical cluster topics** — the single source of truth (Const II.7) — so counts reconcile exactly with the list and the Cluster panel.
+
+The Mind-map is a **behavioral journey graph**, laid out as the funnel spine: for each lane (Pre-product · problem-aware, Product · solution-aware) the stages run left → right with progression arrows — **Awareness → Consideration → Decision → Retention** ("what users learn first → what they compare → what they decide"). Within each stage, topics group by category (collapsible). Clicking a topic node traces its journey within its category:
+- **Next step** — the most likely next topic (same category, next funnel stage),
+- **Compare** — sibling topics at the same stage (alternatives the user weighs),
+- **Leads here** — the topic that most likely preceded it (previous stage).
+
+**Data integrity (Wayne's call, this session).** The reference prompt asked every connection to carry a `probability_score`. Those numbers have no real source row, so — per Const I.1 and Wayne's standing rule — **no modeled probability is shown**. Instead, every node and every connection is **weighted and ranked by real Semrush search volume** (traceable to the canonical pool), and the legend says so explicitly. Connections are journey-stage structure, not invented likelihoods.
+
+**Scale-safe by construction (durable constraint).** The prior flat maps stacked every node of a stage in one column — thousands of nodes → an unusable ~130k-px SVG. This view never renders flat: categories are collapsed by default and topics render only when a category is expanded; each stage column shows its top categories with a "+ N more categories" progressive-disclosure control (the count is always shown; nothing is capped — Const I.6). Horizontal overflow scrolls inside the map; the panel keeps its single vertical scroller (Const IV.1).
+
+**Verified (own debugging agent, real compiled code).** Full retained regression suite re-run against the real compiled code at real scale — **all PASS** (the `journey:` and `preproduct:` blocks import from the edited `JourneySection`, confirming it compiles and its exports are intact). Isolated `tsc` shows **no real type errors** in the changed file. SSR-rendered the new view in **both light and dark** themes (`orbitiq-v7.256-RENDER.html`): all stage labels, relationship types, scope pills, and the volume-weighting note render; no `undefined`/`NaN`. The view uses only existing theme tokens (`var(--c-*)`), which are remapped for light mode, so theme parity (IV.6/V.5) holds by construction. List view, all prior behavior, and panel scroll unchanged.
+
+**Action for Wayne:** deploy v7.256. Open the Journey panel and use the **View** toggle (top of the journey) to switch between **List** and **Mind-map**.
+
+
 ## v7.255 — 2026-06-22 · The suggested article title now carries the highest-volume target keyword (Const III.8)
 
 **The ask (Wayne).** A Content-plan card was titled **"Stock Investing"** while its top target keyword was **"how to invest in stocks" (673K)** — the suggested title dropped the highest-volume head term for a generic paraphrase of the cluster name. The title should always contain the highest-volume matching keyword. Codified first as **Constitution Art. III.8** (amendment v0.13, 2026-06-22), then implemented here.
