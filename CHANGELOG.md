@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.262 — 2026-06-22 · Fix: removing a topic from the Content Plan now sticks (stale-cache bug)
+
+**The bug (Wayne).** Clicking × on a Content Plan row removed it from the plan, but going to the Content Map showed it still checked, and returning to the Content Plan made it reappear. The removal **was** saved to the project — but the selection **read** was being served from cache, so the next mount re-hydrated the old set and the topic looked selected again.
+
+**The fix.** The content-plan selection endpoint and both panel reads are now always fresh:
+- `app/api/projects/[id]/content-plan/route.ts` — `export const dynamic = 'force-dynamic'` + `revalidate = 0`, and GET/PUT responses send `Cache-Control: no-store` (the same guard the page-map route already uses).
+- `ContentMapSection` and `ContentPlanSection` — the selection GET is fetched with `{ cache: 'no-store' }`.
+
+Now: × removes the topic, the save persists, and on the next mount both panels read the **live** set — the Content Map checkbox is unticked and the row stays gone.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso262) — **clean**. Full retained regression suite — **all PASS**. SSR render unchanged (× still one-per-row, checkboxes intact). Route confirmed `force-dynamic` + `no-store`; both client reads confirmed `no-store`.
+
+**Action for Wayne:** deploy v7.262, then re-test — tick on Content Map → appears in Content Plan; click × → gone, and the Content Map checkbox is freed.
+
+
 ## v7.261 — 2026-06-22 · Content Plan: × to remove a topic, and the source panel is now titled "Content Map"
 
 **The ask (Wayne).** Three follow-ups on v7.260: (1) ticking a checkbox should push the topic into the Content Plan (kept — that is the behaviour); (2) the source panel header should read **Content Map**, not "Content Plan"; (3) in the Content Plan, add an **×** to remove a topic — which deselects it and frees its checkbox back on the Content Map.

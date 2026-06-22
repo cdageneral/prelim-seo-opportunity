@@ -18,6 +18,15 @@ import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 
+// v7.262: the selection must always read fresh — never a cached response. Otherwise a
+// removal persists to the DB but a stale GET (browser/route cache) re-hydrates the old
+// set on the next mount, so the topic looks selected again (Content Map checkbox still
+// ticked, row reappears in the plan). Force the handler dynamic; responses are no-store.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
+const NO_STORE = { 'Cache-Control': 'no-store, no-transform' } as const;
+
 async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections JSONB`);                  // v7.260
@@ -39,7 +48,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({
     selections: (project as any).contentPlanSelections ?? [],
     updatedAt:  (project as any).contentPlanSelectionsUpdatedAt ?? null,
-  });
+  }, { headers: NO_STORE });
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
@@ -78,5 +87,5 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   return NextResponse.json({
     selections: (updated as any).contentPlanSelections ?? [],
     updatedAt:  (updated as any).contentPlanSelectionsUpdatedAt ?? null,
-  });
+  }, { headers: NO_STORE });
 }

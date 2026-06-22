@@ -1370,7 +1370,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
-    fetch(`/api/projects/${projectId}/content-plan`)
+    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })   // v7.262: always fresh
       .then((r: Response) => r.ok ? r.json() : { selections: [] })
       .then((d: any) => { if (!cancelled) setSelectedIds(new Set<string>(Array.isArray(d.selections) ? d.selections : [])); })
       .catch(() => { /* honest gap: leave selection empty on failure */ });
