@@ -422,6 +422,18 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         </>
       )}
 
+      {/* v7.264: selection instruction — sits right above the list, only where the
+          checkboxes are (Content Map). */}
+      {selectable && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0 0 12px', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)' }}>
+          <i className="ti ti-checkbox" style={{ fontSize: 15, color: COL.cyan, flexShrink: 0 }} />
+          <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45 }}>
+            Check a box to select which topics to include in your <b style={{ color: COL.cyan }}>scope &amp; content plan</b>.
+            {selectedIds && selectedIds.size > 0 && <span style={{ color: COL.mut }}>&nbsp; · &nbsp;{selectedIds.size} selected</span>}
+          </span>
+        </div>
+      )}
+
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: COL.mut }}>

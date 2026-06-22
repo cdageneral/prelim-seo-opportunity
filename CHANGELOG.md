@@ -1,5 +1,16 @@
 # OrbitIQ Changelog
 
+## v7.264 — 2026-06-22 · Content Map: clearer selection instruction above the topic list
+
+**The ask (Wayne).** Add an instruction telling the user what the checkboxes do.
+
+**What changed (`components/brief/ContentPlanSection.tsx` + `ContentMapSection.tsx`).** Added an instruction banner directly above the topic list on the Content Map — "Check a box to select which topics to include in your scope & content plan" — with a live "N selected" count. It shows only where the checkboxes are (the Content Map); the Content Plan panel doesn't get it. Removed the shorter, redundant hint that sat above the summary cards, so there's one clear instruction placed right where you tick the boxes.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso264) — **clean**. Full retained regression suite — **all PASS**. SSR render confirms the instruction (with the selected-count) renders on the Content Map and is absent on the Content Plan; cyan-tint banner uses theme tokens (Const IV.6).
+
+**Action for Wayne:** deploy v7.264.
+
+
 ## v7.263 — 2026-06-22 · Content Map: remove the redundant "Detailed page & cluster mapping" section
 
 **The ask (Wayne).** The Content Map stacked two views: the explorer (cards + tickable topic list, 704 topics) and an older "Detailed page & cluster mapping" block below it (stat cards counting 460 "article topics", plus Pages/Briefs/Table views). The two used different topic models, so the numbers didn't reconcile (704 vs 460) and the bottom block didn't respond to the top filter cards — when you clicked Net-new or Quick-wins (0 results up top) it still showed 460 / 23.5M/mo, reading like stale/old data. Remove it.

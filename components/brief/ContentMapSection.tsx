@@ -1568,11 +1568,6 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* v7.176: the redesigned, journey-fed content experience leads the panel. */}
       {plan && (
         <div style={{ marginBottom: 26 }}>
-          {/* v7.260: tick a topic to push it into the Content Plan panel. */}
-          <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <i className="ti ti-checkbox" style={{ fontSize: 13, color: 'var(--c-22d3ee)' }} />
-            Tick a topic to add it to your <span style={{ color: 'var(--c-22d3ee)', fontWeight: 600 }}>Content Plan</span>{selectedIds.size > 0 ? ` · ${selectedIds.size} selected` : ''}
-          </p>
           <ContentExplorer plan={plan} mode="content"
             selectable
             selectedIds={selectedIds}
