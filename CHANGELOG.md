@@ -1,5 +1,16 @@
 # OrbitIQ Changelog
 
+## v7.263 — 2026-06-22 · Content Map: remove the redundant "Detailed page & cluster mapping" section
+
+**The ask (Wayne).** The Content Map stacked two views: the explorer (cards + tickable topic list, 704 topics) and an older "Detailed page & cluster mapping" block below it (stat cards counting 460 "article topics", plus Pages/Briefs/Table views). The two used different topic models, so the numbers didn't reconcile (704 vs 460) and the bottom block didn't respond to the top filter cards — when you clicked Net-new or Quick-wins (0 results up top) it still showed 460 / 23.5M/mo, reading like stale/old data. Remove it.
+
+**What changed (`components/brief/ContentMapSection.tsx`).** Deleted the entire bottom section — the "Detailed page & cluster mapping" divider, the article-topic stat cards (Total Articles / Optimise / Build / Pages Mapped / Volume at Stake), the Pages/Briefs/Table view toggle, and the three table views. The Content Map is now just the summary cards + the tickable topic list (the explorer), which already drives the Content Plan. Also removed the now-dead per-render computations that fed that section (the article-topics and content-gaps memos), so ticking a checkbox no longer recomputes 460 article topics + gaps on every render — the list stays snappy. The page-map ("Map ranking pages") pull, the header, and the tick-to-plan flow are untouched. (~360 lines lighter.)
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso263) — **clean**. Full retained regression suite — **all PASS**. SSR render of the panel — renders without throwing, title reads **Content Map**, and the old Detailed-page / Total-Articles / Build-Net-New section is gone. The explorer + checkbox path is unchanged (separately render-checked).
+
+**Action for Wayne:** deploy v7.263. The Content Map is now a single clean view — cards + the tickable list; the confusing 460-count section is gone.
+
+
 ## v7.262 — 2026-06-22 · Fix: removing a topic from the Content Plan now sticks (stale-cache bug)
 
 **The bug (Wayne).** Clicking × on a Content Plan row removed it from the plan, but going to the Content Map showed it still checked, and returning to the Content Plan made it reappear. The removal **was** saved to the project — but the selection **read** was being served from cache, so the next mount re-hydrated the old set and the topic looked selected again.
