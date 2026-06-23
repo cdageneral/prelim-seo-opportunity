@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.267 — 2026-06-23 · Content Plan → Scope: "Add to Scope" cart + a View Scope spec sheet
+
+**The ask (Wayne).** On the Content Plan panel, add two primary CTA buttons. **"Add to Scope"** gathers all the content info for the existing and net-new assets into a running scope spec sheet — like a shopping cart. Under the Executive Summary, add a **"View Scope"** where everything added to scope appears. A second button, **"Push to Brief Agent,"** is a placeholder we'll wire up later.
+
+**What changed.**
+- **Content Plan panel (`components/brief/ContentPlanSection.tsx`).** Two primary CTAs now sit under the header once the plan has topics. **Add to Scope** unions *every* topic in the plan (both existing→optimise and net-new→build, regardless of the active card/priority filter) into the running scope cart and saves it; it shows an "Adding…" → "Added to scope ✓" state and a live "N in scope · this plan is fully scoped" status. **Push to Brief Agent** is present but not yet connected — clicking it shows a short "hand-off isn't connected yet — your scope is saved and ready for it" note.
+- **New View Scope panel (`components/brief/ScopeSection.tsx`).** A new sub-nav item under **Executive Summary** (Executive summary · View scope). It shows everything in scope as a writer-ready spec sheet — the same summary cards, rows, and full briefs the Content Plan uses — with a × to drop a topic, a Refresh CTA, and a "Scope last updated …" timestamp.
+- **Persistence (`/api/projects/[id]/scope`, `scope_selections` column).** Scope is a true running cart: saved on the project so it survives reloads, devices, and re-analysis. Auto-migrated at runtime (ADD COLUMN IF NOT EXISTS) — no manual db:push.
+
+**One source of truth (Const II.7).** Scope stores **only** topic ids — never a copy of the brief data. The View Scope panel re-derives every topic and brief from the canonical pool (the same builder the Content Plan and Cluster panels use) and filters to the scoped ids, so volumes and briefs reconcile exactly. Nothing modeled; every figure still traces to a real Semrush row (Const I.1).
+
+**Theme parity (Const IV.6 / V.5).** The two CTAs are filled buttons whose text token flips with the theme. Measured contrast: Add to Scope (indigo) = 4.63:1 dark / 12.70:1 light; Push to Brief Agent (purple) = 7.34:1 dark / 14.16:1 light — both clear 4.5:1 in **both** themes. Cyan/green/amber fills were tested and rejected because their light-mode tones drop the flipping text below 2.5:1.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` — **clean**. jsdom render harness (both themes) — **all PASS**: View Scope spec sheet renders scoped existing + net-new topics with the remove control; both CTAs render with the theme-safe filled tokens; both panels mount without throwing. Full retained regression suite + 8 new v7.267 scope invariants (ids-only persistence, re-derived view, single scroll container, CTA contrast tokens, no hex literals) — **all PASS**.
+
+**Action for Wayne:** deploy v7.267. On the Content Plan, click **Add to Scope** to gather the plan into your scope cart, then open **Executive Summary → View scope** to see the running spec sheet. (Push to Brief Agent is staged for a later release.)
+
+
+
 ## v7.266 — 2026-06-23 · Journey list view: same checkboxes that push topics into the Content Plan
 
 **The ask (Wayne).** Add the same checkboxes and behavior to the **list view** of the Journey panel that the mind-map already has — checking a topic pushes those topics into the Content Plan, with a way to deselect, and checking a parent selects every child under it.

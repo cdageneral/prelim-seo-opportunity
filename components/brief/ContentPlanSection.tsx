@@ -487,6 +487,14 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   // v7.261: ids whose remove-save is in flight (per-row spinner on the × control).
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
 
+  // v7.267: the running Scope "spec sheet" (the cart). We hold the set of ContentTopic.id
+  // already in scope so "Add to Scope" can union the plan in idempotently and show how
+  // much is scoped. null = still loading from the project DB.
+  const [scopeIds, setScopeIds] = useState<Set<string> | null>(null);
+  const [addingScope, setAddingScope] = useState(false);
+  const [justAdded, setJustAdded] = useState(false);       // transient "Added ✓" confirmation
+  const [briefHint, setBriefHint] = useState(false);       // Push to Brief Agent (wired later)
+
   useEffect(() => {
     if (!projectId) { setKwLoaded(true); return; }
     let cancelled = false;
@@ -508,6 +516,18 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .then((r: Response) => r.ok ? r.json() : { selections: [] })
       .then((d: any) => { if (!cancelled) setSelectedIds(new Set<string>(Array.isArray(d.selections) ? d.selections : [])); })
       .catch(() => { if (!cancelled) setSelectedIds(new Set<string>()); });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  // v7.267: load the saved Scope cart for this project (re-reads on mount, always fresh).
+  useEffect(() => {
+    if (!projectId) { setScopeIds(new Set()); return; }
+    let cancelled = false;
+    setScopeIds(null);
+    fetch(`/api/projects/${projectId}/scope`, { cache: 'no-store' })
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => { if (!cancelled) setScopeIds(new Set<string>(Array.isArray(d.selections) ? d.selections : [])); })
+      .catch(() => { if (!cancelled) setScopeIds(new Set<string>()); });
     return () => { cancelled = true; };
   }, [projectId, kwVersion]);
 
@@ -549,6 +569,40 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); n.delete(id); return n; }));
   };
 
+  // v7.267: every topic id currently resolved into the plan (existing + net-new, all
+  // priorities — independent of the active filter cards). These are the assets "Add to
+  // Scope" pushes into the cart.
+  const planTopicIds = useMemo(
+    () => (selectedPlan ? selectedPlan.topics.map((t: ContentTopic) => t.id) : []),
+    [selectedPlan],
+  );
+  const scopedCount = scopeIds ? scopeIds.size : 0;
+  const allPlanInScope = !!scopeIds && planTopicIds.length > 0 && planTopicIds.every((id) => scopeIds.has(id));
+
+  // v7.267: "Add to Scope" — union ALL current plan topics into the running scope cart and
+  // persist (Const II.7: we store only ids; the View Scope panel re-derives the briefs).
+  // Idempotent: re-adding an already-scoped plan is a no-op union. Optimistic with revert.
+  const addPlanToScope = () => {
+    if (addingScope || planTopicIds.length === 0) return;
+    const prev = scopeIds ?? new Set<string>();
+    const next = new Set<string>(prev);
+    planTopicIds.forEach((id) => next.add(id));
+    setScopeIds(next);          // optimistic
+    setAddingScope(true);
+    setJustAdded(false);
+    fetch(`/api/projects/${projectId}/scope`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); return r.json(); })
+      .then((d: any) => {
+        setScopeIds(new Set<string>(Array.isArray(d.selections) ? d.selections : Array.from(next)));
+        setJustAdded(true);
+        setTimeout(() => setJustAdded(false), 2600);
+      })
+      .catch(() => setScopeIds(prev))   // revert on failure
+      .finally(() => setAddingScope(false));
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>
       <div style={{ marginBottom: 16 }}>
@@ -558,6 +612,62 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
           Your hand-picked plan. Tick topics on the <b style={{ color: COL.cyan }}>Content Map</b> to push them here &mdash; only the topics you select appear, as prioritised, writer-ready briefs. Click a row for the full brief.
           {selCount > 0 && <span style={{ color: COL.txt2 }}> &nbsp;·&nbsp; {selCount} topic{selCount !== 1 ? 's' : ''} in your plan.</span>}
         </p>
+
+        {/* v7.267: primary CTAs — add the whole plan (existing + net-new) to the running
+            Scope cart, and (later) hand off to the Brief Agent. Filled buttons with the
+            text token --c-08080f, which FLIPS with the theme (near-black on dark, near-white
+            on light); the indigo + purple fills are the only accents whose light-mode tones
+            stay dark enough to clear 4.5:1 against that flipping text in BOTH themes — cyan/
+            green/amber fills fail in light, so they are not used (Const IV.6 / V.5). Shown
+            only when the plan has topics. */}
+        {selCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={addPlanToScope}
+              disabled={addingScope}
+              title="Add every topic in this plan (existing + net-new) to your Scope spec sheet"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7, cursor: addingScope ? 'default' : 'pointer',
+                background: 'var(--c-6c63ff)', color: 'var(--c-08080f)', border: 'none', borderRadius: 9,
+                padding: '9px 16px', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.01em',
+                opacity: addingScope ? 0.75 : 1, transition: 'opacity 0.12s',
+              }}
+            >
+              <i className={`ti ${addingScope ? 'ti-loader-2' : justAdded ? 'ti-check' : 'ti-circle-plus'}`} style={{ fontSize: 15 }} />
+              {addingScope ? 'Adding…' : justAdded ? 'Added to scope' : 'Add to Scope'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setBriefHint(true); setTimeout(() => setBriefHint(false), 3200); }}
+              title="Hand the scoped briefs to the Brief Agent (coming soon)"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                background: COL.purple, color: 'var(--c-08080f)', border: 'none', borderRadius: 9,
+                padding: '9px 16px', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.01em',
+              }}
+            >
+              <i className="ti ti-robot" style={{ fontSize: 15 }} />
+              Push to Brief Agent
+            </button>
+
+            {/* live scope status — reads in both themes (muted text on the page surface) */}
+            {scopedCount > 0 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: COL.mut }}>
+                <i className="ti ti-shopping-cart" style={{ fontSize: 13, color: allPlanInScope ? COL.green : COL.mut2 }} />
+                {scopedCount} in scope{allPlanInScope ? ' · this plan is fully scoped' : ''}
+              </span>
+            )}
+          </div>
+        )}
+
+        {briefHint && (
+          <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--c-9a9ac0)', background: 'var(--ca-167-139-250-0_12)', border: '1px solid var(--ca-167-139-250-0_2)', borderRadius: 8, padding: '8px 12px' }}>
+            <i className="ti ti-plug-connected" style={{ color: COL.purple }} />
+            Brief Agent hand-off isn&rsquo;t connected yet &mdash; your scope is saved and ready for it.
+          </div>
+        )}
       </div>
       {(!kwLoaded || selectedIds === null) ? (
         <div style={{ padding: '48px 24px', textAlign: 'center' }}>

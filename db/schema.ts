@@ -49,6 +49,14 @@ export const projects = pgTable('projects', {
   // at runtime via the ADD COLUMN IF NOT EXISTS pattern — no manual db:push.
   contentPlanSelections:          jsonb('content_plan_selections').$type<string[]>(),
   contentPlanSelectionsUpdatedAt: timestamp('content_plan_selections_updated_at'),
+  // v7.267: Scope "spec sheet" — the running cart of content topics the user pushed in via
+  // "Add to Scope" on the Content Plan panel, stored as an array of ContentTopic.id
+  // (Const II.7: a view over one source of truth, not a copy). The View Scope panel
+  // re-derives each topic's full brief from the canonical pool and filters to these ids.
+  // Lives on the project so it survives reloads, devices, and re-analysis. Auto-migrated
+  // at runtime via the ADD COLUMN IF NOT EXISTS pattern — no manual db:push.
+  scopeSelections:          jsonb('scope_selections').$type<string[]>(),
+  scopeSelectionsUpdatedAt: timestamp('scope_selections_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
