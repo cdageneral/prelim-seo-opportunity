@@ -2816,11 +2816,6 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [buildError, setBuildError] = useState<string | null>(null);
   // v7.156: live build progress for the determinate bar + ETA.
   const [progress, setProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
-  // v7.159: measured connector geometry (active pill middle → persona bracket).
-  const leftZoneRef   = useRef<HTMLDivElement | null>(null);
-  const activePillRef = useRef<HTMLButtonElement | null>(null);
-  const personaRef    = useRef<HTMLDivElement | null>(null);
-  const [conn, setConn] = useState<{ line: string; brace: string; w: number; h: number } | null>(null);
 
   const clientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
   const industry     = (analysis as any)?._industry ?? 'General';
@@ -3131,42 +3126,19 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
 
   // v7.170: in demand mode the personas + a "Shared / all personas" bucket are an
   // exclusive partition of the journey topics, so they sum to the combined total.
+  // v7.273: the "Shared / all personas" bucket is no longer offered as its own
+  // selectable box (Wayne 2026-06-23). The partition still assigns shared topics to
+  // SHARED_BUCKET internally, and those topics continue to roll into the "All Segments"
+  // combined view — so nothing is hidden (Const I.5), only the standalone slice is gone.
   const tabs = useMemo(() => [
     { id: 'combined', label: 'All Segments' },
     ...segments.map((s: AudienceSegment) => ({ id: s.id, label: s.name })),
-    ...((demandMode || canonicalMode) && segments.length > 0 ? [{ id: SHARED_BUCKET, label: 'Shared / all personas' }] : []),
-  ], [segments, demandMode, canonicalMode]);
+  ], [segments]);
 
   const activeSegment = activeTab === 'combined' ? null : segments.find((s: AudienceSegment) => s.id === activeTab) ?? null;
-  const segIdx = activeSegment ? segments.indexOf(activeSegment) : -1;
-  const segAccent = segIdx >= 0 ? SEGMENT_ACCENTS[segIdx % SEGMENT_ACCENTS.length] : null;
-
-  // v7.159: measure the active pill + persona card and draw the connector so the
-  // line always lands on the MIDDLE of the active pill. Recompute on tab change,
-  // segment data change, and container resize (responsive wrap).
-  useIsoLayoutEffect(() => {
-    if (!activeSegment) { setConn(null); return; }
-    const measure = () => {
-      const zone = leftZoneRef.current, pill = activePillRef.current, per = personaRef.current;
-      if (!zone || !pill || !per) { setConn(null); return; }
-      const c = zone.getBoundingClientRect();
-      const p = pill.getBoundingClientRect();
-      const r = per.getBoundingClientRect();
-      const paths = buildConnector({
-        pillRightX: p.right - c.left,
-        pillMidY:   p.top + p.height / 2 - c.top,
-        perLeft:    r.left - c.left,
-        perTop:     r.top - c.top,
-        perBottom:  r.bottom - c.top,
-      });
-      setConn({ line: paths.line, brace: paths.brace, w: c.width, h: c.height });
-    };
-    measure();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
-    if (ro && leftZoneRef.current) ro.observe(leftZoneRef.current);
-    window.addEventListener('resize', measure);
-    return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', measure); };
-  }, [activeTab, activeSegment, segIdx, demandMode, segments]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // v7.273: the old pill→persona bracket connector was removed with the stacked-pill
+  // layout — the segment selector is now a flat row of boxes (the active segment box
+  // expands inline), so no measured SVG connector is needed.
 
   const preLLMPrompts = activeSegment
     ? (activeSegment.preLLMPrompts ?? [])
@@ -3201,91 +3173,73 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         </p>
       </div>
 
-      {/* v7.159: segment pills stacked left + persona card (bracket-connected) · build control right */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 24, marginBottom: 18, flexWrap: 'wrap' }}>
+      {/* v7.273: View toggle moved to the top, directly under the header text and ABOVE
+          the segment boxes (Wayne 2026-06-23). It only governs the canonical list/mind-map
+          view, so it renders only when canonical topics exist. */}
+      {(canonicalTopics?.length ?? 0) > 0 && (
+        <JourneyViewToggle view={journeyView} onChange={setJourneyView} />
+      )}
 
-        {/* Left zone — pills + (when a segment is active) bracket connector + persona */}
-        <div ref={leftZoneRef} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start', gap: 0, flex: '1 1 560px', minWidth: 320 }}>
-
-          {/* stacked pills */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', flex: '0 0 auto' }}>
-            {tabs.map((tab: { id: string; label: string }, tabIdx: number) => {
-              const isActive = activeTab === tab.id;
-              const isHovered = hoveredTab === tab.id;
-              const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
-              const tAccent = tSeg ? SEGMENT_ACCENTS[(tabIdx - 1) % SEGMENT_ACCENTS.length] : null;
-              const ac = tAccent ? tAccent.text : 'var(--c-8080a0)';
-              const lit = isActive || isHovered;   // v7.160: active OR hovered → accent + glow
-              return (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                  ref={isActive ? activePillRef : undefined}
-                  onMouseEnter={() => setHoveredTab(tab.id)}
-                  onMouseLeave={() => setHoveredTab((h: string | null) => (h === tab.id ? null : h))}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 8,
-                    padding: tSeg ? '4px 11px 4px 4px' : '7px 13px',
-                    fontSize: 12, fontWeight: isActive ? 700 : 500,
-                    color: lit ? ac : 'var(--c-6a6a90)',
-                    background: isActive ? `${ac}14` : (isHovered ? `${ac}0d` : 'transparent'),
-                    border: `1px solid ${lit ? ac + '55' : 'var(--c-1a1a30)'}`,
-                    boxShadow: lit ? `0 0 0 1px ${ac}22, 0 0 14px ${ac}40` : 'none',
-                    borderRadius: 20, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
-                  }}>
-                  {tSeg && (
-                    tSeg.personaImageUrl ? (
-                      <img src={tSeg.personaImageUrl} alt={`Portrait representing ${tSeg.name}`} loading="lazy"
-                        style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${ac}` }} />
-                    ) : (
-                      <span style={{ width: 24, height: 24, borderRadius: '50%', border: `1.5px solid ${ac}`, color: ac, background: `${ac}10`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 600 }}>
-                        {initialsOf(tSeg.name)}
-                      </span>
-                    )
-                  )}
-                  {tab.label}
-                  {tSeg && (
-                    <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'var(--ca-50-50-70-0_4)', color: isActive ? ac : 'var(--c-4a4a6a)', fontWeight: 600 }}>
-                      {tSeg.volumePct}%
+      {/* v7.273: audience segment selector — a responsive row of boxes (All Segments +
+          one box per segment), replacing the v7.159 stacked pills + bracket persona card.
+          The "All Segments" box leads ("in front"); the active SEGMENT box expands inline
+          to show its trigger + tagline (Wayne 2026-06-23). The "Shared / all personas"
+          bucket is no longer a box; its topics still roll into All Segments (Const I.5). */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10, marginTop: 16, marginBottom: 18 }}>
+        {tabs.map((tab: { id: string; label: string }) => {
+          const isActive = activeTab === tab.id;
+          const isHovered = hoveredTab === tab.id;
+          const tSeg = tab.id !== 'combined' ? segments.find((s: AudienceSegment) => s.id === tab.id) : null;
+          const segPos = tSeg ? segments.indexOf(tSeg) : -1;
+          const tAccent = segPos >= 0 ? SEGMENT_ACCENTS[segPos % SEGMENT_ACCENTS.length] : null;
+          const ac = tAccent ? tAccent.text : 'var(--c-a78bfa)';   // All Segments → neutral purple accent
+          const lit = isActive || isHovered;   // active OR hovered → accent + glow (matches v7.160 pills)
+          return (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              onMouseEnter={() => setHoveredTab(tab.id)}
+              onMouseLeave={() => setHoveredTab((h: string | null) => (h === tab.id ? null : h))}
+              style={{
+                flex: '1 1 170px', minWidth: 150, textAlign: 'left',
+                display: 'flex', flexDirection: 'column', gap: 8,
+                padding: '12px 14px', borderRadius: 12, cursor: 'pointer', transition: 'all 0.15s',
+                background: isActive ? `${ac}14` : (isHovered ? `${ac}0d` : 'transparent'),
+                border: `1px solid ${lit ? ac + '55' : 'var(--c-1a1a30)'}`,
+                boxShadow: lit ? `0 0 0 1px ${ac}22, 0 0 14px ${ac}40` : 'none',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {tSeg ? (
+                  tSeg.personaImageUrl ? (
+                    <img src={tSeg.personaImageUrl} alt={`Portrait representing ${tSeg.name}`} loading="lazy"
+                      style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', border: `1.5px solid ${ac}`, flexShrink: 0 }} />
+                  ) : (
+                    <span style={{ width: 32, height: 32, borderRadius: '50%', border: `1.5px solid ${ac}`, color: ac, background: `${ac}10`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
+                      {initialsOf(tSeg.name)}
                     </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* bracket gutter + persona card (only when a single segment is active) */}
-          {activeSegment && segAccent && (
-            <>
-              <div style={{ flex: '0 0 58px' }} aria-hidden="true" />
-              <div ref={personaRef} style={{ alignSelf: 'center', flex: '1 1 auto', display: 'flex', alignItems: 'center', gap: 14, border: `1px solid ${segAccent.border}44`, borderRadius: 12, background: segAccent.bg, padding: '14px 16px' }}>
-                {activeSegment.personaImageUrl ? (
-                  <img src={activeSegment.personaImageUrl} alt={`Portrait representing ${activeSegment.name}`} loading="lazy"
-                    style={{ width: 64, height: 64, borderRadius: '50%', objectFit: 'cover', border: `2px solid ${segAccent.border}`, flexShrink: 0 }} />
+                  )
                 ) : (
-                  <div style={{ width: 64, height: 64, borderRadius: '50%', flexShrink: 0, background: segAccent.bg, border: `2px solid ${segAccent.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: segAccent.text, fontSize: 18, fontWeight: 600 }}>
-                    {initialsOf(activeSegment.name)}
-                  </div>
+                  <span style={{ width: 32, height: 32, borderRadius: 9, border: `1.5px solid ${lit ? ac : 'var(--c-2a2a45)'}`, color: lit ? ac : 'var(--c-8080a0)', background: isActive ? `${ac}10` : 'transparent', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <i className="ti ti-layout-grid" style={{ fontSize: 15 }} />
+                  </span>
                 )}
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-dcdcf4)', marginBottom: 3 }}>{activeSegment.name}</div>
-                  <p style={{ fontSize: 11.5, color: 'var(--c-8a8ab0)', margin: '0 0 5px', lineHeight: 1.5 }}>{activeSegment.whoTheyAre.trigger}</p>
-                  <p style={{ fontSize: 12, color: 'var(--c-9090b0)', fontStyle: 'italic', margin: 0 }}>&ldquo;{activeSegment.tagline}&rdquo;</p>
-                </div>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: isActive ? 700 : 600, color: lit ? ac : 'var(--c-9090b8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {tab.label}
+                </span>
+                {tSeg && (
+                  <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 8, background: isActive ? `${ac}1f` : 'var(--ca-50-50-70-0_4)', color: isActive ? ac : 'var(--c-4a4a6a)', fontWeight: 600, flexShrink: 0 }}>
+                    {tSeg.volumePct}%
+                  </span>
+                )}
               </div>
-
-              {/* measured connector: faint line from the active pill's MIDDLE + curly brace embracing the persona */}
-              {conn && (
-                <svg width={conn.w} height={conn.h} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' }} aria-hidden="true">
-                  <path d={conn.line}  fill="none" stroke={segAccent.border} strokeWidth={1}   opacity={0.5} />
-                  <path d={conn.brace} fill="none" stroke={segAccent.border} strokeWidth={1.4} opacity={0.65} strokeLinecap="round" />
-                </svg>
+              {/* active segment box expands inline (Wayne 2026-06-23): trigger + tagline */}
+              {tSeg && isActive && (
+                <div style={{ borderTop: `1px solid ${ac}33`, paddingTop: 8, marginTop: 2 }}>
+                  <p style={{ fontSize: 11.5, color: 'var(--c-8a8ab0)', margin: '0 0 5px', lineHeight: 1.5 }}>{tSeg.whoTheyAre?.trigger}</p>
+                  <p style={{ fontSize: 12, color: 'var(--c-9090b0)', fontStyle: 'italic', margin: 0, lineHeight: 1.45 }}>&ldquo;{tSeg.tagline}&rdquo;</p>
+                </div>
               )}
-            </>
-          )}
-        </div>
-
-        {/* v7.242: build-status / "build deep journey" control fully removed from the */}
-        {/* Journey panel (Wayne). The build lives only on the Keyword panel's workflow */}
-        {/* bar; this panel is purely a display of the journey.                          */}
+            </button>
+          );
+        })}
       </div>
 
       <Legend />
@@ -3297,9 +3251,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
            The demand-universe graph below is only the legacy fallback when no canonical
            topics exist (the deep journey still backfills INTO the clusters this reads). */
         <>
-          {/* v7.256: List ⇄ Mind-map toggle. List = current collapsible content plan;
-              Mind-map = behavioral knowledge graph of the same canonical topics. */}
-          <JourneyViewToggle view={journeyView} onChange={setJourneyView} />
+          {/* v7.273: List ⇄ Mind-map toggle now lives at the TOP of the panel (under the
+              header, above the segment boxes) — rendered there, not here. */}
           {journeyView === 'list' ? (
             <CanonicalJourneyView
               topics={(filteredCanonicalTopics ?? canonicalTopics) as CanonicalJourneyTopic[]}

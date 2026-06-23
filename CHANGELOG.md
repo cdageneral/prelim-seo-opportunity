@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.273 — 2026-06-23 · Journey panel — view toggle moved to the top, segments shown as a 4-box selector
+
+**The ask (Wayne).** On the Audience Journeys panel, bring the List / Mind-map **view toggle up to the top**, directly under the header text. Then show the **segments as boxes** — one box per segment, with a box for **All Segments in front** (leading the row).
+
+**Decisions you made (this session).**
+- **Drop "Shared / all personas"** as its own box — the selector is exactly four boxes (All Segments + the three segments). The Shared partition still exists internally and its topics continue to roll into the **All Segments** combined view, so no data is hidden (Const I.5).
+- **Active segment expands inline** — clicking a segment box expands *that box* to show its trigger + tagline; the others stay compact. (Replaces the old large bracket-connected persona card.)
+
+**What changed (presentational only — no data, Const I.1).**
+- **View toggle relocated** to the top of the panel, under the "Audience Journeys" description and **above** the segment selector. It still governs only the canonical List ⇄ Mind-map view, so it appears when canonical topics exist; it was removed from its old spot lower in the canonical view.
+- **Segment pills → a responsive row of boxes.** "All Segments" leads the row, followed by one box per segment (portrait/initials, name, and volume %). The active segment box expands inline with its trigger and tagline.
+- **Removed the old stacked-pill layout** and its measured pill→persona SVG bracket connector (and the now-dead geometry refs/state that drove it). The shared `buildConnector` helper is retained (still exported).
+
+**Defensibility.** No numbers invented, modeled, or changed; this is layout only. The segment→bucket partition (segments + Shared = total) is untouched, so combined totals still reconcile (Const II.7). All new styling uses existing theme tokens — no hex literals — so it is legible in both light and dark (Const IV.6).
+
+**Verified.** Isolated `tsc` on `JourneySection.tsx` — clean. Full retained regression suite re-run (Const V.6) — all prior checks **PASS**, including the journey partition block (segments + Shared = all). Added a new retained `journeyboxes:` block: SSR render confirms the toggle renders **above** the boxes, all three segment boxes render, the **Shared box is gone**, and the selector region carries **theme tokens only (no hex)** — all **PASS**.
+
+**Action for Wayne:** deploy v7.273 — open the Audience Journeys panel: the List / Mind-map toggle now sits at the top under the heading, with the four selector boxes (All Segments + the three segments) beneath it. Click a segment box to expand its trigger + tagline inline.
+
 ## v7.272 — 2026-06-23 · Category Breakdown — delete a keyword, sub-category, or category (trash icons)
 
 **The ask (Wayne).** In the Keyword panel's Category Breakdown tree, add a trash-can to delete any category, sub-category, or keyword. (The opposite — adding categories/sub-categories/keywords — is the next release, v7.273, and will pull real Semrush volume for added keywords.)
