@@ -132,7 +132,30 @@ export default function LLMVisibilitySection({ analysis }: Props) {
 
 function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
   const { categories, unbranded, branded, sentiment, results, probedAt, promptsPerPlatform, platformsUsed } = snapshot;
-  const [showDetail, setShowDetail] = useState(false);
+  const [showDetail, setShowDetail]   = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
+
+  // Dedicated "View prompts" data (v7.274): the exact prompts that were sent,
+  // deduped (each prompt goes to both platforms). Grouped category → prompts,
+  // with brand-level prompts last. Unbranded vs branded flagged per row.
+  const promptGroups = (() => {
+    const seen = new Set<string>();
+    const byGroup = new Map<string, { branded: boolean; prompt: string }[]>();
+    for (const r of results) {
+      if (seen.has(r.prompt)) continue;
+      seen.add(r.prompt);
+      const g = r.category ?? '__brand__';
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g)!.push({ branded: r.branded, prompt: r.prompt });
+    }
+    const cats = [...byGroup.keys()].filter(k => k !== '__brand__').sort();
+    const ordered = [...cats, ...(byGroup.has('__brand__') ? ['__brand__'] : [])];
+    return ordered.map(g => ({
+      label: g === '__brand__' ? 'Brand-level' : g,
+      rows:  byGroup.get(g)!,
+    }));
+  })();
+  const uniquePromptCount = promptGroups.reduce((n, g) => n + g.rows.length, 0);
 
   const probeDate = new Date(probedAt).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
@@ -270,22 +293,72 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
         </div>
       )}
 
-      {/* Methodology + detail toggle */}
+      {/* Methodology + toggles */}
       <div className="border-t border-orbit-border pt-3 flex items-center justify-between flex-wrap gap-2">
         <p className="text-orbit-tertiary text-[10px]">
-          3 prompts per category (2 unbranded + 1 branded) + 4 brand-level, per platform.
+          6 prompts per category (5 unbranded + 1 branded) + 4 brand-level, per platform.
           Responses are live at analysis time, not an index. Sentiment is Claude-assessed; excerpts are verbatim.
         </p>
-        <button
-          onClick={() => setShowDetail(v => !v)}
-          className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors shrink-0"
-        >
-          {showDetail ? 'Hide prompts & responses ▲' : 'View all prompts & responses ▼'}
-        </button>
+        <div className="flex items-center gap-4 shrink-0">
+          <button
+            onClick={() => setShowPrompts(v => !v)}
+            className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors"
+          >
+            {showPrompts ? 'Hide prompts ▲' : `View prompts (${uniquePromptCount}) ▼`}
+          </button>
+          <button
+            onClick={() => setShowDetail(v => !v)}
+            className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors"
+          >
+            {showDetail ? 'Hide prompts & responses ▲' : 'View all prompts & responses ▼'}
+          </button>
+        </div>
       </div>
+
+      {showPrompts && <PromptList groups={promptGroups} />}
 
       {showDetail && <ProbeDetail results={results} />}
 
+    </div>
+  );
+}
+
+// ─── Prompt List (dedicated "View prompts" view, v7.274) ──────────────────────
+// Just the prompts that were sent — no responses — grouped by category, with the
+// brand-level set last. Each prompt is tagged unbranded/branded.
+
+function PromptList({ groups }: { groups: { label: string; rows: { branded: boolean; prompt: string }[] }[] }) {
+  if (groups.length === 0) {
+    return (
+      <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
+        <p className="text-orbit-tertiary text-xs italic">No prompts recorded for this run.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-4 max-h-96 overflow-y-auto">
+      <p className="text-orbit-tertiary text-[10px] leading-relaxed">
+        These are the exact prompts sent to each platform (Claude + ChatGPT). Unbranded prompts
+        never name the brand — they are the visibility signal; the branded prompt is used only for
+        per-category sentiment.
+      </p>
+      {groups.map((g, gi) => (
+        <div key={gi} className="border-b border-orbit-border/50 last:border-0 pb-3 last:pb-0">
+          <p className="text-orbit-primary text-xs font-medium mb-1.5">{g.label}</p>
+          <ol className="flex flex-col gap-1.5">
+            {g.rows.map((r, ri) => (
+              <li key={ri} className="flex items-start gap-2">
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                  r.branded
+                    ? 'bg-orbit-muted text-orbit-tertiary'
+                    : 'bg-orbit-accent/10 text-orbit-accent'
+                }`}>{r.branded ? 'branded' : 'unbranded'}</span>
+                <span className="text-orbit-secondary text-[11px] italic leading-relaxed">&ldquo;{r.prompt}&rdquo;</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.274 — 2026-06-23 · LLM Visibility — deeper unbranded coverage (5 prompts/category, 30 categories) + a "View prompts" link
+
+**The ask (Wayne).** On the AI Search Visibility (LLM Visibility) panel: (1) add an inline link to see the exact prompts that were sent; (2) the old 12-category / 2-unbranded-prompt sample was too thin to draw insights from — widen it; (3) we care about **unbranded** category visibility, not branded — keep just one branded prompt per category for sentiment.
+
+**What changed.**
+- **Probe scheme is now 6 prompts per category — 5 unbranded + 1 branded** (was 2 unbranded + 1 branded). The five unbranded prompts are distinct query framings of the same category (best / considering / top-rated / shortlist / word-of-mouth), so the unbranded mention rate is now out of /5 per platform (/10 combined) instead of /2 (/4). The single branded prompt is retained **only** for per-category sentiment & recognition. (`lib/apis/llmProbe.ts` — `buildPromptSpecs`, `ProbeIntent`.)
+- **Category cap raised 12 to 30** (`lib/claude/synthesize.ts`). The probe runs in one Lambda window; 30 categories x 6 prompts x 2 platforms (Claude Haiku 4.5 + GPT-4o-mini) fits comfortably (~150-180s), 40+ risks the ~300s kill. **This cap is a deliberate, Wayne-requested runtime exception (Const I.6)** — chosen over "uncapped," which would require batching/checkpointing the probe and chunking the classifier; logged here rather than diverging silently.
+- **New "View prompts" link** on the panel (`components/brief/LLMVisibilitySection.tsx`) — a dedicated, prompt-only view (no responses), grouped by category with brand-level last, each prompt tagged unbranded/branded. Separate from the existing "View all prompts & responses" detail toggle. Methodology line updated to "6 prompts per category (5 unbranded + 1 branded)".
+- **Classifier output cap raised 4000 to 16000 tokens** (`lib/apis/llmProbe.ts`, sentiment/recognition pass). At 30 categories the candidate set can exceed 100 items; the classifier returns one JSON object each, and the old 4000-token cap would truncate the array and blank sentiment (the v7.231 truncation class). Billed on actual output only — free headroom, not added cost.
+
+**Data integrity.** All probe figures remain live API responses at analysis time (Const I.1) — nothing modeled. The "View prompts" view shows the actual prompts sent. Cost is negligible (~$0.70/run at 30 categories on verified June-2026 API rates); runtime, not cost, is the binding constraint.
+
+**Verification (Art. V).** Isolated `tsc` — 0 new type errors (diffed against the v7.273 baseline). `buildPromptSpecs` behavioral test on the real function — 184 prompts/platform, 150 unbranded + 30 branded (cat) + 4 brand-level, 5 distinct unbranded framings per category, no brand name in unbranded prompts, brand name in every branded prompt. SSR render at real scale (30 categories): renders clean, methodology text updated, /5 category totals, working "View prompts (N)" link, **theme parity** — new markup uses only orbit-* tokens, no hardcoded white/black/cyan (Const IV.6 / V.5). PDF + Executive Summary read aggregate scores dynamically — no parity edits needed.
+
+
 ## v7.273 — 2026-06-23 · Journey panel — view toggle moved to the top, segments shown as a 4-box selector
 
 **The ask (Wayne).** On the Audience Journeys panel, bring the List / Mind-map **view toggle up to the top**, directly under the header text. Then show the **segments as boxes** — one box per segment, with a box for **All Segments in front** (leading the row).

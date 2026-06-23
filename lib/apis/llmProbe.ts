@@ -6,11 +6,18 @@
  * (_categoryBreakdown, computed in Phase 2 synthesis).
  *
  * Prompt scheme (per platform):
- *   Per procedure category (all of them, "Other" excluded):
- *     • 2 unbranded prompts  — "best providers for {category}" style
+ *   Per procedure category (top 30 by demand, "Other" excluded — v7.274):
+ *     • 5 unbranded prompts  — five distinct "best/top providers for {category}"
+ *       framings, the core unbranded-visibility signal
  *     • 1 branded prompt     — "pros and cons of {client} for {category}"
+ *       (kept solely for per-category sentiment/recognition)
  *   Brand-level (4):
  *     • overview, reputation, industry-top (unbranded), competitor comparison
+ *
+ * v7.274: per Wayne — the unbranded category signal is what matters, so each
+ * category now carries 5 unbranded prompts (was 2) + 1 branded (was 1), and the
+ * category cap was raised 12 → 30 (the cap is a deliberate, Wayne-requested
+ * runtime exception per Const I.6 — the probe runs in one Lambda window).
  *
  * Platforms: Claude (claude-haiku-4-5) + ChatGPT (gpt-4o-mini). All calls
  * run in a bounded-concurrency pool. This is live data at analysis time —
@@ -40,6 +47,9 @@ export type ProbePlatform = 'claude' | 'chatgpt';
 export type ProbeIntent =
   | 'unbranded_recommendation'   // best providers for {category}
   | 'unbranded_consideration'    // considering {category}, who to look into
+  | 'unbranded_toprated'         // top-rated providers for {category} right now
+  | 'unbranded_shortlist'        // shortlist when comparing options for {category}
+  | 'unbranded_wordofmouth'      // who people most often recommend for {category}
   | 'branded_proscons'           // pros and cons of {client} for {category}
   | 'brand_overview'             // what is {client}
   | 'brand_reputation'           // is {client} reputable / reviews
@@ -119,17 +129,33 @@ function buildPromptSpecs(
   const specs: PromptSpec[] = [];
 
   categories.forEach((cat, i) => {
+    const c = cat.name.toLowerCase();
+    // 5 unbranded framings — same category, distinct query intents, to widen
+    // the unbranded-visibility sample per category (v7.274).
     specs.push({
       key: `cat${i}:u1`, category: cat.name, intent: 'unbranded_recommendation', branded: false,
-      prompt: `What are the best companies or providers for ${cat.name.toLowerCase()}?`,
+      prompt: `What are the best companies or providers for ${c}?`,
     });
     specs.push({
       key: `cat${i}:u2`, category: cat.name, intent: 'unbranded_consideration', branded: false,
-      prompt: `I'm considering ${cat.name.toLowerCase()}. Which companies or providers should I look into, and why?`,
+      prompt: `I'm considering ${c}. Which companies or providers should I look into, and why?`,
     });
     specs.push({
+      key: `cat${i}:u3`, category: cat.name, intent: 'unbranded_toprated', branded: false,
+      prompt: `Who are the top-rated providers for ${c} right now?`,
+    });
+    specs.push({
+      key: `cat${i}:u4`, category: cat.name, intent: 'unbranded_shortlist', branded: false,
+      prompt: `If I'm comparing options for ${c}, which companies should be on my shortlist?`,
+    });
+    specs.push({
+      key: `cat${i}:u5`, category: cat.name, intent: 'unbranded_wordofmouth', branded: false,
+      prompt: `What companies do people most often recommend for ${c}?`,
+    });
+    // 1 branded prompt — retained for per-category sentiment / recognition only.
+    specs.push({
       key: `cat${i}:b1`, category: cat.name, intent: 'branded_proscons', branded: true,
-      prompt: `What are the pros and cons of ${clientName} for ${cat.name.toLowerCase()}?`,
+      prompt: `What are the pros and cons of ${clientName} for ${c}?`,
     });
   });
 
@@ -331,10 +357,15 @@ Return ONLY a JSON array. No prose, no markdown fences.
 ${JSON.stringify(payload)}`;
 
   try {
+    // v7.274: 30 categories × (5 unbranded + 1 branded) × 2 platforms can push the
+    // candidate set (mentions + branded) past 100 items; the classifier returns one
+    // JSON object per candidate, so the old 4000-token output cap would TRUNCATE the
+    // array and blank sentiment (the v7.231 truncation class). Raised to 16000 —
+    // billed on ACTUAL output only, so this is free headroom, not added cost.
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const msg = await client.messages.create({
       model:      'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 16000,
       messages:   [{ role: 'user', content: prompt }],
     }, { timeout: 100_000 });
     await recordAnthropic(msg, 'claude-sonnet-4-6');   // v7.225

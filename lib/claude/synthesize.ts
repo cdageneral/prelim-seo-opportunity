@@ -663,15 +663,16 @@ export async function runFullSynthesis(
   // so the panel degrades gracefully instead of going blank.
   let llmProbe = cachedProbe;
   if (!llmProbe) {
-    // v7.86: cap probe input at the top 12 procedure categories by demand —
-    // uncapped footprints can produce 30+ categories, and probing all of them
-    // (3 prompts × 2 platforms each) would not fit in the Lambda window.
-    // The probe is a sampled visibility measure either way; results shown are
-    // always actual probe responses for the categories listed.
+    // v7.274: cap probe input at the top 30 procedure categories by demand
+    // (was 12). The probe now sends 6 prompts/category (5 unbranded + 1 branded)
+    // × 2 platforms in one Lambda window; 30 fits comfortably (~150–180s) while
+    // 40+ risks the ~300s kill. This cap is a deliberate, Wayne-requested runtime
+    // exception (Const I.6) — not a silent default. Results shown are always
+    // actual probe responses for the categories listed.
     const probeCategories = categoryBreakdown.categories
       .filter(c => c.type === 'procedure' && c.name !== 'Other')
       .sort((a, b) => b.monthlyDemand - a.monthlyDemand)
-      .slice(0, 12)
+      .slice(0, 30)
       .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
 
     llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
