@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.271 — 2026-06-23 · Keyword panel — clearer Landscape Summary header, numbered steps, and a stronger journey selector
+
+**The ask (Wayne).** Make the top of the Keyword panel orient the user: add a "Keyword Landscape Summary" title with a short explanation, make "Let's build the workflow" larger with context, label the four build cards as Step 1–4, and make the journey segmentation read as the next major area to choose.
+
+**What changed (presentational only — no data, Const I.1).**
+- **New "Keyword Landscape Summary" intro band** at the very top of the panel body: a titled header with a `ti-map-2` icon and a one-line explanation of what the view is and how to read it.
+- **Enlarged "Let's build the workflow"** — the old tiny uppercase label is now a 16px sentence-case heading with a one-line context sentence (base → competitors → product demand → pre-product demand · each step unlocks the next). The "N actions needed" chip and the Min-volume control keep their places.
+- **"Step N" labels** on each build card — the bare number badge now reads "Step 1"…"Step 4", making the sequence explicit.
+- **Journey strip reframed as "Explore by journey"** — a 15px heading + a "Select a view" cue + a one-line instruction sit above the existing All / Product / Pre-product toggle, so it reads as the next major selection area. The toggle behavior is unchanged.
+
+**Defensibility.** Pure copy/markup and styling; no numbers, data flow, taxonomy, brand guard, or selection logic touched. All colors use existing theme tokens (no hex), so light/dark parity is automatic.
+
+**Verified.** Isolated `tsc` on `KeywordsPanel.tsx` — clean. Dual-theme render check (Const V.5) — rendered in both light and dark; every added token defined in both theme blocks, no hex literals. Full retained regression suite + new `kwheader:` block (summary intro, enlarged title, Step-N labels, journey selector, theme-token-only) — **all PASS**.
+
+**Action for Wayne:** deploy v7.270 — open the Keyword panel; the header now leads with the Landscape Summary, the four steps are numbered, and "Explore by journey" stands out as the next thing to pick.
+
 ## v7.270 — 2026-06-23 · Scope becomes a six-workstream spec sheet with a multi-year plan
 
 **The ask (Wayne).** The Scope panel should aggregate everything pushed in from the other panels — not just content, but LLM prompts, themes, authority, technical and citations — organised by workstream and priority bucket, and able to show a multi-year plan/approach.
