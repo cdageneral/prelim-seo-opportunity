@@ -41,6 +41,13 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);  // v7.267
   } catch { /* already exists */ }
+  // v7.270: namespaced scope for the other five workstreams (additive — content is unchanged).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_workstreams JSONB`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_workstreams_updated_at TIMESTAMP`);
+  } catch { /* already exists */ }
   // v7.269: the two-way sync below also writes the content-plan columns, so ensure them here.
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections JSONB`);
@@ -52,7 +59,11 @@ async function ensureColumns() {
 
 // Full-set replace. ids are opaque ContentTopic.id strings; no cap by default (Const I.6).
 const PutSchema = z.object({
-  selections: z.array(z.string().max(300)).max(50000),
+  selections: z.array(z.string().max(300)).max(50000).optional(),
+  // v7.270: optional namespaced ids for the other five workstreams. Each value is an array
+  // of that workstream's own canonical ids (Const II.7: ids only). Additive — when present
+  // it replaces scope_workstreams; when absent the content path below is unchanged.
+  workstreams: z.record(z.string().max(40), z.array(z.string().max(300)).max(50000)).optional(),
 }).strict();
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -60,8 +71,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const project = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({
-    selections: (project as any).scopeSelections ?? [],
-    updatedAt:  (project as any).scopeSelectionsUpdatedAt ?? null,
+    selections:  (project as any).scopeSelections ?? [],
+    updatedAt:   (project as any).scopeSelectionsUpdatedAt ?? null,
+    workstreams: (project as any).scopeWorkstreams ?? {},          // v7.270 (additive)
+    workstreamsUpdatedAt: (project as any).scopeWorkstreamsUpdatedAt ?? null,
   }, { headers: NO_STORE });
 }
 
@@ -77,11 +90,18 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // v7.270: both fields are optional and additive. The CONTENT path (selections + the
+  // scope ⊆ plan two-way sync) is byte-for-byte the v7.269 behaviour, run only when
+  // `selections` is provided; `workstreams` persists the other five workstreams' ids and
+  // never touches content. A PUT may carry either or both.
+  const hasSelections  = parsed.data.selections  !== undefined;
+  const hasWorkstreams = parsed.data.workstreams !== undefined;
+
   // De-dupe and drop empties while preserving order. The ids are ContentTopic.id values
   // (opaque to the server) — we store exactly what was scoped, nothing modeled.
   const seen = new Set<string>();
   const selections: string[] = [];
-  for (const raw of parsed.data.selections) {
+  for (const raw of (parsed.data.selections ?? [])) {
     const id = raw.trim();
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -97,22 +117,38 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const oldScope: string[] = (current as any).scopeSelections ?? [];
   const removed = oldScope.filter((id) => !newScope.has(id));   // dropped from scope this PUT
 
-  const setObj: Record<string, unknown> = {
-    scopeSelections:          selections,
-    scopeSelectionsUpdatedAt: new Date(),
-    updatedAt:                new Date(),
-  };
+  const setObj: Record<string, unknown> = { updatedAt: new Date() };
 
-  // Two-way sync: removing from scope also removes from the shared content-plan selection,
-  // so the topic unchecks in the Content Map / Content Plan / Journey views (Wayne, v7.269).
-  if (removed.length) {
-    const rem = new Set(removed);
-    const plan: string[] = (current as any).contentPlanSelections ?? [];
-    const prunedPlan = plan.filter((id) => !rem.has(id));
-    if (prunedPlan.length !== plan.length) {
-      setObj.contentPlanSelections          = prunedPlan;
-      setObj.contentPlanSelectionsUpdatedAt = new Date();
+  // CONTENT workstream (unchanged from v7.269) — only when `selections` was sent.
+  if (hasSelections) {
+    Object.assign(setObj, {
+      scopeSelections:          selections,
+      scopeSelectionsUpdatedAt: new Date(),
+    });
+    // Two-way sync: removing from scope also removes from the shared content-plan selection,
+    // so the topic unchecks in the Content Map / Content Plan / Journey views (Wayne, v7.269).
+    if (removed.length) {
+      const rem = new Set(removed);
+      const plan: string[] = (current as any).contentPlanSelections ?? [];
+      const prunedPlan = plan.filter((id) => !rem.has(id));
+      if (prunedPlan.length !== plan.length) {
+        setObj.contentPlanSelections          = prunedPlan;
+        setObj.contentPlanSelectionsUpdatedAt = new Date();
+      }
     }
+  }
+
+  // OTHER FIVE workstreams (v7.270) — ids only, de-duped per namespace (Const II.7). Additive:
+  // replaces scope_workstreams; never reads or mutates content_plan_selections.
+  if (hasWorkstreams) {
+    const ws: Record<string, string[]> = {};
+    for (const [k, arr] of Object.entries(parsed.data.workstreams!)) {
+      const s2 = new Set<string>(); const out: string[] = [];
+      for (const raw of arr) { const id = raw.trim(); if (!id || s2.has(id)) continue; s2.add(id); out.push(id); }
+      ws[k] = out;
+    }
+    setObj.scopeWorkstreams          = ws;
+    setObj.scopeWorkstreamsUpdatedAt = new Date();
   }
 
   const [updated] = await db.update(projects)
@@ -122,7 +158,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
   if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   return NextResponse.json({
-    selections: (updated as any).scopeSelections ?? [],
-    updatedAt:  (updated as any).scopeSelectionsUpdatedAt ?? null,
+    selections:  (updated as any).scopeSelections ?? [],
+    updatedAt:   (updated as any).scopeSelectionsUpdatedAt ?? null,
+    workstreams: (updated as any).scopeWorkstreams ?? {},          // v7.270 (additive)
+    workstreamsUpdatedAt: (updated as any).scopeWorkstreamsUpdatedAt ?? null,
   }, { headers: NO_STORE });
 }

@@ -1320,19 +1320,6 @@ export default function KeywordsPanel({
         </div>
       </div>
 
-      {/* ── v7.270: Keyword Landscape Summary intro — orients the panel: what this  */}
-      {/* view is and how to read it. Static descriptive copy only, no data values    */}
-      {/* (Const I.1). Sits at the very top of the scroll body, above the cards.       */}
-      <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 6 }}>
-          <i className="ti ti-map-2" style={{ fontSize: 18, color: 'var(--c-9b96ff)' }} aria-hidden="true" />
-          <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-e8e8ff)', margin: 0, letterSpacing: '-0.2px' }}>Keyword Landscape Summary</h3>
-        </div>
-        <p style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--c-9090b8)', margin: 0, maxWidth: 760 }}>
-          One view of every keyword in scope — where each sits in the funnel, who you compete with, and which demand is still untapped. Build the workflow below to turn your uploaded list into a full-funnel landscape, then drill in by journey.
-        </p>
-      </div>
-
       {/* ── Summary filter cards ── */}
       {(() => {
         const KW_CARDS: Array<{
@@ -1549,24 +1536,16 @@ export default function KeywordsPanel({
 
         return (
           <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
-            {/* v7.270: enlarged title + one-line context (left column); the min-volume */}
-            {/* control keeps its place on the right via marginLeft:auto.                */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-e8e8ff)', letterSpacing: '-0.2px' }}>
-                    Let&rsquo;s build the workflow
-                  </span>
-                  {actionCount > 0 && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--c-f59e0b44)', borderRadius: 20, padding: '2px 8px' }}>
-                      {actionCount} action{actionCount === 1 ? '' : 's'} needed
-                    </span>
-                  )}
-                </div>
-                <p style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--c-8080a8)', margin: '5px 0 0', maxWidth: 680 }}>
-                  Four steps build your landscape from the ground up — <span style={{ color: 'var(--c-9090c0)' }}>base → competitors → product demand → pre-product demand</span>. Each step unlocks the next.
-                </p>
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-9090c0)' }}>
+                Build workflow
+              </span>
+              {actionCount > 0 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--c-f59e0b44)', borderRadius: 20, padding: '2px 8px' }}>
+                  {actionCount} action{actionCount === 1 ? '' : 's'} needed
+                </span>
+              )}
+              <span style={{ fontSize: 10, color: 'var(--c-484868)' }}>base → competitors → product demand → pre-product demand</span>
 
               {/* v7.244: shared minimum-volume floor for steps 3 & 4 (opt-in, Const I.6). */}
               {(() => {
@@ -1646,8 +1625,7 @@ export default function KeywordsPanel({
                     {/* accent stripe on action cards */}
                     {s.status === 'action' && <span style={{ position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 3, background: s.accent }} aria-hidden="true" />}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      {/* v7.270: "Step N" label (was a bare number) — makes the four-step sequence explicit */}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', height: 18, borderRadius: 5, padding: '0 7px', background: emphasize ? s.accent : 'var(--c-14142a)', color: emphasize ? 'var(--c-08080f)' : s.accent, fontSize: 9, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }}>Step {s.n}</span>
+                      <span style={{ width: 19, height: 19, borderRadius: 5, background: emphasize ? s.accent : 'var(--c-14142a)', color: emphasize ? 'var(--c-08080f)' : s.accent, fontSize: 10.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{s.n}</span>
                       <i className={`ti ${s.icon}`} style={{ fontSize: 14, color: s.accent }} aria-hidden="true" />
                       <span style={{ fontSize: 12, fontWeight: 700, color: emphasize ? 'var(--c-e8e8ff)' : 'var(--c-c8c8e8)' }}>{s.title}</span>
                       <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: chip.fg, background: chip.bg, border: `1px solid ${chip.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
@@ -1739,23 +1717,11 @@ export default function KeywordsPanel({
           { key: 'product', label: 'Product journey',     count: journeyCounts.product, hint: 'Solution-aware demand · full funnel',          accent: 'var(--c-9b96ff)', dot: true },
           { key: 'pre',     label: 'Pre-product journey', count: journeyCounts.pre,     hint: 'Problem / trigger searches · awareness only', accent: 'var(--c-34d399)', dot: true },
         ];
-        // v7.270: reframed as a prominent "Explore by journey" selector — the next
-        // major area to choose. Title + cue + instruction above the existing toggle.
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4, flexWrap: 'wrap' }}>
-                <i className="ti ti-route" style={{ fontSize: 16, color: 'var(--c-9b96ff)' }} aria-hidden="true" />
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-e8e8ff)', letterSpacing: '-0.2px' }}>Explore by journey</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--c-9b96ff)', background: 'var(--ca-108-99-255-0_10)', border: '1px solid var(--ca-108-99-255-0_45)', borderRadius: 20, padding: '2px 9px' }}>
-                  <i className="ti ti-pointer" style={{ fontSize: 10 }} aria-hidden="true" />Select a view
-                </span>
-              </div>
-              <p style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--c-8080a8)', margin: 0, maxWidth: 680 }}>
-                Choose which slice of the landscape to drill into — switching the journey re-scopes the cards, the rank split and the keyword table below.
-              </p>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '11px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>
+              Journey
+            </span>
             <div style={{ display: 'inline-flex', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 10, padding: 3, gap: 3 }}>
               {SCOPES.map(s => {
                 const on = journeyScope === s.key;
@@ -1790,7 +1756,6 @@ export default function KeywordsPanel({
              : journeyScope === 'product' ? 'Solution-aware demand · full funnel'
              :                              'Showing both journeys'}
             </span>
-            </div>
           </div>
         );
       })()}

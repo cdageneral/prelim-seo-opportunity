@@ -57,6 +57,15 @@ export const projects = pgTable('projects', {
   // at runtime via the ADD COLUMN IF NOT EXISTS pattern — no manual db:push.
   scopeSelections:          jsonb('scope_selections').$type<string[]>(),
   scopeSelectionsUpdatedAt: timestamp('scope_selections_updated_at'),
+  // v7.270: Scope aggregation shell — the other five workstreams (LLM prompts, themes,
+  // authority, technical, citations) push their scoped item ids into one namespaced map,
+  // each namespace an array of that workstream's own canonical ids (Const II.7: ids only,
+  // re-derived from each source — never a copy). Content keeps its own column above + its
+  // scope ⊆ plan two-way sync untouched; this is purely additive so existing behaviour is
+  // unaffected. Empty until each source panel's "Add to Scope" ships. Auto-migrated at
+  // runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
+  scopeWorkstreams:          jsonb('scope_workstreams').$type<Record<string, string[]>>(),
+  scopeWorkstreamsUpdatedAt: timestamp('scope_workstreams_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });

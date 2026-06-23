@@ -58,6 +58,15 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);
   } catch { /* already exists */ }
+  // v7.270: the list route selects every schema column, so a column that exists in the
+  // schema but not the DB crashes the dashboard (the v7.268 lesson). Ensure the new
+  // namespaced-scope columns here too.
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_workstreams JSONB`);                                 // v7.270
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_workstreams_updated_at TIMESTAMP`);
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
