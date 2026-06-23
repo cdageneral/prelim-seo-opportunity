@@ -45,6 +45,12 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_updated_at TIMESTAMP`);  // v7.260
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections JSONB`);                        // v7.267 (v7.268: also ensured here for deep-links)
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);        // v7.267
+  } catch { /* already exists */ }
 }
 
 const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];   // v7.99

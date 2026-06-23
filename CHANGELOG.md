@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.268 — 2026-06-23 · Hotfix: blank project list after the v7.267 scope column
+
+**The break (Wayne).** After v7.267, OrbitIQ bounced back to the Client Projects screen with **no projects listed**.
+
+**Root cause.** v7.267 added `scope_selections` / `scope_selections_updated_at` to the `projects` schema. The project-list endpoint runs `db.select().from(projects)`, which selects **every** column declared in the schema. The build script is `next build` only — there is no `drizzle-kit push` — so new columns are created solely by the runtime `ALTER TABLE … ADD COLUMN IF NOT EXISTS` calls inside each route. The list route's `ensureColumns` had not been updated for the scope columns, so on a database that didn't yet have them the list query referenced a non-existent column and failed, which blanked the whole project list. (The same latent hazard had existed for earlier optional columns; they survived only because another route had already created them.)
+
+**The fix.** `app/api/projects/route.ts` now ensures **every** runtime-migrated optional column (`brand_terms`, `excluded_brands`, `content_plan_selections`, `scope_selections`, and their `_updated_at` partners) before the list select — so the dashboard self-heals on first load. The project-detail route (`app/api/projects/[id]/route.ts`) also ensures the scope columns, covering a deep-link that hits a project before the dashboard runs. Every statement is `ADD COLUMN IF NOT EXISTS` — idempotent and safe. No data touched; the scope feature itself is unchanged from v7.267.
+
+**Verified.** esbuild parse of both routes — OK. Full retained regression suite + new `projlist:` guard (list route ensures scope + content_plan columns; GET ensures before selecting) — **all PASS**.
+
+**Action for Wayne:** deploy v7.268 — the project list returns on first load; no re-upload or manual DB change needed.
+
+
+
 ## v7.267 — 2026-06-23 · Content Plan → Scope: "Add to Scope" cart + a View Scope spec sheet
 
 **The ask (Wayne).** On the Content Plan panel, add two primary CTA buttons. **"Add to Scope"** gathers all the content info for the existing and net-new assets into a running scope spec sheet — like a shopping cart. Under the Executive Summary, add a **"View Scope"** where everything added to scope appears. A second button, **"Push to Brief Agent,"** is a placeholder we'll wire up later.
