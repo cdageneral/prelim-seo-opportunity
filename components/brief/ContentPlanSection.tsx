@@ -559,6 +559,9 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     if (!cur.has(id)) return;
     const next = new Set(cur); next.delete(id);
     setSelectedIds(next);   // optimistic
+    // v7.269: scope ⊆ plan — the server prunes this id from scope when the plan shrinks; keep
+    // the local "N in scope" badge accurate immediately rather than waiting for a remount.
+    setScopeIds((s: Set<string> | null) => { if (!s || !s.has(id)) return s; const n = new Set(s); n.delete(id); return n; });
     const arr = Array.from(next);
     setSavingIds((s: Set<string>) => { const n = new Set(s); n.add(id); return n; });
     fetch(`/api/projects/${projectId}/content-plan`, {

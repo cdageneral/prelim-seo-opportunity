@@ -9,7 +9,15 @@
  * from the canonical pool and filters to these ids. The scope persists on the project so it
  * survives reloads, devices, and re-analysis. Mirrors the content-plan route. v7.267.
  *
- * Auto-migrates the column at runtime (ADD COLUMN IF NOT EXISTS) — no manual db:push.
+ * v7.269 — TWO-WAY SYNC (Wayne's decision): scope is a curated SUBSET of the shared
+ * content-plan selection (the set the Content Map / Content Plan / Journey views all read).
+ * So on PUT, any id REMOVED from scope is also removed from `content_plan_selections` —
+ * deselecting in the Scope panel unchecks it everywhere. (Adding to scope never changes the
+ * plan: scoped ids are already in the plan.) The complementary rule — pruning scope when the
+ * plan shrinks — lives in the content-plan PUT route, so scope ⊆ plan is enforced server-side
+ * regardless of which view made the edit (one invariant, all clients inherit it).
+ *
+ * Auto-migrates the columns at runtime (ADD COLUMN IF NOT EXISTS) — no manual db:push.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -32,6 +40,13 @@ async function ensureColumns() {
   } catch { /* already exists */ }
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);  // v7.267
+  } catch { /* already exists */ }
+  // v7.269: the two-way sync below also writes the content-plan columns, so ensure them here.
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections JSONB`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_updated_at TIMESTAMP`);
   } catch { /* already exists */ }
 }
 
@@ -73,12 +88,35 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     selections.push(id);
   }
 
+  // v7.269: load the current row so we can (a) confirm it exists and (b) compute which ids
+  // were REMOVED from scope, which must cascade out of the content-plan selection too.
+  const current = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
+  if (!current) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  const newScope = new Set(selections);
+  const oldScope: string[] = (current as any).scopeSelections ?? [];
+  const removed = oldScope.filter((id) => !newScope.has(id));   // dropped from scope this PUT
+
+  const setObj: Record<string, unknown> = {
+    scopeSelections:          selections,
+    scopeSelectionsUpdatedAt: new Date(),
+    updatedAt:                new Date(),
+  };
+
+  // Two-way sync: removing from scope also removes from the shared content-plan selection,
+  // so the topic unchecks in the Content Map / Content Plan / Journey views (Wayne, v7.269).
+  if (removed.length) {
+    const rem = new Set(removed);
+    const plan: string[] = (current as any).contentPlanSelections ?? [];
+    const prunedPlan = plan.filter((id) => !rem.has(id));
+    if (prunedPlan.length !== plan.length) {
+      setObj.contentPlanSelections          = prunedPlan;
+      setObj.contentPlanSelectionsUpdatedAt = new Date();
+    }
+  }
+
   const [updated] = await db.update(projects)
-    .set({
-      scopeSelections:          selections,
-      scopeSelectionsUpdatedAt: new Date(),
-      updatedAt:                new Date(),
-    } as any)
+    .set(setObj as any)
     .where(eq(projects.id, params.id))
     .returning();
 

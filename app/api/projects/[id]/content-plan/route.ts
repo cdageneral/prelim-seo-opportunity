@@ -34,6 +34,14 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_updated_at TIMESTAMP`);  // v7.260
   } catch { /* already exists */ }
+  // v7.269: scope ⊆ plan is enforced here too (prune scope when the plan shrinks), so ensure
+  // the scope columns exist before we may write them.
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections JSONB`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);
+  } catch { /* already exists */ }
 }
 
 // Full-set replace. ids are opaque ContentTopic.id strings; no cap by default (Const I.6).
@@ -74,12 +82,30 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     selections.push(id);
   }
 
+  // v7.269: load the current row to keep scope a SUBSET of the plan. When the plan shrinks
+  // (a topic deselected in the Content Map / Content Plan / Journey views), any scoped id no
+  // longer in the plan is pruned from scope too — so the View Scope panel never shows a topic
+  // that's been dropped from the plan. (The reverse — scope removal cascading into the plan —
+  // lives in the /scope PUT route; together they keep scope ⊆ plan from either direction.)
+  const current = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
+  if (!current) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  const planSet = new Set(selections);
+  const setObj: Record<string, unknown> = {
+    contentPlanSelections:          selections,
+    contentPlanSelectionsUpdatedAt: new Date(),
+    updatedAt:                      new Date(),
+  };
+
+  const scope: string[] = (current as any).scopeSelections ?? [];
+  const prunedScope = scope.filter((id) => planSet.has(id));
+  if (prunedScope.length !== scope.length) {
+    setObj.scopeSelections          = prunedScope;
+    setObj.scopeSelectionsUpdatedAt = new Date();
+  }
+
   const [updated] = await db.update(projects)
-    .set({
-      contentPlanSelections:          selections,
-      contentPlanSelectionsUpdatedAt: new Date(),
-      updatedAt:                      new Date(),
-    } as any)
+    .set(setObj as any)
     .where(eq(projects.id, params.id))
     .returning();
 

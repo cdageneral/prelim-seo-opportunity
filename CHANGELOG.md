@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.269 — 2026-06-23 · Scope now two-way synced with the plan (deselect in Scope unchecks everywhere)
+
+**The ask (Wayne).** Deselecting a topic in the Scope panel didn't deselect it in the other connected views (Content Plan, Content Map, Journey list, Journey mind-map).
+
+**Why.** Those four views share one selection set (`content_plan_selections`); Scope was a separate set (`scope_selections`), so removing from Scope only touched Scope. Per your call, Scope should be a curated **subset** of the plan, kept **two-way in sync**.
+
+**What changed (server-side, so every view inherits it).**
+- **`/scope` PUT** — any id removed from Scope is also removed from `content_plan_selections`, so the topic unchecks in the Content Plan, Content Map, and both Journey views. (Adding to Scope never changes the plan — scoped topics are already in it.)
+- **`/content-plan` PUT** — `scope_selections` is pruned to stay within the plan, so deselecting a topic anywhere (Map / Plan / Journey) also drops it from Scope. Net effect: `scope ⊆ plan` is guaranteed from either direction, and no client view needed changing.
+- **Content Plan panel** — when you remove a plan row, the "N in scope" badge updates immediately (the server already prunes it).
+
+**Defensibility (Const II.7).** Still ids only — no brief data copied; both panels re-derive every topic from the canonical pool. The relationship is enforced as one server-side invariant rather than duplicated across clients.
+
+**Verified.** Isolated `tsc` — clean. Both routes parse. Full retained regression suite + new `sync:` block (scope-removal cascades to the plan; plan-shrink prunes scope; adding to scope leaves the plan untouched) — **all PASS (105 checks)**.
+
+**Action for Wayne:** deploy v7.269 — deselect a topic in View Scope and it now disappears from the Content Plan, Content Map, and Journey views too (and vice-versa).
+
+
+
 ## v7.268 — 2026-06-23 · Hotfix: blank project list after the v7.267 scope column
 
 **The break (Wayne).** After v7.267, OrbitIQ bounced back to the Client Projects screen with **no projects listed**.
