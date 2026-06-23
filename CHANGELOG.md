@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.278 — 2026-06-23 · LLM Visibility — "Sentiment of mentions" card redesigned into three labeled bar rows with tone icons
+
+**The ask (Wayne).** Change the sentiment summary card to **three rows, each with a horizontal bar graph** — one for positive, one for neutral, one for negative — and add a **thumbs-up** icon for positive, a **thumbs-down** for negative, and a neutral icon for neutral.
+
+**What changed (`components/brief/LLMVisibilitySection.tsx`, UI only).**
+- The single stacked positive/neutral/negative bar is replaced by **three labeled rows**. Each row is `icon · horizontal bar · count · %`, rendered by a new `SentimentBar` component. Positive uses a thumbs-up, negative a thumbs-down, neutral a circle-minus — three inline SVG icons (`ThumbsUpIcon` / `ThumbsDownIcon` / `NeutralIcon`); no icon library added.
+- Each bar's fill width is the row's real share (`pctPos` / `pctNeu` / `pctNeg`, already derived from `sentiment.positive/neutral/negative`); the footer now reads "N mentions assessed". The non-assessed / zero-mention empty states are unchanged.
+
+**No data change (Const I.1).** Counts and percentages are the existing real, Claude-assessed sentiment values off the probe snapshot — nothing modeled, nothing hard-coded. Presentational only.
+
+**Theme parity (Const IV.6 / V.5).** The app toggles theme via `[data-theme="light"]` on `<html>`, not the OS `prefers-color-scheme`, and `darkMode` is unset in `tailwind.config.ts` — so OS-based `dark:` variants are **not** used. Icon shades are single tones verified ≥3:1 against **both** the light (`#fff`) and dark (`#111118`) `orbit-surface`: green-600 (3.30 / 5.70), red-600 (4.83 / 3.89), slate-500 (4.76 / 3.95). Bar track stays the theme-aware `bg-orbit-muted`; counts use `text-orbit-secondary`.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** `tsc` under the project-mirrored `tsconfig` (extends `./tsconfig.json`, **no `target` override**) — PASS. SSR render harness (real-shaped 43/36/6) — three bars at correct widths, all three tone icons present, aria-labelled, theme-safe colors, no `dark:` in code — PASS. Dual-theme render (`orbitiq-v7.278-RENDER.html`, light + dark side by side) — both legible. Contrast computed numerically against the real token values (above). Full **retained regression suite re-run: 129/129 PASS**; added 8 `llmsent:` invariants for this release.
+
 ## v7.277 — 2026-06-23 · LLM Visibility — per-prompt mention badges + a Brand Mention Share card (citations deferred)
 
 **The ask (Wayne).** Badge each prompt where we secured a brand mention, labeled by platform (Claude / ChatGPT). Add summary cards for **Citation Share** and **Brand Mention Share** (acquired vs available, with exact data).

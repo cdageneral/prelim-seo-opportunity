@@ -228,13 +228,13 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
           <p className="text-orbit-tertiary text-xs">Sentiment of mentions</p>
           {sentiment.assessed && sentTotal > 0 ? (
             <>
-              <div className="flex h-2 rounded-full overflow-hidden mt-3 mb-2 bg-orbit-muted">
-                {pctPos > 0 && <div className="bg-green-500"     style={{ width: `${pctPos}%` }} />}
-                {pctNeu > 0 && <div className="bg-orbit-border"  style={{ width: `${pctNeu}%` }} />}
-                {pctNeg > 0 && <div className="bg-red-500/70"    style={{ width: `${pctNeg}%` }} />}
+              <div className="mt-3 flex flex-col gap-2">
+                <SentimentBar tone="positive" count={sentiment.positive} pct={pctPos} />
+                <SentimentBar tone="neutral"  count={sentiment.neutral}  pct={pctNeu} />
+                <SentimentBar tone="negative" count={sentiment.negative} pct={pctNeg} />
               </div>
-              <p className="text-orbit-tertiary text-[10px]">
-                {sentiment.positive} positive · {sentiment.neutral} neutral · {sentiment.negative} negative ({sentiment.totalMentions} mentions)
+              <p className="text-orbit-tertiary text-[10px] mt-2">
+                {sentiment.totalMentions} mentions assessed
               </p>
             </>
           ) : (
@@ -414,6 +414,60 @@ function PromptDrawer({ rows }: { rows: DrawerRow[] }) {
         ))}
       </ol>
     </div>
+  );
+}
+
+// ─── Sentiment Bar Row (v7.278) ───────────────────────────────────────────────
+// One labeled row per tone: icon (thumbs-up / neutral / thumbs-down) + horizontal
+// bar + count·%. Colors chosen to read in BOTH light and dark mode (Const IV.6).
+
+function SentimentBar({ tone, count, pct }: { tone: 'positive' | 'neutral' | 'negative'; count: number; pct: number }) {
+  // Single shades chosen to clear ≥3:1 contrast on BOTH the light and dark
+  // orbit-surface (Const IV.6 — theme parity); the app toggles theme via
+  // [data-theme="light"], so OS-based `dark:` variants must not be used.
+  const style =
+    tone === 'positive' ? { bar: 'bg-green-500', text: 'text-green-600', label: 'Positive' }
+    : tone === 'negative' ? { bar: 'bg-red-500',   text: 'text-red-600',   label: 'Negative' }
+    : { bar: 'bg-slate-400', text: 'text-slate-500', label: 'Neutral' };
+  return (
+    <div className="flex items-center gap-2">
+      <span className={`shrink-0 ${style.text}`} role="img" aria-label={style.label} title={style.label}>
+        {tone === 'positive' ? <ThumbsUpIcon /> : tone === 'negative' ? <ThumbsDownIcon /> : <NeutralIcon />}
+      </span>
+      <div className="flex-1 h-2 rounded-full bg-orbit-muted overflow-hidden">
+        <div className={`h-full rounded-full ${style.bar}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="shrink-0 w-16 text-right text-orbit-secondary text-[10px] tabular-nums">
+        {count} · {pct}%
+      </span>
+    </div>
+  );
+}
+
+function ThumbsUpIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M7 10v12" />
+      <path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z" />
+    </svg>
+  );
+}
+
+function ThumbsDownIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 14V2" />
+      <path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z" />
+    </svg>
+  );
+}
+
+function NeutralIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M8 12h8" />
+    </svg>
   );
 }
 
