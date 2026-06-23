@@ -1985,16 +1985,114 @@ const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
   problem:   { label: 'Pre-product',    color: 'var(--c-34d399)' },
 };
 
+// ─── v7.266: shared Content-Plan selection (Journey list view ⇄ mind-map ⇄ Content Map) ───
+// The Content Plan selection is ONE persisted set — project.content_plan_selections, keyed by
+// ContentTopic.id, which on a canonical topic node IS r.t.id. Checking a topic in the Journey
+// LIST view (this hook's consumer) pushes its id into that SAME set the Content Map / Content
+// Plan / Journey mind-map already read & write — one source of truth, no parallel copy (Const
+// II.7); the parent→child cascade adds every descendant topic id, read from the stored taxonomy
+// rows the list draws and never re-derived lexically (Const II.8). selRef mirrors the live set so
+// rapid sequential toggles chain correctly (each PUT replaces with the full set). Optimistic with
+// revert-on-failure so the UI never claims a save that didn't happen (honest gap, I.5).
+function useContentPlanSelection(projectId: string, kwVersion: number) {
+  const [planIds,   setPlanIds]   = useState<Set<string>>(new Set());
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const selRef = useRef<Set<string>>(new Set());
+  useEffect(() => { selRef.current = planIds; }, [planIds]);
+
+  // Load the saved plan selection on mount / project change (always fresh — Const, v7.262).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => {
+        if (cancelled) return;
+        const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
+        selRef.current = s; setPlanIds(s);
+      })
+      .catch(() => { /* honest gap: leave selection empty on failure (I.5) */ });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  // Persist a new full set (idempotent PUT replace). Optimistic; reverts to prev on failure.
+  const persistPlan = (prev: Set<string>, next: Set<string>, affected: string[]) => {
+    selRef.current = next; setPlanIds(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.add(id)); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => { selRef.current = prev; setPlanIds(prev); })
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.delete(id)); return n; }));
+  };
+
+  // 'none' | 'some' | 'all' over an arbitrary id list (a topic = [id]; a category/lane = every
+  // topic id under it). Drives the checkbox + the indeterminate dash on a partial parent.
+  const planStateForIds = (ids: string[]): 'none' | 'some' | 'all' => {
+    if (ids.length === 0) return 'none';
+    let inn = 0; for (const k of ids) if (planIds.has(k)) inn++;
+    return inn === 0 ? 'none' : inn === ids.length ? 'all' : 'some';
+  };
+  const savingForIds = (ids: string[]): boolean => ids.some(k => savingIds.has(k));
+  // Toggle: a fully-selected set clears its ids; otherwise it adds them all (so a 'some' parent
+  // fills to 'all' on first click, then clears on the next).
+  const toggleIds = (ids: string[]) => {
+    if (!projectId || ids.length === 0) return;
+    const prev = new Set(selRef.current);
+    const next = new Set(prev);
+    if (planStateForIds(ids) === 'all') for (const k of ids) next.delete(k);
+    else                                for (const k of ids) next.add(k);
+    persistPlan(prev, next, ids);
+  };
+  const clearPlan = () => {
+    if (!projectId || selRef.current.size === 0) return;
+    const prev = new Set(selRef.current);
+    persistPlan(prev, new Set<string>(), Array.from(prev));
+  };
+  return { planIds, savingIds, planStateForIds, savingForIds, toggleIds, clearPlan };
+}
+
+// v7.266: HTML plan checkbox — the list view's equivalent of the mind-map's SVG box.
+// none → empty, all → green check, some → indeterminate dash. Stops propagation so a row's own
+// click (expand / open detail) doesn't also fire. Theme-token colors only (Const IV.6 / V.5).
+function PlanCheckbox({ state, saving, onToggle, label, size = 16 }: {
+  state: 'none' | 'some' | 'all'; saving: boolean; onToggle: () => void; label: string; size?: number;
+}) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={state === 'some' ? 'mixed' : state === 'all'}
+      aria-label={label}
+      title={state === 'all' ? 'Remove from Content Plan' : 'Add to Content Plan'}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        width: size, height: size, borderRadius: 4, cursor: 'pointer', boxSizing: 'border-box',
+        background: state === 'all' ? 'var(--c-34d399)' : state === 'some' ? 'var(--ca-52-211-153-0_1)' : 'var(--c-0d0d1e)',
+        border: `1.4px solid ${state === 'none' ? 'var(--c-4a4a6a)' : 'var(--c-34d399)'}`,
+        opacity: saving ? 0.55 : 1, transition: 'all 0.12s',
+      }}
+    >
+      {state === 'all'  && <i className="ti ti-check" style={{ fontSize: size - 5, fontWeight: 700, color: 'var(--c-08080f)' }} />}
+      {state === 'some' && <span style={{ width: size - 8, height: 2, borderRadius: 1, background: 'var(--c-34d399)' }} />}
+    </span>
+  );
+}
+
 // v7.221: the canonical journey view — drives "Topics in journey" from the SAME
 // cluster topics the Cluster panel counts (Const II.7), so the journey reconciles to
 // the cluster count instead of the demand-universe graph. The map is a collapsible
 // parent-category list (the flat node map can't legibly show thousands of clusters),
 // grouped into the two journey lanes. Every number is a real roll-up of the topics.
-function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null }) {
+export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null, projectId = '', kwVersion = 0 }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; projectId?: string; kwVersion?: number }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   // v7.247: Product / Pre-product / All journey scope (matches the Cluster panel).
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
+  // v7.266: same Content-Plan selection the mind-map / Content Map use — checking a topic (or a
+  // whole category / lane) in this list pushes it into the shared plan set (Const II.7).
+  const { planIds, planStateForIds, savingForIds, toggleIds, clearPlan } = useContentPlanSelection(projectId, kwVersion);
 
   // v7.223: a topic is PRE-PRODUCT (problem-aware, awareness-only — Const III.2a) when it
   // is a 'problem' cluster OR a missing-demand cluster seeded by a problem head term from
@@ -2138,9 +2236,25 @@ function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }
           <div>
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>Topic Journeys — every cluster</span>
             <p style={{ fontSize: 11, color: 'var(--c-5a5a80)', marginTop: 1 }}>
-              Every cluster is a journey topic, grouped by category across the two lanes. Expand a category to see its topics. Volumes are real Semrush roll-ups.
+              Every cluster is a journey topic, grouped by category across the two lanes. Expand a category to see its topics; <strong style={{ color: 'var(--c-34d399)' }}>check a box</strong> to add a topic — or a whole category or lane — to your Content Plan. Volumes are real Semrush roll-ups.
             </p>
           </div>
+        </div>
+
+        {/* v7.266: plan-selection summary — these checks ARE the Content Plan (the SAME shared
+            set the Content Map / Content Plan / Journey mind-map read; Const II.7). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-34d399)', background: 'var(--ca-52-211-153-0_1)', border: '1px solid var(--c-34d39955)', borderRadius: 20, padding: '3px 11px' }}>
+            <i className="ti ti-checkbox" style={{ fontSize: 12 }} />{planIds.size.toLocaleString()} {planIds.size === 1 ? 'topic' : 'topics'} in Content Plan
+          </span>
+          {planIds.size > 0 && (
+            <button onClick={clearPlan} style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a45)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>
+              Clear plan
+            </button>
+          )}
+          <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>
+            <i className="ti ti-info-circle" style={{ marginRight: 4 }} />Check a topic to push it into your Content Plan; checking a category or lane adds every topic under it.
+          </span>
         </div>
 
         {lanes.map(L => {
@@ -2149,9 +2263,12 @@ function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }
           const parents = Array.from(lm.entries()).sort((a, b) =>
             b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0));
           const laneCount = Array.from(lm.values()).reduce((s, rs) => s + rs.length, 0);
+          // v7.266: every topic id in this lane — the lane checkbox selects/clears the whole lane.
+          const laneIds = parents.flatMap(([, rs]) => rs.map(r => r.t.id));
           return (
             <div key={L.lane} style={{ marginTop: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0 8px', borderBottom: `1px solid var(--c-1a1a30)` }}>
+                <PlanCheckbox state={planStateForIds(laneIds)} saving={savingForIds(laneIds)} onToggle={() => toggleIds(laneIds)} label={`Add lane to Content Plan: ${L.label}`} />
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: L.accent }} />
                 <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: L.accent }}>{L.label}</span>
                 <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{laneCount.toLocaleString()} topics · {lm.size} categories</span>
@@ -2165,12 +2282,15 @@ function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }
                 // reads without expanding. existing = client ranks / has a page; build = net-new.
                 const catExisting = rs.filter(r => r.action === 'optimize').length;
                 const catBuild    = rs.length - catExisting;
+                const catIds = rs.map(r => r.t.id);   // v7.266: every topic id in this category
                 return (
                   <div key={key} style={{ borderBottom: '1px solid var(--c-141428)' }}>
-                    <button
-                      onClick={() => toggle(key)}
-                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '9px 4px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
-                    >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 4px' }}>
+                      <PlanCheckbox state={planStateForIds(catIds)} saving={savingForIds(catIds)} onToggle={() => toggleIds(catIds)} label={`Add category to Content Plan: ${name}`} />
+                      <button
+                        onClick={() => toggle(key)}
+                        style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: 0, background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                      >
                       <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--c-6a6a90)', width: 14, flexShrink: 0 }} />
                       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
                       <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, color: badge.color, border: `1px solid ${badge.color}`, opacity: 0.85, flexShrink: 0 }}>{badge.label}</span>
@@ -2181,11 +2301,13 @@ function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null }
                       </span>
                       <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', flexShrink: 0, minWidth: 64, textAlign: 'right' }}>{rs.length.toLocaleString()} topics</span>
                       <span style={{ fontSize: 10.5, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 70, textAlign: 'right', fontFamily: 'monospace' }}>{fmtVol(vol)}/mo</span>
-                    </button>
+                      </button>
+                    </div>
                     {open && (
                       <div style={{ paddingBottom: 6 }}>
                         {rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume).map(r => (
                           <div key={r.t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px 6px 26px' }}>
+                            <PlanCheckbox state={planStateForIds([r.t.id])} saving={savingForIds([r.t.id])} onToggle={() => toggleIds([r.t.id])} label={`Add topic to Content Plan: ${r.t.product}`} size={15} />
                             <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: STAGE_COLORS[r.t.stage].text, minWidth: 86, flexShrink: 0 }}>{JOURNEY_STAGE_LABELS[r.t.stage]}</span>
                             <span style={{ fontSize: 11.5, color: 'var(--c-c0c0dc)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.product}</span>
                             <span style={{ fontSize: 10, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 54, textAlign: 'right' }}>{r.t.keywords.length} kw</span>
@@ -2271,45 +2393,11 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());   // categories showing ALL topics (beyond cap)
 
-  // v7.265: Content Plan selection — the SAME persisted set the Content Map / Content Plan
-  // panels read & write (project.content_plan_selections, keyed by ContentTopic.id, which on
-  // a canonical topic node IS r.t.id). Checking a node here pushes its topic(s) into the plan
-  // exactly as the Content Map checkbox does — one source of truth, no parallel copy (Const
-  // II.7); the parent→child cascade adds every descendant topic id, read from the stored
-  // taxonomy and never re-derived lexically (Const II.8 / III.1b). selRef mirrors the live set
-  // so rapid sequential toggles chain correctly (each PUT sends the full set).
-  const [planIds,   setPlanIds]   = useState<Set<string>>(new Set());
-  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
-  const selRef = useRef<Set<string>>(new Set());
-  useEffect(() => { selRef.current = planIds; }, [planIds]);
-
-  // Load the saved plan selection on mount / project change (always fresh — Const, v7.262).
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })
-      .then((r: Response) => r.ok ? r.json() : { selections: [] })
-      .then((d: any) => {
-        if (cancelled) return;
-        const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
-        selRef.current = s; setPlanIds(s);
-      })
-      .catch(() => { /* honest gap: leave selection empty on failure (I.5) */ });
-    return () => { cancelled = true; };
-  }, [projectId, kwVersion]);
-
-  // Persist a new full set (idempotent PUT replace). Optimistic; reverts to prev on failure so
-  // the UI never claims a save that didn't happen.
-  const persistPlan = (prev: Set<string>, next: Set<string>, affected: string[]) => {
-    selRef.current = next; setPlanIds(next);
-    setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.add(id)); return n; });
-    fetch(`/api/projects/${projectId}/content-plan`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
-    })
-      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
-      .catch(() => { selRef.current = prev; setPlanIds(prev); })
-      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.delete(id)); return n; }));
-  };
+  // v7.266: Content Plan selection now comes from the shared useContentPlanSelection hook — the
+  // SAME persisted set the Content Map / Content Plan / Journey LIST view read & write (one
+  // source of truth, no parallel copy; Const II.7). idsForNode (below) maps a node to its topic
+  // ids; the hook handles load / optimistic persist / saving state / clear.
+  const { planIds, planStateForIds, savingForIds, toggleIds, clearPlan } = useContentPlanSelection(projectId, kwVersion);
 
   const problemSet = useMemo(() => new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim())), [problemSeeds]);
   const isPreProduct = (t: CanonicalJourneyTopic): boolean =>
@@ -2435,32 +2523,11 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     if (kind === 'category') return (focused.cats.get(id.slice(4)) ?? []).map(r => r.t.id);
     return [];
   };
-  // 'none' | 'some' | 'all' — drives the checkbox (and indeterminate dash on a partial parent).
-  const planStateOf = (id: string, kind: string): 'none' | 'some' | 'all' => {
-    const ids = idsForNode(id, kind);
-    if (ids.length === 0) return 'none';
-    let inn = 0; for (const k of ids) if (planIds.has(k)) inn++;
-    return inn === 0 ? 'none' : inn === ids.length ? 'all' : 'some';
-  };
-  const isNodeSaving = (id: string, kind: string): boolean =>
-    idsForNode(id, kind).some(k => savingIds.has(k));
-  // Toggle: a fully-selected node clears its ids; otherwise it adds them all (so a 'some'
-  // parent fills to 'all' on first click, then clears on the next).
-  const toggleNodePlan = (id: string, kind: string) => {
-    if (!projectId) return;
-    const ids = idsForNode(id, kind);
-    if (ids.length === 0) return;
-    const prev = new Set(selRef.current);
-    const next = new Set(prev);
-    if (planStateOf(id, kind) === 'all') for (const k of ids) next.delete(k);
-    else                                 for (const k of ids) next.add(k);
-    persistPlan(prev, next, ids);
-  };
-  const clearPlan = () => {
-    if (!projectId || selRef.current.size === 0) return;
-    const prev = new Set(selRef.current);
-    persistPlan(prev, new Set<string>(), Array.from(prev));
-  };
+  // v7.266: thin wrappers over the shared hook — a node's plan state / saving / toggle is just the
+  // hook applied to the node's topic ids (idsForNode). clearPlan comes from the hook.
+  const planStateOf    = (id: string, kind: string) => planStateForIds(idsForNode(id, kind));
+  const isNodeSaving   = (id: string, kind: string) => savingForIds(idsForNode(id, kind));
+  const toggleNodePlan = (id: string, kind: string) => toggleIds(idsForNode(id, kind));
 
   return (
     <div>
@@ -3238,6 +3305,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               topics={(filteredCanonicalTopics ?? canonicalTopics) as CanonicalJourneyTopic[]}
               problemSeeds={(demandUniverse?.problemSeeds ?? (analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[]}
               segmentLabel={activeSegment ? activeSegment.name : (activeBucketId === SHARED_BUCKET ? 'Shared / all personas' : null)}
+              projectId={projectId}
+              kwVersion={kwVersion}
             />
           ) : (
             <JourneyMindMap

@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.266 — 2026-06-23 · Journey list view: same checkboxes that push topics into the Content Plan
+
+**The ask (Wayne).** Add the same checkboxes and behavior to the **list view** of the Journey panel that the mind-map already has — checking a topic pushes those topics into the Content Plan, with a way to deselect, and checking a parent selects every child under it.
+
+**What changed (`components/brief/JourneySection.tsx`).** The Journey **list view** (the collapsible, category-grouped "Topic Journeys — every cluster") now carries a Content-Plan checkbox at three levels: every **topic** row, every **category** header, and every **journey lane** (Product / Pre-product). Checking a topic adds just that topic; checking a **category or lane checks its whole branch** — every topic under it — and a partly-selected parent shows an indeterminate dash. A header chip shows "N topics in Content Plan" with a Clear button, plus a one-line instruction. Clicking a category still expands/collapses it — the checkbox sits beside the toggle, not inside it.
+
+**One source of truth (Const II.7 / II.8).** The list view and the mind-map now share a single `useContentPlanSelection` hook that reads & writes the *same* persisted set the Content Map and Content Plan already use — `project.content_plan_selections`, keyed by `ContentTopic.id`, which on a canonical topic node *is* `r.t.id`. So a topic checked in the list is the exact same row the mind-map ticks, the Content Map shows, and the Content Plan lists — no parallel copy, no lexical re-derivation; the parent→child cascade reads the stored taxonomy rows the list draws. The mind-map's previous inline copy of this logic was factored into the shared hook (one source, not two).
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso266) — **clean**. Full retained regression suite (now incl. a new Journey-list-view checkbox guard) — **all PASS**. jsdom client-render harness — **all PASS**: a checkbox on every lane (2) + category (2); expanding a category reveals topic checkboxes; clicking a topic box fires a PUT whose `selections` carry that topic's id (push to Content Plan); the summary chip renders; theme parity — zero hex literals, css-var tokens only (Const IV.6 / V.5). SSR re-render of the refactored mind-map confirms its checkboxes still render unchanged.
+
+**Action for Wayne:** deploy v7.266. On the Journey panel's List view, tick a topic (or a whole category / lane) to push it into your Content Plan — exactly like the Mind-map view.
+
+
+
 ## v7.265 — 2026-06-22 · Journey map: select branches/topics straight into the Content Plan
 
 **The ask (Wayne).** On the Journey mind-map, add a way to select a branch or element so the same topics get selected in the Content Map — and, because a Content-Map selection is already pushed to the Content Plan, into the Content Plan too. Include a way to deselect, and make checking a parent select every child under it.
