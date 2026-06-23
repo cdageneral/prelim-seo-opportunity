@@ -2263,13 +2263,53 @@ const MIND_LEVEL = [
   { border: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_06)', label: 'Topic' },
 ];
 
-export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null, clientDomain = '' }: {
-  topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; clientDomain?: string;
+export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null, clientDomain = '', projectId = '', kwVersion = 0 }: {
+  topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; clientDomain?: string; projectId?: string; kwVersion?: number;
 }) {
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   const [focusUmbrella, setFocusUmbrella] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());   // categories showing ALL topics (beyond cap)
+
+  // v7.265: Content Plan selection — the SAME persisted set the Content Map / Content Plan
+  // panels read & write (project.content_plan_selections, keyed by ContentTopic.id, which on
+  // a canonical topic node IS r.t.id). Checking a node here pushes its topic(s) into the plan
+  // exactly as the Content Map checkbox does — one source of truth, no parallel copy (Const
+  // II.7); the parent→child cascade adds every descendant topic id, read from the stored
+  // taxonomy and never re-derived lexically (Const II.8 / III.1b). selRef mirrors the live set
+  // so rapid sequential toggles chain correctly (each PUT sends the full set).
+  const [planIds,   setPlanIds]   = useState<Set<string>>(new Set());
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const selRef = useRef<Set<string>>(new Set());
+  useEffect(() => { selRef.current = planIds; }, [planIds]);
+
+  // Load the saved plan selection on mount / project change (always fresh — Const, v7.262).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => {
+        if (cancelled) return;
+        const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
+        selRef.current = s; setPlanIds(s);
+      })
+      .catch(() => { /* honest gap: leave selection empty on failure (I.5) */ });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  // Persist a new full set (idempotent PUT replace). Optimistic; reverts to prev on failure so
+  // the UI never claims a save that didn't happen.
+  const persistPlan = (prev: Set<string>, next: Set<string>, affected: string[]) => {
+    selRef.current = next; setPlanIds(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.add(id)); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => { selRef.current = prev; setPlanIds(prev); })
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.delete(id)); return n; }));
+  };
 
   const problemSet = useMemo(() => new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim())), [problemSeeds]);
   const isPreProduct = (t: CanonicalJourneyTopic): boolean =>
@@ -2382,6 +2422,46 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     setSelectedId(prev => (prev === id ? null : id));
   };
 
+  // ── v7.265: plan-selection cascade ──────────────────────────────────────────────
+  // The content-topic ids a node represents. A topic node = its own id (= ContentTopic.id).
+  // A category/umbrella node = EVERY topic under it, INCLUDING the ones hidden behind the
+  // "+N more" cap (Wayne 2026-06-22: a branch selects the whole branch). 'more' is not a
+  // selectable target. Read from the same stored cats map the tree draws — never re-derived.
+  const idsForNode = (id: string, kind: string): string[] => {
+    if (kind === 'more') return [];
+    if (kind === 'topic') return [id];
+    if (!focused) return [];
+    if (kind === 'umbrella') return Array.from(focused.cats.values()).flat().map(r => r.t.id);
+    if (kind === 'category') return (focused.cats.get(id.slice(4)) ?? []).map(r => r.t.id);
+    return [];
+  };
+  // 'none' | 'some' | 'all' — drives the checkbox (and indeterminate dash on a partial parent).
+  const planStateOf = (id: string, kind: string): 'none' | 'some' | 'all' => {
+    const ids = idsForNode(id, kind);
+    if (ids.length === 0) return 'none';
+    let inn = 0; for (const k of ids) if (planIds.has(k)) inn++;
+    return inn === 0 ? 'none' : inn === ids.length ? 'all' : 'some';
+  };
+  const isNodeSaving = (id: string, kind: string): boolean =>
+    idsForNode(id, kind).some(k => savingIds.has(k));
+  // Toggle: a fully-selected node clears its ids; otherwise it adds them all (so a 'some'
+  // parent fills to 'all' on first click, then clears on the next).
+  const toggleNodePlan = (id: string, kind: string) => {
+    if (!projectId) return;
+    const ids = idsForNode(id, kind);
+    if (ids.length === 0) return;
+    const prev = new Set(selRef.current);
+    const next = new Set(prev);
+    if (planStateOf(id, kind) === 'all') for (const k of ids) next.delete(k);
+    else                                 for (const k of ids) next.add(k);
+    persistPlan(prev, next, ids);
+  };
+  const clearPlan = () => {
+    if (!projectId || selRef.current.size === 0) return;
+    const prev = new Set(selRef.current);
+    persistPlan(prev, new Set<string>(), Array.from(prev));
+  };
+
   return (
     <div>
       {/* scope control */}
@@ -2410,8 +2490,24 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
       <div style={{ marginTop: 12, padding: '11px 14px', border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-0d0d1e)' }}>
         <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>User Journey Map — Topic Hierarchy</div>
         <div style={{ fontSize: 10.5, color: 'var(--c-9090b8)', marginTop: 2 }}>
-          A full branch from the product-line umbrella down to every topic. <strong style={{ color: 'var(--c-d8d8f0)' }}>Click any node</strong> to see its keywords &amp; real Semrush volume. Built from the stored taxonomy — nothing modeled.
+          A full branch from the product-line umbrella down to every topic. <strong style={{ color: 'var(--c-d8d8f0)' }}>Click a node</strong> to see its keywords &amp; real Semrush volume; <strong style={{ color: 'var(--c-34d399)' }}>check the box</strong> on a node to add it (or its whole branch) to your Content Plan. Built from the stored taxonomy — nothing modeled.
         </div>
+      </div>
+
+      {/* v7.265: plan-selection summary — these checks ARE the Content Plan (the SAME shared
+          set the Content Map / Content Plan panels read; Const II.7). */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-34d399)', background: 'var(--ca-52-211-153-0_1)', border: '1px solid var(--c-34d39955)', borderRadius: 20, padding: '3px 11px' }}>
+          <i className="ti ti-checkbox" style={{ fontSize: 12 }} />{planIds.size.toLocaleString()} {planIds.size === 1 ? 'topic' : 'topics'} in Content Plan
+        </span>
+        {planIds.size > 0 && (
+          <button onClick={clearPlan} style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a45)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer' }}>
+            Clear plan
+          </button>
+        )}
+        <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>
+          <i className="ti ti-info-circle" style={{ marginRight: 4 }} />Check a node to push it into your Content Plan; checking a branch adds every topic under it.
+        </span>
       </div>
 
       {/* umbrella picker */}
@@ -2450,11 +2546,27 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
             const existing = n.action === 'optimize';
             const statusColor = existing ? STATE_COLOR.existing : STATE_COLOR.missing;
             const bw = existing ? 52 : 38;
+            // v7.265: per-node plan checkbox (top-left). none → empty, all → check, some → dash.
+            const cbState  = isMore ? 'none' : planStateOf(n.id, n.kind);
+            const cbSaving = !isMore && isNodeSaving(n.id, n.kind);
+            const cbS = 15;
+            const cbx = (n.x - w / 2) + (n.level === 0 ? 16 : 9);
+            const cby = n.y - layout.NH / 2 + 7;
             return (
               <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
                 <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 24 : 14}
                   style={{ fill: isMore ? 'var(--c-14142a)' : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray={isMore ? '4 3' : undefined} />
                 {isTopic && <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: statusColor }} opacity={0.9} />}
+                {!isMore && (
+                  <g onClick={(e) => { e.stopPropagation(); toggleNodePlan(n.id, n.kind); }} style={{ cursor: 'pointer', opacity: cbSaving ? 0.55 : 1 }}
+                     role="button" aria-label={`${cbState === 'all' ? 'Remove from' : 'Add to'} Content Plan: ${n.label}`}>
+                    <rect x={cbx} y={cby} width={cbS} height={cbS} rx={4}
+                      style={{ fill: cbState === 'all' ? 'var(--c-34d399)' : cbState === 'some' ? 'var(--ca-52-211-153-0_1)' : 'var(--c-0d0d1e)' }}
+                      stroke={cbState === 'none' ? 'var(--c-4a4a6a)' : 'var(--c-34d399)'} strokeWidth={1.4} />
+                    {cbState === 'all'  && <path d={`M${cbx + 3.4},${cby + 7.6} l2.8,2.8 l5.2,-6`} fill="none" stroke="var(--c-08080f)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
+                    {cbState === 'some' && <rect x={cbx + 3} y={cby + cbS / 2 - 1} width={cbS - 6} height={2} rx={1} style={{ fill: 'var(--c-34d399)' }} />}
+                  </g>
+                )}
                 <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 19 : 22)}</text>
                 {isTopic ? (
                   <>
@@ -3133,6 +3245,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               problemSeeds={(demandUniverse?.problemSeeds ?? (analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[]}
               segmentLabel={activeSegment ? activeSegment.name : (activeBucketId === SHARED_BUCKET ? 'Shared / all personas' : null)}
               clientDomain={clientDomain}
+              projectId={projectId}
+              kwVersion={kwVersion}
             />
           )}
         </>

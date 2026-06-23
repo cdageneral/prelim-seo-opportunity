@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.265 — 2026-06-22 · Journey map: select branches/topics straight into the Content Plan
+
+**The ask (Wayne).** On the Journey mind-map, add a way to select a branch or element so the same topics get selected in the Content Map — and, because a Content-Map selection is already pushed to the Content Plan, into the Content Plan too. Include a way to deselect, and make checking a parent select every child under it.
+
+**What changed (`components/brief/JourneySection.tsx`).** Every node on the Topic-Hierarchy mind-map (umbrella, category, topic) now carries a checkbox in its top-left corner. Clicking the box adds/removes that node from your Content Plan; clicking the node body still opens its keyword/volume detail (nothing existing changed). A topic checks itself; a **category or umbrella checks its whole branch** — every topic underneath it, including the ones hidden behind "+N more topics" — and a partly-selected parent shows an indeterminate dash. A header chip shows "N topics in Content Plan" with a Clear button.
+
+**One source of truth (Const II.7 / II.8).** The journey checkbox writes to the *same* persisted set the Content Map and Content Plan already read — `project.content_plan_selections`, keyed by `ContentTopic.id`, which on a canonical topic node *is* `r.t.id`. So a topic checked on the journey is the exact same row the Content Map ticks and the Content Plan lists — no parallel copy, no lexical re-derivation; the parent→child cascade reads the stored taxonomy. Switching panels re-reads the set, so the three views stay in lockstep.
+
+**Verified (own debugging agent, real compiled code).** Isolated `tsc` (iso265) — **clean**. Full retained regression suite (61 checks incl. a new Journey↔Plan id-reconcile guard) — **all PASS**. jsdom client-render harness — **all PASS**: checkbox on every umbrella/category/topic (none on "+N more"); category cascade selects all 10 topics including the 2 hidden; umbrella cascade selects all 12; single-topic selects only its id; deselect clears; theme parity — the rendered map uses only css-var tokens, zero hex literals (Const IV.6 / V.5).
+
+**Action for Wayne:** deploy v7.265.
+
+
 ## v7.264 — 2026-06-22 · Content Map: clearer selection instruction above the topic list
 
 **The ask (Wayne).** Add an instruction telling the user what the checkboxes do.
