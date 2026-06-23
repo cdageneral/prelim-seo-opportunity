@@ -1,5 +1,14 @@
 # OrbitIQ Changelog
 
+## v7.275 — 2026-06-23 · Hotfix: v7.274 build error (Map iterator spread under the project's TS target)
+
+**The problem.** v7.274 failed `npm run build` (Vercel): `LLMVisibilitySection.tsx:151` spread a `Map.keys()` iterator (`[...byGroup.keys()]`), which TypeScript rejects under the project's tsconfig (no explicit `target`, so downlevel-iteration rules apply) — "MapIterator can only be iterated through with --downlevelIteration or --target es2015+". The v7.274 isolated typecheck used `target: ES2020`, which masked it.
+
+**The fix.** `Array.from(byGroup.keys())` instead of the spread, and `cats.concat(...)` instead of an array-spread merge (`components/brief/LLMVisibilitySection.tsx`). Behavior is identical — only the iteration form changed. No other functional change from v7.274.
+
+**Verification.** Re-typechecked with a tsconfig that **mirrors the project's** (no `target` set): the fixed file PASSES; reverting to the spread reproduces the exact `TS2802` build error, confirming the fix removes it. Scanned all v7.274-changed files for other Map/Set iterator spreads — none (remaining spreads are over arrays, allowed at any target). Process note: isolated typechecks must mirror the project tsconfig (no `target` override), not a hand-picked ES2020.
+
+
 ## v7.274 — 2026-06-23 · LLM Visibility — deeper unbranded coverage (5 prompts/category, 30 categories) + a "View prompts" link
 
 **The ask (Wayne).** On the AI Search Visibility (LLM Visibility) panel: (1) add an inline link to see the exact prompts that were sent; (2) the old 12-category / 2-unbranded-prompt sample was too thin to draw insights from — widen it; (3) we care about **unbranded** category visibility, not branded — keep just one branded prompt per category for sentiment.

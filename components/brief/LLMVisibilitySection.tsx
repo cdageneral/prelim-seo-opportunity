@@ -148,8 +148,8 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
       if (!byGroup.has(g)) byGroup.set(g, []);
       byGroup.get(g)!.push({ branded: r.branded, prompt: r.prompt });
     }
-    const cats = [...byGroup.keys()].filter(k => k !== '__brand__').sort();
-    const ordered = [...cats, ...(byGroup.has('__brand__') ? ['__brand__'] : [])];
+    const cats = Array.from(byGroup.keys()).filter(k => k !== '__brand__').sort();
+    const ordered = cats.concat(byGroup.has('__brand__') ? ['__brand__'] : []);
     return ordered.map(g => ({
       label: g === '__brand__' ? 'Brand-level' : g,
       rows:  byGroup.get(g)!,
