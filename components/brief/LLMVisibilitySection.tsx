@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -132,30 +132,24 @@ export default function LLMVisibilitySection({ analysis }: Props) {
 
 function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
   const { categories, unbranded, branded, sentiment, results, probedAt, promptsPerPlatform, platformsUsed } = snapshot;
-  const [showDetail, setShowDetail]   = useState(false);
-  const [showPrompts, setShowPrompts] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+  // v7.276: per-category prompt drawer — which category row is expanded inline.
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
-  // Dedicated "View prompts" data (v7.274): the exact prompts that were sent,
-  // deduped (each prompt goes to both platforms). Grouped category → prompts,
-  // with brand-level prompts last. Unbranded vs branded flagged per row.
-  const promptGroups = (() => {
-    const seen = new Set<string>();
-    const byGroup = new Map<string, { branded: boolean; prompt: string }[]>();
+  // The exact prompts sent, per category, deduped (each prompt goes to both
+  // platforms). Used by the inline per-row "view prompts" drawer.
+  const promptsByCat = (() => {
+    const seen = new Map<string, Set<string>>();
+    const byCat = new Map<string, { branded: boolean; prompt: string }[]>();
     for (const r of results) {
-      if (seen.has(r.prompt)) continue;
-      seen.add(r.prompt);
-      const g = r.category ?? '__brand__';
-      if (!byGroup.has(g)) byGroup.set(g, []);
-      byGroup.get(g)!.push({ branded: r.branded, prompt: r.prompt });
+      if (!r.category) continue;                 // brand-level prompts live in the full detail toggle
+      if (!seen.has(r.category)) { seen.set(r.category, new Set()); byCat.set(r.category, []); }
+      if (seen.get(r.category)!.has(r.prompt)) continue;
+      seen.get(r.category)!.add(r.prompt);
+      byCat.get(r.category)!.push({ branded: r.branded, prompt: r.prompt });
     }
-    const cats = Array.from(byGroup.keys()).filter(k => k !== '__brand__').sort();
-    const ordered = cats.concat(byGroup.has('__brand__') ? ['__brand__'] : []);
-    return ordered.map(g => ({
-      label: g === '__brand__' ? 'Brand-level' : g,
-      rows:  byGroup.get(g)!,
-    }));
+    return byCat;
   })();
-  const uniquePromptCount = promptGroups.reduce((n, g) => n + g.rows.length, 0);
 
   const probeDate = new Date(probedAt).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
@@ -257,21 +251,46 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
                 {sortedCats.map(cat => {
                   const pct = Math.round(cat.mentionRate * 100);
                   const barColor = pct >= 67 ? 'bg-green-500' : pct >= 34 ? 'bg-amber-500' : 'bg-red-500/60';
+                  const isOpen   = expandedCat === cat.category;
+                  const catRows  = promptsByCat.get(cat.category) ?? [];
                   return (
-                    <tr key={cat.category} className="border-b border-orbit-border/50 last:border-0">
-                      <td className="px-4 py-2.5 text-orbit-primary">{cat.category}</td>
-                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{fmtVol(cat.monthlyDemand)}</td>
-                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.claudeMentions}/{cat.claudeTotal}</td>
-                      <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.chatgptMentions}/{cat.chatgptTotal}</td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
-                            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.max(pct, 2)}%` }} />
+                    <Fragment key={cat.category}>
+                      <tr
+                        className={`border-b border-orbit-border/50 last:border-0 cursor-pointer hover:bg-orbit-muted/30 transition-colors ${isOpen ? 'bg-orbit-muted/30' : ''}`}
+                        onClick={() => setExpandedCat(c => c === cat.category ? null : cat.category)}
+                        aria-expanded={isOpen}
+                      >
+                        <td className="px-4 py-2.5 text-orbit-primary">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className={`text-orbit-tertiary text-[9px] transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                            <span>{cat.category}</span>
+                            {catRows.length > 0 && (
+                              <span className="text-orbit-accent text-[10px] font-medium">
+                                {isOpen ? 'hide prompts' : 'view prompts'}
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-orbit-secondary">{fmtVol(cat.monthlyDemand)}</td>
+                        <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.claudeMentions}/{cat.claudeTotal}</td>
+                        <td className="px-3 py-2.5 text-right text-orbit-secondary">{cat.chatgptMentions}/{cat.chatgptTotal}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.max(pct, 2)}%` }} />
+                            </div>
+                            <span className="text-orbit-secondary text-[10px] w-8 text-right">{pct}%</span>
                           </div>
-                          <span className="text-orbit-secondary text-[10px] w-8 text-right">{pct}%</span>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="border-b border-orbit-border/50 last:border-0 bg-orbit-muted/20">
+                          <td colSpan={5} className="px-4 py-3">
+                            <PromptDrawer rows={catRows} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -299,23 +318,13 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
           6 prompts per category (5 unbranded + 1 branded) + 4 brand-level, per platform.
           Responses are live at analysis time, not an index. Sentiment is Claude-assessed; excerpts are verbatim.
         </p>
-        <div className="flex items-center gap-4 shrink-0">
-          <button
-            onClick={() => setShowPrompts(v => !v)}
-            className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors"
-          >
-            {showPrompts ? 'Hide prompts ▲' : `View prompts (${uniquePromptCount}) ▼`}
-          </button>
-          <button
-            onClick={() => setShowDetail(v => !v)}
-            className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors"
-          >
-            {showDetail ? 'Hide prompts & responses ▲' : 'View all prompts & responses ▼'}
-          </button>
-        </div>
+        <button
+          onClick={() => setShowDetail(v => !v)}
+          className="text-orbit-secondary text-xs hover:text-orbit-primary transition-colors shrink-0"
+        >
+          {showDetail ? 'Hide prompts & responses ▲' : 'View all prompts & responses ▼'}
+        </button>
       </div>
-
-      {showPrompts && <PromptList groups={promptGroups} />}
 
       {showDetail && <ProbeDetail results={results} />}
 
@@ -323,42 +332,32 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
   );
 }
 
-// ─── Prompt List (dedicated "View prompts" view, v7.274) ──────────────────────
-// Just the prompts that were sent — no responses — grouped by category, with the
-// brand-level set last. Each prompt is tagged unbranded/branded.
+// ─── Prompt Drawer (inline per-category, v7.276) ──────────────────────────────
+// The exact prompts sent for ONE category — no responses — each tagged
+// unbranded/branded. Rendered inside an expandable row under the category.
 
-function PromptList({ groups }: { groups: { label: string; rows: { branded: boolean; prompt: string }[] }[] }) {
-  if (groups.length === 0) {
-    return (
-      <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
-        <p className="text-orbit-tertiary text-xs italic">No prompts recorded for this run.</p>
-      </div>
-    );
+function PromptDrawer({ rows }: { rows: { branded: boolean; prompt: string }[] }) {
+  if (rows.length === 0) {
+    return <p className="text-orbit-tertiary text-[11px] italic">No prompts recorded for this category.</p>;
   }
   return (
-    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-4 max-h-96 overflow-y-auto">
+    <div className="flex flex-col gap-2">
       <p className="text-orbit-tertiary text-[10px] leading-relaxed">
-        These are the exact prompts sent to each platform (Claude + ChatGPT). Unbranded prompts
-        never name the brand — they are the visibility signal; the branded prompt is used only for
-        per-category sentiment.
+        Exact prompts sent to each platform (Claude + ChatGPT) for this category. Unbranded prompts
+        never name the brand — they are the visibility signal; the branded prompt is used only for sentiment.
       </p>
-      {groups.map((g, gi) => (
-        <div key={gi} className="border-b border-orbit-border/50 last:border-0 pb-3 last:pb-0">
-          <p className="text-orbit-primary text-xs font-medium mb-1.5">{g.label}</p>
-          <ol className="flex flex-col gap-1.5">
-            {g.rows.map((r, ri) => (
-              <li key={ri} className="flex items-start gap-2">
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
-                  r.branded
-                    ? 'bg-orbit-muted text-orbit-tertiary'
-                    : 'bg-orbit-accent/10 text-orbit-accent'
-                }`}>{r.branded ? 'branded' : 'unbranded'}</span>
-                <span className="text-orbit-secondary text-[11px] italic leading-relaxed">&ldquo;{r.prompt}&rdquo;</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      ))}
+      <ol className="flex flex-col gap-1.5">
+        {rows.map((r, ri) => (
+          <li key={ri} className="flex items-start gap-2">
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
+              r.branded
+                ? 'bg-orbit-muted text-orbit-tertiary'
+                : 'bg-orbit-accent/10 text-orbit-accent'
+            }`}>{r.branded ? 'branded' : 'unbranded'}</span>
+            <span className="text-orbit-secondary text-[11px] italic leading-relaxed">&ldquo;{r.prompt}&rdquo;</span>
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

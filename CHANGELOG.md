@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.276 — 2026-06-23 · LLM Visibility — "view prompts" moved inline onto each category row (expandable drawer)
+
+**The ask (Wayne).** Move "view prompts" inline onto the category row; clicking opens an expandable drawer for that category, clicking again collapses it.
+
+**What changed (`components/brief/LLMVisibilitySection.tsx`).**
+- The bottom global "View prompts (N)" link is **gone**. Each **category row is now clickable** ("view prompts" / "hide prompts" with a rotating chevron); clicking expands an **inline drawer row** directly beneath it showing that category's exact prompts — the 5 unbranded + 1 branded, each tagged — and clicking again collapses it. One row open at a time.
+- Brand-level prompts (not tied to a category row) remain available in the existing **"View all prompts & responses"** detail toggle, which is retained.
+- New `PromptDrawer` component (replaces the removed global `PromptList`); per-category dedup via `promptsByCat`; `expandedCat` state; `Fragment` used to emit the row + its drawer row.
+
+**No data change.** Probe scheme/cap unchanged from v7.274/275 — this is a UI/interaction change only. Prompts shown are the actual prompts stored on the analysis (Const I.1).
+
+**Verification (Art. V, incl. V.1a).** `tsc` under a tsconfig that **mirrors the project's** (no `target` override) — PASS. SSR render at real scale (30 categories): rows show inline "view prompts"; collapsed = no drawer; expanding a category renders its drawer (explainer + 5 unbranded tags + 1 branded tag) and flips the label to "hide prompts"; old global link absent; full-detail toggle retained; `/5` totals intact; **theme parity** — 0 hardcoded colors, orbit-* tokens only (Const IV.6 / V.5).
+
+
 ## v7.275 — 2026-06-23 · Hotfix: v7.274 build error (Map iterator spread under the project's TS target)
 
 **The problem.** v7.274 failed `npm run build` (Vercel): `LLMVisibilitySection.tsx:151` spread a `Map.keys()` iterator (`[...byGroup.keys()]`), which TypeScript rejects under the project's tsconfig (no explicit `target`, so downlevel-iteration rules apply) — "MapIterator can only be iterated through with --downlevelIteration or --target es2015+". The v7.274 isolated typecheck used `target: ES2020`, which masked it.
