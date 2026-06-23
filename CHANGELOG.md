@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.272 — 2026-06-23 · Category Breakdown — delete a keyword, sub-category, or category (trash icons)
+
+**The ask (Wayne).** In the Keyword panel's Category Breakdown tree, add a trash-can to delete any category, sub-category, or keyword. (The opposite — adding categories/sub-categories/keywords — is the next release, v7.273, and will pull real Semrush volume for added keywords.)
+
+**Decisions you made.**
+- **Delete is destructive:** deleting a category or sub-category also deletes the keywords inside it.
+- Added keywords (next release) will get **real Semrush volume** so the data stays defendable (Const I.1).
+
+**What changed.**
+- **Trash icon on every category and sub-category row** (next to the keyword count). Clicking it opens an inline confirm — "Delete '<name>' and its N keywords permanently?" — with Delete / Cancel, so a destructive action is never one accidental click.
+- **A small × on each keyword chip** (expand a leaf to see them) deletes that single keyword immediately, mirroring the existing per-row delete in the table.
+- **How removal works (defensible):** each removed keyword goes through the same path the table's delete already uses — Semrush / demand / competitor-gap keywords are *blocked* (hidden) and uploaded/custom keywords are hard-deleted. The canonical keyword pool stays the single source of truth (Const II.7); the tree is a view, so removing members makes the node disappear and re-rolls-up every volume arithmetically. No taxonomy data is hand-edited at a read site. After a delete, dependent panels refresh once.
+
+**Defensibility.** No numbers invented or modeled; deletes only remove real rows and recompute exact roll-ups (Const I.1/I.3). Membership is read from the canonical model, never re-derived (Const II.8). All delete UI uses existing theme tokens (no hex) — legible in both light and dark.
+
+**Verified.** Isolated `tsc` on `KeywordsPanel.tsx` — clean. Dual-theme render check (Const V.5) — trash icons, the confirm strip, and chip-delete rendered legibly in both light and dark; every added token defined in both theme blocks, no hex literals. Full retained regression suite + new `kwdelete:` block (bulk delete blocks semrush/demand/gap and hard-deletes custom/csv; collectOwnKeywords gathers the full subtree; one refresh; confirm + chip delete present; theme-token-only) — **all PASS**.
+
+**Action for Wayne:** deploy v7.271 — open the Keyword panel's Category Breakdown; hover a category or sub-category for the trash icon (confirms before deleting its keywords), or expand a leaf and click the × on a keyword chip to remove just that one.
+
 ## v7.271 — 2026-06-23 · Keyword panel — clearer Landscape Summary header, numbered steps, and a stronger journey selector
 
 **The ask (Wayne).** Make the top of the Keyword panel orient the user: add a "Keyword Landscape Summary" title with a short explanation, make "Let's build the workflow" larger with context, label the four build cards as Step 1–4, and make the journey segmentation read as the next major area to choose.

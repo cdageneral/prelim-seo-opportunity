@@ -983,6 +983,34 @@ export default function KeywordsPanel({
     }
   }
 
+  // v7.271: bulk delete used by the Category Breakdown trash icons (delete a keyword,
+  // a sub-category, or a whole category). Destructive per Wayne's decision: deleting a
+  // category removes ITS keywords too. Each row is removed exactly as handleDelete does
+  // — semrush/demand/gap rows are 'blocked' (hidden, so the tree re-derives without
+  // them), custom/csv rows are hard-deleted. The canonical pool stays the source of
+  // truth (Const II.7): the tree is a view, so removing members drops the node and
+  // re-rolls-up volumes arithmetically; no taxonomy JSONB is edited at a read site.
+  // Chunked to avoid flooding the API, then ONE refresh so dependent panels update once.
+  async function deleteRows(rowsToDelete: KeywordRow[]) {
+    const uniq = Array.from(new Map(rowsToDelete.map(r => [r.key, r])).values());
+    const chunk = 20;
+    for (let i = 0; i < uniq.length; i += chunk) {
+      await Promise.all(uniq.slice(i, i + chunk).map(row =>
+        row.source === 'semrush'
+          ? fetch(`/api/projects/${projectId}/keywords`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ keyword: row.keyword, searchVolume: row.searchVolume, type: row.type, branded: row.branded, source: 'blocked' }),
+            })
+          : fetch(`/api/projects/${projectId}/keywords`, {
+              method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ keyword: row.keyword, source: row.source }),
+            }),
+      ));
+    }
+    await fetchDb();
+    onKeywordsChanged?.();   // refresh dependent panels (single source of truth, Const II.7)
+  }
+
   // ── CSV upload ──
   async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1320,7 +1348,7 @@ export default function KeywordsPanel({
         </div>
       </div>
 
-      {/* ── v7.271: Keyword Landscape Summary intro — orients the panel: what this  */}
+      {/* ── v7.270: Keyword Landscape Summary intro — orients the panel: what this  */}
       {/* view is and how to read it. Static descriptive copy only, no data values    */}
       {/* (Const I.1). Sits at the very top of the scroll body, above the cards.       */}
       <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
@@ -1549,7 +1577,7 @@ export default function KeywordsPanel({
 
         return (
           <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
-            {/* v7.271: enlarged title + one-line context (left column); the min-volume */}
+            {/* v7.270: enlarged title + one-line context (left column); the min-volume */}
             {/* control keeps its place on the right via marginLeft:auto.                */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -1646,7 +1674,7 @@ export default function KeywordsPanel({
                     {/* accent stripe on action cards */}
                     {s.status === 'action' && <span style={{ position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 3, background: s.accent }} aria-hidden="true" />}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      {/* v7.271: "Step N" label (was a bare number) — makes the four-step sequence explicit */}
+                      {/* v7.270: "Step N" label (was a bare number) — makes the four-step sequence explicit */}
                       <span style={{ display: 'inline-flex', alignItems: 'center', height: 18, borderRadius: 5, padding: '0 7px', background: emphasize ? s.accent : 'var(--c-14142a)', color: emphasize ? 'var(--c-08080f)' : s.accent, fontSize: 9, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }}>Step {s.n}</span>
                       <i className={`ti ${s.icon}`} style={{ fontSize: 14, color: s.accent }} aria-hidden="true" />
                       <span style={{ fontSize: 12, fontWeight: 700, color: emphasize ? 'var(--c-e8e8ff)' : 'var(--c-c8c8e8)' }}>{s.title}</span>
@@ -1739,7 +1767,7 @@ export default function KeywordsPanel({
           { key: 'product', label: 'Product journey',     count: journeyCounts.product, hint: 'Solution-aware demand · full funnel',          accent: 'var(--c-9b96ff)', dot: true },
           { key: 'pre',     label: 'Pre-product journey', count: journeyCounts.pre,     hint: 'Problem / trigger searches · awareness only', accent: 'var(--c-34d399)', dot: true },
         ];
-        // v7.271: reframed as a prominent "Explore by journey" selector — the next
+        // v7.270: reframed as a prominent "Explore by journey" selector — the next
         // major area to choose. Title + cue + instruction above the existing toggle.
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
@@ -2028,6 +2056,7 @@ export default function KeywordsPanel({
             expectedCount={segmentRows.length}
             dropCategoryNames={dropCategoryNames}
             categoryModel={categoryModel}
+            onDeleteRows={deleteRows}
           />
         )}
 
@@ -2589,6 +2618,7 @@ function KwCategorySection({
   expectedCount,
   dropCategoryNames,
   categoryModel,
+  onDeleteRows,
 }: {
   cb:            KwCategoryBreakdown;
   rows:          KeywordRow[];
@@ -2597,10 +2627,20 @@ function KwCategorySection({
   expectedCount: number;
   dropCategoryNames: Set<string>;   // v7.226: competitor-brand categories to suppress (Const III.1a)
   categoryModel: CategoryModel;     // v7.227: canonical categories + stored membership (shared source)
+  onDeleteRows?: (rows: KeywordRow[]) => Promise<void>;   // v7.271: destructive delete of a node's / a keyword's rows
 }) {
   // ── Expand/collapse state — collapsed by default (parents only). Hooks run
   //    unconditionally before any early return (rules of hooks). ──
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // v7.271: delete affordance state — which node is awaiting confirm, and which id is mid-delete.
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [busyId,    setBusyId]    = useState<string | null>(null);
+  const runDelete = async (id: string, rowsToDelete: KeywordRow[]) => {
+    if (!onDeleteRows || rowsToDelete.length === 0) { setConfirmId(null); return; }
+    setBusyId(id);
+    try { await onDeleteRows(rowsToDelete); }
+    finally { setBusyId(null); setConfirmId(null); }
+  };
 
   // ── Build the hierarchy: a sub-category tree per LLM category, then nest
   //    procedure categories into derived families. Every metric rolls up
@@ -2705,6 +2745,12 @@ function KwCategorySection({
         maxVol={maxVol}
         dimmed={dimmed}
         metaOf={categoryModel.keywordMeta}
+        canDelete={!!onDeleteRows}
+        confirmId={confirmId}
+        busyId={busyId}
+        onAskConfirm={(id: string) => setConfirmId(id)}
+        onCancelConfirm={() => setConfirmId(null)}
+        onConfirmDelete={runDelete}
       />
     ));
   };
@@ -2791,6 +2837,18 @@ function KwCategorySection({
   );
 }
 
+// v7.271: gather every keyword row held under a node (its own + all descendants),
+// de-duped by row key. Used by the destructive category/sub-category delete.
+function collectOwnKeywords(node: CatNode): KeywordRow[] {
+  const out = new Map<string, KeywordRow>();
+  const walk = (n: CatNode) => {
+    for (const k of n.own) out.set(k.key, k);
+    for (const c of n.children) walk(c);
+  };
+  walk(node);
+  return Array.from(out.values());
+}
+
 function KwCatRow({
   cat,
   selIdx,
@@ -2802,6 +2860,12 @@ function KwCatRow({
   expanded = false,
   onToggle,
   metaOf,
+  canDelete = false,
+  confirmId = null,
+  busyId = null,
+  onAskConfirm,
+  onCancelConfirm,
+  onConfirmDelete,
 }: {
   cat:               CatNode;
   selIdx:            number | null;   // null = all ranks; 0–3 = selected bucket
@@ -2813,8 +2877,19 @@ function KwCatRow({
   expanded?:         boolean;
   onToggle?:         () => void;
   metaOf?:           Map<string, KeywordMeta>;   // v7.235: per-keyword classification metadata (Const III.7)
+  canDelete?:        boolean;                     // v7.271: show delete affordances
+  confirmId?:        string | null;              // v7.271: node id awaiting delete-confirm
+  busyId?:           string | null;              // v7.271: id currently being deleted
+  onAskConfirm?:     (id: string) => void;
+  onCancelConfirm?:  () => void;
+  onConfirmDelete?:  (id: string, rows: KeywordRow[]) => void;
 }) {
   const clickable = hasChildren || canRevealKeywords;
+  // v7.271: every keyword held under this node (own + all descendants) — the rows a
+  // category/sub-category delete removes (destructive, Wayne's decision). Exact subtree.
+  const nodeKeywords = canDelete ? collectOwnKeywords(cat) : [];
+  const confirming   = confirmId === cat.id;
+  const deleting     = busyId === cat.id;
   const p1Vol   = cat.vol[0] + cat.vol[1];
   const dispKw  = selIdx === null ? cat.totKw  : cat.kw[selIdx];
   const dispVol = selIdx === null ? cat.totVol : cat.vol[selIdx];
@@ -2917,8 +2992,8 @@ function KwCatRow({
       <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? 'var(--c-333350)' : avgPos <= 3 ? 'var(--c-6c63ff)' : avgPos <= 10 ? 'var(--c-06b6d4)' : avgPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)' }}>
         {avgPos !== null ? avgPos.toFixed(1) : '—'}
       </span>
-      {/* Keyword count (bucket-aware) */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      {/* Keyword count (bucket-aware) + v7.271 delete affordance */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
         {dispKw > 0 ? (
           <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-8080c0)', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e30)', borderRadius: 4, padding: '1px 8px', fontVariantNumeric: 'tabular-nums' }}>
             {dispKw.toLocaleString()}
@@ -2926,8 +3001,44 @@ function KwCatRow({
         ) : (
           <span style={{ fontSize: '10px', color: 'var(--c-282838)' }}>—</span>
         )}
+        {canDelete && nodeKeywords.length > 0 && !confirming && (
+          <button
+            type="button"
+            title={`Delete this ${depth === 0 ? 'category' : 'sub-category'} and its ${nodeKeywords.length} keyword${nodeKeywords.length === 1 ? '' : 's'}`}
+            aria-label={`Delete ${cat.name} and its ${nodeKeywords.length} keywords`}
+            disabled={deleting}
+            onClick={e => { e.stopPropagation(); onAskConfirm?.(cat.id); }}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, border: '1px solid var(--c-2a2a40)', background: 'transparent', color: 'var(--c-8a8aa8)', cursor: deleting ? 'default' : 'pointer', flexShrink: 0 }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-f87171)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-f87171)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-8a8aa8)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-2a2a40)'; }}
+          >
+            <i className="ti ti-trash" style={{ fontSize: 11 }} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </div>
+
+    {/* v7.271: destructive-delete confirm strip for this category / sub-category. */}
+    {canDelete && confirming && (
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '7px 20px', paddingLeft: depth * 16 + 38, background: 'var(--ca-248-113-113-0_2)', borderBottom: '1px solid var(--ca-255-255-255-0_03)' }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--c-f87171)', fontWeight: 600 }}>
+          Delete &ldquo;{cat.name}&rdquo; and its {nodeKeywords.length} keyword{nodeKeywords.length === 1 ? '' : 's'} permanently?
+        </span>
+        <button type="button" disabled={deleting}
+          onClick={() => onConfirmDelete?.(cat.id, nodeKeywords)}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--c-f87171)', background: 'transparent', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 9px', cursor: deleting ? 'default' : 'pointer' }}>
+          <i className={`ti ${deleting ? 'ti-loader-2' : 'ti-trash'}`} style={{ fontSize: 11 }} aria-hidden="true" />{deleting ? 'Deleting…' : 'Delete'}
+        </button>
+        <button type="button" disabled={deleting}
+          onClick={() => onCancelConfirm?.()}
+          style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 9px', cursor: 'pointer' }}>
+          Cancel
+        </button>
+      </div>
+    )}
 
     {/* v7.230: expanded leaf → the real keywords for this level, as chips. Each chip is a
         source row (keyword · annual demand); rank-colored dot = client position bucket. */}
@@ -2977,6 +3088,23 @@ function KwCatRow({
                 </span>
               )}
               <span style={{ color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(k.searchVolume)}</span>
+              {canDelete && (() => {
+                const chipBusy = busyId === 'kw:' + k.key;
+                return (
+                  <button
+                    type="button"
+                    title={`Delete keyword "${k.keyword}"`}
+                    aria-label={`Delete keyword ${k.keyword}`}
+                    disabled={chipBusy}
+                    onClick={e => { e.stopPropagation(); onConfirmDelete?.('kw:' + k.key, [k]); }}
+                    style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, marginLeft: 1, borderRadius: 4, border: 'none', background: 'transparent', color: 'var(--c-55557a)', cursor: chipBusy ? 'default' : 'pointer', flex: '0 0 auto' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-f87171)'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-55557a)'; }}
+                  >
+                    <i className={`ti ${chipBusy ? 'ti-loader-2' : 'ti-x'}`} style={{ fontSize: 11 }} aria-hidden="true" />
+                  </button>
+                );
+              })()}
             </span>
           );
         })}
