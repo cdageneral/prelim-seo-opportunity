@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.277 — 2026-06-23 · LLM Visibility — per-prompt mention badges + a Brand Mention Share card (citations deferred)
+
+**The ask (Wayne).** Badge each prompt where we secured a brand mention, labeled by platform (Claude / ChatGPT). Add summary cards for **Citation Share** and **Brand Mention Share** (acquired vs available, with exact data).
+
+**Data-integrity decision (Const I.1 / Art. X).** The LLM probe captures **brand mentions** per platform (`ProbeResultV2.mentioned`) — real data — but captures **no citation links** (the probe calls plain `chat/completions` / `messages` with no web-search tool, so responses carry no citations; URLs a chat model types in prose are ungrounded). Per Wayne: **ship the brand-mention pieces now, defer Citation Share** until we add citation-grounded (web-search) probing. No citation card is shown rather than fabricate one.
+
+**What changed (`components/brief/LLMVisibilitySection.tsx`, UI only).**
+- **Per-prompt mention badges** in the category drawer: a green "✓ Claude mention" / "✓ ChatGPT mention" badge appears next to a prompt for each platform whose response actually mentioned the brand. (`promptsByCat` now carries per-platform mention; new `DrawerRow` type + `MentionBadge`.)
+- **New "Brand mention share" summary card** (score grid now 4-up): acquired ÷ available across **all** probe responses (unbranded + branded, both platforms — Wayne's chosen denominator), with exact counts and a per-platform split (Claude A/B · ChatGPT C/D) below. Every figure is a direct count of real probe results.
+- **Citation Share — deferred**, with an in-code note explaining why (no citation data captured yet).
+
+**No data/probe change** — scheme/cap unchanged from v7.274/275; this reads existing stored probe results.
+
+**Verification (Art. V, incl. V.1a).** `tsc` under the project-mirrored tsconfig (no `target` override) — PASS. SSR render at real scale: Brand mention share card shows correct %, acquired/available, and per-platform split; no citation card; 4-up grid; drawer renders per-platform mention badges; **theme parity** — 0 hardcoded colors, orbit-*/established green tokens only (Const IV.6 / V.5).
+
+
 ## v7.276 — 2026-06-23 · LLM Visibility — "view prompts" moved inline onto each category row (expandable drawer)
 
 **The ask (Wayne).** Move "view prompts" inline onto the category row; clicking opens an expandable drawer for that category, clicking again collapses it.

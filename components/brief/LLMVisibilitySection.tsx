@@ -137,19 +137,36 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
   // The exact prompts sent, per category, deduped (each prompt goes to both
-  // platforms). Used by the inline per-row "view prompts" drawer.
+  // platforms). Each row carries whether the brand was mentioned on Claude /
+  // ChatGPT for that prompt (real data; null = that platform had no result).
+  // Used by the inline per-row "view prompts" drawer (v7.277 badges).
   const promptsByCat = (() => {
-    const seen = new Map<string, Set<string>>();
-    const byCat = new Map<string, { branded: boolean; prompt: string }[]>();
+    const byCat = new Map<string, Map<string, DrawerRow>>();
     for (const r of results) {
       if (!r.category) continue;                 // brand-level prompts live in the full detail toggle
-      if (!seen.has(r.category)) { seen.set(r.category, new Set()); byCat.set(r.category, []); }
-      if (seen.get(r.category)!.has(r.prompt)) continue;
-      seen.get(r.category)!.add(r.prompt);
-      byCat.get(r.category)!.push({ branded: r.branded, prompt: r.prompt });
+      if (!byCat.has(r.category)) byCat.set(r.category, new Map());
+      const m = byCat.get(r.category)!;
+      if (!m.has(r.prompt)) m.set(r.prompt, { branded: r.branded, prompt: r.prompt, claude: null, chatgpt: null });
+      const row = m.get(r.prompt)!;
+      if (r.platform === 'claude')  row.claude  = r.mentioned;
+      if (r.platform === 'chatgpt') row.chatgpt = r.mentioned;
     }
-    return byCat;
+    const out = new Map<string, DrawerRow[]>();
+    byCat.forEach((m, cat) => out.set(cat, Array.from(m.values())));
+    return out;
   })();
+
+  // Brand Mention Share (v7.277) — acquired vs available across ALL probe
+  // responses (unbranded + branded, both platforms). Wayne's chosen denominator.
+  // Every figure is a direct count of real probe results (Const I.1).
+  const claudeResults  = results.filter(r => r.platform === 'claude');
+  const chatgptResults = results.filter(r => r.platform === 'chatgpt');
+  const mentionTotal   = results.length;
+  const mentionAcquired= results.filter(r => r.mentioned).length;
+  const mentionPct     = mentionTotal > 0 ? Math.round((mentionAcquired / mentionTotal) * 100) : 0;
+  const claudeMentAcq  = claudeResults.filter(r => r.mentioned).length;
+  const chatgptMentAcq = chatgptResults.filter(r => r.mentioned).length;
+  const mentionColor   = mentionPct >= 60 ? 'text-green-400' : mentionPct >= 30 ? 'text-amber-400' : 'text-red-400';
 
   const probeDate = new Date(probedAt).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
@@ -191,7 +208,7 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
       </div>
 
       {/* Score cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
           <p className="text-orbit-tertiary text-xs">Unbranded visibility</p>
           <p className={`text-3xl font-black mt-1 ${unbrandedColor}`}>{unbranded.score}<span className="text-sm font-medium text-orbit-tertiary">/100</span></p>
@@ -228,7 +245,22 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
             </p>
           )}
         </div>
+        {/* Brand Mention Share (v7.277) — acquired vs available across ALL responses */}
+        <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
+          <p className="text-orbit-tertiary text-xs">Brand mention share</p>
+          <p className={`text-3xl font-black mt-1 ${mentionColor}`}>{mentionPct}<span className="text-sm font-medium text-orbit-tertiary">%</span></p>
+          <p className="text-orbit-tertiary text-[10px] mt-1">
+            Mentioned in {mentionAcquired} of {mentionTotal} responses (acquired / available, all prompts)
+          </p>
+          <p className="text-orbit-tertiary text-[10px] mt-0.5">
+            Claude {claudeMentAcq}/{claudeResults.length} · ChatGPT {chatgptMentAcq}/{chatgptResults.length}
+          </p>
+        </div>
       </div>
+
+      {/* Citation share — deferred (v7.277): the LLM probe does not capture citation
+          links today; it would require citation-grounded (web-search) probing.
+          Shown as brand-mention share only until that data exists (Const I.1). */}
 
       {/* Category visibility table */}
       {sortedCats.length > 0 && (
@@ -332,11 +364,29 @@ function ProbeViewV2({ snapshot }: { snapshot: LLMProbeSnapshotV2 }) {
   );
 }
 
-// ─── Prompt Drawer (inline per-category, v7.276) ──────────────────────────────
+// ─── Prompt Drawer (inline per-category, v7.276; mention badges v7.277) ────────
 // The exact prompts sent for ONE category — no responses — each tagged
-// unbranded/branded. Rendered inside an expandable row under the category.
+// unbranded/branded, plus a per-platform badge when the brand was mentioned in
+// that platform's response (real data). Rendered in an expandable row.
 
-function PromptDrawer({ rows }: { rows: { branded: boolean; prompt: string }[] }) {
+interface DrawerRow {
+  branded:  boolean;
+  prompt:   string;
+  claude:   boolean | null;   // brand mentioned in Claude's response (null = no result)
+  chatgpt:  boolean | null;   // brand mentioned in ChatGPT's response (null = no result)
+}
+
+function MentionBadge({ platform, mentioned }: { platform: 'Claude' | 'ChatGPT'; mentioned: boolean | null }) {
+  // Only render when we SECURED a mention on that platform (Wayne's ask).
+  if (mentioned !== true) return null;
+  return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0 bg-green-500/15 text-green-400 border border-green-500/30 font-medium">
+      ✓ {platform} mention
+    </span>
+  );
+}
+
+function PromptDrawer({ rows }: { rows: DrawerRow[] }) {
   if (rows.length === 0) {
     return <p className="text-orbit-tertiary text-[11px] italic">No prompts recorded for this category.</p>;
   }
@@ -345,16 +395,21 @@ function PromptDrawer({ rows }: { rows: { branded: boolean; prompt: string }[] }
       <p className="text-orbit-tertiary text-[10px] leading-relaxed">
         Exact prompts sent to each platform (Claude + ChatGPT) for this category. Unbranded prompts
         never name the brand — they are the visibility signal; the branded prompt is used only for sentiment.
+        A green badge marks a prompt where the brand was actually mentioned, per platform.
       </p>
-      <ol className="flex flex-col gap-1.5">
+      <ol className="flex flex-col gap-2">
         {rows.map((r, ri) => (
-          <li key={ri} className="flex items-start gap-2">
+          <li key={ri} className="flex items-start gap-2 flex-wrap">
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 mt-0.5 ${
               r.branded
                 ? 'bg-orbit-muted text-orbit-tertiary'
                 : 'bg-orbit-accent/10 text-orbit-accent'
             }`}>{r.branded ? 'branded' : 'unbranded'}</span>
             <span className="text-orbit-secondary text-[11px] italic leading-relaxed">&ldquo;{r.prompt}&rdquo;</span>
+            <span className="inline-flex items-center gap-1.5 mt-0.5">
+              <MentionBadge platform="Claude"  mentioned={r.claude} />
+              <MentionBadge platform="ChatGPT" mentioned={r.chatgpt} />
+            </span>
           </li>
         ))}
       </ol>
