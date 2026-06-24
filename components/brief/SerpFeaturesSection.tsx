@@ -45,6 +45,11 @@ interface Props {
   projectId?:   string;   // v7.103: enables uploaded SERP-feature availability
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   externalScanned?: SerpKw[];   // v7.132: live results from the page-level background SERP scan — merged into the scanned set, fresh-wins
+  // v7.287: the full-footprint SERP scan CTA moved here from the Keyword panel.
+  // The page owns the auto-batch loop; this panel triggers it and mirrors progress.
+  onStartSerpScan?:  () => void;
+  serpScanRunning?:  boolean;
+  serpScanProgress?: { done: number; total: number } | null;
 }
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
@@ -858,7 +863,7 @@ const ADD_FEATURES = [
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned }: Props) {
+export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned, onStartSerpScan, serpScanRunning, serpScanProgress }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
 
   const serpSnap    = analysis.serpApiSnapshot ?? {};
@@ -906,6 +911,43 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     () => countUploadFeatures(uploadRows ?? [], scannedSet),
     [uploadRows, scannedSet]
   );
+
+  // ── v7.287: SERP scan coverage + last-scan, for the header CTA ──────────────
+  // The full keyword footprint = uploaded canonical pool ∪ already-scanned keywords
+  // (deduped, lowercase). "Scanned" = keywords with live SERP data. The real scan
+  // is gated server-side by the page's auto-batch loop; this count is the in-panel
+  // estimate of what remains (Const I.1 — both sides are real source rows, nothing
+  // modeled). Mirrors the strip that previously lived in the Keyword panel.
+  const serpCoverage = useMemo(() => {
+    const set = new Set<string>(scannedSet);
+    for (const r of (uploadRows ?? [])) {
+      if (r.source === 'blocked') continue;
+      const kw = (r.keyword ?? '').trim().toLowerCase();
+      if (kw) set.add(kw);
+    }
+    const total     = set.size;
+    const scannedN  = scannedSet.size;
+    return { scanned: scannedN, total, remaining: Math.max(0, total - scannedN) };
+  }, [uploadRows, scannedSet]);
+
+  // Last scan = newest per-keyword scannedAt across the live set, falling back to
+  // the snapshot fetch time. Null → never scanned (honest gap, Const I.5).
+  const lastScanTs = useMemo(() => {
+    let max = 0;
+    for (const k of scannedKws) {
+      if (!k.scannedAt) continue;
+      const t = Date.parse(k.scannedAt);
+      if (!Number.isNaN(t) && t > max) max = t;
+    }
+    if (max === 0 && serpSnap.fetchedAt) {
+      const t = Date.parse(serpSnap.fetchedAt);
+      if (!Number.isNaN(t)) max = t;
+    }
+    return max || null;
+  }, [scannedKws, serpSnap.fetchedAt]);
+  const lastScanLabel = lastScanTs
+    ? `Last scanned ${new Date(lastScanTs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+    : 'Never scanned';
 
   // All computed AIO data — v7.121: computed BEFORE the aggregate metrics so
   // availability/acquired always reflect the LIVE scanned set (in-panel AIO
@@ -1110,10 +1152,60 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             <h2 className="text-orbit-primary text-xl font-bold mt-1">SERP Features</h2>
             <p className="text-orbit-secondary text-sm mt-1">AI Overviews · People Also Ask · Video Carousel</p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {scanDate && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>Scan: {scanDate}</span>}
-            {scanned > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>{scanned} kw{scanned !== 1 ? 's' : ''} scanned</span>}
-            {uploadFeat.rowsWithFeatureData > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>{uploadFeat.rowsWithFeatureData.toLocaleString()} kws w/ features from upload</span>}
+          {/* v7.287: last-scan freshness + the prominent full-footprint SERP scan
+              CTA, moved here from the Keyword panel so the action lives where the
+              data lives (Const IV.4/IV.5). */}
+          <div className="flex flex-col items-end gap-2 flex-shrink-0">
+            <span style={{ fontSize: '10px', fontWeight: 600, color: lastScanTs ? 'var(--c-7070a0)' : 'var(--c-f59e0b)', display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: lastScanTs ? 'var(--c-6c63ff)' : 'var(--c-f59e0b)', display: 'inline-block' }} />
+              {lastScanLabel}
+            </span>
+
+            {typeof onStartSerpScan === 'function' && (
+              (serpCoverage.remaining > 0 || serpScanRunning) ? (
+                <button
+                  onClick={onStartSerpScan}
+                  disabled={!!serpScanRunning}
+                  title="Scans every unscanned keyword automatically, 25 at a time, until coverage is full. 1 SerpAPI credit each. Already-scanned keywords are never re-scanned. The scan keeps running while you browse other panels."
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '8px',
+                    padding: '10px 18px', borderRadius: '10px',
+                    fontSize: '13px', fontWeight: 700, border: 'none',
+                    background: serpScanRunning ? 'var(--c-1a1a2e)' : 'var(--c-6c63ff)',
+                    color:      serpScanRunning ? 'var(--c-8888aa)' : 'var(--c-ffffff)',
+                    cursor:     serpScanRunning ? 'wait' : 'pointer',
+                    boxShadow:  serpScanRunning ? 'none' : '0 2px 10px var(--ca-108-99-255-0_35)',
+                    transition: 'background-color .15s',
+                  }}
+                >
+                  {serpScanRunning ? (
+                    <>
+                      <svg className="animate-spin" style={{ width: 13, height: 13 }} fill="none" viewBox="0 0 24 24">
+                        <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      {serpScanProgress
+                        ? `Scanning… ${serpScanProgress.done.toLocaleString()} of ${serpScanProgress.total.toLocaleString()}`
+                        : 'Scanning…'}
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: '15px', lineHeight: 1 }}>⚡</span>
+                      Scan all {serpCoverage.remaining.toLocaleString()} remaining · ~{serpCoverage.remaining.toLocaleString()} credits
+                    </>
+                  )}
+                </button>
+              ) : serpCoverage.total > 0 ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, padding: '8px 14px', borderRadius: '10px', border: '1px solid var(--ca-52-211-153-0_3)', background: 'var(--ca-52-211-153-0_08)', color: 'var(--c-34d399)' }}>
+                  ✓ Full SERP coverage
+                </span>
+              ) : null
+            )}
+
+            <div className="flex items-center gap-2 flex-wrap" style={{ justifyContent: 'flex-end' }}>
+              {scanned > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>{scanned.toLocaleString()} kw{scanned !== 1 ? 's' : ''} scanned</span>}
+              {uploadFeat.rowsWithFeatureData > 0 && <span style={{ fontSize: '10px', padding: '3px 8px', borderRadius: '5px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-505070)' }}>{uploadFeat.rowsWithFeatureData.toLocaleString()} kws w/ features from upload</span>}
+            </div>
           </div>
         </div>
       </div>

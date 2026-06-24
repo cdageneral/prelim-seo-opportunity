@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData, serpCellHasLocalPack } from '@/lib/utils/kwVolume';
 import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
@@ -10,7 +10,7 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-s
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type KwSource = 'semrush' | 'custom' | 'csv';
-type KwFilter = 'all' | 'branded' | 'nonBranded' | 'competitorGap';
+type KwFilter = 'all' | 'branded' | 'nonBranded' | 'localIntent' | 'competitorGap';
 type SortCol  = 'keyword' | 'competitor' | 'volume' | 'rank' | null;
 type SortDir  = 'asc' | 'desc';
 
@@ -58,6 +58,10 @@ interface KeywordRow {
   clientInPAA:   boolean;
   hasVideo:      boolean;
   clientInVideo: boolean;
+  // v7.287: keyword's Google SERP shows a Local Pack (map pack) — REAL Semrush `Fl`
+  // SERP-feature data, from the uploaded "SERP Features by Keyword" cell, a live SerpAPI
+  // scan, or the footprint roll-up. True for client-footprint AND competitor-gap rows.
+  isLocalIntent: boolean;
 }
 
 interface DbKeyword {
@@ -146,6 +150,12 @@ function buildRows(
     if (k?.keyword) serpMap[k.keyword.toLowerCase()] = k;
   }
 
+  // v7.287: footprint-level Local Pack roll-up (Semrush `Fl`), keyed lowercase. Covers the
+  // live-API client footprint where the flag lives on the snapshot, not on a per-keyword cell.
+  const snapLocalSet = new Set<string>(
+    (analysis?.semrushSnapshot?.localPackKeywords ?? []).map((k: any) => String(k).toLowerCase()),
+  );
+
   // Core filtering via shared utility — single source of truth.
   // v7.176: includeDemand unions the deep-journey demand keywords (the topics built
   // in the Journey panel) into the pool as origin:'demand', so the new topic
@@ -178,6 +188,8 @@ function buildRows(
     const upHasAIO   = /ai overview|\baio\b/.test(upLow);
     const upHasPAA   = upLow.includes('people also ask');
     const upHasVideo = upLow.includes('video');
+    // v7.287: Local Pack (map pack) from the uploaded SERP-features cell (value-robust helper).
+    const upHasLocal = serpCellHasLocalPack(dbRow?.serpFeatures);
 
     return {
       key:          dbRow ? `${dbRow.source}-${dbRow.id}` : (item.isGap ? `sem-gap-${kwLow}` : `sem-ranked-${kwLow}`),
@@ -202,6 +214,12 @@ function buildRows(
       // meant the Video pill never lit up even for scanned keywords.
       hasVideo:      serp ? (serp.serpFeatures ?? []).includes('video_carousel') : upHasVideo,
       clientInVideo: serp?.videoClientCited ?? false,
+      // v7.287: OR every REAL local signal (Const I.1) — live SerpAPI, the uploaded `Fl` cell,
+      // or the footprint roll-up — so a keyword Semrush flags as map-pack isn't missed when a
+      // live scan didn't capture it. Works for client-footprint AND competitor-gap rows.
+      isLocalIntent: (serp ? (serp.serpFeatures ?? []).includes('local_pack') : false)
+        || upHasLocal
+        || snapLocalSet.has(kwLow),
     };
   });
 
@@ -220,6 +238,7 @@ function applyFilter(rows: KeywordRow[], filter: KwFilter, volMin: number = 0): 
   switch (filter) {
     case 'branded':       return rows.filter(r => r.branded);
     case 'nonBranded':    return rows.filter(r => !r.branded);
+    case 'localIntent':   return rows.filter(r => r.isLocalIntent);   // v7.287: triggers a Local Pack
     case 'competitorGap': return rows.filter(r => r.type === 'gap' && !!r.competitor && r.searchVolume >= volMin);
     default:              return rows;
   }
@@ -268,6 +287,7 @@ const FILTER_META: Record<KwFilter, { label: string; slug: string }> = {
   all:           { label: 'All',           slug: 'all'            },
   branded:       { label: 'Branded',       slug: 'branded'        },
   nonBranded:    { label: 'Non-branded',   slug: 'non-branded'    },
+  localIntent:   { label: 'Local Intent',  slug: 'local-intent'   },
   competitorGap: { label: 'Competitor Gap', slug: 'competitor-gap' },
 };
 
@@ -785,12 +805,24 @@ export default function KeywordsPanel({
     const brandedCount  = brandedRows.length,  brandedVol  = ann(brandedRows);
     const nonBrandCount = nonBrandRows.length, nonBrandVol = ann(nonBrandRows);
     const gapCount      = gapRows.length,      gapVol      = ann(gapRows);
+    // v7.287: Local Intent — keywords whose Google SERP shows a Local Pack (real Semrush `Fl`).
+    // Counted on the SAME basis as All Keywords (client footprint + competitor gap), and split
+    // into a client-vs-gap breakout for the card sub-line. Branded/non-branded cut across this,
+    // so Local Intent is its own lens, not a partition of the others.
+    const localClientRows = clientRows.filter(r => r.isLocalIntent);
+    const localGapRows    = gapRows.filter(r => r.isLocalIntent);
+    const localClientCount = localClientRows.length;
+    const localGapCount    = localGapRows.length;
     return {
       allCount:      brandedCount + nonBrandCount + gapCount,  // = client + gap, by construction
       allVol:        brandedVol + nonBrandVol + gapVol,
       brandedCount,  brandedVol,
       nonBrandCount, nonBrandVol,
       gapCount,      gapVol,
+      localCount:    localClientCount + localGapCount,         // client local + gap local
+      localVol:      ann(localClientRows) + ann(localGapRows),
+      localClientCount,
+      localGapCount,
       clientCount:   brandedCount + nonBrandCount,             // client footprint — for the "N client + M gap" sub-line
     };
   }, [scopedSummaryRows]);
@@ -897,8 +929,11 @@ export default function KeywordsPanel({
     const snap = analysis?.semrushSnapshot;
     const set = new Set<string>();
     if (hasLocalPackData(snap)) (snap.localPackKeywords as any[]).forEach(k => set.add(String(k).toLowerCase()));
+    // v7.287: also include every row flagged local (uploaded `Fl` cell / live SerpAPI / gap rows),
+    // so the node badges agree with the Local Intent card (Const II.7) on the CSV-upload + gap paths.
+    for (const r of allRows) if (r.isLocalIntent) set.add(r.keyword.toLowerCase());
     return set;
-  }, [analysis]);
+  }, [analysis, allRows]);
 
   // v7.226: competitor-brand category guard (Const III.1a). The raw `_categoryBreakdown`
   // legitimately contains competitor/third-party brand categories (built from competitor
@@ -1409,6 +1444,17 @@ export default function KeywordsPanel({
             icon: 'ti-search', subtitle: 'Generic / category terms',
           },
           {
+            // v7.287: Local Intent — keywords that trigger a Google Local Pack (map pack). Sub-line
+            // breaks the total into client footprint vs competitor gap. REAL Semrush `Fl` data.
+            id: 'localIntent', label: 'Local Intent', count: kwSummary.localCount, vol: kwSummary.localVol,
+            accent: 'var(--c-46cce0)', activeBg: 'var(--ca-6-182-212-0_10)', activeBdr: 'var(--ca-6-182-212-0_45)',
+            dimBg: 'var(--ca-6-182-212-0_04)', dimBdr: 'var(--ca-6-182-212-0_15)',
+            icon: 'ti-map-pin',
+            subtitle: dbLoaded
+              ? `${kwSummary.localClientCount.toLocaleString()} client + ${kwSummary.localGapCount.toLocaleString()} gap`
+              : 'Triggers a local map pack',
+          },
+          {
             id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,
             accent: 'var(--c-f59e0b)', activeBg: 'var(--ca-245-158-11-0_10)', activeBdr: 'var(--ca-245-158-11-0_45)',
             dimBg: 'var(--ca-245-158-11-0_04)', dimBdr: 'var(--ca-245-158-11-0_15)',
@@ -1416,7 +1462,7 @@ export default function KeywordsPanel({
           },
         ];
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
             {KW_CARDS.map(card => {
               const active = filter === card.id;
               return (
@@ -1984,72 +2030,12 @@ export default function KeywordsPanel({
         )}
       </div>
 
-      {/* ── SERP feature coverage strip (v7.81) ── */}
-      <div className="flex items-center gap-3 px-5 py-2 border-b shrink-0 flex-wrap" style={{ borderColor: 'var(--c-111120)', background: 'var(--c-0a0a14)' }}>
-        <span className="text-[9px] font-semibold uppercase tracking-widest" style={{ color: 'var(--c-252545)' }}>SERP features</span>
-        <span className="text-[10px]" style={{ color: 'var(--c-7070a0)', fontVariantNumeric: 'tabular-nums' }}>
-          {serpCoverage.scanned.toLocaleString()} of {serpCoverage.total.toLocaleString()} keywords scanned
-        </span>
-        {/* coverage mini-bar */}
-        <div style={{ width: 90, height: 4, borderRadius: 2, background: 'var(--c-14142a)', overflow: 'hidden' }}>
-          <div style={{
-            width: serpCoverage.total > 0 ? `${(serpCoverage.scanned / serpCoverage.total) * 100}%` : '0%',
-            height: '100%', background: 'var(--c-6c63ff)', borderRadius: 2, transition: 'width 0.4s ease',
-          }} />
-        </div>
-        {serpCoverage.remaining > 0 ? (
-          // v7.132: when the parent supplies onStartSerpScan, this button kicks
-          // off the page-level auto-batch loop (scans ALL remaining, keeps
-          // running across navigation) and mirrors its progress. Without the
-          // prop it falls back to the legacy single-batch behavior.
-          (() => {
-            const useGlobal = typeof onStartSerpScan === 'function';
-            const busy      = useGlobal ? !!serpScanRunning : scanLoading;
-            return (
-              <button
-                onClick={useGlobal ? onStartSerpScan : handleSerpScan}
-                disabled={busy}
-                className="text-[10px] px-3 py-1 rounded-full border transition-all flex items-center gap-1.5"
-                style={{
-                  borderColor: busy ? 'var(--c-3a3a5c)' : 'var(--ca-108-99-255-0_5)',
-                  color:       busy ? 'var(--c-55557a)' : 'var(--c-9b96ff)',
-                  background:  busy ? 'transparent' : 'var(--ca-108-99-255-0_08)',
-                  cursor:      busy ? 'default' : 'pointer',
-                }}
-                title={useGlobal
-                  ? `Scans every unscanned keyword automatically, 75 at a time, until coverage is full. 1 SerpAPI credit each. Already-scanned keywords are never re-scanned. The scan keeps running while you browse other panels.`
-                  : `Scans the ${Math.min(75, serpCoverage.remaining)} highest-volume unscanned keywords. Each keyword uses 1 SerpAPI search credit. Already-scanned keywords are never re-scanned.`}
-              >
-                {busy ? (
-                  <>
-                    <svg className="animate-spin" style={{ width: 10, height: 10 }} fill="none" viewBox="0 0 24 24">
-                      <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                    </svg>
-                    {useGlobal && serpScanProgress
-                      ? `Scanning… ${serpScanProgress.done.toLocaleString()} of ${serpScanProgress.total.toLocaleString()}`
-                      : 'Scanning… (~2–3 min)'}
-                  </>
-                ) : useGlobal ? (
-                  <>Scan all {serpCoverage.remaining.toLocaleString()} remaining · ~{serpCoverage.remaining.toLocaleString()} credits</>
-                ) : (
-                  <>Scan next {Math.min(75, serpCoverage.remaining)} keywords · ~{Math.min(75, serpCoverage.remaining)} credits</>
-                )}
-              </button>
-            );
-          })()
-        ) : (
-          <span className="text-[10px] px-2 py-0.5 rounded-full border" style={{ borderColor: 'var(--ca-52-211-153-0_3)', background: 'var(--ca-52-211-153-0_08)', color: 'var(--c-34d399)' }}>
-            ✓ full coverage
-          </span>
-        )}
-        {scanError && (
-          <span className="text-[10px]" style={{ color: 'var(--c-f87171)' }}>{scanError}</span>
-        )}
-        <span className="ml-auto text-[9px]" style={{ color: 'var(--c-252545)' }}>
-          feeds AIO / PAA / Video pills + SERP Features panel
-        </span>
-      </div>
+      {/* ── SERP feature scan moved out (v7.287) ──
+          The coverage strip + scan CTA that lived here now lives in the SERP
+          Features panel (its header, top-right) — the action lives where the
+          data lives (Const IV.4). The scan still feeds this panel's AIO / PAA /
+          Video pills via mergedScanned (the global background scan results merge
+          in live through serpScanResults), so the columns are unchanged. */}
 
       {/* ── Category breakdown + keyword table ──
           v7.139: vertical scrolling now lives on the panel root; this wrapper

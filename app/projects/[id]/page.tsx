@@ -1461,6 +1461,9 @@ export default function ProjectBriefPage() {
               websiteUrl={project.websiteUrl}
               projectId={project.id}
               externalScanned={serpScan.results}                 // v7.132: global background scan results merge in live
+              serpScanRunning={serpScan.running || serpScan.checking}   // v7.287: SERP scan CTA moved into this panel
+              serpScanProgress={serpScan.running ? { done: serpScan.done, total: serpScan.total } : null}
+              onStartSerpScan={requestSerpScan}
             />
           )}
 

@@ -630,6 +630,26 @@ export function hasLocalPackData(snap: any): boolean {
   return !!snap && snap.localPackDataAvailable === true && Array.isArray(snap.localPackKeywords);
 }
 
+// v7.287: Local Pack detection from a single uploaded "SERP Features by Keyword" cell.
+// Client-safe mirror of `serpFeaturesHasLocalPack` in lib/apis/semrush.ts so the Keyword
+// panel can flag local-intent rows directly off the uploaded Semrush CSV cell
+// (project_keywords.serp_features) — both client-footprint AND competitor-gap rows — without
+// importing the server semrush module. REAL data only (Const I.1): the flag is Semrush's own
+// `Fl` SERP-feature value. Value-robust: matches the legacy numeric id (3), the Projects label
+// ("geo"), and any token containing "local" ("Local pack" / "local_pack"), case-insensitively.
+// Sources: https://www.semrush.com/kb/986-api-serp-features , .../1340-serp-features-local-pack
+export function serpCellHasLocalPack(raw: unknown): boolean {
+  const s = String(raw ?? '').toLowerCase();
+  if (!s.trim()) return false;
+  const tokens = s.split(/[,|;]+/).map(t => t.trim()).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '3' || t === 'geo') return true;   // legacy numeric id / Projects label
+    if (t.indexOf('local') >= 0) return true;    // "local pack" / "local_pack" name
+  }
+  return false;
+}
+
 /** Set of category NAMES (verbatim, as stored) that trigger a Local Pack. Empty when no data. */
 export function buildLocalPackCategorySet(snap: any): Set<string> {
   const out = new Set<string>();

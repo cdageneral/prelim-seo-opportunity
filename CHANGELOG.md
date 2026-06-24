@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.287 — 2026-06-24 · New "Local Intent" summary card in the Keyword panel (client vs gap), click-to-segment
+
+**The ask (Wayne).** In the Keyword Landscape Summary, add a new card after **Non-branded** called **Local Intent Keywords** — any keyword that triggers a local map pack. Under the total, break out how many come from the **client footprint** vs the **competitor gap**. The signal is in the **SERP Features** column of the Semrush CSV uploads. Clicking the card segments the product categories below accordingly.
+
+**The signal is real, not a heuristic.** A keyword is "Local Intent" when its Google SERP shows a **Local Pack** — read straight from Semrush's own SERP-features value (`Fl`, the "SERP Features by Keyword" CSV column). Sources: [Semrush KB 986](https://www.semrush.com/kb/986-api-serp-features), [KB 1340](https://www.semrush.com/kb/1340-serp-features-local-pack). No modeled or guessed values (Const I.1); when a row carries no SERP-feature data it simply isn't counted as local (honest gap, Const I.5).
+
+**What changed.**
+- **`lib/utils/kwVolume.ts`** — new `serpCellHasLocalPack()`: client-safe, value-robust detection of a Local Pack in a single uploaded SERP-features cell (numeric id `3` / Projects label `geo` / any "local" token). Mirrors the server `serpFeaturesHasLocalPack` so the panel can flag rows straight off the CSV.
+- **`components/brief/KeywordsPanel.tsx`** — every keyword row now carries a real `isLocalIntent` flag, OR-ed across all real signals: a live SerpAPI `local_pack`, the uploaded `Fl` cell, or the footprint roll-up (`localPackKeywords`). Works for **client-footprint AND competitor-gap** rows. New **Local Intent** summary card (after Non-branded; grid now 5-up) showing the total, annual volume, and a **"N client + M gap"** breakout sub-line. New `localIntent` filter: clicking the card segments the Category Breakdown below to local-intent keywords only (same `segmentRows` path as the other cards). Node **📍 Local pack** badges now also reflect the row-level flag, so badges and the card agree (Const II.7).
+- **`app/globals.css`** — added the cyan card alpha tokens (`--ca-6-182-212-0_04/0_10/0_45`) in **both** themes; darkened the light-theme `--c-46cce0` (cyan accent) from `#1fa5b9` → `#0e7490` so it is legible on the near-white summary strip (was ~2.6:1, now ~4.8:1). Dark theme unchanged; the v7.286 Local-pack badge / Local panel chips inherit the improved light-mode contrast.
+
+**Data integrity (Const I.1 / I.5).** The local flag is real Semrush SERP-feature data only; the client-vs-gap breakout is counted on the same basis as All Keywords (client footprint + competitor gap). Rows without the column aren't invented as "no" — they're simply not local.
+
+**Verification (Art. V).** Isolated `tsc` under the project tsconfig (no `target` override, V.1a) clean across the real import graph (verified it catches injected errors); dual-theme render `orbitiq-v7.287-RENDER.html` (5 cards both themes) + WCAG contrast check on the new cyan accent — dark ≈9–10:1, light ≈4.4–4.8:1 (Const IV.6 parity); retained regression suite re-run **175 checks, all PASS** (8 new `localcard:` invariants added — detection, card present, click-segments-by-isLocalIntent, client/gap breakout, 5-col grid, real-signal OR, dual-theme tokens).
+
 ## v7.286 — 2026-06-24 · Identify which categories trigger a Google local map pack (real Semrush SERP data) + gate the Local picker to them
 
 **The ask (Wayne).** Identify which product categories trigger a local map pack; show it in the Keyword panel; and in the Local view only offer categories whose keywords trigger a local map pack.
