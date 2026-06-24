@@ -935,6 +935,19 @@ export default function KeywordsPanel({
     return set;
   }, [analysis, allRows]);
 
+  // v7.288: is ANY real SERP-feature data present to compute Local Intent from? The flag is
+  // read only from real data (snapshot `Fl` roll-up, the uploaded "SERP Features" cell, or a
+  // live SerpAPI scan). When a project's stored rows carry NONE of these — e.g. keywords
+  // uploaded under a build that didn't capture the column — the Local Intent count is a
+  // structural zero, not "no local demand". We surface that honestly (Const I.5) on the card
+  // instead of letting it read like a near-empty result.
+  const localDataPresent = useMemo(() => {
+    if (hasLocalPackData(analysis?.semrushSnapshot)) return true;
+    if (dbKeywords.some(d => typeof d.serpFeatures === 'string' && d.serpFeatures.trim().length > 0)) return true;
+    if ((mergedScanned ?? []).some((s: any) => Array.isArray(s?.serpFeatures) && s.serpFeatures.length > 0)) return true;
+    return false;
+  }, [analysis, dbKeywords, mergedScanned]);
+
   // v7.226: competitor-brand category guard (Const III.1a). The raw `_categoryBreakdown`
   // legitimately contains competitor/third-party brand categories (built from competitor
   // gap keywords). ThemeClustersPanel already drops them at render; the Keyword panel did
@@ -1450,9 +1463,13 @@ export default function KeywordsPanel({
             accent: 'var(--c-46cce0)', activeBg: 'var(--ca-6-182-212-0_10)', activeBdr: 'var(--ca-6-182-212-0_45)',
             dimBg: 'var(--ca-6-182-212-0_04)', dimBdr: 'var(--ca-6-182-212-0_15)',
             icon: 'ti-map-pin',
-            subtitle: dbLoaded
-              ? `${kwSummary.localClientCount.toLocaleString()} client + ${kwSummary.localGapCount.toLocaleString()} gap`
-              : 'Triggers a local map pack',
+            // v7.288: honest gap (Const I.5) — if no SERP-feature data is stored, say so instead
+            // of showing a near-zero that looks like a bug.
+            subtitle: !dbLoaded
+              ? 'Triggers a local map pack'
+              : (!localDataPresent
+                  ? '⚠ No SERP-features in upload — re-upload to populate'
+                  : `${kwSummary.localClientCount.toLocaleString()} client + ${kwSummary.localGapCount.toLocaleString()} gap`),
           },
           {
             id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,

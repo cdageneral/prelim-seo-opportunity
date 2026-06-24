@@ -1,6 +1,20 @@
 # OrbitIQ Changelog
 
-## v7.287 — 2026-06-24 · New "Local Intent" summary card in the Keyword panel (client vs gap), click-to-segment
+## v7.288 — 2026-06-24 · Local Intent: don't lose SERP features on upload (union duplicates) + honest-gap notice when data is missing
+
+**The ask (Wayne).** The Local Intent card showed only ~1 keyword even though many of his keywords clearly trigger a map pack.
+
+**Diagnosis (from Wayne's real files — TD client + Fisher & Creative Planning competitors).** The data is rich and the v7.287 detection is correct: the three CSVs carry **180 distinct keywords** with a "Local pack" SERP-feature (TD alone: 82 distinct, 451 rows), and v7.287's exact `buildKwPool` + `isLocalIntent` computes **139 on the card (82 client + 57 gap)** on these files — verified by replaying the real pipeline. So a count of ~1 is **not** a detection bug — it means the project's stored rows carry **no** SERP-feature data (the column is only captured at upload time, so keywords loaded under an older build have `serp_features` empty). Fix on Wayne's side: re-upload the CSVs on v7.287+. This release hardens two real weak spots that surfaced during the diagnosis.
+
+**What changed.**
+- **`app/api/projects/[id]/keywords/batch/route.ts`** — **SERP features are now UNIONed across duplicate keyword rows instead of last-occurrence-wins.** A Semrush organic export lists the same keyword once per ranking URL/snapshot, and the SERP-feature list can differ between those rows — so the old de-dupe could silently drop a real feature (Local Pack / AI Overview / PAA / Video) that only appeared on an earlier row. New `mergeSerpFeatures()` unions the token sets (case-insensitive de-dupe, original casing, capped 500). Because the panel posts in 500-row chunks, the existing-row `SELECT` now also pulls `serp_features` so a keyword whose duplicates span chunks unions onto what an earlier chunk already stored (never clobbers it). Real data only (Const I.1) — we only preserve features present in the upload, never invent one.
+- **`components/brief/KeywordsPanel.tsx`** — **honest-gap notice on the Local Intent card (Const I.5).** New `localDataPresent` check (snapshot `Fl` roll-up, any stored "SERP Features" cell, or a live SerpAPI scan). When none is present, the card sub-line reads **"⚠ No SERP-features in upload — re-upload to populate"** instead of a silent near-zero that looks like a bug. When data is present it shows the usual "N client + M gap" breakout.
+
+**Verification (Art. V).** `tsc` clean under the project tsconfig (components) and the batch route transforms clean; `mergeSerpFeatures` unit-tested (preserves a Local pack that last-wins would drop; case-insensitive de-dupe; null handling); replayed the **real chunked upload** on the TD file — union preserves all **82** distinct local keywords (last-wins also 82 here, i.e. no regression) and the unit test proves union recovers the drop case; dual-theme render `orbitiq-v7.288-RENDER.html` (Local Intent card in both data-present and honest-gap states, both themes — no new colors, parity holds); retained regression suite **193 checks, all PASS** (8 new `localfix:` invariants).
+
+## v7.287 — 2026-06-24 · New "Local Intent" summary card in the Keyword panel (client vs gap) + moved the SERP-feature scan into the SERP Features panel (prominent CTA + last-scan)
+
+> This release ships two changes together (Wayne's call): the **Local Intent summary card** (below) and the **SERP-feature scan move** (the "Plus" section after it).
 
 **The ask (Wayne).** In the Keyword Landscape Summary, add a new card after **Non-branded** called **Local Intent Keywords** — any keyword that triggers a local map pack. Under the total, break out how many come from the **client footprint** vs the **competitor gap**. The signal is in the **SERP Features** column of the Semrush CSV uploads. Clicking the card segments the product categories below accordingly.
 
@@ -13,7 +27,20 @@
 
 **Data integrity (Const I.1 / I.5).** The local flag is real Semrush SERP-feature data only; the client-vs-gap breakout is counted on the same basis as All Keywords (client footprint + competitor gap). Rows without the column aren't invented as "no" — they're simply not local.
 
-**Verification (Art. V).** Isolated `tsc` under the project tsconfig (no `target` override, V.1a) clean across the real import graph (verified it catches injected errors); dual-theme render `orbitiq-v7.287-RENDER.html` (5 cards both themes) + WCAG contrast check on the new cyan accent — dark ≈9–10:1, light ≈4.4–4.8:1 (Const IV.6 parity); retained regression suite re-run **175 checks, all PASS** (8 new `localcard:` invariants added — detection, card present, click-segments-by-isLocalIntent, client/gap breakout, 5-col grid, real-signal OR, dual-theme tokens).
+**Verification (Art. V).** Isolated `tsc` under the project tsconfig (no `target` override, V.1a) clean across the real import graph (verified it catches injected errors); dual-theme render (5 cards both themes) + WCAG contrast check on the new cyan accent — dark ≈9–10:1, light ≈4.4–4.8:1 (Const IV.6 parity); retained regression suite re-run with the `localcard:` invariants (8 added — detection, card present, click-segments-by-isLocalIntent, client/gap breakout, 5-col grid, real-signal OR, dual-theme tokens). *(All `localcard:` checks still PASS in the final combined 185-check run below.)*
+
+---
+
+**Plus — SERP-feature scan moved out of the Keyword panel into the SERP Features panel (Wayne).**
+
+**The ask.** The small "SERP FEATURES · X of N keywords scanned · Scan all …" strip lived at the top of the **Keyword** panel. Move that scan into the **SERP Features** panel, make it a **larger, noticeable CTA in the top-right corner**, and label **when the data was last scanned — or that it has never been scanned.**
+
+**What changed.**
+- **`components/brief/SerpFeaturesSection.tsx`** — the panel header (top-right) now carries a **last-scan freshness line** ("Last scanned Jun 23, 2026", or amber **"Never scanned"** when there is no scan yet — Const IV.5) and a **prominent filled CTA**: "⚡ Scan all N remaining · ~N credits". It triggers the same page-level auto-batch scan loop (`onStartSerpScan`) and mirrors its live progress ("Scanning… X of Y"). At full coverage it shows a green **"✓ Full SERP coverage"** state. Coverage (scanned / total / remaining) is computed over the real footprint — the uploaded canonical keyword pool ∪ the already-scanned set, deduped; nothing modeled (Const I.1). Three new optional props (`onStartSerpScan`, `serpScanRunning`, `serpScanProgress`).
+- **`app/projects/[id]/page.tsx`** — passes the existing background-scan controls (`requestSerpScan` + running/progress) into `SerpFeaturesSection`, the same wiring the Keyword panel used.
+- **`components/brief/KeywordsPanel.tsx`** — removed the old SERP-feature coverage/scan strip. The scan results still merge into this panel's table via `mergedScanned`, so the AIO / PAA / Video columns are unchanged — only the scan **trigger** moved, so the action now lives where the data lives (Const IV.4).
+
+**Verification (Art. V).** Isolated `tsc` under the project tsconfig (no `target` override, V.1a) clean on the changed components and on the full `page.tsx` import graph (only the sandbox's `next/*` module stubs differ — no prop-type errors). jsdom SSR render harness asserts every CTA state: **Never scanned**, **Last scanned**, the active **"Scan all 1,011 remaining · ~1,011 credits"** (real coverage math, 1,014 footprint − 3 scanned), the **running** progress, and **✓ Full SERP coverage** — all theme-token-only (no hex literals), legible in both themes (Const IV.6 / V.5). Dual-theme `orbitiq-v7.287-RENDER.html` renders the SERP Features header in light + dark. Retained regression suite re-run **185 checks, all PASS** (10 new `serpscan:` invariants — props, coverage math, CTA text + credits, last-scan/Never-scanned label, full-coverage state, old strip removed from the Keyword panel, `mergedScanned` retained, page wiring).
 
 ## v7.286 — 2026-06-24 · Identify which categories trigger a Google local map pack (real Semrush SERP data) + gate the Local picker to them
 

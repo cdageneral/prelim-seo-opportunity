@@ -65,6 +65,31 @@ async function ensureTable() {
   }
 }
 
+// v7.288: union two Semrush "SERP Features by Keyword" cells. A Semrush organic export
+// lists the SAME keyword once per ranking URL/snapshot, and the SERP-feature list can
+// differ between those rows — so the old last-occurrence-wins de-dupe could silently DROP
+// a real feature (Local Pack / AI Overview / PAA / Video) that only appeared on an earlier
+// row. Merging the token sets keeps every feature Semrush ever reported for the keyword
+// (real data only, Const I.1 — we never invent a feature, only preserve ones present in
+// the upload). Case-insensitive token de-dupe, original casing kept, capped at 500 chars.
+function mergeSerpFeatures(a: string | null, b: string | null): string | null {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const cell of [a, b]) {
+    if (!cell) continue;
+    for (const raw of cell.split(',')) {
+      const tok = raw.trim();
+      if (!tok) continue;
+      const key = tok.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(tok);
+    }
+  }
+  if (out.length === 0) return null;
+  return out.join(', ').slice(0, 500);
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } },
@@ -130,17 +155,21 @@ export async function POST(
     ? or(...clientDomainConds)
     : eq(projectKeywords.domain, domainNorm);
 
+  // v7.288: pull each existing row's serp_features too, so a re-upload that arrives in
+  // CHUNKS (the panel posts 500 rows at a time, and a keyword's duplicate rows can span
+  // chunks) unions onto what an earlier chunk already stored — never clobbering it.
   const existing = await db
-    .select({ keyword: projectKeywords.keyword })
+    .select({ keyword: projectKeywords.keyword, serpFeatures: projectKeywords.serpFeatures })
     .from(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, projectId),
       eq(projectKeywords.source, source),
       domainCond,
     ));
-  const existingSet = new Set(existing.map((r: any) => r.keyword));
+  const existingSet  = new Set(existing.map((r: any) => r.keyword));
+  const existingFeat = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.serpFeatures ?? null]));
 
-  // Build valid rows (dedupe within the payload itself, keep last occurrence)
+  // Build valid rows (dedupe within the payload itself; UNION serp-features across duplicates)
   const byKw = new Map<string, any>();
   for (const k of keywords) {
     const kw = (k?.keyword ?? '').trim().toLowerCase();
@@ -148,9 +177,14 @@ export async function POST(
     const vol = Number(k.searchVolume) || 0;
     const pos = k.position != null && !isNaN(Number(k.position)) ? Number(k.position) : null;
     // v7.103: keep the raw Semrush feature list; trim + cap length defensively.
-    const feats = typeof k.serpFeatures === 'string' && k.serpFeatures.trim().length > 0
+    const rowFeats = typeof k.serpFeatures === 'string' && k.serpFeatures.trim().length > 0
       ? k.serpFeatures.trim().slice(0, 500)
       : null;
+    // v7.288: union with what we already have for this keyword — the prior occurrence in
+    // THIS payload, or (first time seen here) whatever a previous chunk stored in the DB —
+    // so no real SERP feature is lost to last-occurrence-wins.
+    const priorFeats = byKw.has(kw) ? (byKw.get(kw).serpFeatures as string | null) : (existingFeat.get(kw) ?? null);
+    const feats = mergeSerpFeatures(priorFeats, rowFeats);
     // v7.251: real ranking/landing URL from the CSV row (Semrush "URL" column).
     const kurl = typeof k.url === 'string' && k.url.trim().length > 0
       ? k.url.trim().slice(0, 500)
