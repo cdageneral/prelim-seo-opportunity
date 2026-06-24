@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.279 — 2026-06-24 · Executive Summary — "Overall Visibility Score" relabel + AI/Coverage cards sourced from their panels
+
+**The ask (Wayne).** On the Executive Summary: (1) rename the lead KPI from **"GEO Visibility Score"** to **"Overall Visibility Score"**; (2) make the **AI Visibility** summary card pull from the **LLM Visibility** panel; (3) make the **Coverage Gap** card pull from the **Content Map**; (4) keep **Journey** sourced from the Journey panel.
+
+**Decisions (Wayne, AskUserQuestion).** AI Visibility = the **combined unbranded + branded mention rate** (the LLM panel's "Brand mention share"); the **Overall Visibility Score's AI pillar uses that same number** so the card and the score agree; Coverage Gap shows **both — net-new topics (headline) + annual volume (subtext)**; Journey stays **"stages with organic coverage (X of 4)."**
+
+**What changed (`components/brief/ExecutiveSummarySection.tsx` + `app/projects/[id]/page.tsx`).**
+- **Relabel** — the lead KPI now reads **"Overall Visibility Score"** (the equal-weighted ⅓ formula is unchanged; only the label moved).
+- **AI Visibility now mirrors the LLM Visibility panel.** New `llmMentionPct` reproduces that panel's *Brand mention share* **verbatim** — acquired ÷ available across **all** probe responses (unbranded + branded, both platforms: `llmSnap.results.filter(r => r.mentioned).length / llmSnap.results.length`); v1 probes fall back to their all-prompt rate. `aiVisPct` now reads this LLM figure first (AI Overviews remain a fallback **only** when no LLM probe was run — honest gap, never fabricated). Because the **score's AI pillar and the landscape line already read `aiVisPct`**, the card, the pillar, and the headline now show one consistent number.
+- **Coverage Gap now reads the Content Map (05).** The exec builds the **same** canonical content-map plan the Content Map renders — `buildCanonicalClusterTopics(...)` → `buildContentPlanFromTopics(...)` — with the same inputs (raw snapshot domain, competitor list, uploaded keywords, and the page-lifted `claudeAssigns` now threaded into the exec). The card shows `scope.build` **net-new topics** (headline) + `fmtAnnual(scope.buildVol)` **annual search volume** (subtext); it reconciles to that panel's *build net-new* set by construction (II.6/II.7).
+- **Journey** card unchanged — still the `buildClusters()` stages-with-coverage count.
+
+**No data change (Const I.1).** Every figure is a direct count/sum of real probe results and the canonical keyword pool — nothing modeled, simulated, or hard-coded. The change re-sources and relabels existing real metrics.
+
+**Theme parity (Const IV.6 / V.5).** No new color tokens or hex were introduced — the cards reuse the existing `--c-22c55e / --c-ef4444 / --c-f59e0b / --c-06b6d4` tokens already validated in both themes. The dual-theme client render asserts zero raw hex in the rendered inline styles.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` under the project-mirrored `tsconfig` (extends `./tsconfig.json`, **no `target` override**) — PASS. Full **retained regression suite re-run: 150/150 PASS** (129 prior + 21 new `exec279:` / `gap279:` / `aivis279:` / `render279:` invariants). The new checks lock: the relabel, the AI card sourcing from `llmSnap.results` and `aiVisPct` preferring it, the coverage card reading `scope.build`/`buildVol` from the canonical content-map plan (build+existing==total, no double count), the exec combined-rate == the LLM panel's brand-mention-share formula, and a **jsdom client render (mocked fetch)** that drives the data-gated cards and confirms "Overall Visibility Score", AI 25% (3 of 12), the Coverage-gap topics+volume card, and no raw hex. Dual-theme render at `orbitiq-v7.279-RENDER.html` (dark + light side by side).
+
 ## v7.278 — 2026-06-23 · LLM Visibility — "Sentiment of mentions" card redesigned into three labeled bar rows with tone icons
 
 **The ask (Wayne).** Change the sentiment summary card to **three rows, each with a horizontal bar graph** — one for positive, one for neutral, one for negative — and add a **thumbs-up** icon for positive, a **thumbs-down** for negative, and a neutral icon for neutral.

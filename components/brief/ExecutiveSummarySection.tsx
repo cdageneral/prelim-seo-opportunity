@@ -4,6 +4,11 @@ import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
 import { SovPanel, computeSov, ctrAt } from '@/components/brief/GoogleSerpSection';
 import { buildClusters } from '@/components/brief/JourneySection';
+// v7.279: Coverage-gap card reads the SAME canonical content-map build the Content
+// Map panel (05) renders — buildCanonicalClusterTopics → buildContentPlanFromTopics
+// — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
+import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
+import { buildContentPlanFromTopics, planFromSnapshot } from '@/lib/journey/contentPlan';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,10 @@ interface Props {
   manualDomains?:          string[];
   defaultClientThreshold?:     number;
   defaultCompetitorThreshold?: number;
+  // v7.279: the page-lifted Claude intent map — threaded so the exec coverage-gap
+  // card builds canonical content-map topics with the SAME map the Content Map
+  // panel uses (the builder under-counts when fed {}; II.7).
+  claudeAssigns?:          Record<string, IntentType>;
 }
 
 // ─── Helpers (mirrors GoogleSerpSection exactly) ──────────────────────────────
@@ -121,6 +130,7 @@ export default function ExecutiveSummarySection({
   manualDomains = [],
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
+  claudeAssigns = {},
 }: Props) {
 
   // ── DB keyword fetch (mirrors GoogleSerpSection exactly) ──────────────────
@@ -316,6 +326,26 @@ export default function ExecutiveSummarySection({
 
   const overallLlmRate = overallTotal > 0 ? Math.round((overallMentions / overallTotal) * 100) : 0;
 
+  // ── v7.279: combined brand-mention rate — mirrors the LLM Visibility panel's
+  // "Brand mention share" exactly (LLMVisibilitySection ProbeViewV2): acquired ÷
+  // available across ALL probe responses (unbranded + branded, both platforms).
+  // This is the figure Wayne chose for the exec "AI visibility" card, so the card
+  // and that panel reconcile (II.6/II.7). v1 probes have no branded/unbranded
+  // split, so the all-prompt mention rate is the combined figure there.
+  let llmMentionAcquired = 0;
+  let llmMentionTotal    = 0;
+  if (isLlmProbeV2) {
+    const v2All: any[] = llmSnap.results ?? [];
+    llmMentionTotal    = v2All.length;
+    llmMentionAcquired = v2All.filter((r: any) => r.mentioned).length;
+  } else if (isLlmProbeV1) {
+    llmMentionTotal    = overallTotal;
+    llmMentionAcquired = overallMentions;
+  }
+  const llmMentionPct: number | null = llmMentionTotal > 0
+    ? Math.round((llmMentionAcquired / llmMentionTotal) * 100)
+    : null;
+
   // ── Content inventory ─────────────────────────────────────────────────────
   // v7.128 — Gap stats now derive from the canonical kwPool (buildKwPool), so
   // the gap COUNT and VOLUME match Keyword Landscape (02) and Content Map (05)
@@ -333,6 +363,23 @@ export default function ExecutiveSummarySection({
   const categories: any[]   = cb.categories ?? [];
   const clusterCount        = categories.filter((c: any) => c.type === 'procedure').length;
   const contentGapsFromDb   = (analysis.contentGaps ?? []) as string[];
+
+  // ── v7.279: Coverage-gap card — net-new topics + volume FROM the Content Map ─
+  // Reproduces ContentMapSection's plan build verbatim: the SAME canonical topic
+  // builder + plan builder, with the SAME inputs — raw snapshot domain (the
+  // Content Map uses `analysis.semrushSnapshot.domain`, NOT the normalized
+  // propClientDomain), the same competitor list, the same uploaded keywords
+  // (both panels read /api/projects/{id}/keywords → d.keywords), and the
+  // page-lifted claudeAssigns. `summary.build` / `buildVol` is exactly the panel's
+  // "build net-new" set (footprint-derived, page-pull-independent), so the card
+  // reconciles to Content Map (05) by construction (II.6/II.7). No modeling (I.1).
+  const cmClientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
+  const contentPlan = useMemo(() => {
+    const topics = buildCanonicalClusterTopics(analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns);
+    return topics.length > 0 ? buildContentPlanFromTopics(topics) : planFromSnapshot(analysis, dbKeywords);
+  }, [analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns]);
+  const netNewTopics = contentPlan?.scope.build ?? 0;      // count of net-new (build) topics
+  const netNewVol    = contentPlan?.scope.buildVol ?? 0;   // their monthly search volume
 
   // ── Opportunities ─────────────────────────────────────────────────────────
   const opps: Opportunity[] = (analysis.opportunities ?? [])
@@ -373,15 +420,21 @@ export default function ExecutiveSummarySection({
     SEO: 'var(--c-8b85ff)', GEO: 'var(--c-06b6d4)', Content: 'var(--c-8b85ff)', Technical: 'var(--c-f59e0b)', Competitive: 'var(--c-ef4444)',
   };
 
-  // ── AI visibility — single defendable figure (v7.130) ──────────────────────
+  // ── AI visibility — single defendable figure ───────────────────────────────
+  // v7.279 (Wayne): the AI-visibility card + the Overall Visibility Score's AI
+  // pillar now read the LLM Visibility panel's combined brand-mention rate
+  // (`llmMentionPct`) as the primary figure, so card, panel, and score agree.
+  // AI Overviews remain a fallback ONLY when no LLM probe was run (honest gap,
+  // I.5) — never fabricated. Both the score pillar and the landscape line read
+  // this single `aiVisPct`, so they stay consistent by construction.
   const aiVisPct: number | null =
-    aioAvail > 0 ? aioRate
-    : overallTotal > 0 ? overallLlmRate
+    llmMentionPct !== null ? llmMentionPct
+    : aioAvail > 0 ? aioRate
     : null;
   const aiVisDenom =
-    aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
-    : overallTotal > 0 ? `of ${overallTotal} AI probes citing you`
-    : 'run an AIO scan to measure';
+    llmMentionPct !== null ? `of ${llmMentionTotal} AI responses citing you`
+    : aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
+    : 'run an AI probe to measure';
   const aiVisColor = aiVisPct === null ? 'var(--c-555570)' : aiVisPct < 20 ? 'var(--c-ef4444)' : aiVisPct < 50 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
 
   const STATUS_STYLE: Record<'present' | 'thin' | 'absent', { bg: string; fg: string; label: string }> = {
@@ -390,7 +443,7 @@ export default function ExecutiveSummarySection({
     absent:  { bg: 'var(--c-2a2a3a)', fg: 'var(--c-8888aa)', label: 'absent' },
   };
 
-  // ── v7.131: GEO Visibility Score (equal-weighted; formula shown on screen) ──
+  // ── v7.131: Overall Visibility Score (equal-weighted; formula shown on screen) ──
   const scoreDims = [
     { label: 'Traditional', val: page1Pct, color: 'var(--c-22c55e)' },
     ...(aiVisPct !== null ? [{ label: 'AI visibility', val: aiVisPct, color: 'var(--c-ef4444)' }] : []),
@@ -458,11 +511,12 @@ export default function ExecutiveSummarySection({
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
-      {/* ═══ v7.131 — GEO VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
+      {/* ═══ v7.131 — OVERALL VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
+      {/* v7.279: renamed from "GEO Visibility Score" to "Overall Visibility Score" (Wayne). */}
       <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 14, alignItems: 'center' }}>
           <div style={{ textAlign: 'center', paddingRight: 14, borderRight: '1px solid var(--c-1e1e2e)' }}>
-            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>GEO Visibility Score</p>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>Overall Visibility Score</p>
             <p style={{ margin: '4px 0 0', fontSize: 40, fontWeight: 800, lineHeight: 1, color: geoScoreColor }}>
               {geoScore}<span style={{ fontSize: 16, color: 'var(--c-555570)' }}>/100</span>
             </p>
@@ -525,8 +579,9 @@ export default function ExecutiveSummarySection({
               big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
               sub: aiVisDenom },
             { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage gap',
-              big: gapVolume > 0 ? fmtAnnual(gapVolume) : '—', bigSuffix: '', bigColor: 'var(--c-f59e0b)',
-              sub: `${gapKwCount} non-branded voids / yr` },
+              // v7.279: net-new topics + their search volume, both from the Content Map (05) build.
+              big: dbLoaded ? `${netNewTopics}` : '—', bigSuffix: dbLoaded ? (netNewTopics === 1 ? ' topic' : ' topics') : '', bigColor: 'var(--c-f59e0b)',
+              sub: netNewVol > 0 ? `${fmtAnnual(netNewVol)} annual search volume to capture` : 'no net-new topics to build' },
             { key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey',
               big: `${journeyStagesCovered}`, bigSuffix: ' of 4', bigColor: 'var(--c-f0f0ff)',
               sub: 'stages with organic coverage' },

@@ -1400,6 +1400,7 @@ export default function ProjectBriefPage() {
               manualDomains={competitorDomains}
               defaultClientThreshold={project.kwVolThresholdClient ?? 0}
               defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
+              claudeAssigns={pageClaudeAssigns}
             />
           )}
 
