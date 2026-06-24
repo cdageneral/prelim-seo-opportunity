@@ -62,7 +62,74 @@ export interface BuildSeedsOptions {
   brand:       string;          // brand display (clientName) e.g. "Sono Bello"
   clientDomain?: string;
   pool?:       SeedPoolItem[];
-  maxSeeds?:   number;          // cap (incl. brand). default 8
+  maxSeeds?:   number;          // cap (incl. brand). default 10 (v7.284; was 8)
+}
+
+/** Default cap for the local services grid (brand + services). v7.284: 8 → 10. */
+export const DEFAULT_SERVICE_CAP = 10;
+
+/** Build the client brand-token map (≥3-char display words + the ≥4-char domain root). */
+function buildBrandTokenMap(brand: string, clientDomain?: string): Record<string, boolean> {
+  const brandDisplay = clean(brand);
+  const root = brandRoot(clientDomain || '');
+  const brandTokens: Record<string, boolean> = {};
+  brandDisplay.split(' ').forEach(w => { if (w.length >= 3) brandTokens[w] = true; });
+  if (root.length >= 4) brandTokens[root] = true;
+  return brandTokens;
+}
+
+/**
+ * Resolve ONE service name to a {term, volume} seed, or null if the name is pure
+ * noise/brand (no distinctive ≥4-char service word). Shared by the catalog and the
+ * explicit-term builders so a curated term gets its volume EXACTLY as the auto list
+ * would — real Semrush volume of the distinctive token (Const I.1), never modeled.
+ */
+function resolveServiceSeed(
+  rawName: string,
+  brandTokens: Record<string, boolean>,
+  clientPool: SeedPoolItem[],
+): ServiceSeed | null {
+  const name = clean(rawName || '');
+  if (!name) return null;
+  const words = name.split(' ').filter(w => w.length >= 4 && SEED_NOISE[w] !== true && brandTokens[w] !== true);
+  if (words.length === 0) return null;                  // pure noise/brand → skip
+  // distinctive token = the longest non-noise word (for volume lookup)
+  let tok = words[0];
+  for (let i = 1; i < words.length; i++) if (words[i].length > tok.length) tok = words[i];
+  return { term: name, kind: 'service', volume: volumeFor(tok, clientPool) };
+}
+
+export interface BuildCatalogOptions {
+  categories?: Array<{ name?: string; type?: string }>;
+  brand:       string;
+  clientDomain?: string;
+  pool?:       SeedPoolItem[];
+}
+
+/**
+ * The FULL (un-capped) ordered catalog of candidate service seeds — every client
+ * service category that isn't pure noise/brand, deduped, sorted highest real
+ * volume → lowest. The brand seed is NOT included (services only); this is the
+ * pick-list the Local panel's "+ Add service" picker reads, and the source the
+ * default top-N auto selection is taken from. The caller is responsible for
+ * applying the competitor-brand guard to `categories` before passing them in
+ * (Const III.1a — the guard lives at the read site, not here).
+ */
+export function buildServiceCatalog(opts: BuildCatalogOptions): ServiceSeed[] {
+  const pool = opts.pool ?? [];
+  const clientPool = pool.filter(k => !k.competitor && !k.isGap);
+  const brandTokens = buildBrandTokenMap(opts.brand, opts.clientDomain);
+
+  const services: ServiceSeed[] = [];
+  const seen: Record<string, boolean> = {};
+  (opts.categories ?? []).forEach(c => {
+    const seed = resolveServiceSeed((c && c.name) || '', brandTokens, clientPool);
+    if (!seed || seen[seed.term]) return;
+    seen[seed.term] = true;
+    services.push(seed);
+  });
+  services.sort((a, b) => b.volume - a.volume);
+  return services;
 }
 
 /**
@@ -70,20 +137,57 @@ export interface BuildSeedsOptions {
  * categories (deduped, noise/brand stripped), capped to `maxSeeds`.
  */
 export function buildServiceSeeds(opts: BuildSeedsOptions): ServiceSeed[] {
-  const maxSeeds = Math.max(1, opts.maxSeeds ?? 8);
+  const maxSeeds = Math.max(1, opts.maxSeeds ?? DEFAULT_SERVICE_CAP);
   const pool = opts.pool ?? [];
   const clientPool = pool.filter(k => !k.competitor && !k.isGap);
-
+  const brandTokens = buildBrandTokenMap(opts.brand, opts.clientDomain);
   const brandDisplay = clean(opts.brand);
-  const root = brandRoot(opts.clientDomain || '');
-  const brandTokens: Record<string, boolean> = {};
-  brandDisplay.split(' ').forEach(w => { if (w.length >= 3) brandTokens[w] = true; });
-  if (root.length >= 4) brandTokens[root] = true;
+
+  const seeds: ServiceSeed[] = [];
+
+  // 1) brand seed
+  if (brandDisplay) {
+    let bv = 0;
+    Object.keys(brandTokens).forEach(t => { const v = volumeFor(t, clientPool); if (v > bv) bv = v; });
+    seeds.push({ term: brandDisplay, kind: 'brand', volume: bv });
+  }
+
+  // 2) service seeds from the catalog (skip the brand name if it appears there)
+  const catalog = buildServiceCatalog(opts);
+  for (let i = 0; i < catalog.length && seeds.length < maxSeeds; i++) {
+    if (catalog[i].term === brandDisplay) continue;
+    seeds.push(catalog[i]);
+  }
+  return seeds.slice(0, maxSeeds);
+}
+
+export interface BuildFromTermsOptions {
+  serviceTerms: string[];       // curated, ordered service terms (services only — brand is added here)
+  brand:       string;
+  clientDomain?: string;
+  pool?:       SeedPoolItem[];
+  maxSeeds?:   number;          // cap incl. brand. default 10
+}
+
+/**
+ * Build seeds from an EXPLICIT curated service-term list (Wayne's deleted/added
+ * picks on the Local panel), brand pinned first. Each term's volume is resolved
+ * from the real pool exactly as the auto catalog does — same data, so the
+ * displayed list and the scanned list reconcile (Const II.7). Order is preserved
+ * (the user's order), then capped to `maxSeeds`. Pure-noise/brand terms are
+ * dropped. The caller guards the source categories upstream (Const III.1a).
+ */
+export function buildSeedsFromServiceTerms(opts: BuildFromTermsOptions): ServiceSeed[] {
+  const maxSeeds = Math.max(1, opts.maxSeeds ?? DEFAULT_SERVICE_CAP);
+  const pool = opts.pool ?? [];
+  const clientPool = pool.filter(k => !k.competitor && !k.isGap);
+  const brandTokens = buildBrandTokenMap(opts.brand, opts.clientDomain);
+  const brandDisplay = clean(opts.brand);
 
   const seeds: ServiceSeed[] = [];
   const seen: Record<string, boolean> = {};
 
-  // 1) brand seed
+  // brand pinned first
   if (brandDisplay) {
     let bv = 0;
     Object.keys(brandTokens).forEach(t => { const v = volumeFor(t, clientPool); if (v > bv) bv = v; });
@@ -91,22 +195,13 @@ export function buildServiceSeeds(opts: BuildSeedsOptions): ServiceSeed[] {
     seen[brandDisplay] = true;
   }
 
-  // 2) service seeds from categories (skip brand-ish + noise-only names)
-  const services: ServiceSeed[] = [];
-  (opts.categories ?? []).forEach(c => {
-    const name = clean((c && c.name) || '');
-    if (!name || seen[name]) return;
-    const words = name.split(' ').filter(w => w.length >= 4 && SEED_NOISE[w] !== true && brandTokens[w] !== true);
-    if (words.length === 0) return;                       // pure noise/brand → skip
-    // distinctive token = the longest non-noise word (for volume lookup)
-    let tok = words[0];
-    for (let i = 1; i < words.length; i++) if (words[i].length > tok.length) tok = words[i];
-    seen[name] = true;
-    services.push({ term: name, kind: 'service', volume: volumeFor(tok, clientPool) });
+  (opts.serviceTerms ?? []).forEach(raw => {
+    if (seeds.length >= maxSeeds) return;
+    const seed = resolveServiceSeed(raw, brandTokens, clientPool);
+    if (!seed || seen[seed.term]) return;
+    seen[seed.term] = true;
+    seeds.push(seed);
   });
-  services.sort((a, b) => b.volume - a.volume);
-
-  for (let i = 0; i < services.length && seeds.length < maxSeeds; i++) seeds.push(services[i]);
   return seeds.slice(0, maxSeeds);
 }
 

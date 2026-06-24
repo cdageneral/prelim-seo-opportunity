@@ -20,7 +20,8 @@
  * COST (SerpAPI search credits): 1 discovery + (scannedKeywords × locationsUsed).
  * dryRun:true returns the plan + estimated credits without spending any.
  *
- * Body: { maxSeeds?: number (def 8, cap 20), maxLocations?: number (def 25, cap 200), dryRun?: boolean }
+ * Body: { maxSeeds?: number (def 10, cap 10), maxLocations?: number (def 25, cap 200),
+ *         services?: string[] (v7.284 curated service terms — brand added server-side), dryRun?: boolean }
  *        v7.183: scan = service seeds × locations grid ("{service} {city}" map-pack per location).
  */
 
@@ -31,20 +32,20 @@ import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
-import { buildKwPool } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
   pickLocationSitemap, type KmlLocation,
 } from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
-import { buildServiceSeeds, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
+import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
 import { cityMarketRank } from '@/lib/local/detect';
 
 export const maxDuration = 300;
 
 // v7.183 location-grid model: scan = service seeds × locations.
-const DEFAULT_MAX_SEEDS = 8;
-const MAX_MAX_SEEDS     = 20;
+const DEFAULT_MAX_SEEDS = 10;     // v7.284: 8 → 10 (brand + up to 9 services)
+const MAX_MAX_SEEDS     = 10;     // v7.284: hard cap of 10 primary services per Wayne
 const DEFAULT_MAX_LOC   = 25;     // Wayne sets this per run; default covers the top metros
 const MAX_MAX_LOC       = 200;    // enough for every location of a large brand
 const CONCURRENCY       = 5;
@@ -188,6 +189,13 @@ export async function POST(
   const locationOrder: LocationOrder = (['market', 'demand', 'az'].indexOf(body?.locationOrder) >= 0)
     ? body.locationOrder : 'market';
   const dryRun = body?.dryRun === true;
+  // v7.284 — explicit curated service terms from the Local panel (services only;
+  // brand is added server-side). When present, these EXACT terms are scanned in
+  // this order (cap-respecting) instead of the auto top-N. Already brand-guarded
+  // client-side; the fallback path below re-applies the guard (Const III.1a).
+  const curatedServices: string[] = Array.isArray(body?.services)
+    ? body.services.map((s: any) => String(s ?? '').trim()).filter(Boolean)
+    : [];
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -283,14 +291,38 @@ export async function POST(
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
 
         // ── 2. Service seeds (the grid's columns) ──────────────────────────────
-        // Brand + top service categories, with real volumes from the client pool.
-        const seeds: ScanSeed[] = buildServiceSeeds({
-          categories: (analysis.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
-          brand:        brandQuery,
-          clientDomain,
-          pool:         pool as any,
-          maxSeeds,
-        });
+        // Brand + service categories, with real volumes from the client pool.
+        // v7.284: prefer Wayne's curated service list (exact terms, his order);
+        // otherwise fall back to the auto top-N. Either way the source categories
+        // are run through the competitor-brand guard at this read site (III.1a).
+        const snap = analysis.semrushSnapshot as any;
+        const brandTermsList: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
+        const compTokens = buildCompetitorBrandTokens(snap, clientDomain, manualCompetitorDomains);
+        const exclTokens = buildExcludedBrandTokens(snap);
+        const isOwnBrand = (name: string) => isBrandedKeyword(name, clientDomain, [], brandTermsList);
+        const guardedCategories = ((snap?._categoryBreakdown?.categories ?? []) as Array<{ name?: string; type?: string }>)
+          .filter(c => {
+            const name = String(c?.name ?? '');
+            if (!name) return false;
+            if (c?.type === 'brand' && !isOwnBrand(name)) return false;
+            if ((textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens)) && !isOwnBrand(name)) return false;
+            return true;
+          });
+        const seeds: ScanSeed[] = curatedServices.length > 0
+          ? buildSeedsFromServiceTerms({
+              serviceTerms: curatedServices,
+              brand:        brandQuery,
+              clientDomain,
+              pool:         pool as any,
+              maxSeeds,
+            })
+          : buildServiceSeeds({
+              categories:   guardedCategories,
+              brand:        brandQuery,
+              clientDomain,
+              pool:         pool as any,
+              maxSeeds,
+            });
 
         // Locations to scan: those with coordinates, ORDERED (largest market /
         // highest demand / A–Z) so a capped run covers the most valuable cities

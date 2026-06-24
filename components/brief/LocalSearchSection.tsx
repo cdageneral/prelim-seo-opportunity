@@ -18,8 +18,8 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { buildKwPool } from '@/lib/utils/kwVolume';
-import { buildServiceSeeds, type ServiceSeed } from '@/lib/local/seeds';
+import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
   buildLocalOpportunities, buildLocalIndex,
@@ -45,6 +45,29 @@ function readLocalScan(a: any): LocalScan | null {
   if (fromSnap) return fromSnap;
   if (typeof window === 'undefined' || !a?.id) return null;
   try { const c = window.localStorage.getItem(cacheKey(a)); return c ? JSON.parse(c) : null; } catch { return null; }
+}
+
+// v7.284 — curated primary-service list. Wayne can delete a service and add one
+// from the client's own service-category catalog. The picks PERSIST per project
+// (localStorage) and are the set the next scan uses. `null` = follow the auto
+// top-N (no manual edits yet); once edited we store an explicit ordered list of
+// service terms (brand excluded — it is pinned). Real volumes only (Const I.1).
+const servicesKey = (projectId: string): string => `orbitiq-local-services-${projectId}`;
+function readCuratedServices(projectId: string): string[] | null {
+  if (typeof window === 'undefined' || !projectId) return null;
+  try {
+    const c = window.localStorage.getItem(servicesKey(projectId));
+    if (!c) return null;
+    const v = JSON.parse(c);
+    return Array.isArray(v?.services) ? v.services.map((s: any) => String(s)) : null;
+  } catch { return null; }
+}
+function writeCuratedServices(projectId: string, services: string[] | null): void {
+  if (typeof window === 'undefined' || !projectId) return;
+  try {
+    if (services == null) window.localStorage.removeItem(servicesKey(projectId));
+    else window.localStorage.setItem(servicesKey(projectId), JSON.stringify({ services }));
+  } catch { /* ignore quota / disabled storage */ }
 }
 
 function fmtEta(sec: number): string {
@@ -89,8 +112,11 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [plan, setPlan]             = useState<{ seeds: number; seedList?: string[]; cells: number; willScan: number; locations: number; locationsScannable: number; locationsUsed: number; potentialCells: number; estCalls: number; source?: string; model?: string; order?: string; firstCities?: string[] } | null>(null);
   // per-run scan setup (Wayne sets these each scan)
   const [capLoc, setCapLoc]         = useState<number>(25);
-  const [capSeeds, setCapSeeds]     = useState<number>(8);
+  const [capSeeds, setCapSeeds]     = useState<number>(DEFAULT_SERVICE_CAP);
   const [locOrder, setLocOrder]     = useState<'market' | 'demand' | 'az'>('market');
+  // v7.284 — curated primary-service terms (services only; brand pinned). null = follow auto.
+  const [curated, setCurated]       = useState<string[] | null>(() => readCuratedServices(projectId));
+  const [addPick, setAddPick]       = useState<string>('');   // current selection in the +Add picker
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -117,20 +143,90 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     }) as any[];
   }, [analysis, dbKeywords, domain, competitorDomains]);
 
-  // v7.183 — service seeds: the client's brand + top service categories, scanned
-  // as "{service} {city}" across every location. Real volumes from the pool.
+  // v7.284 — competitor-brand guard at THIS read site (Const III.1a). The service
+  // catalog reads `_categoryBreakdown.categories`, which still contains competitor
+  // brand categories (synthesis builds them from gap keywords) — so the guard, not
+  // the synthesis output, is the enforcement layer. Drop brand-type categories that
+  // aren't the client's own, and any category whose NAME carries a competitor /
+  // blocklisted brand token; keep the client's own brand. Mirrors ThemeClustersPanel.
+  const guardedCategories = useMemo(() => {
+    const snap = analysis?.semrushSnapshot as any;
+    const cats: Array<{ name?: string; type?: string }> = snap?._categoryBreakdown?.categories ?? [];
+    if (cats.length === 0) return [] as Array<{ name?: string; type?: string }>;
+    const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
+    const compTokens = buildCompetitorBrandTokens(snap, domain, competitorDomains);
+    const exclTokens = buildExcludedBrandTokens(snap);
+    const isClientBrandName = (name: string) => isBrandedKeyword(name, domain, [], brandTerms);
+    return cats.filter(c => {
+      const name = String(c?.name ?? '');
+      if (!name) return false;
+      if ((c?.type === 'brand') && !isClientBrandName(name)) return false;           // foreign brand category
+      const foreignBrand = textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens);
+      if (foreignBrand && !isClientBrandName(name)) return false;                     // name carries a competitor brand
+      return true;
+    });
+  }, [analysis, domain, competitorDomains]);
+
+  // v7.284 — full (un-capped) catalog of candidate services from the GUARDED
+  // categories, sorted highest real Semrush volume → lowest. This feeds both the
+  // default auto selection and the "+ Add service" picker.
+  const catalog = useMemo(
+    () => buildServiceCatalog({ categories: guardedCategories, brand: projectName, clientDomain: domain, pool: pool as any }),
+    [guardedCategories, projectName, domain, pool],
+  );
+
+  // The effective curated SERVICE terms (services only; brand is pinned separately).
+  // null curation → auto default = the top (cap-1) services by volume.
+  const SERVICE_CAP = DEFAULT_SERVICE_CAP;                 // 10 total incl. the brand
+  const maxServices = Math.max(1, SERVICE_CAP - 1);        // 9 services + brand = 10
+  const effectiveServiceTerms = useMemo<string[]>(() => {
+    if (curated != null) return curated.slice(0, maxServices);
+    return catalog.slice(0, maxServices).map(s => s.term);
+  }, [curated, catalog, maxServices]);
+
+  // v7.183/v7.284 — the seeds shown + scanned: brand pinned first, then the curated
+  // services, each with its real pool volume. Same builder the scan uses → the table
+  // and the scan reconcile (Const II.7).
   const seeds: ServiceSeed[] = useMemo(
-    () => buildServiceSeeds({
-      categories: (analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? [],
+    () => buildSeedsFromServiceTerms({
+      serviceTerms: effectiveServiceTerms,
       brand:        projectName,
       clientDomain: domain,
       pool:         pool as any,
-      maxSeeds:     Math.max(1, capSeeds),
+      maxSeeds:     SERVICE_CAP,
     }),
-    [analysis, projectName, domain, pool, capSeeds],
+    [effectiveServiceTerms, projectName, domain, pool, SERVICE_CAP],
   );
   const hasSeeds = seeds.length > 0;
   const seedVolume = useMemo(() => seeds.reduce((s, x) => s + (x.volume || 0), 0), [seeds]);
+
+  // remaining catalog services not already selected (for the +Add picker), vol-sorted
+  const addable = useMemo(() => {
+    const have: Record<string, boolean> = {};
+    seeds.forEach(s => { have[s.term] = true; });
+    return catalog.filter(c => !have[c.term]);
+  }, [catalog, seeds]);
+  const serviceCount = seeds.filter(s => s.kind === 'service').length;
+  const atCap = serviceCount >= maxServices;
+
+  // mutate the curated list (materialise current effective terms on first edit, then persist)
+  const applyCurated = useCallback((next: string[]) => {
+    setCurated(next);
+    writeCuratedServices(projectId, next);
+  }, [projectId]);
+  const removeService = useCallback((term: string) => {
+    applyCurated(effectiveServiceTerms.filter(t => t !== term));
+  }, [applyCurated, effectiveServiceTerms]);
+  const addService = useCallback((term: string) => {
+    const t = String(term || '').trim();
+    if (!t || effectiveServiceTerms.indexOf(t) >= 0 || effectiveServiceTerms.length >= maxServices) return;
+    applyCurated(effectiveServiceTerms.concat([t]));
+    setAddPick('');
+  }, [applyCurated, effectiveServiceTerms, maxServices]);
+  const resetServices = useCallback(() => { setCurated(null); writeCuratedServices(projectId, null); setAddPick(''); }, [projectId]);
+
+  // reload curation when switching projects
+  useEffect(() => { setCurated(readCuratedServices(projectId)); setAddPick(''); }, [projectId]);
 
   // rollups from a completed scan
   const roll = useMemo(() => {
@@ -151,13 +247,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dryRun: true, maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder }),
+        body: JSON.stringify({ dryRun: true, maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder, services: effectiveServiceTerms }),
       });
       const d = await r.json();
       if (!r.ok) { setScanError(d?.error ?? `Could not estimate (${r.status})`); return; }
       setPlan(d.plan ?? null);
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
-  }, [projectId, capLoc, capSeeds, locOrder]);
+  }, [projectId, capLoc, capSeeds, locOrder, effectiveServiceTerms]);
 
   const runScan = useCallback(async () => {
     setPlan(null); setScanError(null); setScanning(true);
@@ -165,7 +261,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder }),
+        body: JSON.stringify({ maxLocations: capLoc, maxSeeds: capSeeds, locationOrder: locOrder, services: effectiveServiceTerms }),
       });
       if (!r.ok || !r.body) {
         let msg = `Scan failed (${r.status})`;
@@ -200,7 +296,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       }
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
     finally { setScanning(false); setProgress(null); }
-  }, [projectId, analysis, capLoc, capSeeds, locOrder]);
+  }, [projectId, analysis, capLoc, capSeeds, locOrder, effectiveServiceTerms]);
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -243,11 +339,11 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-end' }}>
                 <div className="setup-field">
-                  <label>Services <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(brand + service categories)</span></label>
+                  <label>Services <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(brand + service categories · edit in Services tab)</span></label>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <input type="number" min={1} max={20} value={capSeeds}
-                      onChange={e => setCapSeeds(Math.max(1, Math.min(20, parseInt(e.target.value, 10) || 1)))} />
-                    <button className="setup-all" onClick={() => setCapSeeds(Math.max(1, Math.min(20, seeds.length)))}>All ({seeds.length})</button>
+                    <input type="number" min={1} max={SERVICE_CAP} value={capSeeds}
+                      onChange={e => setCapSeeds(Math.max(1, Math.min(SERVICE_CAP, parseInt(e.target.value, 10) || 1)))} />
+                    <button className="setup-all" onClick={() => setCapSeeds(Math.max(1, Math.min(SERVICE_CAP, seeds.length)))}>All ({seeds.length})</button>
                   </div>
                 </div>
                 <div className="setup-field">
@@ -376,8 +472,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             {/* ===== SERVICES (the grid seeds — no scan needed) ===== */}
             {tab === 'kw' && (
               <div className="orbit-card p-5">
-                <div style={{ fontSize: 13, fontWeight: 700 }}>Services tracked per location</div>
-                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + top service categories, derived from the client's own footprint. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Services tracked per location</div>
+                  <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>
+                    {serviceCount} of {maxServices} services{curated != null && <> · <button onClick={resetServices} className="svc-reset">↺ Reset to auto</button></>}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by real Semrush volume. Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="SERVICES" v={String(seeds.length)} />
                   <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="var(--c-46cce0)" />
@@ -386,7 +487,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
-                    <thead><tr><th>Service</th><th>Type</th><th style={{ textAlign: 'right' }}>Base volume / mo</th><th>Scanned as</th></tr></thead>
+                    <thead><tr><th>Service</th><th>Type</th><th style={{ textAlign: 'right' }}>Base volume / mo</th><th>Scanned as</th><th style={{ width: 44 }} aria-label="actions" /></tr></thead>
                     <tbody>
                       {seeds.map((s, i) => (
                         <tr key={i}>
@@ -396,12 +497,27 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                             : <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_14)', color: 'var(--c-5ee68f)', border: '1px solid var(--ca-34-197-94-0_28)' }}>service</span>}</td>
                           <td style={{ textAlign: 'right' }}>{s.volume > 0 ? fmt(s.volume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
                           <td style={{ color: 'var(--c-8888aa)' }}>"{s.term} {`{city}`}"</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {s.kind === 'service'
+                              ? <button className="svc-del" title={`Remove "${s.term}" from the scan`} aria-label={`Remove ${s.term}`} onClick={() => removeService(s.term)}>🗑</button>
+                              : <span title="Brand is always tracked" style={{ color: 'var(--c-555570)', fontSize: 12 }}>📌</span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Adjust the <b>Services</b> and <b>Locations</b> caps at the top, then run a scan to see map-pack rank per city in the Map Pack tab.</div>
+                {/* +Add service picker — remaining service categories, highest real volume first */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                  <select className="svc-add-sel" value={addPick} onChange={e => setAddPick(e.target.value)} disabled={atCap || addable.length === 0}>
+                    <option value="">{atCap ? `At limit (${maxServices} services)` : addable.length === 0 ? 'No more service categories' : '+ Add a service category…'}</option>
+                    {addable.map((c, i) => (
+                      <option key={i} value={c.term}>{c.term}{c.volume > 0 ? `  ·  ${fmt(c.volume)}/mo` : ''}</option>
+                    ))}
+                  </select>
+                  <button className="svc-add-btn" disabled={!addPick || atCap} onClick={() => addService(addPick)}>＋ Add service</button>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Edits persist for this project. Then set the <b>Locations</b> cap at the top and run a scan to see map-pack rank per city in the Map Pack tab.</div>
               </div>
             )}
 
@@ -605,6 +721,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
         .setup-field select{background:var(--c-07070e);border:1px solid var(--c-2a2a3d);border-radius:6px;color:var(--c-cfccff);font-size:12px;font-weight:600;padding:6px 8px;cursor:pointer}
         .setup-all{font-size:10.5px;font-weight:600;padding:0 9px;border-radius:6px;border:1px solid var(--c-3d3880);background:var(--ca-108-99-255-0_14);color:var(--c-b7b2ff);cursor:pointer}
         .setup-all:hover{border-color:var(--c-6c63ff)}
+        .svc-del{font-size:13px;line-height:1;padding:4px 7px;border-radius:6px;border:1px solid var(--ca-239-68-68-0_28);background:var(--ca-239-68-68-0_13);color:var(--c-f08a8a);cursor:pointer}
+        .svc-del:hover{border-color:var(--c-f08a8a);background:var(--ca-239-68-68-0_3)}
+        .svc-add-sel{flex:1;min-width:220px;background:var(--c-07070e);border:1px solid var(--c-2a2a3d);border-radius:6px;color:var(--c-cfccff);font-size:12.5px;font-weight:600;padding:7px 9px;cursor:pointer}
+        .svc-add-sel:disabled{color:var(--c-6a6a90);cursor:not-allowed}
+        .svc-add-btn{font-size:12px;font-weight:700;padding:7px 13px;border-radius:7px;border:1px solid var(--c-3d3880);background:var(--ca-108-99-255-0_16);color:var(--c-b7b2ff);cursor:pointer;white-space:nowrap}
+        .svc-add-btn:hover:not(:disabled){border-color:var(--c-6c63ff)}
+        .svc-add-btn:disabled{opacity:.45;cursor:not-allowed}
+        .svc-reset{font-size:11px;font-weight:600;color:var(--c-8b85ff);background:none;border:none;cursor:pointer;padding:0;text-decoration:underline}
         .local-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
         .local-tbl th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--c-555570);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--c-1e1e2e)}
         .local-tbl td{padding:10px;border-bottom:1px solid var(--c-15151f);vertical-align:middle}

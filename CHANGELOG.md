@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.284 — 2026-06-24 · Local Search → editable primary services (cap 10, delete, add from category catalog)
+
+**The ask (Wayne).** On the Local Search panel's **Services** tab: (1) expand the 8 primary services to **10**; (2) put a **trash can** next to each service to remove it from what we check locally; (3) add a **＋** to add a primary service, picked from the product categories defined by the Keyword panel, ordered **highest → lowest real search volume**.
+
+**What changed.**
+- **`lib/local/seeds.ts`** — added `buildServiceCatalog()` (the full, un-capped list of candidate service seeds from the client's categories, sorted by **real Semrush volume** desc) and `buildSeedsFromServiceTerms()` (brand pinned first + an explicit curated term list, each volume resolved from the real pool exactly as the auto list does, deduped, capped). `buildServiceSeeds()` now composes the catalog; default cap **8 → 10** (`DEFAULT_SERVICE_CAP`).
+- **`components/brief/LocalSearchSection.tsx`** — the Services table is now **editable**: a 🗑 on every **service** row (the brand row is **pinned** 📌, always tracked), and a **＋ Add service** picker listing the remaining service categories **sorted by real volume** (with each category's volume shown). Cap is **10 total** (brand + up to 9 services). Edits **persist per project** (localStorage) and are the exact set the next scan uses — the displayed list and the scanned list reconcile (Const II.7). A **↺ Reset to auto** clears the curation.
+- **Brand guard at the read site (Const III.1a)** — the catalog reads `_categoryBreakdown.categories`, which still contains competitor-brand categories, so the panel now applies the competitor/blocklist **brand guard** (`buildCompetitorBrandTokens` / `buildExcludedBrandTokens` / `textHasCompetitorBrand` + `isBrandedKeyword`) before building the catalog — a rival brand can never appear as a selectable service; the client's own brand is kept. Same guard added to the scan route's fallback category read.
+- **`app/api/projects/[id]/local-scan/route.ts`** — accepts the curated `services[]` (brand added server-side) and scans those exact terms in the user's order; server default + cap raised to **10**.
+
+**Data integrity (Const I.1).** Every volume — auto or curated — is the real Semrush volume of the service term off the canonical pool; nothing modeled. The add-picker only offers categories that already exist in the client's footprint.
+
+**Theme parity (Const IV.6 / V.5).** New controls (`.svc-del` / `.svc-add-sel` / `.svc-add-btn` / `.svc-reset`) use the existing `var(--…)` palette only — no hex literals — verified legible in both themes by the render check.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` mirroring the project tsconfig (no `target` override) — clean on all changed files. **jsdom SSR render** of the Services tab in **both** themes (`orbitiq-v7.284-RENDER.html`) asserts: brand pinned, 🗑 on every service row, ＋Add picker, the competitor category (`Vanguard Funds`) guarded out, cap 10, and theme-var-only styling. **Retained regression suite re-run — all checks PASS** (carried forward from the latest recoverable suite, v7.278 base, + a new `local:`/`local-ui:`/`local-route:` block; 150 checks). *Note: the v7.279–283 working folders on disk are empty stubs and the regression suite is excluded from shipped zips, so those releases' added blocks could not be located to merge — recommend committing `_regression/` to source control going forward so the chain isn't lost.*
+
 ## v7.283 — 2026-06-24 · Exec Summary readability + AI per-stage row (LLM categories → journey stages) + LLM card big numbers
 
 **The ask (Wayne).** (1) The card breakdown text is hard to read — make it larger. (2) The "Where you disappear" **AI row** (was all "coming") — we can now pull it from the LLM Visibility panel. (3) On the exec's **LLM visibility card**, add two larger numbers above the bar charts: **non-branded visibility %** and **branded visibility %**.
