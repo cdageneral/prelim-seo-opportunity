@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.281 — 2026-06-24 · Journey card pulls its pre-product / product split from the Journey panel (fixes phantom pre-product coverage)
+
+**The bug (Wayne).** The v7.280 Journey card showed **"Pre-product 16 of 19 problem themes covered"** even though the **pre-product journey has not been built** — the Journey panel itself shows **"Pre-product journey 0"**. Cause: v7.280 computed the lanes with a **forked `buildClusters()` classification** (its own problem-pool heuristic), which disagrees with how the Journey panel defines the lanes. Wayne: pull this from the Journey panel, do not add new logic.
+
+**The fix (Const II.7 — single source of truth).** Extracted the panel's exact lane logic into one exported helper and made the card call it.
+- **`components/brief/JourneySection.tsx`** — new exported `journeyLaneSummary(topics, problemSeeds)` containing the panel's verbatim rule: a topic is **pre-product** only when it is a `'problem'` cluster **or** a `'demand'` cluster seeded by a deep-journey problem head term (`_demandUniverse.problemSeeds`); coverage = topics whose `canonTopicState` is `'existing'` (the client owns a ranking page). CanonicalJourneyView now has a shared helper to defer to (no behavior change to the panel).
+- **`components/brief/ExecutiveSummarySection.tsx`** — the card's `journeyLanes` now calls `journeyLaneSummary(canonicalTopics, problemSeeds)` over the **same canonical topics** the Content Map / Journey panels build, with `problemSeeds` read from `analysis._demandUniverse`. The forked `buildClusters` lane logic is gone. Pre-product therefore reads **"—" / "not built yet"** exactly when the panel shows "Pre-product journey 0"; the Product row shows **"{covered} of {N}"** topics (N = the panel's product-lane topic count). Canonical topics are now built **once** and shared by the coverage-map plan and the journey summary.
+
+**No data change (Const I.1).** Counts are the panel's own roll-ups over the canonical topic pool — nothing modeled; the change removes invented numbers rather than adding any.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` (project-mirrored, no `target` override) — PASS. Full **retained regression suite 185/185 PASS**. Per V.6, two `*280` checks whose behavior changed by design (lane logic now via `journeyLaneSummary`; product row shows "of N" not "of 4") were **updated in place with dated notes**. New `exec281:` / `journey281:` / `render281:` invariants lock: the exec reads `journeyLaneSummary` over canonical topics with `_demandUniverse` seeds (no forked classification), the helper classifies problem + deep-journey-seeded demand as pre-product **and drops a demand topic back to product when its seed is absent** (the exact bug), coverage counts only client-owned topics, and the client render shows the **Pre-product "not built yet"** honest gap when no deep journey exists. Dual-theme render at `orbitiq-v7.281-RENDER.html`.
+
 ## v7.280 — 2026-06-24 · Executive Summary cards — "Google SERP Ranks" rename, Coverage shows optimise + build, Journey split into pre-product + product rows
 
 **The ask (Wayne).** On the Exec Summary "two worlds" cards: (1) rename **"Traditional"** -> **"Google SERP Ranks"**; (2) on the Coverage card, bring in **both** existing pages to optimise **and** net-new pages to build; (3) on the Journey card, show the **product journey** coverage **plus a second row above it for the pre-product journey**.

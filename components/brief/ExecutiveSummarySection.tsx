@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
 import { SovPanel, computeSov, ctrAt } from '@/components/brief/GoogleSerpSection';
-import { buildClusters } from '@/components/brief/JourneySection';
+import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySection';
 // v7.279: Coverage-gap card reads the SAME canonical content-map build the Content
 // Map panel (05) renders — buildCanonicalClusterTopics → buildContentPlanFromTopics
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
@@ -288,23 +288,6 @@ export default function ExecutiveSummarySection({
   // counted as problem THEMES with client organic coverage out of total
   // pre-product themes, and is empty until the deep journey is built (honest gap,
   // III.2a-ii) → shown as "—" rather than a fabricated stage count.
-  const journeyLanes = useMemo(() => {
-    const STAGE_ORDER = ['awareness', 'consideration', 'decision', 'retention'] as const;
-    const clusters = buildClusters(analysis, {}, clientDomain, manualDomains, dbKeywords);
-    const prod: Record<string, number> = { awareness: 0, consideration: 0, decision: 0, retention: 0 };
-    let preTotal = 0, preCovered = 0;
-    clusters.forEach(c => {
-      if (c.journeyType === 'pre-product') {
-        preTotal++;
-        const cv = c.subClusters.reduce((s, sc) => s + sc.clientVolume, 0);
-        if (cv > 0) preCovered++;
-      } else {
-        c.subClusters.forEach(sc => { if (sc.clientVolume > 0 && prod[sc.stage] !== undefined) prod[sc.stage] += sc.clientVolume; });
-      }
-    });
-    const prodCovered = STAGE_ORDER.filter(s => prod[s] > 0).length;
-    return { prodCovered, prodTotal: 4, preCovered, preTotal };
-  }, [analysis, clientDomain, manualDomains, dbKeywords]);
 
   // ── LLM visibility ────────────────────────────────────────────────────────
   // v7.80: supports both probe shapes. v2 (llm_probe_v2) reports the UNBRANDED
@@ -399,10 +382,31 @@ export default function ExecutiveSummarySection({
   // "build net-new" set (footprint-derived, page-pull-independent), so the card
   // reconciles to Content Map (05) by construction (II.6/II.7). No modeling (I.1).
   const cmClientDomain = (analysis?.semrushSnapshot as any)?.domain ?? '';
-  const contentPlan = useMemo(() => {
-    const topics = buildCanonicalClusterTopics(analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns);
-    return topics.length > 0 ? buildContentPlanFromTopics(topics) : planFromSnapshot(analysis, dbKeywords);
-  }, [analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns]);
+  // v7.281: build the canonical content-map topics ONCE — the SAME call the Content Map
+  // (05) and Journey panels make — then derive both the coverage-map plan and the journey
+  // lane summary from it (Const II.7, no parallel builds).
+  const canonicalTopics = useMemo(
+    () => buildCanonicalClusterTopics(analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns),
+    [analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns],
+  );
+  const contentPlan = useMemo(
+    () => canonicalTopics.length > 0 ? buildContentPlanFromTopics(canonicalTopics) : planFromSnapshot(analysis, dbKeywords),
+    [canonicalTopics, analysis, dbKeywords],
+  );
+  // v7.281: pull the product / pre-product split + coverage from the SAME source the
+  // Journey panel renders — its canonical topics + journeyLaneSummary() (Const II.7) —
+  // instead of forking a buildClusters classification (which wrongly reported a built-out
+  // pre-product lane). Pre-product topics exist only once the deep journey is built
+  // (problem/demand topics seeded by _demandUniverse.problemSeeds, Const III.2a-ii), so
+  // preTotal is 0 here exactly when the panel shows "Pre-product journey 0".
+  const problemSeeds = useMemo(
+    () => ((analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[],
+    [analysis],
+  );
+  const journeyLanes = useMemo(
+    () => journeyLaneSummary(canonicalTopics as any, problemSeeds),
+    [canonicalTopics, problemSeeds],
+  );
   const netNewTopics  = contentPlan?.scope.build ?? 0;        // net-new pages to BUILD
   const netNewVol     = contentPlan?.scope.buildVol ?? 0;     // their monthly search volume
   // v7.280: also surface the EXISTING pages to optimise (Wayne — show both halves
@@ -615,13 +619,17 @@ export default function ExecutiveSummarySection({
               big: dbLoaded ? `${coverageTopics}` : '—', bigSuffix: dbLoaded ? (coverageTopics === 1 ? ' page' : ' pages') : '', bigColor: 'var(--c-f59e0b)',
               sub: dbLoaded ? `${optimizeTopics} to optimize · ${netNewTopics} to build` : 'mapping pages…' },
             // v7.280: Journey split into two stacked rows — pre-product (top) + product.
+            // v7.281: counts come straight from the Journey panel's lane split
+            // (journeyLaneSummary) — pre-product shows "—/not built yet" until the deep
+            // journey exists, exactly like the panel's "Pre-product journey 0".
             { key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey',
               rows: [
                 { label: 'Pre-product', big: journeyLanes.preTotal > 0 ? `${journeyLanes.preCovered}` : '—',
                   suffix: journeyLanes.preTotal > 0 ? ` of ${journeyLanes.preTotal}` : '',
-                  sub: journeyLanes.preTotal > 0 ? 'problem themes covered' : 'not built yet' },
-                { label: 'Product', big: `${journeyLanes.prodCovered}`, suffix: ' of 4',
-                  sub: 'funnel stages covered' },
+                  sub: journeyLanes.preTotal > 0 ? 'topics with coverage' : 'not built yet' },
+                { label: 'Product', big: dbLoaded ? `${journeyLanes.productCovered}` : '—',
+                  suffix: dbLoaded ? ` of ${journeyLanes.productTotal}` : '',
+                  sub: 'topics with coverage' },
               ] },
           ] as Array<{ key: string; accent: string; icon: string; big?: string; bigSuffix?: string; bigColor?: string; sub?: string; rows?: Array<{ label: string; big: string; suffix: string; sub: string }> }>).map(b => (
             <div key={b.key} className="orbit-card p-3"

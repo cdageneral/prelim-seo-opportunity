@@ -1977,6 +1977,31 @@ function canonTopicState(t: CanonicalJourneyTopic): NodeState {
   return (clientRanked.length > 0 || !!t.pageUrl) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
 }
 
+// ─── v7.281: shared journey lane summary (single source of truth, Const II.7) ──────
+// The EXACT product/pre-product split + coverage the CanonicalJourneyView panel renders,
+// extracted so the Executive Summary card reads the SAME numbers instead of forking its
+// own classification. A topic is PRE-PRODUCT only when it is a 'problem' cluster OR a
+// 'demand' cluster seeded by a deep-journey problem head term (Const III.2a / III.2a-ii) —
+// so when the deep journey has NOT been built there are no pre-product topics (preTotal=0),
+// matching the panel's "Pre-product journey 0". Coverage = topics whose state is 'existing'
+// (the client owns a ranking page), identical to the panel's optimise count.
+export function journeyLaneSummary(
+  topics: CanonicalJourneyTopic[],
+  problemSeeds: string[] = [],
+): { productTotal: number; productCovered: number; preTotal: number; preCovered: number } {
+  const problemSet = new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim()));
+  const isPre = (t: CanonicalJourneyTopic): boolean =>
+    t.parentType === 'problem' ||
+    (t.parentType === 'demand' && problemSet.has((t.parentName || '').toLowerCase().trim()));
+  let productTotal = 0, productCovered = 0, preTotal = 0, preCovered = 0;
+  for (const t of topics) {
+    const covered = canonTopicState(t) === 'existing';
+    if (isPre(t)) { preTotal++; if (covered) preCovered++; }
+    else          { productTotal++; if (covered) productCovered++; }
+  }
+  return { productTotal, productCovered, preTotal, preCovered };
+}
+
 const CANON_TYPE_BADGE: Record<string, { label: string; color: string }> = {
   procedure: { label: 'Product topic',  color: 'var(--c-9b96ff)' },
   brand:     { label: 'Brand',          color: 'var(--c-f59e0b)' },
