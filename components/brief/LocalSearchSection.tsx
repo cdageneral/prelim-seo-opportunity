@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand, buildLocalPackCategorySet, hasLocalPackData } from '@/lib/utils/kwVolume';
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
@@ -157,15 +157,24 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     const compTokens = buildCompetitorBrandTokens(snap, domain, competitorDomains);
     const exclTokens = buildExcludedBrandTokens(snap);
     const isClientBrandName = (name: string) => isBrandedKeyword(name, domain, [], brandTerms);
+    // v7.286 — local-pack gate (Wayne's choice: show ONLY categories that trigger a Google
+    // local map pack). Real Semrush SERP-feature data. When the analysis predates the flag
+    // (no data), DON'T hide everything — fall back to all categories + a notice (Const I.5).
+    const lpAvailable = hasLocalPackData(snap);
+    const lpCats = buildLocalPackCategorySet(snap);
     return cats.filter(c => {
       const name = String(c?.name ?? '');
       if (!name) return false;
       if ((c?.type === 'brand') && !isClientBrandName(name)) return false;           // foreign brand category
       const foreignBrand = textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens);
       if (foreignBrand && !isClientBrandName(name)) return false;                     // name carries a competitor brand
+      if (lpAvailable && !lpCats.has(name)) return false;                             // not a local-pack-triggering category
       return true;
     });
   }, [analysis, domain, competitorDomains]);
+
+  // v7.286 — is the real local-pack filter active on this analysis? Drives the panel notice.
+  const localPackActive = useMemo(() => hasLocalPackData(analysis?.semrushSnapshot), [analysis]);
 
   // v7.284/v7.285 — full (un-capped) catalog of candidate services from the GUARDED
   // categories, sorted by REAL monthly demand → lowest (v7.285: the same demand the
@@ -481,6 +490,9 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                   </div>
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS.</div>
+                {localPackActive
+                  ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Showing only categories that <b>trigger a Google local map pack</b> — based on real Semrush SERP-feature data for the client's keywords.</div>
+                  : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ Local-pack filtering needs a fresh analysis run to populate the SERP-feature data — showing all service categories for now.</div>}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="SERVICES" v={String(seeds.length)} />
                   <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="var(--c-46cce0)" />

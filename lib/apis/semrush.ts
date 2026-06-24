@@ -33,6 +33,37 @@ export interface SemrushKeyword {
   url:        string;
   cpc:        number;
   competition: number;
+  // v7.286: REAL Semrush SERP-feature signal — does this keyword's Google SERP show a
+  // Local Pack (map pack)? Pulled from the Analytics API SERP-features column (`Fl`,
+  // Semrush KB 986/1340). `undefined` = the column wasn't returned (older pull / not
+  // supported) → treat as UNKNOWN, never as "no" (Const I.5, honest gap).
+  triggersLocalPack?: boolean;
+}
+
+// v7.286 — detect the "Local pack" SERP feature in a Semrush `Fl` column value.
+// Verified-mechanism, value-robust: the legacy Analytics API returns SERP features as a
+// delimited list; Local Pack is documented as numeric id 3 (legacy scheme), labelled
+// "geo" in the Projects API, and named "Local pack" elsewhere — so we match ALL of
+// {token "3", "geo", any token containing "local"} case-insensitively. The first live
+// run logs a raw sample so the constant is confirmed against the account (self-verify).
+// Sources: https://www.semrush.com/kb/986-api-serp-features , .../1340-serp-features-local-pack
+export function serpFeaturesHasLocalPack(raw: string): boolean {
+  const s = String(raw ?? '').toLowerCase();
+  if (!s.trim()) return false;
+  const tokens = s.split(/[,|;]+/).map(t => t.trim()).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '3' || t === 'geo') return true;          // legacy numeric id / Projects label
+    if (t.indexOf('local') >= 0) return true;           // "local pack" / "local_pack" name
+  }
+  return false;
+}
+
+/** Find the SERP-features column value in a parsed Semrush CSV row (header name varies). */
+function serpFeaturesValue(row: Record<string, string>): string | undefined {
+  if (row['SERP Features'] != null) return row['SERP Features'];
+  const key = Object.keys(row).find(k => /serp\s*features?/i.test(k));
+  return key ? row[key] : undefined;
 }
 
 export interface SemrushCompetitor {
@@ -72,6 +103,13 @@ export interface SemrushSnapshot {
   competitorPositionVol?:  Record<string, Record<string, number>>;  // monthly volume
   fetchedAt:    string;
   warnings?:    string[];                // v7.96: non-fatal problems during the pull (e.g. failed gap fetches)
+  // v7.286: REAL local-pack signal rolled up from the footprint's `Fl` SERP-features.
+  // `localPackKeywords` = lowercased client keywords whose Google SERP shows a Local
+  // Pack. `localPackDataAvailable` distinguishes "no local-pack keywords" (false flags
+  // present) from "column not returned / pre-v7.286 pull" (undefined) — so read sites
+  // can fall back honestly (Const I.5) instead of hiding everything.
+  localPackKeywords?:      string[];
+  localPackDataAvailable?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -160,11 +198,13 @@ export async function getOrganicKeywords(
 ): Promise<SemrushKeyword[]> {
   const all: SemrushKeyword[] = [];
   let offset = 0;
+  let loggedSerpSample = false;       // v7.286: one-time raw SERP-features sample (self-verify)
   for (;;) {
     const want = limit > 0 ? Math.min(SEMRUSH_PAGE, limit - all.length) : SEMRUSH_PAGE;
     if (want <= 0) break;
     // v7.164: Semrush rejects display_offset=0 (ERROR 605 — must be a positive
     // integer < display_limit, or omitted). Only send it for pages after the first.
+    // v7.286: `Fl` = SERP features per keyword (Semrush KB 986) → real Local Pack flag.
     const raw = await semrushGet({
       type:    'domain_organic',
       domain,
@@ -172,17 +212,30 @@ export async function getOrganicKeywords(
       display_limit:  String(want),
       ...(offset > 0 ? { display_offset: String(offset) } : {}),
       display_sort: 'tr_desc',
-      export_columns: 'Ph,Po,Nq,Ur,Cp,Co',
+      export_columns: 'Ph,Po,Nq,Ur,Cp,Co,Fl',
       ...volumeFilter(volMin),
     });
-    const rows = parseSemrushCSV(raw).map(row => ({
-      keyword:      row['Keyword']   ?? '',
-      position:     parseInt(row['Position'] ?? '0'),
-      searchVolume: parseInt(row['Search Volume'] ?? '0'),
-      url:          row['URL']       ?? '',
-      cpc:          parseFloat(row['CPC'] ?? '0'),
-      competition:  parseFloat(row['Competition'] ?? '0'),
-    }));
+    const parsed = parseSemrushCSV(raw);
+    const rows = parsed.map(row => {
+      const sf = serpFeaturesValue(row);                // undefined = column not returned
+      return {
+        keyword:      row['Keyword']   ?? '',
+        position:     parseInt(row['Position'] ?? '0'),
+        searchVolume: parseInt(row['Search Volume'] ?? '0'),
+        url:          row['URL']       ?? '',
+        cpc:          parseFloat(row['CPC'] ?? '0'),
+        competition:  parseFloat(row['Competition'] ?? '0'),
+        triggersLocalPack: sf === undefined ? undefined : serpFeaturesHasLocalPack(sf),
+      } as SemrushKeyword;
+    });
+    // v7.286 self-verify: log a small raw sample once so the FIRST live run reveals the
+    // actual `Fl` value format and confirms the Local-Pack constant against the account.
+    if (!loggedSerpSample && parsed.length > 0) {
+      const samples = parsed.map(serpFeaturesValue).filter(v => v != null && String(v).trim() !== '').slice(0, 8);
+      const colPresent = serpFeaturesValue(parsed[0]) !== undefined;
+      console.log(`[OrbitIQ] Semrush SERP-features(Fl) colPresent=${colPresent} sample=${JSON.stringify(samples)}`);
+      loggedSerpSample = true;
+    }
     all.push(...rows);
     offset += rows.length;
     onPage?.(all.length);
@@ -595,6 +648,15 @@ export async function getSemrushSnapshot(
   const positionDist = buildPositionDistribution(topKeywords);
   const positionVol  = buildVolumeDistribution(topKeywords);   // v7.136
 
+  // v7.286: roll up the real per-keyword Local Pack flag (from the footprint's `Fl`
+  // column) into a deduped lowercased keyword list. `available` = the column was
+  // returned for at least one row (so an empty list means "checked, none" — not "unknown").
+  const localPackDataAvailable = topKeywords.some(k => k.triggersLocalPack !== undefined);
+  const localPackSet = new Set<string>();
+  topKeywords.forEach(k => { if (k.triggersLocalPack) localPackSet.add((k.keyword || '').toLowerCase()); });
+  const localPackKeywords = Array.from(localPackSet);
+  console.log(`[OrbitIQ] LocalPack rollup: dataAvailable=${localPackDataAvailable}, localPackKeywords=${localPackKeywords.length}/${topKeywords.length}`);
+
   return {
     domain,
     overview,
@@ -607,6 +669,8 @@ export async function getSemrushSnapshot(
     competitorPositionVol,
     fetchedAt: new Date().toISOString(),
     warnings,
+    localPackKeywords,
+    localPackDataAvailable,
   };
 }
 

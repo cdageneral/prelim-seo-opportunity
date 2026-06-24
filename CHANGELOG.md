@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.286 — 2026-06-24 · Identify which categories trigger a Google local map pack (real Semrush SERP data) + gate the Local picker to them
+
+**The ask (Wayne).** Identify which product categories trigger a local map pack; show it in the Keyword panel; and in the Local view only offer categories whose keywords trigger a local map pack.
+
+**The signal is real, not a heuristic.** Per-keyword Local Pack presence comes from Semrush's SERP-features column (`Fl`), added to the footprint pull. Sources: [Semrush KB 986](https://www.semrush.com/kb/986-api-serp-features), [KB 1340](https://www.semrush.com/kb/1340-serp-features-local-pack). Decisions: source = Semrush `Fl` (broad coverage, no extra API cost; **requires re-running an analysis to populate** — existing snapshots won't have it until then); Local picker = **show only** local-pack categories.
+
+**What changed.**
+- **`lib/apis/semrush.ts`** — the footprint pull now requests `Fl`; each keyword gets a real `triggersLocalPack` flag (value-robust detection: numeric id `3` / Projects label `geo` / name "local pack"); the snapshot carries `localPackKeywords` + `localPackDataAvailable`. A one-time log prints a raw `Fl` sample on the first live run so the constant is **self-verified against your account**.
+- **`lib/utils/kwVolume.ts`** — `buildLocalPackCategorySet()` rolls the per-keyword flag up to category names through STORED membership (`_categoryBreakdown.keywordCategories`, Const II.8 — never re-derived). One shared helper so the Keyword badge and the Local gate agree (Const II.7).
+- **`components/brief/KeywordsPanel.tsx`** — a **📍 Local pack** badge on every category/sub-category whose keywords trigger a map pack (computed over the node's real keyword subtree, works in flat and path-tree modes).
+- **`components/brief/LocalSearchSection.tsx`** — the +Add picker and auto-selection are gated to local-pack categories only. **Graceful fallback (Const I.5):** when the analysis predates this data, it does NOT blank out — it shows all categories with an amber "local-pack filtering needs a fresh analysis run" notice; when active, a cyan "showing only local-pack categories" notice.
+
+**Data integrity (Const I.1 / I.5).** The flag is real Semrush SERP-feature data; the rollup never fabricates. Unknown/absent data is shown honestly and never hidden as "no". **Verification caveat:** the exact `Fl` value format couldn't be confirmed from the build sandbox (the Semrush MCP ignores `export_columns`; no app API key here), so detection is value-robust + self-verifying on first live run, and degrades gracefully if the column comes back empty — by Wayne's explicit choice (fail-safe build).
+
+**Verification (Art. V).** Isolated `tsc` (project tsconfig, no `target` override) clean on all changed files; jsdom render + unit harness (17 checks: detection across formats, rollup, gate-on, graceful-fallback-off) all pass; dual-theme render `orbitiq-v7.286-RENDER.html`; retained regression suite re-run **167 checks, all PASS** (13 new `localpack:` invariants added).
+
 ## v7.285 — 2026-06-24 · Local Search services → rank by real category demand + un-lock the +Add picker
 
 **The ask (Wayne).** On the Local Search **Services** tab, the categories shown in the Keyword/Market-Gap "PROCEDURE LINES" (Retirement Planning, Tax Planning, Estate Planning…) weren't appearing in the **+ Add service** dropdown.

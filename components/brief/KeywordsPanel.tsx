@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { buildKwPool, isBrandedKeyword, extractBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData } from '@/lib/utils/kwVolume';
 import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
@@ -888,6 +888,17 @@ export default function KeywordsPanel({
   // the canonical segmentRows pool, so category totals always balance with
   // the summary cards for the active segment.
   const cb = (analysis?.semrushSnapshot?._categoryBreakdown ?? null) as KwCategoryBreakdown | null;
+
+  // v7.286: REAL Local-Pack keyword set — keywords whose Google SERP shows a map pack
+  // (Semrush `Fl` SERP feature). A category/node is badged when ANY of its keywords is in
+  // here, so it works in both flat and path-tree modes. Empty until an analysis is re-run
+  // on/after v7.286 (honest gap, Const I.5).
+  const localPackKw = useMemo(() => {
+    const snap = analysis?.semrushSnapshot;
+    const set = new Set<string>();
+    if (hasLocalPackData(snap)) (snap.localPackKeywords as any[]).forEach(k => set.add(String(k).toLowerCase()));
+    return set;
+  }, [analysis]);
 
   // v7.226: competitor-brand category guard (Const III.1a). The raw `_categoryBreakdown`
   // legitimately contains competitor/third-party brand categories (built from competitor
@@ -2056,6 +2067,7 @@ export default function KeywordsPanel({
             expectedCount={segmentRows.length}
             dropCategoryNames={dropCategoryNames}
             categoryModel={categoryModel}
+            localPackKw={localPackKw}
             onDeleteRows={deleteRows}
           />
         )}
@@ -2618,6 +2630,7 @@ function KwCategorySection({
   expectedCount,
   dropCategoryNames,
   categoryModel,
+  localPackKw,
   onDeleteRows,
 }: {
   cb:            KwCategoryBreakdown;
@@ -2627,6 +2640,7 @@ function KwCategorySection({
   expectedCount: number;
   dropCategoryNames: Set<string>;   // v7.226: competitor-brand categories to suppress (Const III.1a)
   categoryModel: CategoryModel;     // v7.227: canonical categories + stored membership (shared source)
+  localPackKw?:  Set<string>;       // v7.286: lowercased keywords whose SERP shows a Local Pack
   onDeleteRows?: (rows: KeywordRow[]) => Promise<void>;   // v7.271: destructive delete of a node's / a keyword's rows
 }) {
   // ── Expand/collapse state — collapsed by default (parents only). Hooks run
@@ -2745,6 +2759,7 @@ function KwCategorySection({
         maxVol={maxVol}
         dimmed={dimmed}
         metaOf={categoryModel.keywordMeta}
+        localPack={!!localPackKw && localPackKw.size > 0 && collectOwnKeywords(n).some(r => localPackKw.has(String(r.keyword || '').toLowerCase()))}
         canDelete={!!onDeleteRows}
         confirmId={confirmId}
         busyId={busyId}
@@ -2860,6 +2875,7 @@ function KwCatRow({
   expanded = false,
   onToggle,
   metaOf,
+  localPack = false,
   canDelete = false,
   confirmId = null,
   busyId = null,
@@ -2877,6 +2893,7 @@ function KwCatRow({
   expanded?:         boolean;
   onToggle?:         () => void;
   metaOf?:           Map<string, KeywordMeta>;   // v7.235: per-keyword classification metadata (Const III.7)
+  localPack?:        boolean;                     // v7.286: ≥1 keyword under this node triggers a Google Local Pack (real Semrush Fl)
   canDelete?:        boolean;                     // v7.271: show delete affordances
   confirmId?:        string | null;              // v7.271: node id awaiting delete-confirm
   busyId?:           string | null;              // v7.271: id currently being deleted
@@ -2951,6 +2968,12 @@ function KwCatRow({
         <div style={{ minWidth: 0, flex: '1 1 auto' }}>
           <span style={{ fontSize: '12px', fontWeight: nameWeight, color: nameColor, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {cat.name}
+            {localPack && (
+              <span
+                title="At least one keyword here triggers a Google local map pack (real Semrush SERP-feature data)"
+                style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '.04em', color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 4, padding: '1px 5px', marginLeft: 6, textTransform: 'uppercase', whiteSpace: 'nowrap' }}
+              >📍 Local pack</span>
+            )}
             {hasChildren
               ? <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.children.length}</span>
               : (canRevealKeywords && <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.own.length} kw</span>)}

@@ -617,3 +617,33 @@ export function getVolumeMetrics(opts: KwPoolOptions): VolumeMetrics {
   const pool = buildKwPool(opts);
   return { pool, ...computeVolumeMetrics(pool) };
 }
+
+// ─── v7.286: Local Pack (map pack) rollup ──────────────────────────────────────
+// Which CATEGORY names contain at least one keyword whose Google SERP shows a Local
+// Pack. The per-keyword flag is REAL Semrush SERP-feature data (`Fl`, KB 986/1340),
+// rolled up here through STORED membership (`_categoryBreakdown.keywordCategories`,
+// Const II.8 — never re-derived). Both the Keyword panel (badge) and the Local panel
+// (picker gate) read this one helper so they agree (Const II.7).
+
+/** True once the analysis actually carries the SERP-feature column (a re-run on/after v7.286). */
+export function hasLocalPackData(snap: any): boolean {
+  return !!snap && snap.localPackDataAvailable === true && Array.isArray(snap.localPackKeywords);
+}
+
+/** Set of category NAMES (verbatim, as stored) that trigger a Local Pack. Empty when no data. */
+export function buildLocalPackCategorySet(snap: any): Set<string> {
+  const out = new Set<string>();
+  if (!hasLocalPackData(snap)) return out;
+  const lp = new Set<string>((snap.localPackKeywords as any[]).map(k => String(k).toLowerCase()));
+  if (lp.size === 0) return out;
+  const kc = snap?._categoryBreakdown?.keywordCategories;
+  if (kc && typeof kc === 'object') {
+    Object.keys(kc).forEach(kw => {
+      if (lp.has(String(kw).toLowerCase())) {
+        const cat = String(kc[kw] ?? '');
+        if (cat) out.add(cat);
+      }
+    });
+  }
+  return out;
+}
