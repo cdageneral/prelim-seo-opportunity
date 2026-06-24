@@ -364,6 +364,34 @@ export default function ExecutiveSummarySection({
   const nonBrandedPct: number | null = isLlmProbeV2 ? (llmSnap.unbranded?.score ?? 0) : null;
   const brandedPct:    number | null = isLlmProbeV2 ? (llmSnap.branded?.score ?? 0) : null;
 
+  // v7.283: AI-per-stage visibility for the "Where you disappear" row, pulled from the
+  // LLM Visibility panel's per-CATEGORY mention rates and mapped onto the 4 journey stages
+  // (Wayne). The map is a real weighted roll-up: for each stage, average the probed
+  // categories' mention rate weighted by that category's volume in the stage — using the
+  // SAME buildClusters() the Journey/grid rows use for stage volumes (Const II.6/II.7).
+  // Categories the probe didn't cover are skipped (honest gap), and a stage with no probed
+  // volume stays null → rendered as "no data", never fabricated. v2 probe only.
+  const aiStageRates = useMemo(() => {
+    const STAGE_ORDER = ['awareness', 'consideration', 'decision', 'retention'] as const;
+    const cats: any[] = llmSnap?.categories ?? [];
+    if (!isLlmProbeV2 || cats.length === 0) return STAGE_ORDER.map(st => ({ stage: st as string, rate: null as number | null }));
+    const rateByCat = new Map<string, number>();
+    cats.forEach((c: any) => { if (c?.category) rateByCat.set(String(c.category).toLowerCase().trim(), c.mentionRate ?? 0); });
+    const clusters = buildClusters(analysis, {}, clientDomain, manualDomains, dbKeywords);
+    const num: Record<string, number> = {}; const den: Record<string, number> = {};
+    STAGE_ORDER.forEach(st => { num[st] = 0; den[st] = 0; });
+    clusters.forEach(c => {
+      const r = rateByCat.get(String(c.name).toLowerCase().trim());
+      if (r === undefined) return;                       // category not probed → skip (honest)
+      c.subClusters.forEach(sc => {
+        if (num[sc.stage] === undefined) return;
+        num[sc.stage] += r * sc.totalVolume;
+        den[sc.stage] += sc.totalVolume;
+      });
+    });
+    return STAGE_ORDER.map(st => ({ stage: st as string, rate: den[st] > 0 ? Math.round((num[st] / den[st]) * 100) : null }));
+  }, [isLlmProbeV2, llmSnap, analysis, clientDomain, manualDomains, dbKeywords]);
+
   // ── Content inventory ─────────────────────────────────────────────────────
   // v7.128 — Gap stats now derive from the canonical kwPool (buildKwPool), so
   // the gap COUNT and VOLUME match Keyword Landscape (02) and Content Map (05)
@@ -661,11 +689,11 @@ export default function ExecutiveSummarySection({
                 <div className="flex flex-col gap-2 mt-1.5">
                   {b.rows.map(r => (
                     <div key={r.label}>
-                      <p className="text-[8px] uppercase tracking-wider font-semibold" style={{ color: 'var(--c-8888aa)' }}>{r.label}</p>
-                      <p className="font-bold leading-none" style={{ fontSize: 18, color: 'var(--c-f0f0ff)', marginTop: 2 }}>
-                        {r.big}{r.suffix ? <span style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{r.suffix}</span> : null}
+                      <p className="uppercase tracking-wider font-semibold" style={{ fontSize: 10, color: 'var(--c-c0c0e0)' }}>{r.label}</p>
+                      <p className="font-bold leading-none" style={{ fontSize: 19, color: 'var(--c-f0f0ff)', marginTop: 2 }}>
+                        {r.big}{r.suffix ? <span style={{ fontSize: 12, color: 'var(--c-8888aa)' }}>{r.suffix}</span> : null}
                       </p>
-                      <p className="text-[8px] mt-0.5" style={{ color: 'var(--c-8888aa)' }}>{r.sub}</p>
+                      <p className="mt-0.5" style={{ fontSize: 10, color: 'var(--c-8888aa)' }}>{r.sub}</p>
                     </div>
                   ))}
                 </div>
@@ -674,13 +702,13 @@ export default function ExecutiveSummarySection({
                   <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor ?? 'var(--c-f0f0ff)', marginTop: 8 }}>
                     {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
                   </p>
-                  {b.sub ? <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p> : null}
+                  {b.sub ? <p className="mt-1" style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{b.sub}</p> : null}
                   {b.breakdown ? (
-                    <div className="flex flex-col gap-0.5 mt-1.5">
+                    <div className="flex flex-col gap-1 mt-2">
                       {b.breakdown.map(d => (
                         <div key={d.label} className="flex items-center justify-between" style={{ gap: 6 }}>
-                          <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>{d.label}</span>
-                          <span className="text-[10px] font-semibold" style={{ color: 'var(--c-c0c0e0)' }}>{d.val}</span>
+                          <span style={{ fontSize: 12, color: 'var(--c-c0c0e0)' }}>{d.label}</span>
+                          <span className="font-bold" style={{ fontSize: 14, color: 'var(--c-e8e8ff)' }}>{d.val}</span>
                         </div>
                       ))}
                     </div>
@@ -713,17 +741,23 @@ export default function ExecutiveSummarySection({
             );
           })}
 
-          <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>AI</span>
-          {journeyStages.map(s => (
-            <div key={`a-${s.stage}`}
-              style={{ background: 'var(--c-16161f)', color: 'var(--c-555570)', height: 26, borderRadius: 4,
-                border: '1px dashed var(--c-2a2a3a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>
-              coming
-            </div>
-          ))}
+          <span className="text-[9px]" style={{ color: 'var(--c-06b6d4)' }}>AI</span>
+          {journeyStages.map((s, i) => {
+            const r = (aiStageRates[i]?.stage === s.stage ? aiStageRates[i]?.rate : aiStageRates.find(a => a.stage === s.stage)?.rate) ?? null;
+            const col = r === null ? 'var(--c-555570)' : r < 15 ? 'var(--c-ef4444)' : r < 40 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
+            const bg  = r === null ? 'var(--c-16161f)' : 'var(--c-1e1e2e)';
+            return (
+              <div key={`a-${s.stage}`} title={r === null ? 'no probed category volume in this stage' : `${r}% of AI answers for ${s.label} topics cite you`}
+                style={{ background: bg, color: col, height: 26, borderRadius: 4,
+                  border: r === null ? '1px dashed var(--c-2a2a3a)' : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 600 }}>
+                {r === null ? 'no data' : `${r}%`}
+              </div>
+            );
+          })}
         </div>
         <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
-          AI-per-stage visibility, audience segments, and Sentinel live signals are in build — this row activates once LLM probes are mapped to journey stages.
+          AI per-stage = your brand&rsquo;s mention rate in AI answers for each stage&rsquo;s topics (LLM probe category visibility mapped to journey stages). Audience segments and Sentinel live signals are still in build.
         </p>
       </div>
 
@@ -735,6 +769,21 @@ export default function ExecutiveSummarySection({
           <p className="text-orbit-secondary text-xs font-medium mb-1">LLM visibility · AI answer citations</p>
           {(isLlmProbeV1 || isLlmProbeV2) && llmPlatforms.length > 0 ? (
             <>
+              {/* v7.283: two large numbers above the per-platform bars — the LLM panel's
+                  own Non-branded visibility (unbranded.score) + Branded visibility
+                  (branded.score). Real probe rates; shown for a v2 probe only. */}
+              {(nonBrandedPct !== null && brandedPct !== null) ? (
+                <div className="grid grid-cols-2 gap-2 mb-3 mt-1">
+                  <div className="rounded-md px-2.5 py-2 bg-orbit-surface">
+                    <p style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>Non-branded visibility</p>
+                    <p className="font-bold leading-none" style={{ fontSize: 26, color: aiVisColor, marginTop: 4 }}>{nonBrandedPct}%</p>
+                  </div>
+                  <div className="rounded-md px-2.5 py-2 bg-orbit-surface">
+                    <p style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>Branded visibility</p>
+                    <p className="font-bold leading-none" style={{ fontSize: 26, color: 'var(--c-22c55e)', marginTop: 4 }}>{brandedPct}%</p>
+                  </div>
+                </div>
+              ) : null}
               {llmPlatforms.map((p: any) => {
                 const pct      = Math.round((p.mentionRate ?? 0) * 100);
                 const col      = pct < 34 ? 'var(--c-ef4444)' : pct < 67 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';

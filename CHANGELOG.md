@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.283 — 2026-06-24 · Exec Summary readability + AI per-stage row (LLM categories → journey stages) + LLM card big numbers
+
+**The ask (Wayne).** (1) The card breakdown text is hard to read — make it larger. (2) The "Where you disappear" **AI row** (was all "coming") — we can now pull it from the LLM Visibility panel. (3) On the exec's **LLM visibility card**, add two larger numbers above the bar charts: **non-branded visibility %** and **branded visibility %**.
+
+**What changed (`components/brief/ExecutiveSummarySection.tsx`, presentational + a real roll-up).**
+- **Larger text** — the two-worlds card breakdown rows go from 9/10px to **label 12px / value 14px**, the sub line to 11px, and the Journey card rows from 8px to 10px labels/subs (value 19px). Colors use existing readable tokens (`--c-c0c0e0` / `--c-e8e8ff`).
+- **AI per-stage row** — the four "coming" cells are replaced with a real per-stage AI mention rate. New `aiStageRates` memo maps the LLM Visibility panel's per-**category** mention rates onto the 4 journey stages: for each stage it takes the **volume-weighted mean** of the probed categories' mention rate, using the **same `buildClusters()`** stage volumes the grid's Organic row uses (Const II.6/II.7). Categories the probe didn't cover are skipped, and a stage with no probed volume renders **"no data"** — never a fabricated 0% (Const I.1/I.5). v2 probe only. Caption updated to explain the mapping.
+- **LLM card big numbers** — above the per-platform citation bars, two large figures: **Non-branded visibility** (`unbranded.score`) and **Branded visibility** (`branded.score`) — the LLM panel's own real mention/recognition rates. v2 probe only.
+
+**No data change (Const I.1).** The AI per-stage figure is a transparent volume-weighted roll-up of real per-category mention rates; the LLM card numbers are the probe's own rates. Nothing modeled; missing data shows as "no data".
+
+**Theme parity (Const IV.6 / V.5).** No new tokens or hex; the AI cells reuse the existing red/amber/green band tokens. Dual-theme client render asserts zero raw hex.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` (project-mirrored, no `target` override) — PASS. Full **retained regression suite 216/216 PASS**. New `exec283:` / `viz283:` / `render283:` invariants lock: `aiStageRates` reads `llmSnap.categories`, the per-stage rate is a volume-weighted mean with a null (no-data) honest gap, the "coming" placeholder is gone, the LLM card big numbers come from `unbranded.score`/`branded.score`, and the enlarged fonts — plus a **jsdom client render** (fixture with categories) confirming the LLM big numbers, a populated AI row (≥ 1 per-stage % cell), the stage-mapping caption, the 14px breakdown value, and no raw hex. Dual-theme render at `orbitiq-v7.283-RENDER.html`.
+
 ## v7.282 — 2026-06-24 · Executive Summary cards — each big number gains a breakdown beneath it
 
 **The ask (Wayne).** On the "two worlds" cards, keep the big headline and add a breakdown under each:
