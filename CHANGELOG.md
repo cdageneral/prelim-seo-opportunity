@@ -1,5 +1,24 @@
 # OrbitIQ Changelog
 
+## v7.282 — 2026-06-24 · Executive Summary cards — each big number gains a breakdown beneath it
+
+**The ask (Wayne).** On the "two worlds" cards, keep the big headline and add a breakdown under each:
+- **Google SERP Ranks** — keep the page-1 % total; underneath split into **ranks 1-3** and **ranks 4-10**.
+- **AI Visibility** — keep the combined %; underneath show the **non-branded** and **branded** visibility %.
+- **Coverage map** — keep the big total pages; underneath show how many are **existing** vs **net-new**.
+
+**What changed (`components/brief/ExecutiveSummarySection.tsx`, presentational only).**
+- **Google SERP Ranks** — new `rank410Pct = (page1Vol - top3Vol) / totalVol`; the card now shows `page1Pct%` big, with a breakdown **"Ranks 1-3 {top3VolPct}% · Ranks 4-10 {rank410Pct}%"** (same volume basis as the headline, so they reconcile to page-1).
+- **AI Visibility** — keeps the combined brand-mention rate big, and adds **"Non-branded {unbranded.score}% · Branded {branded.score}%"** — the LLM Visibility panel's own *Unbranded visibility* and *Brand recognition* figures (real mention/recognition rates off the probe, `lib/apis/llmProbe.ts`). Only shown for a v2 probe (no fabricated split for v1/AIO).
+- **Coverage map** — the optimize/build counts moved from the subtext into a labeled breakdown under the total: **"Existing (optimize) {existing} · Net-new (build) {build}"** (same `scope.existing`/`scope.build` from the Content Map plan).
+- Added a reusable `breakdown` block to the card renderer (label · value rows); the Journey card's two-row layout is unchanged.
+
+**No data change (Const I.1).** Every breakdown figure is a real roll-up — rank-band volumes off the canonical pool, the probe's own unbranded/branded rates, and the content-map optimise/net-new split. Nothing modeled.
+
+**Theme parity (Const IV.6 / V.5).** No new color tokens or hex; breakdown rows use existing muted tokens. The dual-theme client render asserts zero raw hex.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` (project-mirrored, no `target` override) — PASS. Full **retained regression suite 198/198 PASS**. Per V.6, four prior-release checks whose wording changed (coverage subtext → breakdown) were **updated in place with dated notes**. New `exec282:` / `viz282:` / `render282:` invariants lock: `rank410Pct` volume math (1-3 + 4-10 reconcile to page-1), the AI breakdown sourced from `unbranded.score`/`branded.score`, the coverage existing/net-new breakdown, and a **jsdom client render** confirming all three breakdowns render with values and no raw hex. Dual-theme render at `orbitiq-v7.282-RENDER.html`.
+
 ## v7.281 — 2026-06-24 · Journey card pulls its pre-product / product split from the Journey panel (fixes phantom pre-product coverage)
 
 **The bug (Wayne).** The v7.280 Journey card showed **"Pre-product 16 of 19 problem themes covered"** even though the **pre-product journey has not been built** — the Journey panel itself shows **"Pre-product journey 0"**. Cause: v7.280 computed the lanes with a **forked `buildClusters()` classification** (its own problem-pool heuristic), which disagrees with how the Journey panel defines the lanes. Wayne: pull this from the Journey panel, do not add new logic.

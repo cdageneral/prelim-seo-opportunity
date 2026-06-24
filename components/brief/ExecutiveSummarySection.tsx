@@ -201,6 +201,9 @@ export default function ExecutiveSummarySection({
   const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
   // Volume-based — matches GoogleSerpSection and volume opportunity bars
   const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
+  // v7.282: page-1 split into ranks 1-3 (top3VolPct) and ranks 4-10 (volume-based, same
+  // total basis), for the Google SERP Ranks card breakdown. Sums to page1Pct (rounding aside).
+  const rank410Pct     = totalVol > 0 ? Math.round(((page1Vol - top3Vol) / totalVol) * 100) : 0;
 
   // ── Market capture ────────────────────────────────────────────────────────
   const semSnap: any   = analysis.semrushSnapshot  ?? {};
@@ -353,6 +356,13 @@ export default function ExecutiveSummarySection({
   const llmMentionPct: number | null = llmMentionTotal > 0
     ? Math.round((llmMentionAcquired / llmMentionTotal) * 100)
     : null;
+
+  // v7.282: the two halves under the combined AI-visibility figure — the LLM Visibility
+  // panel's own "Unbranded visibility" (unbranded.score) and "Brand recognition"
+  // (branded.score), each a real mention/recognition rate off the probe (lib/apis/llmProbe.ts).
+  // Available only for a v2 probe (v1/AIO have no branded/unbranded split → null, no breakdown).
+  const nonBrandedPct: number | null = isLlmProbeV2 ? (llmSnap.unbranded?.score ?? 0) : null;
+  const brandedPct:    number | null = isLlmProbeV2 ? (llmSnap.branded?.score ?? 0) : null;
 
   // ── Content inventory ─────────────────────────────────────────────────────
   // v7.128 — Gap stats now derive from the canonical kwPool (buildKwPool), so
@@ -609,15 +619,27 @@ export default function ExecutiveSummarySection({
             // v7.280: "Traditional" renamed to "Google SERP Ranks" (Wayne).
             { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Google SERP Ranks',
               big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: 'var(--c-f0f0ff)',
-              sub: 'of demand ranked page 1' },
+              sub: 'of demand ranked page 1',
+              breakdown: dbLoaded ? [
+                { label: 'Ranks 1\u20133', val: `${top3VolPct}%` },
+                { label: 'Ranks 4\u201310', val: `${rank410Pct}%` },
+              ] : undefined },
             { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility',
               big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
-              sub: aiVisDenom },
+              sub: aiVisDenom,
+              breakdown: (nonBrandedPct !== null && brandedPct !== null) ? [
+                { label: 'Non-branded', val: `${nonBrandedPct}%` },
+                { label: 'Branded', val: `${brandedPct}%` },
+              ] : undefined },
             // v7.280: Coverage now shows BOTH halves of the Content Map (05) — existing
             // pages to optimise + net-new pages to build (Wayne).
             { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage map',
               big: dbLoaded ? `${coverageTopics}` : '—', bigSuffix: dbLoaded ? (coverageTopics === 1 ? ' page' : ' pages') : '', bigColor: 'var(--c-f59e0b)',
-              sub: dbLoaded ? `${optimizeTopics} to optimize · ${netNewTopics} to build` : 'mapping pages…' },
+              sub: dbLoaded ? undefined : 'mapping pages…',
+              breakdown: dbLoaded ? [
+                { label: 'Existing (optimize)', val: `${optimizeTopics}` },
+                { label: 'Net-new (build)', val: `${netNewTopics}` },
+              ] : undefined },
             // v7.280: Journey split into two stacked rows — pre-product (top) + product.
             // v7.281: counts come straight from the Journey panel's lane split
             // (journeyLaneSummary) — pre-product shows "—/not built yet" until the deep
@@ -631,7 +653,7 @@ export default function ExecutiveSummarySection({
                   suffix: dbLoaded ? ` of ${journeyLanes.productTotal}` : '',
                   sub: 'topics with coverage' },
               ] },
-          ] as Array<{ key: string; accent: string; icon: string; big?: string; bigSuffix?: string; bigColor?: string; sub?: string; rows?: Array<{ label: string; big: string; suffix: string; sub: string }> }>).map(b => (
+          ] as Array<{ key: string; accent: string; icon: string; big?: string; bigSuffix?: string; bigColor?: string; sub?: string; rows?: Array<{ label: string; big: string; suffix: string; sub: string }>; breakdown?: Array<{ label: string; val: string }> }>).map(b => (
             <div key={b.key} className="orbit-card p-3"
               style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0' }}>
               <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: b.accent }}>{b.icon}</p>
@@ -652,7 +674,17 @@ export default function ExecutiveSummarySection({
                   <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor ?? 'var(--c-f0f0ff)', marginTop: 8 }}>
                     {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
                   </p>
-                  <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p>
+                  {b.sub ? <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p> : null}
+                  {b.breakdown ? (
+                    <div className="flex flex-col gap-0.5 mt-1.5">
+                      {b.breakdown.map(d => (
+                        <div key={d.label} className="flex items-center justify-between" style={{ gap: 6 }}>
+                          <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>{d.label}</span>
+                          <span className="text-[10px] font-semibold" style={{ color: 'var(--c-c0c0e0)' }}>{d.val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
