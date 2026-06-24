@@ -300,7 +300,7 @@ export async function POST(
         const compTokens = buildCompetitorBrandTokens(snap, clientDomain, manualCompetitorDomains);
         const exclTokens = buildExcludedBrandTokens(snap);
         const isOwnBrand = (name: string) => isBrandedKeyword(name, clientDomain, [], brandTermsList);
-        const guardedCategories = ((snap?._categoryBreakdown?.categories ?? []) as Array<{ name?: string; type?: string }>)
+        const guardedCategories = ((snap?._categoryBreakdown?.categories ?? []) as Array<{ name?: string; type?: string; monthlyDemand?: number }>)
           .filter(c => {
             const name = String(c?.name ?? '');
             if (!name) return false;
@@ -314,6 +314,7 @@ export async function POST(
               brand:        brandQuery,
               clientDomain,
               pool:         pool as any,
+              categories:   guardedCategories,
               maxSeeds,
             })
           : buildServiceSeeds({

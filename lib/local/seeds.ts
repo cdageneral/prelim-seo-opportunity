@@ -57,8 +57,15 @@ function volumeFor(token: string, clientPool: SeedPoolItem[]): number {
   return v;
 }
 
+/** A client content category as carried on `_categoryBreakdown.categories`. */
+export interface SeedCategory {
+  name?:          string;
+  type?:          string;
+  monthlyDemand?: number;       // v7.285: the category's REAL monthly demand (same field Market Gap shows)
+}
+
 export interface BuildSeedsOptions {
-  categories?: Array<{ name?: string; type?: string }>;
+  categories?: SeedCategory[];
   brand:       string;          // brand display (clientName) e.g. "Sono Bello"
   clientDomain?: string;
   pool?:       SeedPoolItem[];
@@ -79,28 +86,39 @@ function buildBrandTokenMap(brand: string, clientDomain?: string): Record<string
 }
 
 /**
- * Resolve ONE service name to a {term, volume} seed, or null if the name is pure
- * noise/brand (no distinctive ≥4-char service word). Shared by the catalog and the
- * explicit-term builders so a curated term gets its volume EXACTLY as the auto list
- * would — real Semrush volume of the distinctive token (Const I.1), never modeled.
+ * Resolve ONE category/term to its cleaned service term + distinctive token, or
+ * null if the name is pure noise/brand (no distinctive ≥4-char service word).
+ * Term validity only — the VOLUME is assigned by the caller (real category demand
+ * preferred, v7.285), so the catalog and the curated list stay one source of truth.
  */
-function resolveServiceSeed(
+function serviceTermOf(
   rawName: string,
   brandTokens: Record<string, boolean>,
-  clientPool: SeedPoolItem[],
-): ServiceSeed | null {
+): { term: string; tok: string } | null {
   const name = clean(rawName || '');
   if (!name) return null;
   const words = name.split(' ').filter(w => w.length >= 4 && SEED_NOISE[w] !== true && brandTokens[w] !== true);
   if (words.length === 0) return null;                  // pure noise/brand → skip
-  // distinctive token = the longest non-noise word (for volume lookup)
+  // distinctive token = the longest non-noise word (used only as a volume FALLBACK)
   let tok = words[0];
   for (let i = 1; i < words.length; i++) if (words[i].length > tok.length) tok = words[i];
-  return { term: name, kind: 'service', volume: volumeFor(tok, clientPool) };
+  return { term: name, tok };
+}
+
+/** Map clean(category name) → its real monthly demand (Const I.1; the Market-Gap field). */
+function demandByTerm(categories: SeedCategory[]): Record<string, number> {
+  const m: Record<string, number> = {};
+  categories.forEach(c => {
+    const t = clean((c && c.name) || '');
+    if (t && c && typeof c.monthlyDemand === 'number' && isFinite(c.monthlyDemand)) {
+      if (m[t] == null || c.monthlyDemand > m[t]) m[t] = c.monthlyDemand;
+    }
+  });
+  return m;
 }
 
 export interface BuildCatalogOptions {
-  categories?: Array<{ name?: string; type?: string }>;
+  categories?: SeedCategory[];
   brand:       string;
   clientDomain?: string;
   pool?:       SeedPoolItem[];
@@ -108,25 +126,28 @@ export interface BuildCatalogOptions {
 
 /**
  * The FULL (un-capped) ordered catalog of candidate service seeds — every client
- * service category that isn't pure noise/brand, deduped, sorted highest real
- * volume → lowest. The brand seed is NOT included (services only); this is the
- * pick-list the Local panel's "+ Add service" picker reads, and the source the
- * default top-N auto selection is taken from. The caller is responsible for
- * applying the competitor-brand guard to `categories` before passing them in
- * (Const III.1a — the guard lives at the read site, not here).
+ * service category that isn't pure noise/brand, deduped, sorted highest REAL
+ * monthly demand → lowest (v7.285: was the client's ranked-keyword volume; now the
+ * category's own `monthlyDemand`, the same number Market Gap shows, so the picker
+ * reconciles with the rest of the app — Const II.7 / I.1). Falls back to the
+ * ranked-pool volume of the distinctive token only when a category carries no
+ * demand (older snapshots). The brand seed is NOT included (services only). The
+ * caller applies the competitor-brand guard to `categories` first (Const III.1a).
  */
 export function buildServiceCatalog(opts: BuildCatalogOptions): ServiceSeed[] {
   const pool = opts.pool ?? [];
   const clientPool = pool.filter(k => !k.competitor && !k.isGap);
   const brandTokens = buildBrandTokenMap(opts.brand, opts.clientDomain);
+  const demand = demandByTerm(opts.categories ?? []);
 
   const services: ServiceSeed[] = [];
   const seen: Record<string, boolean> = {};
   (opts.categories ?? []).forEach(c => {
-    const seed = resolveServiceSeed((c && c.name) || '', brandTokens, clientPool);
-    if (!seed || seen[seed.term]) return;
-    seen[seed.term] = true;
-    services.push(seed);
+    const r = serviceTermOf((c && c.name) || '', brandTokens);
+    if (!r || seen[r.term]) return;
+    seen[r.term] = true;
+    const volume = demand[r.term] != null ? demand[r.term] : volumeFor(r.tok, clientPool);
+    services.push({ term: r.term, kind: 'service', volume });
   });
   services.sort((a, b) => b.volume - a.volume);
   return services;
@@ -166,16 +187,18 @@ export interface BuildFromTermsOptions {
   brand:       string;
   clientDomain?: string;
   pool?:       SeedPoolItem[];
+  categories?: SeedCategory[];  // v7.285: source for each term's real monthly demand
   maxSeeds?:   number;          // cap incl. brand. default 10
 }
 
 /**
  * Build seeds from an EXPLICIT curated service-term list (Wayne's deleted/added
- * picks on the Local panel), brand pinned first. Each term's volume is resolved
- * from the real pool exactly as the auto catalog does — same data, so the
- * displayed list and the scanned list reconcile (Const II.7). Order is preserved
- * (the user's order), then capped to `maxSeeds`. Pure-noise/brand terms are
- * dropped. The caller guards the source categories upstream (Const III.1a).
+ * picks on the Local panel), brand pinned first. Each term's volume is its REAL
+ * category monthly demand (v7.285) — looked up from `categories`, the same source
+ * the catalog uses — so the displayed list and the scanned list reconcile (Const
+ * II.7 / I.1), falling back to the ranked-pool volume only when a term carries no
+ * demand. Order is preserved (the user's order), then capped to `maxSeeds`.
+ * Pure-noise/brand terms are dropped. The caller guards the categories upstream.
  */
 export function buildSeedsFromServiceTerms(opts: BuildFromTermsOptions): ServiceSeed[] {
   const maxSeeds = Math.max(1, opts.maxSeeds ?? DEFAULT_SERVICE_CAP);
@@ -183,6 +206,7 @@ export function buildSeedsFromServiceTerms(opts: BuildFromTermsOptions): Service
   const clientPool = pool.filter(k => !k.competitor && !k.isGap);
   const brandTokens = buildBrandTokenMap(opts.brand, opts.clientDomain);
   const brandDisplay = clean(opts.brand);
+  const demand = demandByTerm(opts.categories ?? []);
 
   const seeds: ServiceSeed[] = [];
   const seen: Record<string, boolean> = {};
@@ -197,10 +221,11 @@ export function buildSeedsFromServiceTerms(opts: BuildFromTermsOptions): Service
 
   (opts.serviceTerms ?? []).forEach(raw => {
     if (seeds.length >= maxSeeds) return;
-    const seed = resolveServiceSeed(raw, brandTokens, clientPool);
-    if (!seed || seen[seed.term]) return;
-    seen[seed.term] = true;
-    seeds.push(seed);
+    const r = serviceTermOf(raw, brandTokens);
+    if (!r || seen[r.term]) return;
+    seen[r.term] = true;
+    const volume = demand[r.term] != null ? demand[r.term] : volumeFor(r.tok, clientPool);
+    seeds.push({ term: r.term, kind: 'service', volume });
   });
   return seeds.slice(0, maxSeeds);
 }

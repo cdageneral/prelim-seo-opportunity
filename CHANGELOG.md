@@ -1,5 +1,22 @@
 # OrbitIQ Changelog
 
+## v7.285 — 2026-06-24 · Local Search services → rank by real category demand + un-lock the +Add picker
+
+**The ask (Wayne).** On the Local Search **Services** tab, the categories shown in the Keyword/Market-Gap "PROCEDURE LINES" (Retirement Planning, Tax Planning, Estate Planning…) weren't appearing in the **+ Add service** dropdown.
+
+**Root cause (both in the v7.284 code).** (1) **Cap lockout** — the list auto-selected the top 9 services, filling the cap, so the dropdown was *disabled* ("At limit") with no options until you deleted one. (2) **Wrong volume basis** — the picker ranked/labelled categories by `volumeFor()` (the client's *already-ranked* keyword volume), not the category's real demand. Categories the client doesn't yet rank for scored 0, sorted to the bottom, and showed "—", so the high-demand Market-Gap categories were buried.
+
+**What changed.**
+- **`lib/local/seeds.ts`** — `buildServiceCatalog()` and `buildSeedsFromServiceTerms()` now rank and label each category by its **real `monthlyDemand`** (the same field Market Gap reads), falling back to the ranked-pool volume only when a category carries no demand (older snapshots). Added a `SeedCategory` type (`name`/`type`/`monthlyDemand`) and a shared `demandByTerm` map; split the old `resolveServiceSeed` into a volume-free `serviceTermOf` so the catalog and the curated list assign volume from one demand source (Const II.7 / I.1).
+- **`components/brief/LocalSearchSection.tsx`** — the **+Add dropdown is now always browsable**: it's disabled only when *nothing* remains to add (not at the cap). At the 10-cap it still lists every remaining category, with an amber hint to remove one first. The list ranks by real demand, the column/stat are relabelled **"Demand / mo"** / **"SERVICE DEMAND / MO"**, and the picker shows each category's demand and an "(N available)" count. Guarded categories now carry `monthlyDemand` into the seed builder.
+- **`app/api/projects/[id]/local-scan/route.ts`** — passes the guarded categories into `buildSeedsFromServiceTerms` so curated terms resolve to the same real demand on the scan side.
+
+**Data integrity (Const I.1).** `monthlyDemand` is the category's real demand off `_categoryBreakdown` — nothing modeled. The competitor-brand guard (III.1a) is unchanged and still applied at the read site.
+
+**Theme parity (Const IV.6 / V.5).** No new colors; the at-cap hint reuses the existing amber token. Dual-theme render `orbitiq-v7.285-RENDER.html`.
+
+**Verification (Art. V).** Isolated `tsc` (project tsconfig, no `target` override) clean on all changed files; jsdom dual-theme render asserts demand-ranked order, the demand values, the picker staying browsable at cap, the relabel, and the competitor category guarded out; retained regression suite re-run **154 checks, all PASS** (new `local:`/`local-ui:`/`local-route:` v7.285 invariants added).
+
 ## v7.284 — 2026-06-24 · Local Search → editable primary services (cap 10, delete, add from category catalog)
 
 **The ask (Wayne).** On the Local Search panel's **Services** tab: (1) expand the 8 primary services to **10**; (2) put a **trash can** next to each service to remove it from what we check locally; (3) add a **＋** to add a primary service, picked from the product categories defined by the Keyword panel, ordered **highest → lowest real search volume**.

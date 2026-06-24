@@ -151,8 +151,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   // blocklisted brand token; keep the client's own brand. Mirrors ThemeClustersPanel.
   const guardedCategories = useMemo(() => {
     const snap = analysis?.semrushSnapshot as any;
-    const cats: Array<{ name?: string; type?: string }> = snap?._categoryBreakdown?.categories ?? [];
-    if (cats.length === 0) return [] as Array<{ name?: string; type?: string }>;
+    const cats: Array<{ name?: string; type?: string; monthlyDemand?: number }> = snap?._categoryBreakdown?.categories ?? [];
+    if (cats.length === 0) return [] as Array<{ name?: string; type?: string; monthlyDemand?: number }>;
     const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
     const compTokens = buildCompetitorBrandTokens(snap, domain, competitorDomains);
     const exclTokens = buildExcludedBrandTokens(snap);
@@ -167,9 +167,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     });
   }, [analysis, domain, competitorDomains]);
 
-  // v7.284 — full (un-capped) catalog of candidate services from the GUARDED
-  // categories, sorted highest real Semrush volume → lowest. This feeds both the
-  // default auto selection and the "+ Add service" picker.
+  // v7.284/v7.285 — full (un-capped) catalog of candidate services from the GUARDED
+  // categories, sorted by REAL monthly demand → lowest (v7.285: the same demand the
+  // Market Gap panel shows, so the picker reconciles with the rest of the app). This
+  // feeds both the default auto selection and the "+ Add service" picker.
   const catalog = useMemo(
     () => buildServiceCatalog({ categories: guardedCategories, brand: projectName, clientDomain: domain, pool: pool as any }),
     [guardedCategories, projectName, domain, pool],
@@ -193,9 +194,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       brand:        projectName,
       clientDomain: domain,
       pool:         pool as any,
+      categories:   guardedCategories,
       maxSeeds:     SERVICE_CAP,
     }),
-    [effectiveServiceTerms, projectName, domain, pool, SERVICE_CAP],
+    [effectiveServiceTerms, projectName, domain, pool, guardedCategories, SERVICE_CAP],
   );
   const hasSeeds = seeds.length > 0;
   const seedVolume = useMemo(() => seeds.reduce((s, x) => s + (x.volume || 0), 0), [seeds]);
@@ -478,16 +480,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     {serviceCount} of {maxServices} services{curated != null && <> · <button onClick={resetServices} className="svc-reset">↺ Reset to auto</button></>}
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by real Semrush volume. Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS. Volume = the base service term's real Semrush volume.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS.</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="SERVICES" v={String(seeds.length)} />
                   <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="var(--c-46cce0)" />
                   <MiniStat k="GRID CELLS" v={scan ? fmt(scan.scannedCount) : `${seeds.length} × locations`} color="var(--c-a9a3ff)" />
-                  <MiniStat k="SERVICE VOL / MO" v={fmt(seedVolume)} color="var(--c-a9a3ff)" />
+                  <MiniStat k="SERVICE DEMAND / MO" v={fmt(seedVolume)} color="var(--c-a9a3ff)" />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
-                    <thead><tr><th>Service</th><th>Type</th><th style={{ textAlign: 'right' }}>Base volume / mo</th><th>Scanned as</th><th style={{ width: 44 }} aria-label="actions" /></tr></thead>
+                    <thead><tr><th>Service</th><th>Type</th><th style={{ textAlign: 'right' }}>Demand / mo</th><th>Scanned as</th><th style={{ width: 44 }} aria-label="actions" /></tr></thead>
                     <tbody>
                       {seeds.map((s, i) => (
                         <tr key={i}>
@@ -507,16 +509,20 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     </tbody>
                   </table>
                 </div>
-                {/* +Add service picker — remaining service categories, highest real volume first */}
+                {/* +Add service picker — ALL remaining service categories (highest demand first),
+                    always browsable so the full list is visible even at the cap (v7.285). */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-                  <select className="svc-add-sel" value={addPick} onChange={e => setAddPick(e.target.value)} disabled={atCap || addable.length === 0}>
-                    <option value="">{atCap ? `At limit (${maxServices} services)` : addable.length === 0 ? 'No more service categories' : '+ Add a service category…'}</option>
+                  <select className="svc-add-sel" value={addPick} onChange={e => setAddPick(e.target.value)} disabled={addable.length === 0}>
+                    <option value="">{addable.length === 0 ? 'All service categories are tracked' : `+ Add a service category…  (${addable.length} available)`}</option>
                     {addable.map((c, i) => (
                       <option key={i} value={c.term}>{c.term}{c.volume > 0 ? `  ·  ${fmt(c.volume)}/mo` : ''}</option>
                     ))}
                   </select>
                   <button className="svc-add-btn" disabled={!addPick || atCap} onClick={() => addService(addPick)}>＋ Add service</button>
                 </div>
+                {atCap && addable.length > 0 && (
+                  <div style={{ fontSize: 10.5, color: 'var(--c-f6c061)', marginTop: 6 }}>At the {SERVICE_CAP}-service limit (brand + {maxServices}). Remove a service above to add one of the {addable.length} remaining.</div>
+                )}
                 <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Edits persist for this project. Then set the <b>Locations</b> cap at the top and run a scan to see map-pack rank per city in the Map Pack tab.</div>
               </div>
             )}
