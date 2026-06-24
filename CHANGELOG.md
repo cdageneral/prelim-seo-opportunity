@@ -1,5 +1,20 @@
 # OrbitIQ Changelog
 
+## v7.280 — 2026-06-24 · Executive Summary cards — "Google SERP Ranks" rename, Coverage shows optimise + build, Journey split into pre-product + product rows
+
+**The ask (Wayne).** On the Exec Summary "two worlds" cards: (1) rename **"Traditional"** -> **"Google SERP Ranks"**; (2) on the Coverage card, bring in **both** existing pages to optimise **and** net-new pages to build; (3) on the Journey card, show the **product journey** coverage **plus a second row above it for the pre-product journey**.
+
+**What changed (`components/brief/ExecutiveSummarySection.tsx`, presentational + roll-up only).**
+- **Rename** -- the card is now **"Google SERP Ranks"**, and the matching pillar label in the Overall Visibility Score block was renamed too for consistency (pillar label column widened 82->118px). The 1/3 formula and the underlying `page1Pct` value are unchanged.
+- **Coverage card -> both halves of the Content Map (05).** New `optimizeTopics` = `contentPlan.scope.existing`; headline `coverageTopics` = existing + build **pages**; subtext reads **"{existing} to optimize . {build} to build"**. Both numbers come from the same canonical content-map plan (`buildContentPlanFromTopics(buildCanonicalClusterTopics(...))`) so they reconcile to that panel's optimise/net-new split. Card label updated to **"Coverage map."**
+- **Journey card -> two stacked rows.** New `journeyLanes` memo runs the **same `buildClusters()`** the Journey panel renders and splits clusters by `journeyType`: the **Product** row shows funnel-stage coverage (**X of 4** stages with client organic coverage); the **Pre-product** row (rendered **above** it) shows problem-theme coverage (**X of Y** themes). Pre-product is awareness-only (Const III.2a) and is populated only from the deep-journey build (III.2a-ii) -- so when it hasn't been built the row honestly shows **"--" / "not built yet"** rather than a fabricated count.
+
+**No data change (Const I.1).** Every figure is a count/sum off the canonical keyword pool and the same cluster/plan builders the other panels use -- nothing modeled, simulated, or hard-coded.
+
+**Theme parity (Const IV.6 / V.5).** No new color tokens or hex -- the cards reuse the existing palette already validated in both themes; the dual-theme client render asserts zero raw hex.
+
+**Verification (Art. V, incl. V.1a / V.5 / V.6).** Isolated `tsc` under the project-mirrored `tsconfig` (no `target` override) -- PASS. Full **retained regression suite 170/170 PASS** (129 baseline + 21 *279 + 20 new *280). Per V.6, four *279 checks whose behavior legitimately changed (coverage wording; "Coverage gap"->"Coverage map") were **updated in place with dated notes**, not deleted. New `exec280:`/`gap280:`/`render280:` invariants lock the rename (card + pillar), `coverageTopics = scope.existing + scope.build` with the optimize/build subtext, the journey lane split by `journeyType` with Pre-product + Product rows and the pre-product honest-gap, plus a **jsdom client render (mocked fetch)** confirming "Google SERP Ranks", "Coverage map" with both halves, both journey rows ("of 4"), and no raw hex. Dual-theme render at `orbitiq-v7.280-RENDER.html`.
+
 ## v7.279 — 2026-06-24 · Executive Summary — "Overall Visibility Score" relabel + AI/Coverage cards sourced from their panels
 
 **The ask (Wayne).** On the Executive Summary: (1) rename the lead KPI from **"GEO Visibility Score"** to **"Overall Visibility Score"**; (2) make the **AI Visibility** summary card pull from the **LLM Visibility** panel; (3) make the **Coverage Gap** card pull from the **Content Map**; (4) keep **Journey** sourced from the Journey panel.

@@ -281,6 +281,31 @@ export default function ExecutiveSummarySection({
   }, [analysis, clientDomain, manualDomains, dbKeywords]);
   const journeyStagesCovered = journeyStages.filter(s => s.status !== 'absent').length;
 
+  // ── v7.280: per-lane journey coverage for the summary card — the PRODUCT funnel
+  // (4 stages) and the PRE-PRODUCT lane shown as two rows. Built from the SAME
+  // buildClusters() the Journey panel renders (II.6/II.7). Pre-product is
+  // awareness-only (Const III.2a) so it has no 4-stage funnel — its coverage is
+  // counted as problem THEMES with client organic coverage out of total
+  // pre-product themes, and is empty until the deep journey is built (honest gap,
+  // III.2a-ii) → shown as "—" rather than a fabricated stage count.
+  const journeyLanes = useMemo(() => {
+    const STAGE_ORDER = ['awareness', 'consideration', 'decision', 'retention'] as const;
+    const clusters = buildClusters(analysis, {}, clientDomain, manualDomains, dbKeywords);
+    const prod: Record<string, number> = { awareness: 0, consideration: 0, decision: 0, retention: 0 };
+    let preTotal = 0, preCovered = 0;
+    clusters.forEach(c => {
+      if (c.journeyType === 'pre-product') {
+        preTotal++;
+        const cv = c.subClusters.reduce((s, sc) => s + sc.clientVolume, 0);
+        if (cv > 0) preCovered++;
+      } else {
+        c.subClusters.forEach(sc => { if (sc.clientVolume > 0 && prod[sc.stage] !== undefined) prod[sc.stage] += sc.clientVolume; });
+      }
+    });
+    const prodCovered = STAGE_ORDER.filter(s => prod[s] > 0).length;
+    return { prodCovered, prodTotal: 4, preCovered, preTotal };
+  }, [analysis, clientDomain, manualDomains, dbKeywords]);
+
   // ── LLM visibility ────────────────────────────────────────────────────────
   // v7.80: supports both probe shapes. v2 (llm_probe_v2) reports the UNBRANDED
   // mention rate — prompts that never named the brand — per platform; v1 keeps
@@ -378,8 +403,13 @@ export default function ExecutiveSummarySection({
     const topics = buildCanonicalClusterTopics(analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns);
     return topics.length > 0 ? buildContentPlanFromTopics(topics) : planFromSnapshot(analysis, dbKeywords);
   }, [analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns]);
-  const netNewTopics = contentPlan?.scope.build ?? 0;      // count of net-new (build) topics
-  const netNewVol    = contentPlan?.scope.buildVol ?? 0;   // their monthly search volume
+  const netNewTopics  = contentPlan?.scope.build ?? 0;        // net-new pages to BUILD
+  const netNewVol     = contentPlan?.scope.buildVol ?? 0;     // their monthly search volume
+  // v7.280: also surface the EXISTING pages to optimise (Wayne — show both halves
+  // of the Content Map: optimise vs build). scope.existing/build are the Content
+  // Map's own optimise/net-new split, so the card reconciles to that panel.
+  const optimizeTopics = contentPlan?.scope.existing ?? 0;    // existing pages to OPTIMISE
+  const coverageTopics = optimizeTopics + netNewTopics;       // total mapped pages
 
   // ── Opportunities ─────────────────────────────────────────────────────────
   const opps: Opportunity[] = (analysis.opportunities ?? [])
@@ -445,7 +475,7 @@ export default function ExecutiveSummarySection({
 
   // ── v7.131: Overall Visibility Score (equal-weighted; formula shown on screen) ──
   const scoreDims = [
-    { label: 'Traditional', val: page1Pct, color: 'var(--c-22c55e)' },
+    { label: 'Google SERP Ranks', val: page1Pct, color: 'var(--c-22c55e)' },
     ...(aiVisPct !== null ? [{ label: 'AI visibility', val: aiVisPct, color: 'var(--c-ef4444)' }] : []),
     { label: 'Journey', val: Math.round((journeyStagesCovered / 4) * 100), color: 'var(--c-06b6d4)' },
   ];
@@ -528,7 +558,7 @@ export default function ExecutiveSummarySection({
             <div className="flex flex-col gap-1.5">
               {scoreDims.map(d => (
                 <div key={d.label} className="flex items-center gap-2">
-                  <span style={{ width: 82, fontSize: 11, color: d.color }}>{d.label}</span>
+                  <span style={{ width: 118, fontSize: 11, color: d.color }}>{d.label}</span>
                   <div style={{ flex: 1, background: 'var(--c-1e1e2e)', borderRadius: 3, height: 7 }}>
                     <div style={{ width: `${Math.min(100, d.val)}%`, background: d.color, height: 7, borderRadius: 3 }} />
                   </div>
@@ -571,28 +601,52 @@ export default function ExecutiveSummarySection({
           The approach · two worlds of visibility
         </p>
         <div className="grid grid-cols-4 gap-2">
-          {[
-            { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Traditional',
+          {([
+            // v7.280: "Traditional" renamed to "Google SERP Ranks" (Wayne).
+            { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Google SERP Ranks',
               big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: 'var(--c-f0f0ff)',
               sub: 'of demand ranked page 1' },
             { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility',
               big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
               sub: aiVisDenom },
-            { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage gap',
-              // v7.279: net-new topics + their search volume, both from the Content Map (05) build.
-              big: dbLoaded ? `${netNewTopics}` : '—', bigSuffix: dbLoaded ? (netNewTopics === 1 ? ' topic' : ' topics') : '', bigColor: 'var(--c-f59e0b)',
-              sub: netNewVol > 0 ? `${fmtAnnual(netNewVol)} annual search volume to capture` : 'no net-new topics to build' },
+            // v7.280: Coverage now shows BOTH halves of the Content Map (05) — existing
+            // pages to optimise + net-new pages to build (Wayne).
+            { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage map',
+              big: dbLoaded ? `${coverageTopics}` : '—', bigSuffix: dbLoaded ? (coverageTopics === 1 ? ' page' : ' pages') : '', bigColor: 'var(--c-f59e0b)',
+              sub: dbLoaded ? `${optimizeTopics} to optimize · ${netNewTopics} to build` : 'mapping pages…' },
+            // v7.280: Journey split into two stacked rows — pre-product (top) + product.
             { key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey',
-              big: `${journeyStagesCovered}`, bigSuffix: ' of 4', bigColor: 'var(--c-f0f0ff)',
-              sub: 'stages with organic coverage' },
-          ].map(b => (
+              rows: [
+                { label: 'Pre-product', big: journeyLanes.preTotal > 0 ? `${journeyLanes.preCovered}` : '—',
+                  suffix: journeyLanes.preTotal > 0 ? ` of ${journeyLanes.preTotal}` : '',
+                  sub: journeyLanes.preTotal > 0 ? 'problem themes covered' : 'not built yet' },
+                { label: 'Product', big: `${journeyLanes.prodCovered}`, suffix: ' of 4',
+                  sub: 'funnel stages covered' },
+              ] },
+          ] as Array<{ key: string; accent: string; icon: string; big?: string; bigSuffix?: string; bigColor?: string; sub?: string; rows?: Array<{ label: string; big: string; suffix: string; sub: string }> }>).map(b => (
             <div key={b.key} className="orbit-card p-3"
               style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0' }}>
               <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: b.accent }}>{b.icon}</p>
-              <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor, marginTop: 8 }}>
-                {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
-              </p>
-              <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p>
+              {b.rows ? (
+                <div className="flex flex-col gap-2 mt-1.5">
+                  {b.rows.map(r => (
+                    <div key={r.label}>
+                      <p className="text-[8px] uppercase tracking-wider font-semibold" style={{ color: 'var(--c-8888aa)' }}>{r.label}</p>
+                      <p className="font-bold leading-none" style={{ fontSize: 18, color: 'var(--c-f0f0ff)', marginTop: 2 }}>
+                        {r.big}{r.suffix ? <span style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{r.suffix}</span> : null}
+                      </p>
+                      <p className="text-[8px] mt-0.5" style={{ color: 'var(--c-8888aa)' }}>{r.sub}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor ?? 'var(--c-f0f0ff)', marginTop: 8 }}>
+                    {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
+                  </p>
+                  <p className="text-[9px] mt-1" style={{ color: 'var(--c-8888aa)' }}>{b.sub}</p>
+                </>
+              )}
             </div>
           ))}
         </div>
