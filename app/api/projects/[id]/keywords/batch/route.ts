@@ -232,9 +232,36 @@ export async function POST(
     await db.insert(projectKeywords).values(rows.slice(i, i + CHUNK));
   }
 
+  // v7.289: self-diagnosis — how many rows in THIS payload carried SERP features, and how
+  // many actually persisted to the column. When prepared > 0 but stored === 0 the write is
+  // being silently dropped at the DB layer (column missing / migration failed); when
+  // prepared === 0 the client never sent it. Returned to the panel so the upload result
+  // shows it, and logged server-side for the Vercel log. Pure read-back — changes nothing.
+  const serpFeaturesPrepared = rows.filter(
+    r => typeof r.serpFeatures === 'string' && r.serpFeatures.trim().length > 0,
+  ).length;
+  let serpFeaturesStored = 0;
+  try {
+    const res: any = await db.execute(sql`
+      SELECT COUNT(*)::int AS n
+      FROM project_keywords
+      WHERE project_id = ${projectId}
+        AND serp_features IS NOT NULL
+        AND serp_features <> ''
+    `);
+    serpFeaturesStored = Number(res?.rows?.[0]?.n ?? res?.[0]?.n ?? 0);
+  } catch (err) {
+    console.error('[OrbitIQ] serp_features verify query failed:', err);
+  }
+  console.log(
+    `[OrbitIQ] batch upload project=${projectId} source=${source} domain="${domainNorm}" rows=${rows.length} serpFeaturesPrepared=${serpFeaturesPrepared} serpFeaturesStored(total project)=${serpFeaturesStored}`,
+  );
+
   return NextResponse.json({
     inserted: toInsert.length,
     updated:  toUpdate.length,
     skipped:  keywords.length - rows.length,
+    serpFeaturesPrepared,   // v7.289: rows in this payload that carried a SERP-features value
+    serpFeaturesStored,     // v7.289: rows in the project whose serp_features column is now non-empty
   });
 }

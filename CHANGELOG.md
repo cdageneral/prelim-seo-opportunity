@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.289 — 2026-06-24 · Self-diagnose why SERP features aren't stored (upload report + panel coverage readout)
+
+**The ask (Wayne).** After re-uploading, Local Intent still showed 0 with the "No SERP-features in upload" notice — even though his files are full of "Local pack" rows.
+
+**What we established.** The app's exact CSV parser pulls all 451 "Local pack" rows from his TD file, and the v7.288 write/read code is correct. Critically, his keyword cards still show data — which means the `keywords` SELECT (which lists `serp_features` explicitly) is succeeding, so the **column exists** and the **read works**. That isolates it to the **write**: `serp_features` is landing empty. Rather than keep guessing against a database we can't see, this release makes the app report the truth.
+
+**What changed (instrumentation only — no behavior change to the data model).**
+- **`app/api/projects/[id]/keywords/batch/route.ts`** — after each upload the route now (a) counts how many rows in the payload carried a SERP-features value (`serpFeaturesPrepared`), and (b) runs a **post-insert `COUNT(*)` read-back** of how many rows in the project actually have a non-empty `serp_features` column (`serpFeaturesStored`), returning both and logging them to the Vercel log. `prepared > 0` but `stored === 0` proves the write is being dropped at the DB layer; `prepared === 0` proves the client never sent it.
+- **`components/brief/KeywordsPanel.tsx`** — (a) the **upload result message** now reports it: "SERP features stored on N keywords," or a loud **"⚠ SERP features did not save (X sent, 0 stored)"** when the write fails. (b) A permanent **read-only coverage line** in the panel's Source-of-count strip: **"SERP-features data on X of N stored rows · Y trigger a local pack,"** turning red with a re-upload hint when X is 0. Real data only (Const I.1) — reads stored rows, computes nothing.
+
+**How to use it.** Deploy v7.289 (all files), re-upload your CSV, and read the upload message + the strip line. If it says SERP features were sent but 0 stored, it's a database-write issue and we fix the DB layer next; if it shows a real count but the card is still 0, it's a panel bug and I fix that. Either way we stop guessing.
+
+**Verification (Art. V).** `tsc` clean under the project tsconfig (components); batch route transforms clean; dual-theme render `orbitiq-v7.289-RENDER.html` (coverage line in data-present + empty states, both themes) with WCAG contrast on every new color — base grey 5.9/7.4, red 5.2/5.9, cyan 10.3/4.8 (all ≥4.5, Const IV.6; switched the empty-state warning off amber, which failed at 2.7:1 on the light strip, onto the red token which passes); retained regression suite **199 checks, all PASS** (6 new `serpdiag:` invariants).
+
 ## v7.288 — 2026-06-24 · Local Intent: don't lose SERP features on upload (union duplicates) + honest-gap notice when data is missing
 
 **The ask (Wayne).** The Local Intent card showed only ~1 keyword even though many of his keywords clearly trigger a map pack.

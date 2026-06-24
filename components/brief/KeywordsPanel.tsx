@@ -948,6 +948,16 @@ export default function KeywordsPanel({
     return false;
   }, [analysis, dbKeywords, mergedScanned]);
 
+  // v7.289: read-only coverage of the uploaded SERP-features column on the STORED rows —
+  // the diagnostic that tells us whether the data made it into the DB (write OK) or not.
+  // Reads dbKeywords only; computes/changes nothing.
+  const serpFeatCoverage = useMemo(() => {
+    const total   = dbKeywords.length;
+    const withFeat = dbKeywords.filter(d => typeof d.serpFeatures === 'string' && d.serpFeatures.trim().length > 0).length;
+    const localFromCells = dbKeywords.filter(d => serpCellHasLocalPack(d.serpFeatures)).length;
+    return { total, withFeat, localFromCells };
+  }, [dbKeywords]);
+
   // v7.226: competitor-brand category guard (Const III.1a). The raw `_categoryBreakdown`
   // legitimately contains competitor/third-party brand categories (built from competitor
   // gap keywords). ThemeClustersPanel already drops them at render; the Keyword panel did
@@ -1161,6 +1171,7 @@ export default function KeywordsPanel({
     // v7.143: full row accounting so a silent drop is impossible to miss —
     // we report saved vs file rows, plus dup/blank/failed breakdown.
     let added = 0; let skipped = 0; let failed = 0;
+    let serpPrepared = 0; let serpStored = 0;   // v7.289: SERP-features write diagnosis
     const fileRows      = dataLines.length;            // data rows in the CSV (excl. header)
     const parsedDropped = fileRows - parsed.length;    // rows with no keyword (couldn't parse)
     const CHUNK = 500;
@@ -1187,6 +1198,8 @@ export default function KeywordsPanel({
           const d = await res.json();
           added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
           skipped += d.skipped  ?? 0;                          // duplicate keywords within the file
+          serpPrepared += d.serpFeaturesPrepared ?? 0;          // v7.289: rows in payload carrying SERP features
+          if (typeof d.serpFeaturesStored === 'number') serpStored = d.serpFeaturesStored;   // running project total
         } else {
           failed += chunk.length;                              // server error — these rows did NOT save
         }
@@ -1208,12 +1221,23 @@ export default function KeywordsPanel({
     if (skipped > 0)        parts.push(`${skipped.toLocaleString()} duplicate keyword${skipped !== 1 ? 's' : ''} in file`);
     if (parsedDropped > 0)  parts.push(`${parsedDropped.toLocaleString()} blank/unparseable row${parsedDropped !== 1 ? 's' : ''}`);
     if (failed > 0)         parts.push(`${failed.toLocaleString()} failed to save — re-upload to retry`);
+    // v7.289: SERP-features write diagnosis. If this file carried SERP features but none
+    // persisted, the column write is being dropped server-side (DB/migration) — surface it
+    // loudly so it isn't mistaken for "no local demand".
+    let serpNote = '';
+    if (serpPrepared > 0 && serpStored === 0) {
+      serpNote = ` ⚠ SERP features did not save (${serpPrepared.toLocaleString()} sent, 0 stored) — DB column issue, contact support.`;
+    } else if (serpPrepared > 0) {
+      serpNote = ` SERP features stored on ${serpStored.toLocaleString()} keyword${serpStored !== 1 ? 's' : ''}.`;
+    } else if (serpPrepared === 0 && fileRows > 0) {
+      serpNote = ` (No SERP-features column detected in this file.)`;
+    }
     const detail = parts.length ? ` (${parts.join(' · ')})` : '';
     setCsvStatus({
-      type: failed > 0 ? 'error' : 'success',
-      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.`,
+      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0)) ? 'error' : 'success',
+      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.${serpNote}`,
     });
-    setTimeout(() => setCsvStatus(null), 10000);
+    setTimeout(() => setCsvStatus(null), 15000);
   }
 
   // ── Clear All — FULL RESET (v7.233) ─────────────────────────────────────────
@@ -1568,6 +1592,18 @@ export default function KeywordsPanel({
               {p.distinctDb.toLocaleString()} distinct of {p.rawDbRows.toLocaleString()} uploaded rows
               {dupRows > 0 && <span style={{ color: 'var(--c-f59e0b)', marginLeft: 6 }}>· {dupRows.toLocaleString()} duplicate rows</span>}
             </span>
+            {/* v7.289: SERP-features coverage diagnostic — shows whether the uploaded SERP-features */}
+            {/* column actually landed on the stored rows (the input to Local Intent). Real data only. */}
+            {serpFeatCoverage.total > 0 && (
+              <span style={{ flexBasis: '100%', fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-8a8aa8)', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <i className="ti ti-map-pin" style={{ color: serpFeatCoverage.withFeat === 0 ? 'var(--c-ef4444)' : 'var(--c-46cce0)' }} />
+                SERP-features data on{' '}
+                <b style={{ color: serpFeatCoverage.withFeat === 0 ? 'var(--c-ef4444)' : 'var(--c-46cce0)' }}>{serpFeatCoverage.withFeat.toLocaleString()}</b>
+                {' '}of {serpFeatCoverage.total.toLocaleString()} stored rows
+                {serpFeatCoverage.withFeat > 0 && <>{' · '}<b style={{ color: 'var(--c-46cce0)' }}>{serpFeatCoverage.localFromCells.toLocaleString()}</b> trigger a local pack</>}
+                {serpFeatCoverage.withFeat === 0 && <span style={{ color: 'var(--c-ef4444)' }}>{' — '}empty: re-upload on this version with the “SERP Features by Keyword” column to populate</span>}
+              </span>
+            )}
           </div>
         );
       })()}
