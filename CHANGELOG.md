@@ -1,5 +1,21 @@
 # OrbitIQ Changelog
 
+## v7.295 — 2026-06-25 · The Keyword Landscape CSV uploader now actually reads the SERP-Features column (the real reason Local Intent showed 2)
+
+**Rebased on v7.294** (the AI Answer Engines / Profound panel) — that work is preserved untouched; this release adds only the parser fix below.
+
+**The ask (Wayne).** After re-uploading `weg.csv` (which carries 31 "Local pack" rows across 392 keywords), Local Intent still showed **2** and the panel said "No SERP-features in upload." Hard-refreshing and re-uploading didn't help.
+
+**Root cause (proved with the live production log, not a guess).** The Vercel runtime log for the actual upload — `domain="wealthenhancement.com" rows=392 serpFeaturesPrepared=0 sampleKeys=[keyword|searchVolume|position|url] sampleSerp=""` — showed the **browser never sent the SERP column**. There are two CSV uploaders in the app, and the **Keyword Landscape / scope upload uses `parseCsvText` in `app/projects/[id]/page.tsx`**, not `KeywordsPanel`'s parser. That `parseCsvText` (a) **never read the "SERP Features by Keyword" column at all**, and (b) split rows with a naive `line.split(',')` that **shatters Semrush's quoted comma-containing cells** ("Trends" = `"0.05,0.05,…"` and the SERP-Features list = `"Local pack, Reviews, Video, …"`), misaligning every column to their right. So the 31 Local pack values were dropped before the payload was ever built — which is why no amount of re-uploading or refreshing changed it. (The file and `KeywordsPanel`'s separate parser were both correct all along.)
+
+**What changed (`app/projects/[id]/page.tsx` only — real data, Const I.1).**
+- Added a **quoted-field-aware splitter** (`splitDelimitedLine`) used for both the header and every data row, so quoted comma cells (Trends, SERP Features) no longer break column alignment.
+- `parseCsvText` now **reads the SERP-Features column** (aliases `serp features by keyword` / `serp features` / `serp_features` / Semrush `Fl`) and returns it as `serpFeatures`. `handleFileUpload` already posts the parsed rows verbatim, so the value now reaches `/keywords/batch`, persists to `serp_features`, and feeds the Local Pack detection the Keyword panel and Local Search panel read.
+
+**Effect.** Re-uploading `weg.csv` through the Keyword Landscape screen now sends `serpFeaturesPrepared=31`, stores them, and Local Intent reads **31** (not 2) — and the v7.293 Local Search service categories populate from those real Local Pack keywords.
+
+**Verification (Art. V).** Real project **`tsc --noEmit` clean** across the full v7.294 source incl. the Profound panel (no `target` override, Const V.1a). **Replayed the actual `weg.csv` (392 rows) through the exact new `parseCsvText`:** 392 rows parsed, all 392 carry `serpFeatures`, **31 trigger a Local pack**, URL column stays aligned despite the quoted Trends cell. No styling change (parser logic only). Retained regression suite **222 checks, all PASS** — 10 `pageparse:` invariants (quoted-field splitter, SERP-Features read incl. `Fl`, serpFeatures returned + posted, naive-split removed, runtime alignment check). Note: ships as v7.295 (not overwriting the existing v7.294 AI Answer Engines package — Const VI.3).
+
 ## v7.294 — 2026-06-25 · New "AI Answer Engines" panel — upload Profound exports to see real GEO visibility across ChatGPT, Perplexity, Gemini, Copilot & Google AI
 
 **The ask (Wayne).** Add a new panel under the **LLM Visibility** nav group, fed by **Profound** CSV exports, that extracts and displays as much as possible from the files — and give each file its own upload feature so the upload activates the panel. Identify what each CSV does.
