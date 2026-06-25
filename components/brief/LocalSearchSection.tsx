@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand, buildLocalPackCategorySet, hasLocalPackData } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand, buildLocalPackCategorySet, hasAnyLocalSignal } from '@/lib/utils/kwVolume';
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
@@ -157,24 +157,31 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     const compTokens = buildCompetitorBrandTokens(snap, domain, competitorDomains);
     const exclTokens = buildExcludedBrandTokens(snap);
     const isClientBrandName = (name: string) => isBrandedKeyword(name, domain, [], brandTerms);
-    // v7.286 — local-pack gate (Wayne's choice: show ONLY categories that trigger a Google
-    // local map pack). Real Semrush SERP-feature data. When the analysis predates the flag
-    // (no data), DON'T hide everything — fall back to all categories + a notice (Const I.5).
-    const lpAvailable = hasLocalPackData(snap);
-    const lpCats = buildLocalPackCategorySet(snap);
+    // v7.286/v7.292 — local-pack gate. Show ONLY categories that trigger a Google local map
+    // pack — the SAME segmentation the Keyword panel badges 📍 Local pack (Const II.7), read
+    // from the real local-pack keyword set: the footprint `Fl` roll-up PLUS uploaded SERP-feature
+    // cells (v7.292, via dbKeywords). When there is NO local signal at all, there is no honest
+    // basis to call any category local — return brand-only (the brand seed is pinned separately)
+    // and surface the gap (Const I.5), rather than falling back to every category. Per Wayne's
+    // choice, EVERY category that triggers a local pack is eligible (product + own-brand/nav);
+    // foreign-brand categories are still dropped above by the competitor-brand guard (III.1a).
+    const localSignal = hasAnyLocalSignal(snap, dbKeywords);
+    if (!localSignal) return [] as Array<{ name?: string; type?: string; monthlyDemand?: number }>;
+    const lpCats = buildLocalPackCategorySet(snap, dbKeywords);
     return cats.filter(c => {
       const name = String(c?.name ?? '');
       if (!name) return false;
       if ((c?.type === 'brand') && !isClientBrandName(name)) return false;           // foreign brand category
       const foreignBrand = textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens);
       if (foreignBrand && !isClientBrandName(name)) return false;                     // name carries a competitor brand
-      if (lpAvailable && !lpCats.has(name)) return false;                             // not a local-pack-triggering category
+      if (!lpCats.has(name)) return false;                                            // not a local-pack-triggering category
       return true;
     });
-  }, [analysis, domain, competitorDomains]);
+  }, [analysis, domain, competitorDomains, dbKeywords]);
 
-  // v7.286 — is the real local-pack filter active on this analysis? Drives the panel notice.
-  const localPackActive = useMemo(() => hasLocalPackData(analysis?.semrushSnapshot), [analysis]);
+  // v7.286/v7.292 — is the real local-pack filter active on this analysis? Drives the panel
+  // notice. Active whenever any real local signal exists (footprint roll-up OR uploaded cells).
+  const localPackActive = useMemo(() => hasAnyLocalSignal(analysis?.semrushSnapshot, dbKeywords), [analysis, dbKeywords]);
 
   // v7.284/v7.285 — full (un-capped) catalog of candidate services from the GUARDED
   // categories, sorted by REAL monthly demand → lowest (v7.285: the same demand the
@@ -491,8 +498,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 </div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS.</div>
                 {localPackActive
-                  ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Showing only categories that <b>trigger a Google local map pack</b> — based on real Semrush SERP-feature data for the client's keywords.</div>
-                  : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ Local-pack filtering needs a fresh analysis run to populate the SERP-feature data — showing all service categories for now.</div>}
+                  ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Your <b>brand</b> plus every category that <b>triggers a Google local map pack</b> — the same 📍 Local pack segmentation the Keyword panel shows, from real Semrush SERP-feature data.</div>
+                  : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ No local-pack signal in this data yet — showing your <b>brand</b> only. Upload Semrush keywords with the <b>SERP Features</b> column (or re-run the analysis) to populate service areas.</div>}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
                   <MiniStat k="SERVICES" v={String(seeds.length)} />
                   <MiniStat k="LOCATIONS" v={scan ? fmt(scan.locations.length) : '—'} color="var(--c-46cce0)" />

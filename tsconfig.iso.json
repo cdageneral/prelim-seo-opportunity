@@ -1,5 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": { "incremental": false, "plugins": [], "noEmit": true, "skipLibCheck": true, "types": ["node","react","react-dom"] },
-  "include": ["/tmp/build287_shims.d.ts","lib/utils/kwVolume.ts","components/brief/KeywordsPanel.tsx","components/brief/CompetitorsModal.tsx"]
-}

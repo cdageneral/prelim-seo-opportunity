@@ -650,11 +650,56 @@ export function serpCellHasLocalPack(raw: unknown): boolean {
   return false;
 }
 
-/** Set of category NAMES (verbatim, as stored) that trigger a Local Pack. Empty when no data. */
-export function buildLocalPackCategorySet(snap: any): Set<string> {
+// v7.292: the REAL local-pack keyword set, mirroring the Keyword panel's badge logic
+// (Const II.7 single source of truth). It folds BOTH local signals the panel uses:
+//   (1) the footprint roll-up `snap.localPackKeywords` (the `Fl` SERP-feature roll-up), and
+//   (2) every uploaded row whose own "SERP Features" cell carries a Local Pack (serpCellHasLocalPack).
+// Source (2) is why the Keyword panel can badge a category 📍 Local pack even on an analysis
+// that predates the `localPackKeywords` roll-up — so the Local Search panel must read the same
+// pair to agree with it. All real Semrush data (Const I.1); keys lowercased.
+export function buildLocalPackKeywordSet(snap: any, dbKeywords?: any[]): Set<string> {
+  const set = new Set<string>();
+  if (hasLocalPackData(snap)) {
+    (snap.localPackKeywords as any[]).forEach(k => set.add(String(k).toLowerCase()));
+  }
+  if (Array.isArray(dbKeywords)) {
+    for (const d of dbKeywords) {
+      if (serpCellHasLocalPack(d?.serpFeatures)) {
+        const kw = String(d?.keyword ?? '').toLowerCase();
+        if (kw) set.add(kw);
+      }
+    }
+  }
+  return set;
+}
+
+// v7.292: is there ANY real local signal to filter on? True when the footprint roll-up exists
+// OR any uploaded row carries a SERP-feature cell (whether or not that cell shows a Local Pack —
+// a populated column means the data is present to judge from). When this is false there is no
+// honest basis to claim a category is local, so the Local Search panel shows the brand only and
+// surfaces the gap (Const I.5) rather than falling back to every category.
+export function hasAnyLocalSignal(snap: any, dbKeywords?: any[]): boolean {
+  if (hasLocalPackData(snap)) return true;
+  if (Array.isArray(dbKeywords)) {
+    for (const d of dbKeywords) {
+      const s = d?.serpFeatures;
+      if (typeof s === 'string' && s.trim().length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Set of category NAMES (verbatim, as stored) that trigger a Local Pack — the same segmentation
+ * the Keyword panel badges. A category is included when ANY keyword mapped to it (by STORED
+ * membership `keywordCategories`, Const II.8 — never re-derived lexically) is in the real
+ * local-pack keyword set (footprint roll-up + uploaded SERP-feature cells, v7.292). Pass
+ * `dbKeywords` to fold in the uploaded-cell signal; omit it for the footprint-only set.
+ * Empty when there is no local signal at all.
+ */
+export function buildLocalPackCategorySet(snap: any, dbKeywords?: any[]): Set<string> {
   const out = new Set<string>();
-  if (!hasLocalPackData(snap)) return out;
-  const lp = new Set<string>((snap.localPackKeywords as any[]).map(k => String(k).toLowerCase()));
+  const lp = buildLocalPackKeywordSet(snap, dbKeywords);
   if (lp.size === 0) return out;
   const kc = snap?._categoryBreakdown?.keywordCategories;
   if (kc && typeof kc === 'object') {
