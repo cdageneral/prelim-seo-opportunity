@@ -18,7 +18,8 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand, buildLocalPackCategorySet, hasAnyLocalSignal } from '@/lib/utils/kwVolume';
+import { buildKwPool, buildLocalPackKeywordSet, hasAnyLocalSignal } from '@/lib/utils/kwVolume';
+import { buildCategoryModel } from '@/lib/category/categoryModel';
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
@@ -143,66 +144,68 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     }) as any[];
   }, [analysis, dbKeywords, domain, competitorDomains]);
 
-  // v7.284 — competitor-brand guard at THIS read site (Const III.1a). The service
-  // catalog reads `_categoryBreakdown.categories`, which still contains competitor
-  // brand categories (synthesis builds them from gap keywords) — so the guard, not
-  // the synthesis output, is the enforcement layer. Drop brand-type categories that
-  // aren't the client's own, and any category whose NAME carries a competitor /
-  // blocklisted brand token; keep the client's own brand. Mirrors ThemeClustersPanel.
-  const guardedCategories = useMemo(() => {
+  // v7.293 — source the Local services from the CANONICAL category model — the SAME
+  // categories the Keyword panel shows (buildCategoryModel → buildCanonicalClusterTopics),
+  // NOT the raw `_categoryBreakdown.categories`. The canonical model already applies the
+  // competitor-brand guard (Const III.1a) AND merges near-duplicate categories, so the
+  // service list reads one "Wealth Management" node instead of the raw breakdown's un-merged
+  // variants ("wealth management", "wealth management services", "…investment advisory", …).
+  // A category is a candidate when it is a PRODUCT/service category (parentType 'procedure' —
+  // excludes brand, location/nav, and the pre-product demand/problem lanes) AND ≥1 of its
+  // keywords triggers a Google Local Pack (the real local-pack keyword set: footprint `Fl`
+  // roll-up + uploaded SERP-feature cells, Const II.7/II.8 — STORED membership, never
+  // re-derived lexically). Volume is the EXACT TS roll-up of the category's own keyword
+  // volumes (Const I.1/I.3 — first-topic-wins, no double count), the same demand the Keyword
+  // panel shows. No local signal → [] (brand only + honest gap, Const I.5). Ranked desc.
+  const categoryModel = useMemo(
+    () => (analysis?.semrushSnapshot ? buildCategoryModel(analysis, domain, competitorDomains, dbKeywords) : null),
+    [analysis, domain, competitorDomains, dbKeywords],
+  );
+  const localServiceCats = useMemo(() => {
     const snap = analysis?.semrushSnapshot as any;
-    const cats: Array<{ name?: string; type?: string; monthlyDemand?: number }> = snap?._categoryBreakdown?.categories ?? [];
-    if (cats.length === 0) return [] as Array<{ name?: string; type?: string; monthlyDemand?: number }>;
-    const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
-    const compTokens = buildCompetitorBrandTokens(snap, domain, competitorDomains);
-    const exclTokens = buildExcludedBrandTokens(snap);
-    const isClientBrandName = (name: string) => isBrandedKeyword(name, domain, [], brandTerms);
-    // v7.286/v7.292 — local-pack gate. Show ONLY categories that trigger a Google local map
-    // pack — the SAME segmentation the Keyword panel badges 📍 Local pack (Const II.7), read
-    // from the real local-pack keyword set: the footprint `Fl` roll-up PLUS uploaded SERP-feature
-    // cells (v7.292, via dbKeywords). When there is NO local signal at all, there is no honest
-    // basis to call any category local — return brand-only (the brand seed is pinned separately)
-    // and surface the gap (Const I.5), rather than falling back to every category. Per Wayne's
-    // choice, EVERY category that triggers a local pack is eligible (product + own-brand/nav);
-    // foreign-brand categories are still dropped above by the competitor-brand guard (III.1a).
-    const localSignal = hasAnyLocalSignal(snap, dbKeywords);
-    if (!localSignal) return [] as Array<{ name?: string; type?: string; monthlyDemand?: number }>;
-    const lpCats = buildLocalPackCategorySet(snap, dbKeywords);
-    return cats.filter(c => {
-      const name = String(c?.name ?? '');
-      if (!name) return false;
-      if ((c?.type === 'brand') && !isClientBrandName(name)) return false;           // foreign brand category
-      const foreignBrand = textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens);
-      if (foreignBrand && !isClientBrandName(name)) return false;                     // name carries a competitor brand
-      if (!lpCats.has(name)) return false;                                            // not a local-pack-triggering category
-      return true;
+    if (!categoryModel || !hasAnyLocalSignal(snap, dbKeywords)) {
+      return [] as Array<{ name: string; type: string; monthlyDemand: number }>;
+    }
+    const lpKw = buildLocalPackKeywordSet(snap, dbKeywords);
+    if (lpKw.size === 0) return [] as Array<{ name: string; type: string; monthlyDemand: number }>;
+    const typeOf = new Map(categoryModel.categories.map(c => [c.name, c.type]));
+    const vol = new Map<string, number>();           // canonical category → exact volume roll-up
+    const isLocal = new Set<string>();               // categories holding ≥1 local-pack keyword
+    categoryModel.members.forEach(m => {
+      if (typeOf.get(m.categoryName) !== 'procedure') return;   // product/service categories only
+      vol.set(m.categoryName, (vol.get(m.categoryName) || 0) + (m.volume || 0));
+      if (lpKw.has(String(m.keyword).toLowerCase().trim())) isLocal.add(m.categoryName);
     });
-  }, [analysis, domain, competitorDomains, dbKeywords]);
+    return Array.from(isLocal)
+      .map(name => ({ name, type: 'service', monthlyDemand: vol.get(name) || 0 }))
+      .sort((a, b) => b.monthlyDemand - a.monthlyDemand);
+  }, [analysis, dbKeywords, categoryModel]);
 
-  // v7.286/v7.292 — is the real local-pack filter active on this analysis? Drives the panel
-  // notice. Active whenever any real local signal exists (footprint roll-up OR uploaded cells).
+  // v7.286/v7.292 — is a real local signal present? Drives the panel notice + brand-only gap.
   const localPackActive = useMemo(() => hasAnyLocalSignal(analysis?.semrushSnapshot, dbKeywords), [analysis, dbKeywords]);
 
-  // v7.284/v7.285 — full (un-capped) catalog of candidate services from the GUARDED
-  // categories, sorted by REAL monthly demand → lowest (v7.285: the same demand the
-  // Market Gap panel shows, so the picker reconciles with the rest of the app). This
-  // feeds both the default auto selection and the "+ Add service" picker.
+  // v7.293 — full (un-capped) catalog of candidate services from the LOCAL-PACK product
+  // categories of the canonical model, sorted by REAL category demand desc (the same demand
+  // the Keyword panel / Market Gap show, so the picker reconciles — Const II.7). Feeds both
+  // the default auto selection and the "+ Add service" picker (so the dropdown shows ONLY
+  // these local-pack product categories).
   const catalog = useMemo(
-    () => buildServiceCatalog({ categories: guardedCategories, brand: projectName, clientDomain: domain, pool: pool as any }),
-    [guardedCategories, projectName, domain, pool],
+    () => buildServiceCatalog({ categories: localServiceCats, brand: projectName, clientDomain: domain, pool: pool as any }),
+    [localServiceCats, projectName, domain, pool],
   );
 
   // The effective curated SERVICE terms (services only; brand is pinned separately).
-  // null curation → auto default = the top (cap-1) services by volume.
-  const SERVICE_CAP = DEFAULT_SERVICE_CAP;                 // 10 total incl. the brand
-  const maxServices = Math.max(1, SERVICE_CAP - 1);        // 9 services + brand = 10
+  // null curation → auto default = the top AUTO_SERVICES by volume (Wayne: brand + top 7).
+  const SERVICE_CAP = DEFAULT_SERVICE_CAP;                 // 10 total incl. the brand (max addable)
+  const maxServices = Math.max(1, SERVICE_CAP - 1);        // up to 9 services + brand = 10 (cap)
+  const AUTO_SERVICES = 7;                                 // v7.293 — default list = brand + top 7
   const effectiveServiceTerms = useMemo<string[]>(() => {
     if (curated != null) return curated.slice(0, maxServices);
-    return catalog.slice(0, maxServices).map(s => s.term);
+    return catalog.slice(0, AUTO_SERVICES).map(s => s.term);
   }, [curated, catalog, maxServices]);
 
   // v7.183/v7.284 — the seeds shown + scanned: brand pinned first, then the curated
-  // services, each with its real pool volume. Same builder the scan uses → the table
+  // services, each with its real category demand. Same builder the scan uses → the table
   // and the scan reconcile (Const II.7).
   const seeds: ServiceSeed[] = useMemo(
     () => buildSeedsFromServiceTerms({
@@ -210,10 +213,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       brand:        projectName,
       clientDomain: domain,
       pool:         pool as any,
-      categories:   guardedCategories,
+      categories:   localServiceCats,
       maxSeeds:     SERVICE_CAP,
     }),
-    [effectiveServiceTerms, projectName, domain, pool, guardedCategories, SERVICE_CAP],
+    [effectiveServiceTerms, projectName, domain, pool, localServiceCats, SERVICE_CAP],
   );
   const hasSeeds = seeds.length > 0;
   const seedVolume = useMemo(() => seeds.reduce((s, x) => s + (x.volume || 0), 0), [seeds]);
@@ -496,7 +499,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     {serviceCount} of {maxServices} services{curated != null && <> · <button onClick={resetServices} className="svc-reset">↺ Reset to auto</button></>}
                   </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + up to {maxServices} service categories, derived from the client's own footprint and ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add one with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + the top {AUTO_SERVICES} <b style={{ color: 'var(--c-c8c8e0)' }}>product categories that trigger a Google local map pack</b> (the same 📍 Local pack categories the Keyword panel shows), ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add another local-pack category with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each is scanned in the Google map pack as <b style={{ color: 'var(--c-c8c8e0)' }}>"{`{service} {city}`}"</b> from every location's GPS.</div>
                 {localPackActive
                   ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Your <b>brand</b> plus every category that <b>triggers a Google local map pack</b> — the same 📍 Local pack segmentation the Keyword panel shows, from real Semrush SERP-feature data.</div>
                   : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ No local-pack signal in this data yet — showing your <b>brand</b> only. Upload Semrush keywords with the <b>SERP Features</b> column (or re-run the analysis) to populate service areas.</div>}
