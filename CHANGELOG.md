@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.290 — 2026-06-24 · Large CSV uploads now persist reliably (the real reason SERP features showed empty)
+
+**The ask (Wayne).** After re-uploading, Local Intent still showed 0 / "No SERP-features in upload" — even on the correct, full file.
+
+**Root cause.** Verified against Wayne's actual file (`td-4400-more-…csv`): the file is perfect — 5,459 of 5,461 rows carry SERP features, 451 say "Local pack" — and his live `db/schema.ts` and v7.288 upload route handle `serp_features` correctly. So the data and the logic were fine; the failure was the **upload not persisting at scale**. That CSV posts as eleven batches, and **every batch re-read the entire project footprint** (the v7.288 `existing` SELECT pulled all rows for the domain — thousands, each with a 500-char `serp_features` cell — once per batch). On a large project that read alone can exceed the serverless function's time budget; the batch 504s, its rows never save, `serp_features` stays empty, and the honest-gap notice (correctly) reports no SERP data.
+
+**What changed (no change to the data model or detection).**
+- **`app/api/projects/[id]/keywords/batch/route.ts`** — the existing-rows read is now **scoped to just the keywords in the current batch** (`inArray(keyword, payloadKws)`) instead of the whole footprint. Exact, not a sample (Const I.6) — we only need the prior state of the keywords we're about to write. Turns a per-batch full-table scan into a small lookup, so each batch finishes well inside the time budget. Cross-batch SERP-features union is preserved (a keyword's duplicates in a later batch still read and merge the earlier batch's stored value).
+- **`components/brief/KeywordsPanel.tsx`** — upload batches reduced **500 → 250** (lighter request) and each batch now **retries up to 3× with backoff** before it's counted as failed, so a transient timeout no longer silently drops rows. Real accounting preserved — a batch only counts as failed after retries are exhausted, and the "Saved X of N … failed" message (plus the v7.289 SERP diagnostics) still report the truth.
+
+**Verification (Art. V).** `tsc` clean (components); batch route transforms clean; **replayed the real upload** of Wayne's 5,461-row file through the new 250-row + scoped-existing union path — all **82** distinct local keywords preserved, zero lost by the scale fix; no styling change so the v7.289 dual-theme render still holds (Const IV.6 unaffected); retained regression suite **205 checks, all PASS** (6 new `scale:` invariants). Combine with v7.289's diagnostics: after deploying, the upload message now reports SERP features stored, and the panel shows the coverage line.
+
 ## v7.289 — 2026-06-24 · Self-diagnose why SERP features aren't stored (upload report + panel coverage readout)
 
 **The ask (Wayne).** After re-uploading, Local Intent still showed 0 with the "No SERP-features in upload" notice — even though his files are full of "Local pack" rows.

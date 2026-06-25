@@ -1174,38 +1174,51 @@ export default function KeywordsPanel({
     let serpPrepared = 0; let serpStored = 0;   // v7.289: SERP-features write diagnosis
     const fileRows      = dataLines.length;            // data rows in the CSV (excl. header)
     const parsedDropped = fileRows - parsed.length;    // rows with no keyword (couldn't parse)
-    const CHUNK = 500;
+    // v7.290 SCALE FIX: smaller batches + automatic retry. Big footprints (TD ≈ 5,400 rows)
+    // were posted 500 at a time; if any batch timed out server-side it was counted as failed
+    // and its rows (incl. serp_features) never saved — leaving the upload silently partial.
+    // Now 250-row batches (lighter request, paired with the route's scoped existing-query
+    // fix) and each batch retries up to 3× with backoff before it's declared failed, so a
+    // transient timeout no longer drops data. Real accounting preserved (Const I.6).
+    const CHUNK = 250;
+    const MAX_ATTEMPTS = 3;
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
     setCsvProgress({ current: 0, total: parsed.length });
     for (let i = 0; i < parsed.length; i += CHUNK) {
       const chunk = parsed.slice(i, i + CHUNK);
-      try {
-        const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            domain: '',
-            source: 'csv',
-            keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null }) => ({
-              keyword:      row.keyword,
-              searchVolume: row.searchVolume,
-              position:     row.position,
-              type:         row.type,
-              serpFeatures: row.serpFeatures,
-              url:          row.url,
-            })),
-          }),
-        });
-        if (res.ok) {
-          const d = await res.json();
-          added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
-          skipped += d.skipped  ?? 0;                          // duplicate keywords within the file
-          serpPrepared += d.serpFeaturesPrepared ?? 0;          // v7.289: rows in payload carrying SERP features
-          if (typeof d.serpFeaturesStored === 'number') serpStored = d.serpFeaturesStored;   // running project total
-        } else {
-          failed += chunk.length;                              // server error — these rows did NOT save
+      const payload = JSON.stringify({
+        domain: '',
+        source: 'csv',
+        keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null }) => ({
+          keyword:      row.keyword,
+          searchVolume: row.searchVolume,
+          position:     row.position,
+          type:         row.type,
+          serpFeatures: row.serpFeatures,
+          url:          row.url,
+        })),
+      });
+      let saved = false;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !saved; attempt++) {
+        try {
+          const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload,
+          });
+          if (res.ok) {
+            const d = await res.json();
+            added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
+            skipped += d.skipped  ?? 0;                          // duplicate keywords within the file
+            serpPrepared += d.serpFeaturesPrepared ?? 0;          // v7.289: rows in payload carrying SERP features
+            if (typeof d.serpFeaturesStored === 'number') serpStored = d.serpFeaturesStored;   // running project total
+            saved = true;
+          } else if (attempt < MAX_ATTEMPTS) {
+            await sleep(attempt * 800);                          // server error (e.g. 504 timeout) — back off and retry
+          }
+        } catch {
+          if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);   // network error — back off and retry
         }
-      } catch {
-        failed += chunk.length;                                // network/parse error — did NOT save
       }
+      if (!saved) failed += chunk.length;                        // exhausted retries — these rows did NOT save
       setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
     }
     setCsvProgress(null);

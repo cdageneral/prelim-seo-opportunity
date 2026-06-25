@@ -156,15 +156,27 @@ export async function POST(
     : eq(projectKeywords.domain, domainNorm);
 
   // v7.288: pull each existing row's serp_features too, so a re-upload that arrives in
-  // CHUNKS (the panel posts 500 rows at a time, and a keyword's duplicate rows can span
-  // chunks) unions onto what an earlier chunk already stored — never clobbering it.
-  const existing = await db
+  // CHUNKS (the panel posts in batches, and a keyword's duplicate rows can span chunks)
+  // unions onto what an earlier chunk already stored — never clobbering it.
+  // v7.290 SCALE FIX: scope this read to ONLY the keywords in THIS payload (inArray), not
+  // the whole project footprint. The old query pulled every existing row for the domain —
+  // up to thousands, each with a 500-char serp_features cell — on EVERY batch, so an
+  // 11-batch upload re-read the entire footprint 11×. On a large project (TD ≈ 5,400 rows)
+  // that read alone could blow the serverless function's time budget, the batch would 504,
+  // its rows never persisted, and serp_features stayed empty (the bug Wayne hit). We only
+  // ever need the existing state of the keywords we're about to write, so this is exact —
+  // not a sampling shortcut (Const I.6) — and turns a full-table scan into a small lookup.
+  const payloadKws = Array.from(new Set(
+    keywords.map((k: any) => (k?.keyword ?? '').trim().toLowerCase()).filter((s: string) => s.length > 0),
+  ));
+  const existing = payloadKws.length === 0 ? [] : await db
     .select({ keyword: projectKeywords.keyword, serpFeatures: projectKeywords.serpFeatures })
     .from(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, projectId),
       eq(projectKeywords.source, source),
       domainCond,
+      inArray(projectKeywords.keyword, payloadKws),
     ));
   const existingSet  = new Set(existing.map((r: any) => r.keyword));
   const existingFeat = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.serpFeatures ?? null]));
