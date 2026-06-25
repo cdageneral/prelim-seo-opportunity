@@ -265,8 +265,13 @@ export async function POST(
   } catch (err) {
     console.error('[OrbitIQ] serp_features verify query failed:', err);
   }
+  // v7.291: raw-payload probe — what did the BROWSER actually send? Prints the field names
+  // on the first incoming keyword and a sample of its serp-features value. If `serpFeatures`
+  // is absent from the keys, the client (uploader bundle) never sent it — i.e. a stale cached
+  // chunk in the browser, not a server/file problem. Read-only; logs to Vercel only.
+  const sampleKw: any = Array.isArray(keywords) ? (keywords[0] ?? {}) : {};
   console.log(
-    `[OrbitIQ] batch upload project=${projectId} source=${source} domain="${domainNorm}" rows=${rows.length} serpFeaturesPrepared=${serpFeaturesPrepared} serpFeaturesStored(total project)=${serpFeaturesStored}`,
+    `[OrbitIQ] batch upload project=${projectId} source=${source} domain="${domainNorm}" rows=${rows.length} serpFeaturesPrepared=${serpFeaturesPrepared} serpFeaturesStored(total project)=${serpFeaturesStored} sampleKeys=[${Object.keys(sampleKw).join('|')}] sampleSerp=${JSON.stringify(String(sampleKw.serpFeatures ?? '')).slice(0, 80)}`,
   );
 
   return NextResponse.json({

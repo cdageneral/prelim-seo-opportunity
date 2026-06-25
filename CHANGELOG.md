@@ -1,5 +1,17 @@
 # OrbitIQ Changelog
 
+## v7.291 — 2026-06-25 · Force-refresh the competitor uploader + log exactly what the browser sends (stale-bundle diagnosis)
+
+**The situation.** On the live v7.290 build, every CSV upload (client Wealth Enhancement + competitors) reaches the server with `serpFeaturesPrepared=0` — confirmed in the Vercel runtime logs. But the client file `weg-880+.csv` (505 distinct keywords, matching the log) **has** the SERP-features column, fully populated, 57 "Local pack" rows; and the deployed CompetitorsModal parser (read at the running commit) is correct and extracts those features when run on the same files. Correct code + correct file + zero received ⇒ the browser is running a **stale cached copy of the uploader chunk** that predates SERP-features parsing.
+
+**What changed (diagnostic + cache-bust only — no behavior change).**
+- **`components/brief/CompetitorsModal.tsx`** — added a client-side probe that logs `competitor CSV parsed rows=… withSerpFeatures=… sample=…` right after parsing. This both (a) **changes the file's content hash**, so the next deploy forces every browser to fetch a fresh uploader chunk (clearing the stale one), and (b) prints, in the browser console, whether THIS browser parsed the SERP column.
+- **`app/api/projects/[id]/keywords/batch/route.ts`** — the upload log now also prints `sampleKeys=[…]` (the field names on the first incoming keyword) and `sampleSerp=…` (its SERP-features value). If `serpFeatures` is missing from `sampleKeys`, the browser definitively didn't send it (stale bundle); if present with a real value but `prepared=0`, it's a server-side count bug. Pure read-only logging.
+
+**How to use it.** Deploy these 3 files, then in the app do a hard refresh (Cmd/Ctrl+Shift+R) or open in a private window, and re-upload. Expected: with the fresh chunk, the uploader now reads the SERP column and `serpFeaturesPrepared` jumps to a real number — populating Local Intent. The new logs confirm it either way.
+
+**Verification (Art. V).** `tsc` clean (components); both changed files transform clean; no behavior/styling change (render + theme parity unaffected); retained regression suite **205 checks, all PASS**.
+
 ## v7.290 — 2026-06-24 · Large CSV uploads now persist reliably (the real reason SERP features showed empty)
 
 **The ask (Wayne).** After re-uploading, Local Intent still showed 0 / "No SERP-features in upload" — even on the correct, full file.

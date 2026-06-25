@@ -415,6 +415,13 @@ export default function CompetitorsModal({
       setStatusFor(target.id, { type: 'error', msg: 'Could not read file.' }); return;
     }
     const parsed = parseCompetitorCsv(text);
+    // v7.291: client-side probe — confirms THIS browser's uploader parsed the SERP-features
+    // column. If `withSerp` is 0 on a file that has the column, the browser is running a stale
+    // cached bundle (this changed file forces a fresh chunk on the next deploy). Diagnostic only.
+    try {
+      const withSerp = parsed.filter(p => p.serpFeatures && String(p.serpFeatures).trim().length > 0).length;
+      console.log(`[OrbitIQ] competitor CSV parsed rows=${parsed.length} withSerpFeatures=${withSerp} sample=${JSON.stringify(parsed[0]?.serpFeatures ?? null)}`);
+    } catch { /* diagnostic only */ }
     if (!parsed.length) {
       setStatusFor(target.id, { type: 'error', msg: 'No valid rows. Expected columns: keyword, search_volume, position.' });
       return;
