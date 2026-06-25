@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ThemeToggle from '@/components/ThemeToggle';
 import LLMVisibilitySection from '@/components/brief/LLMVisibilitySection';
+import ProfoundVisibilitySection from '@/components/brief/ProfoundVisibilitySection';
 import AudienceSegmentsSection from '@/components/brief/AudienceSegmentsSection';
 import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
@@ -66,7 +67,7 @@ interface Project {
 type NavSection =
   | 'overview' | 'viewScope' | 'keywords' | 'audienceSegments' | 'journeys' | 'content' | 'contentPlan'
   | 'serp' | 'serpFeatures'
-  | 'llm'
+  | 'llm' | 'aiEngines'
   | 'local'
   | 'authority' | 'entity'
   | 'urlTax' | 'techHygiene'
@@ -89,12 +90,13 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'serp',         num: '06', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
   { id: 'serpFeatures', num: '07', icon: 'ti-star',             label: 'SERP Features',          group: 'Google Platform' },
   { id: 'llm',          num: '08', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
-  { id: 'local',        num: '09', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
-  { id: 'authority',    num: '10', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
-  { id: 'entity',       num: '11', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
-  { id: 'urlTax',       num: '12', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
-  { id: 'techHygiene',  num: '13', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
-  { id: 'usage',        num: '14', icon: 'ti-receipt',          label: 'API Usage',              group: 'Operations' },
+  { id: 'aiEngines',    num: '09', icon: 'ti-chart-bar',        label: 'AI Answer Engines',      group: 'LLM Visibility' },
+  { id: 'local',        num: '10', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
+  { id: 'authority',    num: '11', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
+  { id: 'entity',       num: '12', icon: 'ti-target',           label: 'LLM Entity Authority',   group: 'Page & Entity Authority' },
+  { id: 'urlTax',       num: '13', icon: 'ti-link',             label: 'URL Taxonomy',           group: 'Technical Authority' },
+  { id: 'techHygiene',  num: '14', icon: 'ti-tool',             label: 'Tech Hygiene',           group: 'Technical Authority' },
+  { id: 'usage',        num: '15', icon: 'ti-receipt',          label: 'API Usage',              group: 'Operations' },
 ];
 
 const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Local Search', 'Page & Entity Authority', 'Technical Authority', 'Operations'];
@@ -1474,6 +1476,14 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── AI Answer Engines (Profound uploads) — v7.294 ──
+               Upload-driven, so it renders independent of analysis results (like API Usage). */}
+          {activeSection === 'aiEngines' && (
+            <div className="overflow-y-auto flex-1 min-h-0 p-3 animate-fade-in">
+              <ProfoundVisibilitySection projectId={projectId} clientName={project?.clientName} />
+            </div>
+          )}
+
           {/* ── Audience Segments ── */}
           {hasResults && analysis && activeSection === 'audienceSegments' && (
             <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
@@ -1515,7 +1525,7 @@ export default function ProjectBriefPage() {
           )}
 
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'local' && activeSection !== 'usage' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
