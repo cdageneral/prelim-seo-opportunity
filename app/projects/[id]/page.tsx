@@ -140,36 +140,18 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
 
 // ── CSV / XLSX parser (client-side) ──────────────────────────────────────────
 
-// v7.295: quoted-field-aware splitter. A Semrush Positions export quotes any cell that
-// contains the delimiter — notably "Trends" ("0.05,0.05,…") AND "SERP Features by Keyword"
-// ("Local pack, Reviews, Video, …"). The old `line.split(',')` shattered those cells, which
-// (a) silently misaligned every column to the right of "Trends" and (b) is why the SERP-Features
-// column never parsed here. Splits on `delimiter` only when NOT inside double-quotes.
-function splitDelimitedLine(line: string, delimiter: string): string[] {
-  const out: string[] = [];
-  let cur = ''; let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') { inQuote = !inQuote; }
-    else if (ch === delimiter && !inQuote) { out.push(cur); cur = ''; }
-    else { cur += ch; }
-  }
-  out.push(cur);
-  return out.map(s => s.replace(/\r$/, '').trim().replace(/^"|"$/g, '').trim());
-}
-
-function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number; url?: string; serpFeatures?: string }[] {
+function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number; url?: string }[] {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const firstLine  = lines[0] ?? '';
   const delimiter  = firstLine.includes(';') ? ';' : ',';
-  const headers    = splitDelimitedLine(firstLine, delimiter).map(h => h.toLowerCase());
+  const headers    = firstLine.split(delimiter).map(h => h.trim().replace(/"/g, '').toLowerCase());
 
   return lines.slice(1).map(line => {
     const vals: Record<string, string> = {};
-    splitDelimitedLine(line, delimiter).forEach((v, i) => { vals[headers[i] ?? i] = v; });
+    line.split(delimiter).forEach((v, i) => { vals[headers[i] ?? i] = v.trim().replace(/"/g, ''); });
 
-    // Semrush column aliases: Ph=Keyword, Nq=Volume, Po=Position, Ur=URL, Fl=SERP Features
+    // Semrush column aliases: Ph=Keyword, Nq=Volume, Po=Position, Ur=URL
     const kw  = (vals['keyword'] || vals['ph'] || vals['phrase'] || '').toLowerCase().trim();
     const vol = parseInt(vals['search volume'] || vals['nq'] || vals['volume'] || vals['searches'] || '0') || 0;
     const posRaw = vals['position'] || vals['po'] || '';
@@ -181,16 +163,8 @@ function parseCsvText(text: string): { keyword: string; searchVolume: number; po
     const rawUrl = (vals['url'] || vals['ur'] || vals['ranking url'] || vals['landing page']
       || vals['page'] || vals['page url'] || vals['address'] || vals['current url'] || vals['target url'] || '').trim();
     const url    = rawUrl ? rawUrl : undefined;
-    // v7.295: SERP-Features column — the SOURCE of Local Pack / Local Intent. This project-page
-    // (Keyword Landscape) upload parser DROPPED this column entirely — only KeywordsPanel's
-    // parser read it — so CSV-uploaded projects never persisted serp_features and the Local
-    // Intent card stayed at the live-scan count (e.g. 2) even when the file carried dozens of
-    // "Local pack" rows. Same header aliases as the KeywordsPanel parser + Semrush 'Fl'.
-    // Real data only (Const I.1); blank stays unmapped (honest gap, I.5).
-    const rawFeats = (vals['serp features by keyword'] || vals['serp features'] || vals['serp_features'] || vals['fl'] || '').trim();
-    const serpFeatures = rawFeats ? rawFeats : undefined;
 
-    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined, url, serpFeatures };
+    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined, url };
   }).filter(r => r.keyword && r.searchVolume > 0);
 }
 

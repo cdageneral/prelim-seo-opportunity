@@ -216,25 +216,81 @@ function mergeResponses(existing: ResponseRow[], incoming: ResponseRow[]): Respo
   return Array.from(map.values());
 }
 
-// ─── Persistence (per project, trimmed, quota-safe) ───────────────────────────
+// ─── Persistence (per project) ────────────────────────────────────────────────
+// v7.295: store in IndexedDB, not localStorage. The full Profound dataset (~2.8 MB
+// JSON → ~5.6 MB in localStorage's UTF-16 store) exceeds the ~5 MB localStorage
+// quota, so the write failed silently and a refresh reverted to whatever smaller
+// file last fit. IndexedDB holds tens of MB and stores the structured object
+// directly. A one-time migration drains any legacy localStorage snapshot, then
+// removes that key so the old (often partial) save can't resurrect on refresh.
 
-const storeKey = (pid: string) => `orbitiq:profound:${pid}`;
+const IDB_NAME = 'orbitiq';
+const IDB_STORE = 'profound';
+const legacyKey = (pid: string) => `orbitiq:profound:${pid}`;
 
-function loadPersisted(pid: string): Dataset | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(storeKey(pid));
-    if (!raw) return null;
-    const d = JSON.parse(raw) as Dataset;
-    if (!d || !Array.isArray(d.responses)) return null;
-    return d;
-  } catch { return null; }
+function openIDB(): Promise<IDBDatabase | null> {
+  return new Promise(resolve => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
+    let req: IDBOpenDBRequest;
+    try { req = indexedDB.open(IDB_NAME, 1); } catch { resolve(null); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
 }
 
-function persist(pid: string, d: Dataset) {
+async function idbSave(pid: string, d: Dataset): Promise<boolean> {
+  const db = await openIDB();
+  if (!db) return false;
+  return new Promise(resolve => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(d, pid);
+      tx.oncomplete = () => { db.close(); resolve(true); };
+      tx.onerror = () => { db.close(); resolve(false); };
+      tx.onabort = () => { db.close(); resolve(false); };
+    } catch { resolve(false); }
+  });
+}
+
+async function idbLoad(pid: string): Promise<Dataset | null> {
+  const db = await openIDB();
+  if (!db) return null;
+  return new Promise(resolve => {
+    try {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const rq = tx.objectStore(IDB_STORE).get(pid);
+      rq.onsuccess = () => { db.close(); const v = rq.result; resolve(v && Array.isArray(v.responses) ? v as Dataset : null); };
+      rq.onerror = () => { db.close(); resolve(null); };
+    } catch { resolve(null); }
+  });
+}
+
+async function idbDelete(pid: string): Promise<void> {
+  const db = await openIDB();
+  if (!db) return;
+  try {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(pid);
+    tx.oncomplete = () => db.close();
+  } catch { /* no-op */ }
+}
+
+function readLegacyLocal(pid: string): Dataset | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(legacyKey(pid));
+    if (!raw) return null;
+    const d = JSON.parse(raw) as Dataset;
+    return d && Array.isArray(d.responses) ? d : null;
+  } catch { return null; }
+}
+function clearLegacyLocal(pid: string) {
   if (typeof window === 'undefined') return;
-  try { window.localStorage.setItem(storeKey(pid), JSON.stringify(d)); }
-  catch { /* quota — keep session-only, no crash */ }
+  try { window.localStorage.removeItem(legacyKey(pid)); } catch { /* no-op */ }
 }
 
 // ─── Small UI helpers ─────────────────────────────────────────────────────────
@@ -264,19 +320,47 @@ type Tab = 'overview' | 'engines' | 'competitive' | 'reputation' | 'prompts' | '
 interface Props { projectId: string; clientName?: string | null; }
 
 export default function ProfoundVisibilitySection({ projectId, clientName }: Props) {
-  const [data, setData] = useState<Dataset>(() =>
-    loadPersisted(projectId) ?? { responses: [], rankings: [], prompts: [], uploadedAt: null, client: clientName || 'Wealth Enhancement Group' }
-  );
+  const emptyData = (): Dataset => ({ responses: [], rankings: [], prompts: [], uploadedAt: null, client: clientName || 'Wealth Enhancement Group' });
+  const [data, setData] = useState<Dataset>(emptyData);
+  const [hydrated, setHydrated] = useState(false);   // false until we've read IndexedDB
   const [tab, setTab] = useState<Tab>('overview');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [persistWarn, setPersistWarn] = useState(false);
 
   const respInput = useRef<HTMLInputElement>(null);
   const rankInput = useRef<HTMLInputElement>(null);
   const promptInput = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { persist(projectId, data); }, [projectId, data]);
+  // Hydrate once per project: prefer IndexedDB; otherwise migrate a legacy
+  // localStorage snapshot into IndexedDB, then clear the legacy key.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let loaded = await idbLoad(projectId);
+      if (!loaded) {
+        const legacy = readLegacyLocal(projectId);
+        if (legacy) { await idbSave(projectId, legacy); loaded = legacy; }
+      }
+      clearLegacyLocal(projectId);
+      if (!alive) return;
+      if (loaded) setData(loaded);
+      setHydrated(true);
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+
+  // Persist on change — but only after hydration, so the initial empty state
+  // never overwrites a saved dataset.
+  useEffect(() => {
+    if (!hydrated) return;
+    const isEmpty = data.responses.length === 0 && data.rankings.length === 0 && data.prompts.length === 0;
+    if (isEmpty) return;
+    let alive = true;
+    idbSave(projectId, data).then(okSaved => { if (alive) setPersistWarn(!okSaved); });
+    return () => { alive = false; };
+  }, [projectId, data, hydrated]);
 
   const hasResp = data.responses.length > 0;
 
@@ -322,7 +406,10 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
   }
 
   function clearAll() {
-    setData({ responses: [], rankings: [], prompts: [], uploadedAt: null, client: clientName || 'Wealth Enhancement Group' });
+    setData(emptyData());
+    setPersistWarn(false);
+    void idbDelete(projectId);
+    clearLegacyLocal(projectId);
     setNotice('Cleared all uploaded Profound data for this project.');
     setError(null);
   }
@@ -380,7 +467,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
 
         <div className="flex items-center justify-between flex-wrap gap-2">
           <p className="text-orbit-tertiary text-[10px]">
-            File type is detected from the CSV header — drop any of the Profound exports into any slot. Responses are merged &amp; de-duplicated across files. Data is stored in your browser for this project.
+            File type is detected from the CSV header — drop any of the Profound exports into any slot. Responses are merged &amp; de-duplicated across files. Data is saved in your browser (IndexedDB) for this project, so it persists across refreshes.
           </p>
           {(hasResp || data.rankings.length > 0 || data.prompts.length > 0) && (
             <button onClick={clearAll} className="text-red-600 text-[11px] hover:underline shrink-0">Clear all</button>
@@ -395,10 +482,23 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
         )}
         {error && <p className="text-red-600 text-xs">{error}</p>}
         {notice && !error && <p className="text-green-600 text-xs">{notice}</p>}
+        {persistWarn && (
+          <p className="text-amber-600 text-xs">
+            ⚠ This dataset is loaded for this session but couldn&rsquo;t be saved to browser storage, so it may not persist after a refresh. Everything below still works now.
+          </p>
+        )}
       </div>
 
+      {/* Restoring saved data (IndexedDB read in flight) — avoids flashing the empty state */}
+      {!hydrated && !hasResp && (
+        <div className="orbit-card p-8 text-center flex items-center justify-center gap-2">
+          <span className="inline-block w-3 h-3 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />
+          <p className="text-orbit-secondary text-sm">Restoring saved data…</p>
+        </div>
+      )}
+
       {/* Empty state */}
-      {!hasResp && (
+      {hydrated && !hasResp && (
         <div className="orbit-card p-8 text-center flex flex-col items-center gap-2">
           <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center">
             <i className="ti ti-upload text-orbit-accent text-xl" aria-hidden="true" />
