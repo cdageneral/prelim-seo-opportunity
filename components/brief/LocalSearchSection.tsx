@@ -20,6 +20,8 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { buildKwPool, buildLocalPackKeywordSet, hasAnyLocalSignal } from '@/lib/utils/kwVolume';
 import { buildCategoryModel } from '@/lib/category/categoryModel';
+import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: mirror the Keyword panel's local-pack product lines
+import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298: competitor-brand guard (Const III.1a)
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
@@ -167,19 +169,28 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       return [] as Array<{ name: string; type: string; monthlyDemand: number }>;
     }
     const lpKw = buildLocalPackKeywordSet(snap, dbKeywords);
+    // v7.298 — also fold the LIVE SerpAPI local_pack signal so the Local panel's local set matches
+    // the Keyword panel's isLocalIntent EXACTLY (it ORs serp local_pack with the uploaded-cell and
+    // footprint roll-up signals — Const II.7). Without this the Local panel misses serp-flagged
+    // service lines (e.g. "Insurance", "Advisor & Service Selection") the Keyword panel badges.
+    const saRows = (analysis?.serpApiSnapshot?.keywords ?? []) as any[];
+    for (let i = 0; i < saRows.length; i++) {
+      const feats = saRows[i]?.serpFeatures;
+      if (Array.isArray(feats) && feats.indexOf('local_pack') >= 0) {
+        const kw = String(saRows[i]?.keyword ?? '').toLowerCase().trim();
+        if (kw) lpKw.add(kw);
+      }
+    }
     if (lpKw.size === 0) return [] as Array<{ name: string; type: string; monthlyDemand: number }>;
-    const typeOf = new Map(categoryModel.categories.map(c => [c.name, c.type]));
-    const vol = new Map<string, number>();           // canonical category → exact volume roll-up
-    const isLocal = new Set<string>();               // categories holding ≥1 local-pack keyword
-    categoryModel.members.forEach(m => {
-      if (typeOf.get(m.categoryName) !== 'procedure') return;   // product/service categories only
-      vol.set(m.categoryName, (vol.get(m.categoryName) || 0) + (m.volume || 0));
-      if (lpKw.has(String(m.keyword).toLowerCase().trim())) isLocal.add(m.categoryName);
-    });
-    return Array.from(isLocal)
-      .map(name => ({ name, type: 'service', monthlyDemand: vol.get(name) || 0 }))
-      .sort((a, b) => b.monthlyDemand - a.monthlyDemand);
-  }, [analysis, dbKeywords, categoryModel]);
+    // v7.298 — MIRROR the Keyword panel (Const II.7): roll the local-pack PROCEDURE keywords up to
+    // their canonical product LINES via the SAME buildPathTree roll-up the Keyword panel badges,
+    // instead of emitting the granular leaf categories (which leaked big informational buckets like
+    // "401k" / "net investment income tax" / "local advisors" as "services"). Reads STORED paths
+    // (Const II.8/III.1b — never lexical) and applies the competitor-brand guard (Const III.1a).
+    const drop = buildCategoryGuard(snap, domain, competitorDomains).droppedCategoryNames(categoryModel.categories);
+    return buildLocalServiceLines(categoryModel, lpKw, drop)
+      .map(l => ({ name: l.name, type: 'service', monthlyDemand: l.monthlyDemand }));
+  }, [analysis, dbKeywords, categoryModel, domain, competitorDomains]);
 
   // v7.286/v7.292 — is a real local signal present? Drives the panel notice + brand-only gap.
   const localPackActive = useMemo(() => hasAnyLocalSignal(analysis?.semrushSnapshot, dbKeywords), [analysis, dbKeywords]);
