@@ -334,6 +334,19 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
  * Query SerpAPI for a batch of keywords (from Semrush top keywords).
  * Caps at 50 queries to manage credit usage.
  */
+// v7.297: bounded-concurrency scan. The previous implementation scanned the
+// batch strictly one keyword at a time (plus a 200ms gap each). When SerpAPI
+// responded slowly, a 75-keyword batch ran past Vercels hard 300s function cap,
+// returning a 504 before the route could respond, so the SERP Features panels
+// progress bar never advanced ("0 of N"). Running a small fixed number of
+// keywords concurrently keeps each batch comfortably under the cap (worst case
+// is roughly (batch / CONCURRENCY) * ~30s). Concurrency is capped at
+// SCAN_CONCURRENCY and never exceeds the batch size; one slow or failed keyword
+// cannot block the others. Per-call 15s timeouts and the per-keyword try/catch
+// are unchanged, so credit safety is identical: 1 keyword = 1 search, and a
+// failed keyword is skipped (never retried here).
+const SCAN_CONCURRENCY = 5;
+
 export async function batchKeywordScan(
   keywords: string[],
   clientDomain: string,
@@ -341,21 +354,28 @@ export async function batchKeywordScan(
   market?: Market,   // v7.99: per-project market
 ): Promise<KeywordSerpData[]> {
   const batch = keywords.slice(0, limit);
-  const results: KeywordSerpData[] = [];
+  const out: Array<KeywordSerpData | undefined> = new Array(batch.length);
+  let next = 0;
 
-  // Sequential with small delay to respect rate limits (200/hr on Growth plan)
-  for (const keyword of batch) {
-    try {
-      const raw = await fetchSerpData(keyword, market);
-      results.push(await parseKeywordSerp(keyword, raw, clientDomain));
-      // 200ms between calls to stay under burst limits
-      await new Promise(r => setTimeout(r, 200));
-    } catch (err) {
-      console.error(`SerpAPI error for "${keyword}":`, err);
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= batch.length) return;
+      const keyword = batch[i];
+      try {
+        const raw = await fetchSerpData(keyword, market);
+        out[i] = await parseKeywordSerp(keyword, raw, clientDomain);   // order preserved by index
+      } catch (err) {
+        console.error(`SerpAPI error for "${keyword}":`, err);   // skipped slot stays undefined
+      }
     }
   }
 
-  return results;
+  const workerCount = Math.min(SCAN_CONCURRENCY, batch.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  // Drop the slots whose keyword failed, preserving input order for the rest.
+  return out.filter((r): r is KeywordSerpData => r != null);
 }
 
 // ─── SERP Feature Summary ─────────────────────────────────────────────────────

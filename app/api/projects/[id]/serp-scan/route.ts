@@ -8,7 +8,8 @@
  *
  * Credit safety:
  *  - Already-scanned keywords are NEVER re-scanned (no double credit spend).
- *  - batchSize defaults to 75, hard-capped at 100 per call.
+ *  - batchSize defaults to 25, hard-capped at 25 per call (v7.297 keeps each
+ *    scan invocation under Vercels 300s cap; the loop runs more batches).
  *  - 1 keyword = 1 SerpAPI search credit.
  *
  * Body:    { batchSize?: number }
@@ -27,8 +28,13 @@ import { buildKwPool } from '@/lib/utils/kwVolume';
 
 export const maxDuration = 300;
 
-const DEFAULT_BATCH = 75;
-const MAX_BATCH     = 100;
+// v7.297: batch hard-capped at 25 (was 75 default / 100 max). Combined with
+// the bounded-concurrency scan in lib/apis/serp.ts, this keeps every scan
+// invocation under Vercels 300s function cap, so the auto-batch loops
+// progress advances instead of 504-ing. The client loop sends 75; it is
+// capped here and simply runs more, shorter batches until done.
+const DEFAULT_BATCH = 25;
+const MAX_BATCH     = 25;
 
 function normalizeDomain(url: string): string {
   try {
