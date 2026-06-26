@@ -1,22 +1,16 @@
 # OrbitIQ Changelog
 
+## v7.296 — 2026-06-26 · Re-apply the Keyword Landscape SERP-Features parser fix (reverted by a colliding v7.295) — on top of the IndexedDB persistence
+
+**Why this exists.** Two parallel build streams both shipped a "v7.295": one was the CSV **parser fix** (below), the other was the **IndexedDB persistence** fix for the AI Answer Engines panel. They were deployed in sequence, and the second full-zip deploy **reverted the parser fix** (its `page.tsx` was the old version). Confirmed from the live commit `093866e3` diff, which removed `splitDelimitedLine` and the SERP-Features read. v7.296 carries **both**: the live IndexedDB `ProfoundVisibilitySection.tsx` (unchanged from the deployed v7.295) **plus** the re-applied parser fix in `page.tsx`. Nothing is reverted.
+
+**The parser fix (`app/projects/[id]/page.tsx`).** The Keyword Landscape / scope upload uses `parseCsvText` here (not `KeywordsPanel`'s parser). It (a) never read the "SERP Features by Keyword" column, and (b) split rows with a naive `line.split(',')` that shatters Semrush's quoted comma cells ("Trends", "SERP Features"), misaligning every column to their right — so the SERP column never reached the upload. Now uses a **quoted-field-aware splitter** (`splitDelimitedLine`) and reads the SERP-Features column (aliases `serp features by keyword` / `serp features` / `serp_features` / Semrush `Fl`), returning it as `serpFeatures`. `handleFileUpload` posts it verbatim → it persists to `serp_features` and feeds Local Pack / Local Intent. Proof (live log signature): the upload that fails shows `serpFeaturesPrepared=0 … sampleKeys=[keyword|searchVolume|position|url]`; with this fix it sends `serpFeaturesPrepared=31`.
+
+**Verification (Art. V).** Real project **`tsc --noEmit` clean** across the full source incl. the IndexedDB Profound panel (no `target` override, Const V.1a). **Replayed the actual `weg.csv` (392 rows) through the exact new `parseCsvText`:** 392 rows, all carry `serpFeatures`, **31 Local pack**, URL column aligned through the quoted Trends cell. Retained regression suite **222 checks, all PASS** (10 `pageparse:` invariants). The IndexedDB persistence code is byte-identical to the deployed v7.295 (folded in, not re-authored).
+
 ## v7.295 — 2026-06-25 · AI Answer Engines panel now persists across refresh (IndexedDB, not localStorage)
 
-**The bug (Wayne).** After uploading the full responses file, a browser refresh or navigating away reverted the Responses slot to a smaller file (e.g. 100 rows) until re-uploaded — a repeating loop.
-
-**Root cause.** The panel persisted the whole dataset to **localStorage**. The full `raw_data4.csv` dataset serialises to **~2.8 MB JSON**, which becomes **~5.6 MB** in localStorage's UTF-16 store — over the browser's ~5 MB quota. The write threw `QuotaExceededError`, which the code swallowed silently (session-only fallback), so on refresh it loaded the last snapshot that *did* fit: an earlier, smaller upload (the 100-row `Raw Data.csv`). Hence the revert-to-100 loop.
-
-**The fix (`components/brief/ProfoundVisibilitySection.tsx`).**
-- Persistence moved from localStorage to **IndexedDB** (DB `orbitiq`, store `profound`, keyed by project id). IndexedDB holds tens of MB and stores the structured object directly — the full 2.8 MB dataset (with response text) saves and survives refreshes.
-- **One-time migration:** on mount the panel reads IndexedDB; if empty, it drains any legacy localStorage snapshot into IndexedDB and then **removes the legacy key**, so the old partial save can't resurrect on a later refresh.
-- **Async hydration without a flash:** initial state is empty; a `hydrated` flag gates the UI so a saved dataset shows a brief "Restoring saved data…" spinner instead of flashing the empty upload state, then renders.
-- **Honest failure (Const I.5):** if a save still can't complete (private-mode / IndexedDB blocked), an amber notice tells the user the data is session-only and may not persist — no more silent loss.
-- `Clear all` now deletes the IndexedDB record (and any legacy key) so a cleared project stays cleared after refresh.
-
-**Note for Wayne.** This release also fixes *which* file sticks: upload **`raw_data4.csv`** (2,430 rows) into Responses — it's the complete export (it contains every row of `Raw Data.csv` / `raw_data2` / `raw_data3`; verified union = raw_data4 alone). Your screenshot showed 100 rows / 5 engines, i.e. the partial `Raw Data.csv`. With this build, once raw_data4 is loaded it persists across refreshes.
-
-**Verification (Art. V).** Component **`tsc --noEmit` clean** under the project tsconfig (no `target` override, Const V.1a). **jsdom harness with `fake-indexeddb` at real scale:** (A) the full 2,430-row dataset seeded in IndexedDB hydrates on a fresh mount → 6 engines / 990 visibility responses shown, no empty-state flash, and a *second* mount (second refresh) still shows it; (B) a legacy localStorage snapshot migrates into IndexedDB, the localStorage key is cleared, and the data survives the next mount; (C) `Clear all` deletes the IndexedDB record. All 6 tabs re-render in **both** light and dark with the async-hydrated data (Const V.5); theme-parity guard clean (Const IV.6). Additive change — no other panel touched.
-
+> Shipped by the parallel build stream; folded into v7.296 unchanged. Persistence moved from localStorage to **IndexedDB** (DB `orbitiq`, store `profound`, keyed by project id) because the full ~2.8 MB Profound dataset (~5.6 MB in localStorage's UTF-16 store) exceeded the ~5 MB quota — the write failed silently and a refresh reverted to whatever smaller file last fit. Includes a one-time localStorage→IndexedDB migration (then clears the legacy key), async hydration with a "Restoring saved data…" spinner (no empty-state flash), an honest amber notice when a save can't complete (Const I.5), and `Clear all` deleting the IndexedDB record. (`components/brief/ProfoundVisibilitySection.tsx`.)
 
 ## v7.294 — 2026-06-25 · New "AI Answer Engines" panel — upload Profound exports to see real GEO visibility across ChatGPT, Perplexity, Gemini, Copilot & Google AI
 
