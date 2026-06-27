@@ -166,6 +166,48 @@ export function parseLocationUrls(
   return out;
 }
 
+/** A single office's real detail, parsed from the page's schema.org JSON-LD (no guessing). */
+export interface LocationDetail {
+  address: string; city: string; state: string; zip: string; phone: string;
+  lat: number | null; lng: number | null;
+}
+
+/**
+ * v7.303 — parse a location page's schema.org JSON-LD (LocalBusiness / FinancialService /
+ * Organization / Place) for its REAL address, phone and GPS. Returns the first business node
+ * that carries a postal address. Pure string/JSON parsing — no DOM, no network, no modeling
+ * (Const I.1: every field traces to the client's own structured markup). null when absent.
+ */
+export function parseLocationPageJsonLd(html: string): LocationDetail | null {
+  const blocks: string[] = [];
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) blocks.push(m[1]);
+  for (let i = 0; i < blocks.length; i++) {
+    let data: any;
+    try { data = JSON.parse(blocks[i].trim()); } catch { continue; }
+    const nodes: any[] = Array.isArray(data) ? data : (Array.isArray(data['@graph']) ? data['@graph'] : [data]);
+    for (let j = 0; j < nodes.length; j++) {
+      const n = nodes[j];
+      if (!n || typeof n !== 'object' || !n.address) continue;
+      const a = n.address || {};
+      const street = Array.isArray(a.streetAddress) ? a.streetAddress.filter(Boolean).join(', ') : String(a.streetAddress || '');
+      const city = String(a.addressLocality || '').trim();
+      const state = String(a.addressRegion || '').trim();
+      const zip = String(a.postalCode || '').trim();
+      const cityState = [city, state].filter(Boolean).join(', ');
+      const address = [street, cityState, zip].filter(Boolean).join(', ');
+      const phone = String(n.telephone || '').trim();
+      const g = n.geo || {};
+      const latN = Number(g.latitude), lngN = Number(g.longitude);
+      const lat = isFinite(latN) && g.latitude != null && g.latitude !== '' ? latN : null;
+      const lng = isFinite(lngN) && g.longitude != null && g.longitude !== '' ? lngN : null;
+      if (street || phone || lat != null) return { address, city, state, zip, phone, lat, lng };
+    }
+  }
+  return null;
+}
+
 /** City + state vocabulary from discovered locations (lowercase) for the geo detector. */
 export function geoVocabFromLocations(locs: KmlLocation[]): string[] {
   const set: Record<string, boolean> = {};

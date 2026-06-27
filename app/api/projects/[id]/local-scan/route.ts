@@ -35,7 +35,7 @@ import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
-  pickLocationSitemap, type KmlLocation,
+  pickLocationSitemap, parseLocationPageJsonLd, type KmlLocation,
 } from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
 import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
@@ -51,6 +51,7 @@ const MAX_MAX_LOC       = 200;    // enough for every location of a large brand
 const CONCURRENCY       = 5;
 const KW_CONCURRENCY    = 10;     // v7.299: keyword map-pack scan = 1 search each (no AI 2nd call) → safe at higher concurrency
 const MAX_SCAN_KEYWORDS = 300;    // v7.299: runtime ceiling so one streamed request stays under the 300s Vercel cap (NOT a data cap)
+const ENRICH_BUDGET_MS  = 120_000; // v7.303: wall-clock cap for fetching office detail pages (keeps the request under 300s)
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -110,6 +111,46 @@ const hasKmlExt = (u: string): boolean => /\.kml(\?|#|$)/i.test(u);
  *   or, as a fallback, /locations/{city}/ page URLs. Returns [] if the site has
  *   no usable sitemap (caller then falls back to a Maps brand search).
  */
+// v7.303 — fill in each office's REAL address / phone / GPS from its own page's schema.org
+// JSON-LD (Const I.1 — sourced from the client's structured markup, never modeled). Bounded
+// concurrency + a wall-clock budget so the request stays under Vercel's 300s cap; offices not
+// reached in the budget keep their honest gap. Mutates the listings in place.
+async function enrichOfficesFromPages(
+  listings: LocalListing[],
+  send: (o: unknown) => void,
+): Promise<void> {
+  const targets = listings.filter(l => l.pageUrl && (l.lat == null || !l.address || !l.phone));
+  const total = targets.length;
+  if (total === 0) return;
+  const startedAt = Date.now();
+  let next = 0, done = 0;
+  const worker = async (): Promise<void> => {
+    while (next < targets.length) {
+      if (Date.now() - startedAt > ENRICH_BUDGET_MS) return;   // budget guard
+      const l = targets[next++];
+      const html = await fetchText(l.pageUrl as string);
+      if (html) {
+        const d = parseLocationPageJsonLd(html);
+        if (d) {
+          if (d.address) l.address = d.address;
+          if (d.phone)   l.phone   = d.phone;
+          if (d.lat != null) l.lat = d.lat;
+          if (d.lng != null) l.lng = d.lng;
+          if (d.city)    l.city    = d.city;
+          const flags: string[] = [];
+          if (l.lat == null || l.lng == null) flags.push('no map coordinates');
+          if (!l.phone)   flags.push('no phone');
+          if (!l.address) flags.push('no address');
+          l.healthFlags = flags;
+        }
+      }
+      done++;
+      send({ type: 'progress', done, total, phase: `Reading office details ${done} of ${total}…` });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(KW_CONCURRENCY, targets.length) }, () => worker()));
+}
+
 // v7.302 — discover offices from a manually-provided URL: HTML locations page, sitemap, or KML.
 async function discoverFromUrl(
   url: string,
@@ -359,6 +400,9 @@ export async function POST(
         }
         const clientPlaceIds: Record<string, boolean> = {};
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
+
+        // v7.303 — enrich offices with real address/phone/GPS from each page's JSON-LD (real run only).
+        if (!dryRun && listings.length > 0) await enrichOfficesFromPages(listings, send);
 
         // ── v7.299 KEYWORD MODE: scan each real local-intent keyword's map pack ───────
         if (keywordMode) {

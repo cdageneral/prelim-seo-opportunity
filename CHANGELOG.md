@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.303 — 2026-06-26 · Office address / phone / GPS now read from each location page (real data); "0 reviews" relabeled "pending"
+
+**What Wayne flagged.** After the Locations URL found all 192 offices, each one showed *"no address · no phone · no map coordinates · 0 reviews"* — yet the office page clearly lists the address (936 E Williams Field Rd, Suite 103, 85295) and phone ((480) 744-1112). Fair question: how do we know the data is accurate?
+
+**The answer (every field traced to a source).**
+- **City / state** came from the office URL slug (`/location/gilbert-az`) — correct, but that's all the index gave us.
+- **Address / phone / GPS** were shown as missing because we only read the index, not each office page. They were never *wrong* — just not fetched. Each page carries a **schema.org `FinancialService` JSON-LD** block with the real `streetAddress`, `telephone`, and `geo` lat/lng.
+- **"0 reviews" was a mislabel.** The client site has **no** review data (no `aggregateRating` in the markup). Ratings/reviews are Google Business Profile data — they only come from a Google/SerpAPI lookup, which hadn't run for these offices. So it's *pending*, not a confirmed zero.
+
+**What shipped.**
+- **`lib/local/sitemap.ts` — `parseLocationPageJsonLd`.** Pure parser for a location page's schema.org JSON-LD (`LocalBusiness`/`FinancialService`/`Organization`/`Place`): real `streetAddress` (+ locality/region/postal), `telephone`, and `geo` lat/lng. No DOM, no network, no modeling — Const I.1, sourced from the client's own structured markup.
+- **`app/api/projects/[id]/local-scan/route.ts` — `enrichOfficesFromPages`.** On a real scan, fetches each discovered office page (free, no SerpAPI) and fills in real address, phone, and **GPS coordinates** from its JSON-LD. Bounded concurrency (10) + a **120s wall-clock budget** so the request stays under Vercel's 300s cap; any office not reached keeps its honest gap. Streams "Reading office details X of N…" progress.
+- **`components/brief/LocalSearchSection.tsx`.** The per-office line now shows **"reviews pending"** (not "0 reviews") whenever no real Google rating has been fetched, so an unknown is never presented as a measured zero (Const I.1/I.5). The Locations source line is clarified: address/phone/coordinates come from each office page; Google ratings/reviews are pending until a map-pack scan or Google lookup.
+
+**So: is the data accurate?** Yes, and now traceable — after a scan, address/phone/GPS are the office page's own published values (not guessed); city/state are the URL; reviews are honestly marked *pending* because Google hasn't been queried yet. **Real Google reviews/ratings** would need a per-office SerpAPI Maps lookup (paid) — now feasible since we have each office's GPS/address — offered as a separate step rather than spending credits automatically.
+
+**Verification (Art. V).** **Real project `tsc --noEmit` clean** (project tsconfig, no `target` override — Const V.1a; the parser uses an indexed `regex.exec` loop, no `matchAll`/iterator spread). **`parseLocationPageJsonLd` harness 7/7** on the **real WEG Gilbert page structure**: exact address ("936 E Williams Field Rd, Suite 103, Gilbert, AZ, 85295"), phone ("+1 (480) 744-1112"), and GPS (33.30733, -111.76986); null when no JSON-LD or no address. Enrichment is bounded + budgeted; the live per-office fetch is confirmed on deploy (the scan's progress shows it working). Builds on v7.298–v7.302.
+
 ## v7.302 — 2026-06-26 · Manual "Locations URL" input — point the scan at your locations page / sitemap / KML when auto-detect can't reach it
 
 **Why.** Some client sites (wealthenhancement.com included) block or throttle non-browser requests: a normal browser visit to the sitemap returns 200, but a programmatic fetch stalls (the server-side `web_fetch` timed out at 180s; a same-origin `fetch()` hung past 45s). That pattern is classic CDN/bot protection, so even with the v7.301 `/location/` parsing fix the app's server-side discovery may still come back empty. Per Wayne: add a manual input to point us at the right URL.

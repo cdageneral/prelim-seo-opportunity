@@ -586,7 +586,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>
                   {scan.source && scan.source.indexOf('manual') === 0
-                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL. Ratings/reviews are backfilled from the live map-pack scan.</>
+                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL — address, phone &amp; map coordinates are read from each office page; Google ratings/reviews are pending until a map-pack scan or Google lookup.</>
                     : (scan.source === 'kml' || scan.source === 'sitemap-pages')
                     ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
@@ -603,7 +603,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                             <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{l.address || 'no address'} · {(() => { const st = locStatus(l); return <span style={{ color: st.color }} title={st.hint}>{st.icon} {st.label}</span>; })()}</div>
                             <div style={{ marginTop: 6, fontSize: 12 }}>
                               {l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> <b>{l.rating}</b></> : <span style={{ color: 'var(--c-555570)' }}>rating pending scan</span>}
-                              <span style={{ color: 'var(--c-8888aa)' }}> · {fmt(l.reviews)} reviews{l.type ? ` · ${l.type}` : ''}</span>
+                              <span style={{ color: 'var(--c-8888aa)' }}> · {l.rating != null ? `${fmt(l.reviews)} reviews` : <span style={{ color: 'var(--c-555570)' }}>reviews pending</span>}{l.type ? ` · ${l.type}` : ''}</span>
                             </div>
                             <div style={{ marginTop: 4, fontSize: 11, color: 'var(--c-8888aa)' }}>
                               {l.phone ? <span>{l.phone}</span> : null}
