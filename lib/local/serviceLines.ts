@@ -28,6 +28,10 @@ import type { CategoryModel } from '@/lib/category/categoryModel';
 export interface LocalServiceLine {
   name:          string;
   monthlyDemand: number;   // exact monthly-volume roll-up of the line's own + descendant keywords
+  // v7.299 — the line's local-pack keywords (the actual keywords under it that trigger a Google
+  // Local Pack, client + gap). These are the real queries the Local panel scans for map-pack rank
+  // (no synthetic "{service} {city}" — Const I.1, real Semrush keywords). Lowercased, deduped.
+  localKeywords: string[];
 }
 
 interface TreeNode {
@@ -53,6 +57,11 @@ function subtreeHasLocal(n: TreeNode, localPackKw: Set<string>): boolean {
   for (let i = 0; i < n.ownKws.length; i++) if (localPackKw.has(n.ownKws[i])) return true;
   for (let i = 0; i < n.children.length; i++) if (subtreeHasLocal(n.children[i], localPackKw)) return true;
   return false;
+}
+// v7.299 — collect this subtree's keywords that trigger a local pack (deduped into `acc`).
+function collectSubtreeLocal(n: TreeNode, localPackKw: Set<string>, acc: Set<string>): void {
+  for (let i = 0; i < n.ownKws.length; i++) if (localPackKw.has(n.ownKws[i])) acc.add(n.ownKws[i]);
+  for (let i = 0; i < n.children.length; i++) collectSubtreeLocal(n.children[i], localPackKw, acc);
 }
 
 /**
@@ -116,7 +125,9 @@ export function buildLocalServiceLines(
     const n = collapseSingleChild(roots[i]);
     if (n.name === 'Other') continue;
     if (!subtreeHasLocal(n, localPackKw)) continue;
-    out.push({ name: n.name, monthlyDemand: subtreeVol(n) });
+    const lkSet = new Set<string>();
+    collectSubtreeLocal(n, localPackKw, lkSet);
+    out.push({ name: n.name, monthlyDemand: subtreeVol(n), localKeywords: Array.from(lkSet) });
   }
   out.sort((a, b) => b.monthlyDemand - a.monthlyDemand);
   return out;

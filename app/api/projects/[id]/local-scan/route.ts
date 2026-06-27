@@ -39,7 +39,7 @@ import {
 } from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
 import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
-import { cityMarketRank } from '@/lib/local/detect';
+import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
 
 export const maxDuration = 300;
 
@@ -49,6 +49,8 @@ const MAX_MAX_SEEDS     = 10;     // v7.284: hard cap of 10 primary services per
 const DEFAULT_MAX_LOC   = 25;     // Wayne sets this per run; default covers the top metros
 const MAX_MAX_LOC       = 200;    // enough for every location of a large brand
 const CONCURRENCY       = 5;
+const KW_CONCURRENCY    = 10;     // v7.299: keyword map-pack scan = 1 search each (no AI 2nd call) → safe at higher concurrency
+const MAX_SCAN_KEYWORDS = 300;    // v7.299: runtime ceiling so one streamed request stays under the 300s Vercel cap (NOT a data cap)
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -196,6 +198,13 @@ export async function POST(
   const curatedServices: string[] = Array.isArray(body?.services)
     ? body.services.map((s: any) => String(s ?? '').trim()).filter(Boolean)
     : [];
+  // v7.299 — KEYWORD MODE: the panel passes the real local-intent keywords (client + gap)
+  // under the tracked service lines. When present we scan each keyword's map pack ONCE at the
+  // project market locale (no synthetic "{service} {city}", no per-location grid).
+  const bodyKeywords: string[] = Array.isArray(body?.keywords)
+    ? body.keywords.map((k: any) => String(k ?? '').toLowerCase().trim()).filter(Boolean)
+    : [];
+  const keywordMode = bodyKeywords.length > 0;
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -267,7 +276,7 @@ export async function POST(
         if (discovered.locations.length > 0) {
           source = discovered.source;                       // 'kml' | 'sitemap-pages'
           listings = discovered.locations.map(l => kmlToListing(l, clientDomain));
-        } else if (!dryRun) {
+        } else if (!dryRun && !keywordMode) {
           // Fallback to Maps brand search (costs 1 SerpAPI call) — real-run only.
           const rawListings = await getMapsListings(brandQuery, market, undefined, 20);
           callsUsed++;
@@ -289,6 +298,89 @@ export async function POST(
         }
         const clientPlaceIds: Record<string, boolean> = {};
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
+
+        // ── v7.299 KEYWORD MODE: scan each real local-intent keyword's map pack ───────
+        if (keywordMode) {
+          const seen: Record<string, boolean> = {};
+          const kws: string[] = [];
+          for (let i = 0; i < bodyKeywords.length; i++) { const kw = bodyKeywords[i]; if (kw && !seen[kw]) { seen[kw] = true; kws.push(kw); } }
+          const scanKws = kws.slice(0, MAX_SCAN_KEYWORDS);
+          // real Semrush volume per keyword from the canonical pool (Const I.1)
+          const volByKw: Record<string, number> = {};
+          for (let i = 0; i < (pool as any[]).length; i++) {
+            const it = (pool as any[])[i];
+            const kw = String(it.keyword ?? '').toLowerCase().trim();
+            const v = it.searchVolume || 0;
+            if (kw && (volByKw[kw] == null || v > volByKw[kw])) volByKw[kw] = v;
+          }
+
+          if (dryRun) {
+            send({
+              type: 'done', dryRun: true,
+              plan: { model: 'keyword', keywords: scanKws.length, totalKeywords: kws.length, estCalls: scanKws.length, source, locations: listings.length },
+            });
+            controller.close();
+            return;
+          }
+
+          send({ type: 'start', total: scanKws.length });
+          const out: LocalKeywordScan[] = new Array(scanKws.length);
+          let next = 0, done = 0;
+          const kwWorker = async (): Promise<void> => {
+            while (next < scanKws.length) {
+              const i = next++;
+              const kw = scanKws[i];
+              let res: { packPresent: boolean; places: MapsPlace[] };
+              try { res = await getLocalPack(kw, market); }   // single market locale, no ll (v7.299)
+              catch { res = { packPresent: false, places: [] }; }
+              callsUsed++;
+              const members: LocalPackMember[] = res.places.map(p => ({
+                position: p.position, title: p.title, placeId: p.placeId,
+                rating: p.rating, reviews: p.reviews,
+                isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
+              }));
+              const mine = members.find(m => m.isClient);
+              const leader = members.find(m => m.position === 1);
+              const det = detectLocalIntent(kw);
+              out[i] = {
+                keyword:          kw,
+                searchVolume:     volByKw[kw] ?? 0,
+                intent:           det ? det.intent : 'implicit-local',
+                matchedTerm:      det ? det.matchedTerm : '',
+                packPresent:      res.packPresent,
+                clientBestRank:   mine ? mine.position : null,
+                bestLocationId:   mine ? (mine.placeId || null) : null,
+                bestLocationCity: '',
+                packLeader:       leader ? leader.title : '',
+                pack:             members,
+              };
+              done++;
+              send({ type: 'progress', done, total: scanKws.length, seed: kw });
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(KW_CONCURRENCY, scanKws.length || 1) }, () => kwWorker()));
+
+          const localScan: LocalScan = {
+            domain:       clientDomain,
+            market:       market.code,
+            locations:    listings,
+            keywords:     out.filter(Boolean),
+            builtAt:      new Date().toISOString(),
+            scannedCount: scanKws.length,
+            localTotal:   kws.length,
+            callsUsed,
+            source,
+            model:        'keyword',
+            locationsScanned: 0,
+          };
+          await db.update(analyses)
+            .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: localScan } as any })
+            .where(eq(analyses.id, analysis.id));
+          console.log(`[OrbitIQ] Local keyword scan stored: ${scanKws.length} keywords, ${callsUsed} credits`);
+          send({ type: 'done', localScan });
+          controller.close();
+          return;
+        }
 
         // ── 2. Service seeds (the grid's columns) ──────────────────────────────
         // Brand + service categories, with real volumes from the client pool.
