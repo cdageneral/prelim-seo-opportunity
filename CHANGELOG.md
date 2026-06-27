@@ -1,5 +1,23 @@
 # OrbitIQ Changelog
 
+## v7.304 — 2026-06-26 · Offices populate with real address/phone/GPS in ONE fetch (embedded map markers); reviews show "Pending", not "0/Weak"
+
+**Two things Wayne saw on v7.303.** Offices still showed *no address / no phone / no coordinates*, and the Reviews tab showed *— / 0 / Weak* for every office. Two causes:
+
+1. **Enrichment runs during a scan, not on cached data.** v7.303's per-office enrichment only fills address/phone/GPS while a scan is running. After deploying it, the panel still showed the *previous* scan's data (with the new labels). It needed a re-run — **and** the per-office approach meant ~192 page fetches, which a guarded site can throttle.
+2. **Reviews are Google data, not on the website.** The client site carries no ratings, so "0 reviews / Weak" was an unknown shown as a measured zero.
+
+**What shipped.**
+- **`lib/local/sitemap.ts` — `parseEmbeddedLocationMarkers`.** Reads the `/locations` page's **embedded map data** (GeoJSON `features` / Drupal `geofield_google_map`, or any inline JSON with `geometry.coordinates`) — every office with **real GPS + street + zip + phone** in the **single page fetch we already make**. No 192-page crawl, no throttling risk. Pure parsing of the page's own marker JSON/popup (Const I.1).
+- **`app/api/projects/[id]/local-scan/route.ts`.** `discoverFromUrl` now tries embedded markers first; per-office `parseLocationPageJsonLd` enrichment remains the fallback for sites without embedded markers. Offices already complete from markers are skipped, so no redundant fetching.
+- **`components/brief/LocalSearchSection.tsx`.** The Reviews tab now shows **rating "—", reviews "—", status "Pending"** (cyan) when no Google rating has been fetched — never "0/Weak" for an unknown (Const I.1/I.5). Note clarified: ratings/reviews come from Google Business Profiles via SerpAPI; *Pending* = not fetched yet (the site has no review data).
+
+**Action for Wayne: re-run the scan.** Enrichment runs *during* a scan, so after uploading v7.304, click **Re-run scan** — the offices will fill in real address / phone / map coordinates from the embedded markers (one fetch), and reviews will read **Pending** until a Google lookup.
+
+**Where ARE the review ratings?** They live on Google, not the website. To get the real per-office star rating + review count we run a **SerpAPI Google/Maps lookup per office** (paid, ~1 credit each) — now straightforward since every office has GPS + address. That's a separate, opt-in step (it spends credits), so it isn't run automatically.
+
+**Verification (Art. V).** **Real project `tsc --noEmit` clean** (project tsconfig, no `target` override — Const V.1a; parser uses indexed `regex.exec` loops). **`parseEmbeddedLocationMarkers` harness 7/7 on the REAL WEG geofield feature**: Gilbert → coords (33.30733, -111.76986), address "936 E Williams Field Rd, Suite 103, Gilbert, AZ, 85295", phone "(480) 744-1112", correct /location URL; second office parsed; `tel:` country code stripped and formatted. `parseLocationPageJsonLd` 7/7 (v7.303) retained as fallback. Theme-safe Pending pill (defined CSS vars). Builds on v7.298–v7.303.
+
 ## v7.303 — 2026-06-26 · Office address / phone / GPS now read from each location page (real data); "0 reviews" relabeled "pending"
 
 **What Wayne flagged.** After the Locations URL found all 192 offices, each one showed *"no address · no phone · no map coordinates · 0 reviews"* — yet the office page clearly lists the address (936 E Williams Field Rd, Suite 103, 85295) and phone ((480) 744-1112). Fair question: how do we know the data is accurate?

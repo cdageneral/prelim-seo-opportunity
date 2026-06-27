@@ -586,7 +586,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>
                   {scan.source && scan.source.indexOf('manual') === 0
-                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL — address, phone &amp; map coordinates are read from each office page; Google ratings/reviews are pending until a map-pack scan or Google lookup.</>
+                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL, with real address, phone &amp; map coordinates. Google ratings/reviews are pending until a per-office Google lookup.</>
                     : (scan.source === 'kml' || scan.source === 'sitemap-pages')
                     ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
@@ -681,7 +681,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                   </div>
                   <div className="orbit-card p-5" style={{ flex: 1, minWidth: 320 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Reviews by location</div>
-                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count. (Star distribution &amp; velocity require a per-review pull — not fabricated here.)</div>
+                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count from Google Business Profiles (via SerpAPI). <b>Pending</b> = not fetched yet (the website carries no review data) — run a per-office Google lookup to populate; a blank rating is never shown as a zero.</div>
                     <div style={{ overflowX: 'auto' }}>
                       <table className="local-tbl">
                         <thead><tr><th>Location</th><th>Rating</th><th style={{ textAlign: 'right' }}>Reviews</th><th>Status</th></tr></thead>
@@ -690,8 +690,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                             <tr key={i}>
                               <td style={{ fontWeight: 600 }}>{l.city || l.title}</td>
                               <td>{l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> {l.rating}</> : '—'}</td>
-                              <td style={{ textAlign: 'right' }}>{fmt(l.reviews)}</td>
-                              <td>{l.rating != null && l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
+                              <td style={{ textAlign: 'right' }}>{l.rating != null ? fmt(l.reviews) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
+                              <td>{l.rating == null ? <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }} title="Google rating not fetched yet — run a per-office Google lookup to populate">Pending</span> : l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
                             </tr>
                           ))}
                         </tbody>

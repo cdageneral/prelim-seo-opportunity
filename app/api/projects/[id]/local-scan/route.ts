@@ -35,7 +35,7 @@ import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
-  pickLocationSitemap, parseLocationPageJsonLd, type KmlLocation,
+  pickLocationSitemap, parseLocationPageJsonLd, parseEmbeddedLocationMarkers, type KmlLocation,
 } from '@/lib/local/sitemap';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
 import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
@@ -177,7 +177,11 @@ async function discoverFromUrl(
     const locs = parseLocationUrls(urls);
     if (locs.length) return { locations: locs, source: 'manual-sitemap' };
   }
-  // HTML page → pull href links and parse the /location(s)/ office URLs (no DOM; regex).
+  // HTML page → FIRST try the page's embedded map markers (GeoJSON / geofield) — full office
+  // data (GPS + address + phone) in this single fetch, no per-page crawling.
+  const markers = parseEmbeddedLocationMarkers(txt, clientDomain);
+  if (markers.length) return { locations: markers, source: 'manual-page' };
+  // Otherwise pull href links and parse the /location(s)/ office URLs (no DOM; regex).
   const hrefs: string[] = [];
   const re = /href\s*=\s*["']([^"']+)["']/gi;
   let mm: RegExpExecArray | null;

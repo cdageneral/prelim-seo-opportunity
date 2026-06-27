@@ -166,6 +166,72 @@ export function parseLocationUrls(
   return out;
 }
 
+// v7.304 — parse offices straight from a store-locator page's EMBEDDED map data (GeoJSON
+// `features` / Drupal geofield_google_map, or any inline JSON with geometry.coordinates). One
+// fetch yields every office with real GPS + address + phone — no per-page fetching. Real data
+// only (Const I.1): every field comes from the page's own marker JSON / popup markup.
+export function parseEmbeddedLocationMarkers(html: string, clientDomain: string): KmlLocation[] {
+  const blobs: string[] = [];
+  const re = /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) blobs.push(m[1]);
+  const out: KmlLocation[] = [];
+  const seen: Record<string, boolean> = {};
+  const grab = (re2: RegExp, str: string): string => { const x = str.match(re2); return x ? String(x[1]).trim() : ''; };
+  const collect = (node: any, acc: any[][]): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      if (node.length && node[0] && node[0].geometry && node[0].geometry.coordinates) { acc.push(node); return; }
+      for (let i = 0; i < node.length; i++) collect(node[i], acc);
+      return;
+    }
+    const keys = Object.keys(node);
+    for (let i = 0; i < keys.length; i++) collect(node[keys[i]], acc);
+  };
+  for (let b = 0; b < blobs.length; b++) {
+    let j: any; try { j = JSON.parse(blobs[b].trim()); } catch { continue; }
+    const arrays: any[][] = [];
+    collect(j, arrays);
+    for (let a = 0; a < arrays.length; a++) {
+      const arr = arrays[a];
+      for (let i = 0; i < arr.length; i++) {
+        const f = arr[i];
+        const c = f && f.geometry && f.geometry.coordinates;
+        if (!Array.isArray(c) || c.length < 2) continue;
+        const lng = Number(c[0]), lat = Number(c[1]);                 // GeoJSON order = [lng, lat]
+        const p = f.properties || {};
+        const popup = [String(p.description || ''), String((p.data && p.data.nothing) || '')].join(' ');   // combine both popup fields (phone in one, street/zip in the other)
+        const hrefM = popup.match(/href=["'](\/location[^"']*|https?:\/\/[^"']*\/location[^"']*)["']/i);
+        const url = hrefM ? (hrefM[1].charAt(0) === '/' ? `https://${clientDomain}${hrefM[1]}` : hrefM[1]) : '';
+        let name = String(p.tooltip || '').trim();
+        if (!name) name = grab(/<b>([^<]+)<\/b>/i, popup);
+        let phone = '';
+        const telM = popup.match(/tel:\+?([0-9]+)/i);
+        if (telM) {
+          let d = telM[1];
+          if (d.length === 11 && d.charAt(0) === '1') d = d.slice(1);   // drop US country code
+          if (d.length === 10) phone = `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+        }
+        if (!phone) { const phM = popup.match(/\(\d{3}\)\s?\d{3}[-.\s]?\d{4}/); if (phM) phone = phM[0].trim(); }
+        const street = grab(/location-street[^>]*>([^<]+)</i, popup) || grab(/address-line1[^>]*>([^<]+)</i, popup);
+        const zip = grab(/location-zip[^>]*>([^<]+)</i, popup) || grab(/postal-code[^>]*>([^<]+)</i, popup);
+        let city = name, state = '';
+        const cs = name.match(/^(.*?),\s*([A-Za-z]{2})$/);
+        if (cs) { city = cs[1].trim(); state = cs[2].toUpperCase(); }
+        const address = [street, [city, state].filter(Boolean).join(', '), zip].filter(Boolean).join(', ');
+        const key = (url || name || `${lat},${lng}`).toLowerCase();
+        if (!key || seen[key]) continue;
+        seen[key] = true;
+        out.push({
+          name: name || city || 'Location', address, city, state, zip, phone,
+          url, lat: isFinite(lat) ? lat : null, lng: isFinite(lng) ? lng : null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** A single office's real detail, parsed from the page's schema.org JSON-LD (no guessing). */
 export interface LocationDetail {
   address: string; city: string; state: string; zip: string; phone: string;
