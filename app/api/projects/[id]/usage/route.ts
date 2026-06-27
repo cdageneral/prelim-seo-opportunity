@@ -12,13 +12,16 @@
  * modeled. quantity <= 0 clears the baseline for that provider+unit.
  *
  * Fault-tolerant: if the api_usage table isn't migrated yet, GET returns an
- * empty ledger rather than erroring.
+ * empty ledger rather than erroring. v7.305: both GET and POST first ensure the
+ * table exists, so opening the panel or saving a baseline self-heals a
+ * never-migrated ledger instead of silently failing.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { apiUsage } from '@/db/schema';
 import { and, eq, sql, desc, isNotNull } from 'drizzle-orm';
+import { ensureUsageTable } from '@/lib/usage/record';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +39,7 @@ interface ProviderLine {
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const projectId = params.id;
   try {
+    await ensureUsageTable();   // v7.305: self-heal a never-migrated ledger table
     const grouped = await db
       .select({
         provider: apiUsage.provider,
@@ -124,6 +128,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   try {
+    await ensureUsageTable();   // v7.305: self-heal a never-migrated ledger table
     // Upsert semantics: a baseline is a single anchor per provider+unit, so clear
     // any prior baseline rows for this combination before inserting the new one.
     await db.delete(apiUsage).where(and(

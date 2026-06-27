@@ -8,12 +8,15 @@
  * values written per call by lib/usage/record.ts.
  *
  * Fault-tolerant: an un-migrated table yields an empty rollup, not a 500.
+ * v7.305: ensures the api_usage table exists first, so the rollup self-heals on
+ * first open instead of waiting for the first billable call.
  */
 
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
 import { apiUsage, projects } from '@/db/schema';
 import { sql, eq } from 'drizzle-orm';
+import { ensureUsageTable } from '@/lib/usage/record';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +39,7 @@ function foldLine(map: Map<string, Line>, provider: string, unit: string, kind: 
 
 export async function GET() {
   try {
+    await ensureUsageTable();   // v7.305: self-heal a never-migrated ledger table
     const grouped = await db
       .select({
         projectId:   apiUsage.projectId,

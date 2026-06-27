@@ -22,8 +22,61 @@
  */
 
 import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { db, apiUsage } from '@/db';
 import { currentUsageProject } from './context';
+
+// ─── Self-healing table creation (v7.305) ──────────────────────────────────────
+//
+// The `api_usage` ledger table is defined in db/schema.ts, but a new TABLE is
+// only created by `drizzle-kit push` — which was never run against the
+// production Neon DB (the build is just `next build`, and the one-time db:push
+// note in the schema was never executed). The result: every insert below threw
+// `relation "api_usage" does not exist`, the error was swallowed (accounting
+// must never break a real call), and the ledger stayed permanently empty so the
+// API Usage panel showed "No usage recorded yet" despite real Semrush/SerpAPI
+// calls firing the recorder.
+//
+// Fix: ensure the table exists at runtime, mirroring the project's established
+// "ADD COLUMN IF NOT EXISTS" auto-migration pattern (used for new project
+// columns) — but for a whole table via CREATE TABLE IF NOT EXISTS. It is
+// memoized so the DDL runs at most once per warm process; a transient failure
+// resets the memo so the next call retries. Columns mirror db/schema.ts exactly.
+// Idempotent and safe to call from the recorder AND the read routes, so the
+// ledger self-creates on the first billable call OR the first panel open.
+let _ensureUsageTablePromise: Promise<void> | null = null;
+
+export function ensureUsageTable(): Promise<void> {
+  if (_ensureUsageTablePromise) return _ensureUsageTablePromise;
+  _ensureUsageTablePromise = (async () => {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS "api_usage" (
+        "id"         serial PRIMARY KEY NOT NULL,
+        "project_id" uuid REFERENCES "projects"("id") ON DELETE CASCADE,
+        "provider"   text NOT NULL,
+        "endpoint"   text NOT NULL,
+        "unit"       text NOT NULL,
+        "quantity"   integer DEFAULT 0 NOT NULL,
+        "rows"       integer,
+        "rate"       integer,
+        "key_hash"   text,
+        "kind"       text DEFAULT 'usage' NOT NULL,
+        "meta"       jsonb,
+        "created_at" timestamp DEFAULT now() NOT NULL
+      )
+    `);
+    // Helpful indexes for the per-project and cross-project rollups. IF NOT
+    // EXISTS keeps this idempotent; failure here is non-fatal (caught below).
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS "api_usage_project_id_idx" ON "api_usage" ("project_id")`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS "api_usage_created_at_idx" ON "api_usage" ("created_at")`);
+  })().catch((err) => {
+    // Reset so a transient failure (e.g. brief DB hiccup) can retry next time,
+    // rather than caching a rejected promise for the life of the process.
+    _ensureUsageTablePromise = null;
+    throw err;
+  });
+  return _ensureUsageTablePromise;
+}
 
 // ─── Semrush per-line unit rates (verified at developer.semrush.com, 2026-06-17) ──
 // Domain reports:  https://developer.semrush.com/api/seo/domain-reports/
@@ -69,6 +122,9 @@ export function keyFingerprint(key: string | undefined | null): string | null {
 /** Core writer. Reads projectId from context, inserts one ledger row. Never throws. */
 export async function recordUsage(input: RecordInput): Promise<void> {
   try {
+    // v7.305: make sure the ledger table exists before the first write so a
+    // never-migrated prod DB self-heals instead of silently dropping every row.
+    await ensureUsageTable();
     const quantity = Number.isFinite(input.quantity) ? Math.max(0, Math.round(input.quantity)) : 0;
     await db.insert(apiUsage).values({
       projectId: currentUsageProject(),
