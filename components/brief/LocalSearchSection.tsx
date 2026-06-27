@@ -208,35 +208,52 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return catalog.slice(0, AUTO_SERVICES).map(s => s.term);
   }, [curated, catalog, maxServices]);
 
-  // v7.299 — the REAL local-intent keywords (client + gap) under the TRACKED service lines. These
-  // already trigger a Google Local Pack, so they ARE the scan set — scanned as-is (no "{service}
-  // {city}" synthesis). Match a tracked term to its line by the cleaned form serviceTermOf uses.
-  const cleanTerm = (str: string): string => String(str ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-  const scanKeywords = useMemo<string[]>(() => {
-    const tracked: Record<string, boolean> = {};
-    effectiveServiceTerms.forEach(t => { tracked[cleanTerm(t)] = true; });
-    const seen: Record<string, boolean> = {};
-    const list: string[] = [];
-    for (let i = 0; i < localLines.length; i++) {
-      const l = localLines[i];
-      if (!tracked[cleanTerm(l.name)]) continue;
-      for (let j = 0; j < l.localKeywords.length; j++) {
-        const kw = String(l.localKeywords[j] ?? '').toLowerCase().trim();
-        if (kw && !seen[kw]) { seen[kw] = true; list.push(kw); }
+  // v7.300 — the scan set is EVERY local-intent keyword (client + gap) that maps to a PRODUCT /
+  // service category (procedure type) by STORED membership (Const II.8) — i.e. only the product
+  // categories ASSOCIATED WITH the local-map-pack keywords (Wayne). Not gated by the curated
+  // service list; not limited to keywords that happen to carry a stored taxonomy path. The local
+  // set ORs the uploaded-cell + footprint roll-up + live SerpAPI signals (matches the Keyword
+  // panel's isLocalIntent). Keywords are grouped to their canonical product LINE for display only.
+  const scanInfo = useMemo<{ keywords: string[]; lines: Array<{ name: string; count: number }> }>(() => {
+    const snap = analysis?.semrushSnapshot as any;
+    if (!categoryModel || !hasAnyLocalSignal(snap, dbKeywords)) return { keywords: [], lines: [] };
+    const lpKw = buildLocalPackKeywordSet(snap, dbKeywords);
+    const saRows = (analysis?.serpApiSnapshot?.keywords ?? []) as any[];
+    for (let i = 0; i < saRows.length; i++) {
+      const feats = saRows[i]?.serpFeatures;
+      if (Array.isArray(feats) && feats.indexOf('local_pack') >= 0) {
+        const kw = String(saRows[i]?.keyword ?? '').toLowerCase().trim();
+        if (kw) lpKw.add(kw);
       }
     }
-    return list;
-  }, [localLines, effectiveServiceTerms]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const trackedLineCount = useMemo<number>(() => {
-    const tracked: Record<string, boolean> = {};
-    effectiveServiceTerms.forEach(t => { tracked[cleanTerm(t)] = true; });
-    return localLines.filter(l => tracked[cleanTerm(l.name)]).length;
-  }, [localLines, effectiveServiceTerms]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const kwCountByTerm = useMemo<Record<string, number>>(() => {
-    const m: Record<string, number> = {};
-    for (let i = 0; i < localLines.length; i++) m[cleanTerm(localLines[i].name)] = localLines[i].localKeywords.length;
-    return m;
-  }, [localLines]);   // eslint-disable-line react-hooks/exhaustive-deps
+    if (lpKw.size === 0) return { keywords: [], lines: [] };
+    const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
+    for (let i = 0; i < categoryModel.categories.length; i++) {
+      const c = categoryModel.categories[i];
+      typeByName[c.name] = (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure';
+    }
+    const drop = buildCategoryGuard(snap, domain, competitorDomains).droppedCategoryNames(categoryModel.categories);
+    const cfk = categoryModel.categoryForKeyword;
+    const paths = categoryModel.keywordPaths;
+    const parentOf = categoryModel.parentForCategory;
+    const seen: Record<string, boolean> = {};
+    const kws: string[] = [];
+    const lineCount: Record<string, number> = {};
+    Array.from(lpKw).forEach(kw => {
+      const cat = cfk.get(kw);
+      if (!cat || cat === 'Other' || drop.has(cat) || typeByName[cat] !== 'procedure') return;
+      if (seen[kw]) return;
+      seen[kw] = true;
+      kws.push(kw);
+      const path = paths.get(kw);
+      const line = (path && path.length) ? path[0] : (parentOf.get(cat.toLowerCase()) || cat);
+      lineCount[line] = (lineCount[line] || 0) + 1;
+    });
+    const lines = Object.keys(lineCount).map(name => ({ name, count: lineCount[name] })).sort((a, b) => b.count - a.count);
+    return { keywords: kws, lines };
+  }, [analysis, dbKeywords, categoryModel, domain, competitorDomains]);
+  const scanKeywords = scanInfo.keywords;
+  const scanCategoryCount = scanInfo.lines.length;
 
   // v7.183/v7.284 — the seeds shown + scanned: brand pinned first, then the curated
   // services, each with its real category demand. Same builder the scan uses → the table
@@ -394,7 +411,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
                 <div style={{ fontSize: 12, color: 'var(--c-c8c8e0)' }}>
-                  <b style={{ color: 'var(--c-cfccff)' }}>{fmt(scanKeywords.length)}</b> local-intent keyword{scanKeywords.length !== 1 ? 's' : ''} across <b style={{ color: 'var(--c-cfccff)' }}>{trackedLineCount}</b> tracked service line{trackedLineCount !== 1 ? 's' : ''} <span style={{ color: 'var(--c-6a6a90)' }}>(client + gap · edit lines in the Services tab)</span>
+                  <b style={{ color: 'var(--c-cfccff)' }}>{fmt(scanKeywords.length)}</b> local-intent keyword{scanKeywords.length !== 1 ? 's' : ''} across <b style={{ color: 'var(--c-cfccff)' }}>{scanCategoryCount}</b> product service categor{scanCategoryCount !== 1 ? 'ies' : 'y'} <span style={{ color: 'var(--c-6a6a90)' }}>(client + gap · only categories with local-map-pack keywords)</span>
                 </div>
                 <button onClick={() => requestPlan()} disabled={scanKeywords.length === 0} className="orbit-btn-sm" style={{ height: 32 }}>Estimate &amp; preview</button>
               </div>
@@ -452,7 +469,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             <div style={{ width: 30, height: 30, borderRadius: 8, background: hasLocal ? 'var(--ca-6-182-212-0_18)' : 'var(--c-1a1a2a)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>📍</div>
             <div style={{ flex: 1, fontSize: 12.5, color: 'var(--c-c8c8e0)' }}>
               {hasLocal
-                ? <><b>Local panel active — {fmt(scanKeywords.length)} local-intent keyword{scanKeywords.length !== 1 ? 's' : ''} across {trackedLineCount} tracked service line{trackedLineCount !== 1 ? 's' : ''}.</b> <span className="text-orbit-secondary"> Each keyword (client + gap) is checked in the Google map pack as-is — the keyword already triggers a local pack, so there's no city modifier{scan ? <> — last scan checked {fmt(scan.scannedCount)} keywords.</> : <>. Run a scan to see your map-pack rank per keyword.</>}</span></>
+                ? <><b>Local panel active — {fmt(scanKeywords.length)} local-intent keyword{scanKeywords.length !== 1 ? 's' : ''} across {scanCategoryCount} product service categor{scanCategoryCount !== 1 ? 'ies' : 'y'}.</b> <span className="text-orbit-secondary"> Each keyword (client + gap) is checked in the Google map pack as-is — the keyword already triggers a local pack, so there's no city modifier{scan ? <> — last scan checked {fmt(scan.scannedCount)} keywords.</> : <>. Run a scan to see your map-pack rank per keyword.</>}</span></>
                 : <><b>No local-intent keywords detected yet.</b> <span className="text-orbit-secondary"> Couldn't derive local-pack keywords from this client's categories — confirm the analysis ran with keyword + SERP-feature data.</span></>}
             </div>
           </div>
@@ -489,7 +506,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
             {/* SUBNAV */}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-              <TabBtn id="kw"   cur={tab} set={setTab} icon="🔎" label="Services" cnt={seeds.length} />
+              <TabBtn id="kw"   cur={tab} set={setTab} icon="🔎" label="Services" cnt={scanCategoryCount} />
               <TabBtn id="loc"  cur={tab} set={setTab} icon="📌" label="Locations" cnt={scan ? clientLocations.length : undefined} />
               <TabBtn id="pack" cur={tab} set={setTab} icon="🗺️" label="Map Pack" cnt={scan ? scan.scannedCount : undefined} />
               <TabBtn id="rev"  cur={tab} set={setTab} icon="⭐" label="Reviews" cnt={scan ? clientLocations.length : undefined} />
@@ -497,62 +514,36 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <TabBtn id="opp"  cur={tab} set={setTab} icon="🎯" label="Opportunities" cnt={roll ? roll.opps.opportunities.length : undefined} />
             </div>
 
-            {/* ===== SERVICES (the grid seeds — no scan needed) ===== */}
+            {/* ===== SERVICE CATEGORIES (the local-pack keyword scan set — no scan needed) ===== */}
             {tab === 'kw' && (
               <div className="orbit-card p-5">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>Services tracked per location</div>
-                  <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>
-                    {serviceCount} of {maxServices} services{curated != null && <> · <button onClick={resetServices} className="svc-reset">↺ Reset to auto</button></>}
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>Product service categories scanned</div>
+                  <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{scanCategoryCount} categor{scanCategoryCount !== 1 ? 'ies' : 'y'} · {fmt(scanKeywords.length)} local-pack keywords</div>
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>Your brand + the top {AUTO_SERVICES} <b style={{ color: 'var(--c-c8c8e0)' }}>product categories that trigger a Google local map pack</b> (the same 📍 Local pack categories the Keyword panel shows), ranked by <b style={{ color: 'var(--c-c8c8e0)' }}>real monthly search demand</b> (the same demand shown in Market Gap). Delete any you don't want, or add another local-pack category with <b style={{ color: 'var(--c-c8c8e0)' }}>+ Add service</b>. Each tracked line's real local-intent keywords (client + gap) are scanned as-is in the Google map pack — see the Map Pack tab.</div>
+                <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>The <b style={{ color: 'var(--c-c8c8e0)' }}>product / service categories associated with your local-map-pack keywords</b> (the same 📍 Local pack categories the Keyword panel shows). EVERY local-intent keyword (client + gap) in these categories is checked as-is in the Google map pack — no city modifier, since the keyword already carries its local intent. See your rank per keyword in the Map Pack tab.</div>
                 {localPackActive
-                  ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Your <b>brand</b> plus every category that <b>triggers a Google local map pack</b> — the same 📍 Local pack segmentation the Keyword panel shows, from real Semrush SERP-feature data.</div>
-                  : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ No local-pack signal in this data yet — showing your <b>brand</b> only. Upload Semrush keywords with the <b>SERP Features</b> column (or re-run the analysis) to populate service areas.</div>}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
-                  <MiniStat k="TRACKED LINES" v={String(trackedLineCount)} />
+                  ? <div style={{ fontSize: 11, color: 'var(--c-46cce0)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>📍 Only categories that <b>trigger a Google local map pack</b> are scanned — the same 📍 Local pack segmentation the Keyword panel shows, from real Semrush + SerpAPI data.</div>
+                  : <div style={{ fontSize: 11, color: 'var(--c-f6c061)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_28)', borderRadius: 7, padding: '7px 10px', marginBottom: 12 }}>⚠ No local-pack signal in this data yet. Upload Semrush keywords with the <b>SERP Features</b> column (or re-run the analysis) to populate local categories.</div>}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 14 }}>
+                  <MiniStat k="PRODUCT CATEGORIES" v={String(scanCategoryCount)} />
                   <MiniStat k="KEYWORDS TO SCAN" v={fmt(scanKeywords.length)} color="var(--c-46cce0)" />
                   <MiniStat k="MAP-PACK CHECKS" v={scan ? fmt(scan.scannedCount) : fmt(scanKeywords.length)} color="var(--c-a9a3ff)" />
-                  <MiniStat k="SERVICE DEMAND / MO" v={fmt(seedVolume)} color="var(--c-a9a3ff)" />
                 </div>
                 <div style={{ overflowX: 'auto' }}>
                   <table className="local-tbl">
-                    <thead><tr><th>Service line</th><th>Type</th><th style={{ textAlign: 'right' }}>Demand / mo</th><th style={{ textAlign: 'right' }}>Local keywords</th><th style={{ width: 44 }} aria-label="actions" /></tr></thead>
+                    <thead><tr><th>Product service category</th><th style={{ textAlign: 'right' }}>Local-pack keywords</th></tr></thead>
                     <tbody>
-                      {seeds.map((s, i) => (
+                      {scanInfo.lines.map((l, i) => (
                         <tr key={i}>
-                          <td style={{ fontWeight: 600 }}>{s.term}</td>
-                          <td>{s.kind === 'brand'
-                            ? <span className="ipill" style={{ background: 'var(--ca-108-99-255-0_15)', color: 'var(--c-a9a3ff)', border: '1px solid var(--ca-108-99-255-0_3)' }}>brand</span>
-                            : <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_14)', color: 'var(--c-5ee68f)', border: '1px solid var(--ca-34-197-94-0_28)' }}>service</span>}</td>
-                          <td style={{ textAlign: 'right' }}>{s.volume > 0 ? fmt(s.volume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
-                          <td style={{ textAlign: 'right', color: 'var(--c-8888aa)' }}>{s.kind === 'brand' ? <span style={{ color: 'var(--c-555570)' }}>—</span> : fmt(kwCountByTerm[cleanTerm(s.term)] ?? 0)}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            {s.kind === 'service'
-                              ? <button className="svc-del" title={`Remove "${s.term}" from the scan`} aria-label={`Remove ${s.term}`} onClick={() => removeService(s.term)}>🗑</button>
-                              : <span title="Brand is always tracked" style={{ color: 'var(--c-555570)', fontSize: 12 }}>📌</span>}
-                          </td>
+                          <td style={{ fontWeight: 600 }}>{l.name} <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }}>📍 local pack</span></td>
+                          <td style={{ textAlign: 'right' }}>{fmt(l.count)}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                {/* +Add service picker — ALL remaining service categories (highest demand first),
-                    always browsable so the full list is visible even at the cap (v7.285). */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-                  <select className="svc-add-sel" value={addPick} onChange={e => setAddPick(e.target.value)} disabled={addable.length === 0}>
-                    <option value="">{addable.length === 0 ? 'All service categories are tracked' : `+ Add a service category…  (${addable.length} available)`}</option>
-                    {addable.map((c, i) => (
-                      <option key={i} value={c.term}>{c.term}{c.volume > 0 ? `  ·  ${fmt(c.volume)}/mo` : ''}</option>
-                    ))}
-                  </select>
-                  <button className="svc-add-btn" disabled={!addPick || atCap} onClick={() => addService(addPick)}>＋ Add service</button>
-                </div>
-                {atCap && addable.length > 0 && (
-                  <div style={{ fontSize: 10.5, color: 'var(--c-f6c061)', marginTop: 6 }}>At the {SERVICE_CAP}-service limit (brand + {maxServices}). Remove a service above to add one of the {addable.length} remaining.</div>
-                )}
-                <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Edits persist for this project. Then click <b>Estimate &amp; preview</b> at the top and run a scan to see your map-pack rank per keyword in the Map Pack tab.</div>
+                <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Click <b>Estimate &amp; preview</b> at the top, then run a scan to see your map-pack rank per keyword in the Map Pack tab.</div>
               </div>
             )}
 
