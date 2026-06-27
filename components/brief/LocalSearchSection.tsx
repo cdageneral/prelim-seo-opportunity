@@ -73,6 +73,20 @@ function writeCuratedServices(projectId: string, services: string[] | null): voi
   } catch { /* ignore quota / disabled storage */ }
 }
 
+// v7.302 — optional manual Locations URL (a locations page, sitemap, or .kml), persisted per project.
+const locUrlKey = (projectId: string): string => `orbitiq-local-locurl-${projectId}`;
+function readLocationsUrl(projectId: string): string {
+  if (typeof window === 'undefined' || !projectId) return '';
+  try { return window.localStorage.getItem(locUrlKey(projectId)) || ''; } catch { return ''; }
+}
+function writeLocationsUrl(projectId: string, url: string): void {
+  if (typeof window === 'undefined' || !projectId) return;
+  try {
+    if (url) window.localStorage.setItem(locUrlKey(projectId), url);
+    else window.localStorage.removeItem(locUrlKey(projectId));
+  } catch { /* ignore quota / disabled storage */ }
+}
+
 function fmtEta(sec: number): string {
   if (!isFinite(sec) || sec <= 0) return '';
   if (sec < 60) return `~${Math.round(sec)}s`;
@@ -117,6 +131,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   // v7.284 — curated primary-service terms (services only; brand pinned). null = follow auto.
   const [curated, setCurated]       = useState<string[] | null>(() => readCuratedServices(projectId));
   const [addPick, setAddPick]       = useState<string>('');   // current selection in the +Add picker
+  const [locationsUrl, setLocationsUrl] = useState<string>(() => readLocationsUrl(projectId));   // v7.302 manual locations URL
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -298,7 +313,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const resetServices = useCallback(() => { setCurated(null); writeCuratedServices(projectId, null); setAddPick(''); }, [projectId]);
 
   // reload curation when switching projects
-  useEffect(() => { setCurated(readCuratedServices(projectId)); setAddPick(''); }, [projectId]);
+  useEffect(() => { setCurated(readCuratedServices(projectId)); setAddPick(''); setLocationsUrl(readLocationsUrl(projectId)); }, [projectId]);
 
   // rollups from a completed scan
   const roll = useMemo(() => {
@@ -319,13 +334,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dryRun: true, keywords: scanKeywords }),
+        body: JSON.stringify({ dryRun: true, keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
       });
       const d = await r.json();
       if (!r.ok) { setScanError(d?.error ?? `Could not estimate (${r.status})`); return; }
       setPlan(d.plan ?? null);
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
-  }, [projectId, scanKeywords]);
+  }, [projectId, scanKeywords, locationsUrl]);
 
   const runScan = useCallback(async () => {
     setPlan(null); setScanError(null); setScanning(true);
@@ -333,7 +348,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: scanKeywords }),
+        body: JSON.stringify({ keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
       });
       if (!r.ok || !r.body) {
         let msg = `Scan failed (${r.status})`;
@@ -368,7 +383,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       }
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
     finally { setScanning(false); setProgress(null); }
-  }, [projectId, analysis, scanKeywords]);
+  }, [projectId, analysis, scanKeywords, locationsUrl]);
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -418,6 +433,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', marginTop: 7 }}>
                 Each keyword is checked once in Google's local 3-pack at your market locale — no city modifier, since the keyword already carries its local intent. Your map-pack rank per keyword shows in the Map Pack tab.
               </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+                <label style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--c-cfccff)', textTransform: 'uppercase', letterSpacing: '.06em', whiteSpace: 'nowrap' }}>Locations URL <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(optional)</span></label>
+                <input type="text" value={locationsUrl}
+                  onChange={e => { setLocationsUrl(e.target.value); writeLocationsUrl(projectId, e.target.value.trim()); }}
+                  placeholder="https://example.com/locations — a locations page, sitemap, or .kml"
+                  style={{ flex: '1 1 340px', minWidth: 220, background: 'var(--c-13131d)', border: '1px solid var(--c-2a2a3d)', borderRadius: 7, padding: '6px 9px', color: 'var(--c-e2e2f6)', fontSize: 11.5 }} />
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 4 }}>If your offices aren't auto-detected, paste your locations page (or sitemap/.kml) URL — we read the office list from it. Click <b>Estimate &amp; preview</b> to see how many were found.</div>
             </div>
           )}
 
@@ -448,6 +471,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <b style={{ color: 'var(--c-cfccff)' }}>{fmt(plan.keywords ?? 0)}</b> local-intent keyword{(plan.keywords ?? 0) !== 1 ? 's' : ''} = <b style={{ color: 'var(--c-cfccff)' }}>{fmt(plan.keywords ?? 0)}</b> map-pack check{(plan.keywords ?? 0) !== 1 ? 's' : ''} ·
                 <b style={{ color: 'var(--c-f6c061)' }}> ~{fmt(plan.estCalls ?? 0)} SerpAPI credits</b>
               </div>
+              {typeof plan.locations === 'number' && (
+                <div style={{ fontSize: 10.5, color: (plan.locations ?? 0) > 0 ? 'var(--c-5ee68f)' : 'var(--c-f6c061)', marginTop: 4 }}>
+                  {(plan.locations ?? 0) > 0
+                    ? `📍 ${fmt(plan.locations ?? 0)} office location${(plan.locations ?? 0) !== 1 ? 's' : ''} found${locationsUrl.trim() ? ' from your Locations URL' : ''}`
+                    : (locationsUrl.trim() ? '📍 No offices found at that URL — check it points to your locations page, sitemap, or .kml.' : '📍 No office locations auto-detected — add a Locations URL above if you have one.')}
+                </div>
+              )}
               {(plan.totalKeywords ?? 0) > (plan.keywords ?? 0) && (
                 <div style={{ fontSize: 10.5, color: 'var(--c-f6c061)', marginTop: 4 }}>Scanning {fmt(plan.keywords ?? 0)} of {fmt(plan.totalKeywords ?? 0)} keywords this run (runtime safety cap).</div>
               )}
@@ -555,7 +585,9 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <div className="orbit-card p-5">
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>
-                  {scan.source === 'kml' || scan.source === 'sitemap-pages'
+                  {scan.source && scan.source.indexOf('manual') === 0
+                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL. Ratings/reviews are backfilled from the live map-pack scan.</>
+                    : (scan.source === 'kml' || scan.source === 'sitemap-pages')
                     ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
                 </div>

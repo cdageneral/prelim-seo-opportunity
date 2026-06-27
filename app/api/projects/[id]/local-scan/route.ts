@@ -110,6 +110,46 @@ const hasKmlExt = (u: string): boolean => /\.kml(\?|#|$)/i.test(u);
  *   or, as a fallback, /locations/{city}/ page URLs. Returns [] if the site has
  *   no usable sitemap (caller then falls back to a Maps brand search).
  */
+// v7.302 — discover offices from a manually-provided URL: HTML locations page, sitemap, or KML.
+async function discoverFromUrl(
+  url: string,
+  clientDomain: string,
+): Promise<{ locations: KmlLocation[]; source: string }> {
+  if (!url) return { locations: [], source: 'none' };
+  const txt = await fetchText(url);
+  if (!txt) return { locations: [], source: 'none' };
+  // KML
+  if (hasKmlExt(url) || /<kml[\s>]/i.test(txt)) {
+    const pm = parseKmlPlacemarks(txt);
+    if (pm.length) return { locations: pm, source: 'manual-kml' };
+  }
+  // Sitemap (urlset, or an index → fetch a few children)
+  if (/<urlset[\s>]/i.test(txt) || /<sitemapindex[\s>]/i.test(txt)) {
+    let urls = parseUrlset(txt);
+    if (/<sitemapindex[\s>]/i.test(txt)) {
+      const children = parseSitemapIndex(txt);
+      for (let i = 0; i < children.length && i < 6; i++) {
+        const cx = await fetchText(children[i]);
+        if (cx) urls = urls.concat(parseUrlset(cx));
+      }
+    }
+    const locs = parseLocationUrls(urls);
+    if (locs.length) return { locations: locs, source: 'manual-sitemap' };
+  }
+  // HTML page → pull href links and parse the /location(s)/ office URLs (no DOM; regex).
+  const hrefs: string[] = [];
+  const re = /href\s*=\s*["']([^"']+)["']/gi;
+  let mm: RegExpExecArray | null;
+  while ((mm = re.exec(txt)) !== null) {
+    const h = mm[1];
+    if (h.toLowerCase().indexOf('/location') < 0) continue;
+    hrefs.push(h.charAt(0) === '/' ? `https://${clientDomain}${h}` : h);
+  }
+  const locs = parseLocationUrls(hrefs);
+  if (locs.length) return { locations: locs, source: 'manual-page' };
+  return { locations: [], source: 'none' };
+}
+
 async function discoverLocationsFromSite(
   domain: string,
 ): Promise<{ locations: KmlLocation[]; source: string }> {
@@ -210,6 +250,10 @@ export async function POST(
     ? body.keywords.map((k: any) => String(k ?? '').toLowerCase().trim()).filter(Boolean)
     : [];
   const keywordMode = bodyKeywords.length > 0;
+  // v7.302 — optional manual Locations URL (Wayne). Accepts an HTML locations page, a sitemap
+  // (urlset/index), or a KML; lets the user point us at the right page when auto-discovery's
+  // path conventions don't match. Free fetch (no SerpAPI).
+  const locationsUrl = String(body?.locationsUrl ?? '').trim();
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -277,11 +321,22 @@ export async function POST(
 
         let listings: LocalListing[] = [];
         let source = 'none';
-        const discovered = await discoverLocationsFromSite(clientDomain);
-        if (discovered.locations.length > 0) {
-          source = discovered.source;                       // 'kml' | 'sitemap-pages'
-          listings = discovered.locations.map(l => kmlToListing(l, clientDomain));
-        } else if (!dryRun && !keywordMode) {
+        // v7.302 — a manually-provided Locations URL wins (free). Works for HTML pages, sitemaps, KML.
+        if (locationsUrl) {
+          const m = await discoverFromUrl(locationsUrl, clientDomain);
+          if (m.locations.length > 0) {
+            source = m.source;
+            listings = m.locations.map(l => kmlToListing(l, clientDomain));
+          }
+        }
+        // Auto sitemap discovery — skip in a keyword-mode dryRun (locations aren't part of the
+        // keyword estimate), but always run for the real scan and for the legacy grid plan.
+        if (listings.length === 0 && (!keywordMode || !dryRun)) {
+          const discovered = await discoverLocationsFromSite(clientDomain);
+          if (discovered.locations.length > 0) {
+            source = discovered.source;                     // 'kml' | 'sitemap-pages'
+            listings = discovered.locations.map(l => kmlToListing(l, clientDomain));
+          } else if (!dryRun && !keywordMode) {
           // Fallback to Maps brand search (costs 1 SerpAPI call) — real-run only.
           const rawListings = await getMapsListings(brandQuery, market, undefined, 20);
           callsUsed++;
@@ -300,6 +355,7 @@ export async function POST(
               isClient: true, verified, healthFlags,
             };
           });
+          }
         }
         const clientPlaceIds: Record<string, boolean> = {};
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });

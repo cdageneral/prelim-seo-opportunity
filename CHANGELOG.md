@@ -1,5 +1,18 @@
 # OrbitIQ Changelog
 
+## v7.302 — 2026-06-26 · Manual "Locations URL" input — point the scan at your locations page / sitemap / KML when auto-detect can't reach it
+
+**Why.** Some client sites (wealthenhancement.com included) block or throttle non-browser requests: a normal browser visit to the sitemap returns 200, but a programmatic fetch stalls (the server-side `web_fetch` timed out at 180s; a same-origin `fetch()` hung past 45s). That pattern is classic CDN/bot protection, so even with the v7.301 `/location/` parsing fix the app's server-side discovery may still come back empty. Per Wayne: add a manual input to point us at the right URL.
+
+**What shipped.**
+- **Scan Setup → "Locations URL (optional)"** (`components/brief/LocalSearchSection.tsx`). Paste a locations page, a sitemap (`urlset` or index), or a `.kml`. Persisted per project (localStorage). Sent with both the estimate and the scan.
+- **`app/api/projects/[id]/local-scan/route.ts` — `discoverFromUrl`.** A manually-provided URL takes priority over auto-discovery (free, no SerpAPI). It auto-detects the content: **KML** → placemarks; **sitemap** (urlset, or an index → fetches a few children) → `parseLocationUrls`; **HTML page** → pulls the `/location(s)/…` office links straight from the markup (regex, no DOM) → `parseLocationUrls`. Single-segment office pages only (service sub-pages and the index are skipped), city+state parsed from the slug, deduped.
+- **Live feedback in the preview.** Because the URL fetch is free, the dry-run runs it and the confirm card now reports **"📍 N office locations found from your Locations URL"** (or a clear "0 found — check the URL" / "none auto-detected, add a Locations URL"). So you know immediately whether it worked, before spending any SerpAPI credits. The Locations tab labels the source as read from your URL.
+
+**Honest caveat.** This routes the fetch through the app server, so it still needs the server to be *able* to reach that URL. If a site hard-blocks the server's fetch entirely (not just the wrong path), the preview will show "0 found" — at which point the next option is a render/anti-bot fetch or a direct office upload. The keyword scan itself is unaffected either way (it doesn't need locations).
+
+**Verification (Art. V).** **Real project `tsc --noEmit` clean** (full app, project tsconfig, no `target` override — Const V.1a; `discoverFromUrl` uses an indexed `regex.exec` loop, no Map/Set-iterator spread / `matchAll`). **Harness:** the HTML-page office extraction path **6/6** (relative + absolute hrefs, service sub-pages + index excluded, city/state parsed, deduped) and `parseLocationUrls` **10/10** (v7.301) on the real WEG URL patterns. Live server-side fetch of a protected site is, by nature, confirmed only on deploy — the in-preview "N found" count is built precisely so that confirmation is one click. Builds on v7.298–v7.301.
+
 ## v7.301 — 2026-06-26 · Location discovery now finds the client's offices (matches `/location/{city}-{state}`, not just `/locations/`)
 
 **What Wayne flagged.** The Locations panel said *"No client locations were discovered"* even though wealthenhancement.com has ~193 office pages (e.g. https://www.wealthenhancement.com/locations).
