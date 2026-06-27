@@ -121,21 +121,47 @@ export function parseKmlPlacemarks(xml: string): KmlLocation[] {
  * page URLs found in a page sitemap. No coordinates (those need a geocode/Maps
  * lookup), but the page list + city slug is still authoritative and free.
  */
-export function parseLocationUrls(urls: string[], pathHint: string = '/locations/'): KmlLocation[] {
+// US state + DC postal abbreviations — used to split a trailing state code off a location
+// slug (e.g. "plymouth-mn" → city "plymouth", state "MN").
+const US_STATE_ABBR: Record<string, boolean> = (function () {
+  const m: Record<string, boolean> = {};
+  ['al','ak','az','ar','ca','co','ct','de','fl','ga','hi','id','il','in','ia','ks','ky','la','me','md','ma','mi','mn','ms','mo','mt','ne','nv','nh','nj','nm','ny','nc','nd','oh','ok','or','pa','ri','sc','sd','tn','tx','ut','vt','va','wa','wv','wi','wy','dc'].forEach(x => { m[x] = true; });
+  return m;
+})();
+
+export function parseLocationUrls(
+  urls: string[],
+  // v7.301 — accept BOTH the singular `/location/` and plural `/locations/` conventions
+  // (plus office/branch), since clients differ. WEG uses `/location/{city}-{st}` (singular);
+  // the old `/locations/`-only hint matched none → 0 locations discovered. Order matters only
+  // for which hint is reported; the two never overlap ("/location/" is not a substring of
+  // "/locations/{slug}"). Service sub-pages ("/location/{city}/{service}") are skipped by the
+  // single-segment rule.
+  pathHints: string[] = ['/location/', '/locations/', '/office/', '/offices/', '/branch/', '/branches/'],
+): KmlLocation[] {
   const out: KmlLocation[] = [];
   const seen: Record<string, boolean> = {};
-  const hint = pathHint.toLowerCase();
   for (let i = 0; i < urls.length; i++) {
     const u = urls[i];
     const lu = u.toLowerCase();
-    const idx = lu.indexOf(hint);
-    if (idx < 0) continue;
-    const tail = lu.slice(idx + hint.length).replace(/\/+$/, '');
-    if (!tail || tail.indexOf('/') >= 0) continue;      // only the first segment (a city slug)
-    if (seen[tail]) continue;
+    let tail = '';
+    for (let h = 0; h < pathHints.length; h++) {
+      const idx = lu.indexOf(pathHints[h]);
+      if (idx < 0) continue;
+      const t = lu.slice(idx + pathHints[h].length).replace(/\/+$/, '');
+      if (!t || t.indexOf('/') >= 0) continue;      // only the first segment (a city/office slug)
+      tail = t; break;
+    }
+    if (!tail || seen[tail]) continue;
     seen[tail] = true;
-    const label = tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    out.push({ name: label, address: '', city: label, state: '', zip: '', phone: '', url: u, lat: null, lng: null });
+    // Split a trailing US state code off the slug: "plymouth-mn" → city "plymouth", state "MN".
+    const parts = tail.split('-').filter(Boolean);
+    let state = '';
+    if (parts.length >= 2 && US_STATE_ABBR[parts[parts.length - 1]]) {
+      state = (parts.pop() as string).toUpperCase();
+    }
+    const label = parts.join(' ').replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    out.push({ name: state ? `${label}, ${state}` : label, address: '', city: label, state, zip: '', phone: '', url: u, lat: null, lng: null });
   }
   return out;
 }

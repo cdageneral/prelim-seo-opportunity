@@ -1,5 +1,19 @@
 # OrbitIQ Changelog
 
+## v7.301 — 2026-06-26 · Location discovery now finds the client's offices (matches `/location/{city}-{state}`, not just `/locations/`)
+
+**What Wayne flagged.** The Locations panel said *"No client locations were discovered"* even though wealthenhancement.com has ~193 office pages (e.g. https://www.wealthenhancement.com/locations).
+
+**Root cause (verified on the live sitemap, not guessed).** The site's office pages live at **`/location/{city}-{state}`** — *singular* "location" — e.g. `/location/plymouth-mn`, `/location/green-bay-wi`. The discovery's `parseLocationUrls` only matched the **plural** `/locations/` path, so it found **0** offices → the code fell back to a Maps brand search → 0 matched → the empty-state message. Confirmed by walking the real sitemap: `sitemap.xml` is a Drupal simple_sitemap index → `?page=1/2/3`; **page 2 carries 193 single-segment `/location/{city}-{state}` office URLs** (alongside `/location/{city}/{service}` sub-pages).
+
+**The fix.**
+- **`lib/local/sitemap.ts` — `parseLocationUrls`** now matches **both `/location/` and `/locations/`** (plus `/office(s)/`, `/branch(es)/`), takes only the **single segment** after the hint (so `/location/{city}/{service}` service sub-pages and the `/locations` index are correctly skipped), **parses the trailing US state code** out of the slug (`plymouth-mn` → city *Plymouth*, state *MN*), and dedupes. The two hints never overlap, so plural-convention sites still work unchanged.
+- **`app/api/projects/[id]/local-scan/route.ts` — `fetchText`** now sends a **browser-like User-Agent** and a 15s timeout (an unknown UA can be silently dropped by a site's CDN/bot filter, which would also return 0 locations).
+
+**Note.** These sitemap office pages carry no GPS coordinates, so they appear in the **Locations / Reviews** tabs (city, state, page URL; ratings backfilled when the office shows in a scanned pack). The v7.299+ keyword scan doesn't depend on locations — this purely restores the Locations panel.
+
+**Verification (Art. V).** **Real project `tsc --noEmit` clean** (full app, project tsconfig, no `target` override — Const V.1a). **`parseLocationUrls` harness 10/10 on the REAL WEG URL patterns**: 193 offices matched; city + state parsed (West Conshohocken→PA, Grand Rapids→MN, multi-word *Jacksonville Orange Park*→FL, *Los Angeles Westwood*→CA); `/location/{city}/{service}` sub-pages and the `/locations` index excluded; duplicates collapsed; plural `/locations/{city}` back-compat retained. The site's `sitemap.xml` returns **200** to a browser; the live server-side fetch (with the hardened UA) is to be confirmed on the deployed build. Builds on v7.298–v7.300.
+
 ## v7.300 — 2026-06-26 · Local scan now covers EVERY product/service category with local-map-pack keywords (stored membership), not just the curated lines
 
 **What Wayne flagged.** v7.299 read "29 keywords across 4 tracked service lines" — but there are 69 local-intent keywords in the Keyword panel and more than 4 product service categories. The scan should check the keywords that **represent the intent of the product service categories** — and specifically only the product lines **associated with the local-map-pack keywords**.

@@ -89,8 +89,13 @@ function cityFromAddress(address: string): string {
 async function fetchText(url: string): Promise<string | null> {
   try {
     const r = await fetch(url, {
-      signal: AbortSignal.timeout(12_000),
-      headers: { 'user-agent': 'OrbitIQ-LocalScan/1.0' },
+      // v7.301 — browser-like UA + 15s; some sites (e.g. Drupal/CDN bot filters) drop an
+      // unknown UA, which silently returned 0 locations. Still identifies OrbitIQ.
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        'user-agent': 'Mozilla/5.0 (compatible; OrbitIQ-LocalScan/1.0; +https://orbitiq.app) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'accept': 'application/xml,text/xml,text/html,application/xhtml+xml,*/*',
+      },
     });
     if (!r.ok) return null;
     return await r.text();
