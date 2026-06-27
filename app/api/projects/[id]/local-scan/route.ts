@@ -23,6 +23,10 @@
  * Body: { maxSeeds?: number (def 10, cap 10), maxLocations?: number (def 25, cap 200),
  *         services?: string[] (v7.284 curated service terms — brand added server-side), dryRun?: boolean }
  *        v7.183: scan = service seeds × locations grid ("{service} {city}" map-pack per location).
+ *        v7.307: reviewsMode — per-office Google Business Profile rating + review-count lookup
+ *        (1 google_maps search per office). Drives the Reviews tab's "Fetch reviews" button; the
+ *        offices come from the existing _localScan, results merge back into it. dryRun returns the
+ *        office count + estimated credits. Real SerpAPI data only (Const I.1) — never modeled.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -299,6 +303,11 @@ export async function POST(
   // (urlset/index), or a KML; lets the user point us at the right page when auto-discovery's
   // path conventions don't match. Free fetch (no SerpAPI).
   const locationsUrl = String(body?.locationsUrl ?? '').trim();
+  // v7.307 — REVIEWS MODE: per-office Google Business Profile rating + review-count lookup,
+  // driven by the Reviews tab's "Fetch reviews" button. Operates on the offices already in
+  // _localScan (no re-discovery), does ONE google_maps search per office, and merges the real
+  // rating/reviews back in. dryRun returns the office count + estimated credits.
+  const reviewsMode = body?.reviewsMode === true;
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -355,6 +364,85 @@ export async function POST(
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       let callsUsed = 0;
       try {
+        // ── v7.307 REVIEWS MODE: per-office Google rating + review-count lookup ───────
+        // Wayne's "Fetch reviews" button. Reviews don't ride the keyword map-pack scan (the
+        // client often isn't in a city's pack), so this does ONE google_maps lookup per office
+        // to read its REAL Google Business Profile rating + review count, biased to the office
+        // GPS, then merges the result back into the existing _localScan. dryRun returns the
+        // office count + estimated credits. Real SerpAPI data only (Const I.1) — never modeled.
+        if (reviewsMode) {
+          const prior = (analysis.semrushSnapshot as any)?._localScan as LocalScan | undefined;
+          const offices: LocalListing[] = (prior?.locations ?? []).filter(l => l.isClient);
+          if (!prior || offices.length === 0) {
+            if (dryRun) {
+              send({ type: 'done', dryRun: true, plan: { model: 'reviews', offices: 0, estCalls: 0, source: prior?.source ?? 'none' } });
+            } else {
+              send({ type: 'error', error: 'No offices to fetch reviews for. Run a local scan first so OrbitIQ can discover your locations.' });
+            }
+            controller.close();
+            return;
+          }
+          if (dryRun) {
+            send({ type: 'done', dryRun: true, plan: { model: 'reviews', offices: offices.length, estCalls: offices.length, source: prior.source ?? 'none' } });
+            controller.close();
+            return;
+          }
+
+          send({ type: 'start', total: offices.length });
+          const updated: LocalListing[] = offices.map(l => ({ ...l }));   // clone so we mutate copies
+          let rNext = 0, rDone = 0, reviewCalls = 0;
+          const reviewWorker = async (): Promise<void> => {
+            while (rNext < updated.length) {
+              const l = updated[rNext++];
+              const city = l.city || cityFromAddress(l.address) || '';
+              const q = [brandQuery, city].filter(Boolean).join(' ').trim() || brandQuery;
+              const ll = (l.lat != null && l.lng != null) ? `@${l.lat},${l.lng},14z` : undefined;
+              let places: MapsPlace[] = [];
+              try { places = await getMapsListings(q, market, ll, 8); } catch { places = []; }
+              reviewCalls++;
+              // Match the office's OWN Google Business Profile among the results: client brand
+              // match + a real rating first, then prefer a same-city address, else most reviews.
+              const mine = places.filter(p => isClientPlace(p) && p.rating != null);
+              const cityLc = city.toLowerCase();
+              const pick: MapsPlace | undefined =
+                mine.find(p => cityFromAddress(p.address).toLowerCase() === cityLc) ||
+                mine.slice().sort((a, b) => (b.reviews || 0) - (a.reviews || 0))[0];
+              if (pick && pick.rating != null) {
+                l.rating  = pick.rating;
+                l.reviews = pick.reviews;
+                if (pick.placeId) l.placeId = pick.placeId;
+                if (!l.address && pick.address) l.address = pick.address;
+                if (!l.phone && pick.phone) l.phone = pick.phone;
+                l.verified = pick.rating != null && pick.reviews > 0 && !!l.address;
+                const flags: string[] = [];
+                if (pick.rating < 4.0) flags.push('low rating');
+                if (pick.reviews < 25) flags.push('few reviews');
+                l.healthFlags = flags;
+              }
+              rDone++;
+              send({ type: 'progress', done: rDone, total: updated.length, seed: l.city || l.title });
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(CONCURRENCY, updated.length) }, () => reviewWorker()));
+
+          // Merge: keep any non-client rows untouched, replace the client offices with the
+          // freshly-fetched ones. Preserve every other field of the prior scan (keywords, model…).
+          const nonClient = (prior.locations ?? []).filter(l => !l.isClient);
+          const localScan: LocalScan = {
+            ...prior,
+            locations:  nonClient.concat(updated),
+            builtAt:    new Date().toISOString(),
+            callsUsed:  (prior.callsUsed ?? 0) + reviewCalls,
+          };
+          await db.update(analyses)
+            .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: localScan } as any })
+            .where(eq(analyses.id, analysis.id));
+          console.log(`[OrbitIQ] Per-office review fetch: ${updated.length} offices, ${reviewCalls} credits`);
+          send({ type: 'done', localScan });
+          controller.close();
+          return;
+        }
+
         // ── 1. Discover client locations ──────────────────────────────────────
         // PRIMARY (v7.179): the client's OWN sitemap/KML — authoritative, free,
         // every location with GPS. FALLBACK: a SerpAPI Maps brand search (1 call)
