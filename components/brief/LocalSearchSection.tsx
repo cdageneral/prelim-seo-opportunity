@@ -132,6 +132,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [curated, setCurated]       = useState<string[] | null>(() => readCuratedServices(projectId));
   const [addPick, setAddPick]       = useState<string>('');   // current selection in the +Add picker
   const [locationsUrl, setLocationsUrl] = useState<string>(() => readLocationsUrl(projectId));   // v7.302 manual locations URL
+  const [locQuery, setLocQuery] = useState('');   // v7.306: Locations tab search filter
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -327,6 +328,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   }, [scan]);
 
   const clientLocations = useMemo(() => (scan?.locations ?? []).filter(l => l.isClient), [scan]);
+  // v7.306: Locations tab search filter (city / address / phone / name). No cap — show the full footprint (Const I.6).
+  const filteredLocations = useMemo(() => {
+    const q = locQuery.trim().toLowerCase();
+    if (!q) return clientLocations;
+    return clientLocations.filter(l => [l.title, l.address, l.city, l.phone].some(v => String(v ?? '').toLowerCase().indexOf(q) >= 0));
+  }, [clientLocations, locQuery]);
 
   // ── scan flow: dryRun → confirm → stream ────────────────────────────────────
   const requestPlan = useCallback(async () => {
@@ -594,8 +601,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 {clientLocations.length === 0
                   ? <div style={{ fontSize: 12.5, color: 'var(--c-f6c061)' }}>No client locations were discovered. Confirm the site exposes a sitemap/locations page, or that the business name matches the Google Business Profile.</div>
                   : <>
+                    <input type="text" value={locQuery}
+                      onChange={e => setLocQuery(e.target.value)}
+                      placeholder={`Search ${fmt(clientLocations.length)} locations by city, address, or phone…`}
+                      style={{ width: '100%', boxSizing: 'border-box', background: 'var(--c-13131d)', border: '1px solid var(--c-2a2a3d)', borderRadius: 7, padding: '7px 10px', color: 'var(--c-e2e2f6)', fontSize: 12, marginBottom: 12 }} />
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
-                      {clientLocations.slice(0, 60).map((l, i) => (
+                      {filteredLocations.map((l, i) => (
                         <div key={i} className="loc-card" style={{ borderColor: l.healthFlags.length ? 'var(--ca-245-158-11-0_3)' : 'var(--c-1e1e2e)' }}>
                           <div className="loc-mk" style={l.healthFlags.length ? { background: 'var(--ca-245-158-11-0_12)', borderColor: 'var(--ca-245-158-11-0_3)' } : {}}>{l.healthFlags.length ? '⚠' : '📍'}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -614,7 +625,9 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                         </div>
                       ))}
                     </div>
-                    {clientLocations.length > 60 && <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>Showing 60 of {fmt(clientLocations.length)} locations.</div>}
+                    {filteredLocations.length === 0
+                      ? <div style={{ fontSize: 12, color: 'var(--c-f6c061)', marginTop: 10 }}>No locations match {`"${locQuery.trim()}"`}.</div>
+                      : <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>{locQuery.trim() ? `Showing ${fmt(filteredLocations.length)} of ${fmt(clientLocations.length)} locations matching "${locQuery.trim()}".` : `Showing all ${fmt(clientLocations.length)} locations.`}</div>}
                   </>}
               </div>
             )}
