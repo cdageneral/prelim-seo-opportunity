@@ -1,0 +1,198 @@
+/**
+ * POST /api/synthesize — Phase 2: Claude synthesis (SYNCHRONOUS)
+ *
+ * v7.2: No fire-and-forget. The handler awaits all Claude calls before
+ * returning. The HTTP connection stays open → Lambda stays alive.
+ *
+ * Called by the client immediately after POST /api/analyze succeeds.
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { db }      from '@/db';
+import { analyses, personas, opportunities, projects } from '@/db/schema';
+import { eq }      from 'drizzle-orm';
+import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
+import { generatePersonaImages } from '@/lib/apis/personaImage';
+import { setUsageProject } from '@/lib/usage/context';
+
+export const maxDuration = 300;
+
+function normalizeDomain(url: string): string {
+  try {
+    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    return parsed.hostname.replace(/^www\./, '');
+  } catch {
+    return url.replace(/^www\./, '').replace(/^https?:\/\//, '').split('/')[0];
+  }
+}
+
+export async function POST(req: NextRequest) {
+  let body: unknown;
+  try { body = await req.json(); } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  const analysisId = (body as any)?.analysisId as string | undefined;
+  if (!analysisId) {
+    return NextResponse.json({ error: 'Missing analysisId' }, { status: 400 });
+  }
+
+  const analysis = await db.query.analyses.findFirst({
+    where: eq(analyses.id, analysisId),
+  });
+
+  if (!analysis) {
+    return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
+  }
+  setUsageProject(analysis.projectId);   // v7.225: attribute synthesis API usage to the project
+  if (!analysis.semrushSnapshot) {
+    return NextResponse.json(
+      { error: 'Phase 1 snapshots not found. Run analysis again.' },
+      { status: 400 }
+    );
+  }
+  // Idempotency guard
+  if (analysis.status === 'completed') {
+    return NextResponse.json({ analysisId, status: 'completed' });
+  }
+
+  const project = await db.query.projects.findFirst({
+    where: eq(projects.id, analysis.projectId),
+  });
+
+  if (!project) {
+    return NextResponse.json({ error: 'Project not found' }, { status: 404 });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    await db.update(analyses)
+      .set({ status: 'failed', errorMessage: 'ANTHROPIC_API_KEY is not set.', completedAt: new Date() })
+      .where(eq(analyses.id, analysisId));
+    return NextResponse.json(
+      { error: 'ANTHROPIC_API_KEY is not set. Add it in Vercel → Settings → Environment Variables.' },
+      { status: 500 }
+    );
+  }
+
+  console.log(`[OrbitIQ] Phase 2 starting for ${analysisId}`);
+
+  const domain     = normalizeDomain(project.websiteUrl);
+  const clientName = project.clientName;
+  const industry   = project.industry ?? 'General';
+  const semrush    = analysis.semrushSnapshot as any;
+  const serp       = analysis.serpApiSnapshot  as any;
+  const profound   = analysis.profoundSnapshot as any;
+
+  // ── v7.83: resumable synthesis ──────────────────────────────────────────────
+  // Checkpoints from a previously interrupted run (Vercel 300s kill, dropped
+  // connection) live in semrushSnapshot._synthCheckpoint. Completed passes are
+  // reused instead of re-run — no duplicate Claude/OpenAI spend on retry.
+  const cached: SynthesisCheckpoint = (semrush?._synthCheckpoint ?? {}) as SynthesisCheckpoint;
+  const checkpointState: SynthesisCheckpoint = { ...cached };
+
+  const persistCheckpoint = async (partial: SynthesisCheckpoint) => {
+    Object.assign(checkpointState, partial);
+    try {
+      await db.update(analyses)
+        .set({
+          semrushSnapshot: { ...(semrush as any), _synthCheckpoint: checkpointState } as any,
+          // Probe is persisted as it completes so the panel survives a crash mid-run
+          ...(partial.llmProbe ? { profoundSnapshot: partial.llmProbe as any } : {}),
+        })
+        .where(eq(analyses.id, analysisId));
+      console.log(`[OrbitIQ] Phase 2 checkpoint saved: ${Object.keys(checkpointState).join(', ')}`);
+    } catch (err) {
+      // Non-fatal — a failed checkpoint write only means a retry re-runs that pass
+      console.error('[OrbitIQ] Checkpoint write failed (non-fatal):', (err as any)?.message);
+    }
+  };
+
+  try {
+    const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound, cached, persistCheckpoint)
+      .catch(err => {
+        const msg = String((err as any)?.message ?? err);
+        if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
+          throw new Error(`Anthropic API key error: ${msg}. Check ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables.`);
+        }
+        throw new Error(`Claude synthesis failed: ${msg}`);
+      });
+
+    // Audience segments (new rich format) are stored in semrushSnapshot._audienceSegments
+    // alongside _narrative, _pptPrompt, _categoryBreakdown — no schema change needed.
+    // The old `personas` relational table insert is intentionally skipped; the rigid
+    // segment_name NOT NULL constraint is incompatible with the new AudienceSegment shape.
+
+    // v7.83: skip insert if a previous (interrupted) attempt already wrote rows
+    const existingOpps = await db.select({ id: opportunities.id })
+      .from(opportunities)
+      .where(eq(opportunities.analysisId, analysisId))
+      .catch(() => []);
+
+    if (synthesis.opportunities.length > 0 && existingOpps.length === 0) {
+      await db.insert(opportunities).values(
+        synthesis.opportunities.map((o: any) => ({
+          analysisId,
+          category:        o.category,
+          title:           o.title,
+          summary:         o.summary,
+          impactScore:     o.impactScore,
+          effortScore:     o.effortScore,
+          estimatedVisits: o.estimatedVisits,
+          estimatedLeads:  o.estimatedLeads,
+          evidence:        o.evidence,
+          rank:            o.rank,
+        }))
+      );
+    }
+
+    // v7.149: generate a photoreal portrait per audience segment (Option A
+    // circular avatar in the panel). Non-fatal — on missing keys or any failure
+    // the segments are returned unchanged and the analysis still completes.
+    // v7.150: also capture a diagnostic status string for the panel/logs.
+    const personaImg = await generatePersonaImages(synthesis.personas, {
+      industry,
+      clientName,
+      idPrefix: `${domain.replace(/[^a-z0-9]+/gi, '-')}-${analysisId.slice(0, 8)}`,
+    }).catch((e) => ({ segments: synthesis.personas, status: `failed: ${String((e as any)?.message ?? e)}` }));
+    const personasWithImages = personaImg.segments;
+
+    const hm = synthesis.heroMetrics;
+    await db.update(analyses)
+      .set({
+        status:              'completed',
+        completedAt:         new Date(),
+        marketCaptureRate:   hm.marketCaptureRate,
+        totalCategoryVolume: hm.totalCategoryVolume,
+        clientOwnedVolume:   hm.clientOwnedVolume,
+        keywordFootprint:    hm.keywordFootprint,
+        aioAvailable:        hm.aioAvailable,
+        aioAcquired:         hm.aioAcquired,
+        topCompetitor:       hm.topCompetitor,
+        semrushSnapshot: {
+          ...(semrush as any),
+          _narrative:          synthesis.narrative,
+          _pptPrompt:          synthesis.pptPrompt,
+          _categoryBreakdown:  synthesis.categoryBreakdown,
+          _audienceSegments:   personasWithImages,
+          _audienceSegmentsImageStatus: personaImg.status,   // v7.150: portrait-gen diagnostic
+          _synthCheckpoint:    undefined,   // v7.83: clear resume checkpoint on completion
+        } as any,
+        // v7.80: LLM probe now runs in Phase 2 (needs categories) — persist it here
+        profoundSnapshot: (synthesis.llmProbe ?? profound) as any,
+      })
+      .where(eq(analyses.id, analysisId));
+
+    console.log(`[OrbitIQ] Phase 2 complete for ${analysisId}`);
+    return NextResponse.json({ analysisId, status: 'completed' });
+
+  } catch (err) {
+    console.error(`[OrbitIQ] Phase 2 failed for ${analysisId}:`, err);
+    await db.update(analyses)
+      .set({ status: 'failed', errorMessage: String((err as any)?.message ?? err), completedAt: new Date() })
+      .where(eq(analyses.id, analysisId));
+    return NextResponse.json(
+      { error: String((err as any)?.message ?? err) },
+      { status: 500 }
+    );
+  }
+}

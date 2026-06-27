@@ -1,0 +1,153 @@
+/**
+ * lib/local/sitemap.ts — v7.179 (Local Search panel)
+ *
+ * DETERMINISTIC discovery of a client's physical locations from its OWN website
+ * — the authoritative, free, fully-defensible source (no SerpAPI credits, no
+ * modeling). Many multi-location brands publish:
+ *   • a sitemap index (sitemap.xml / sitemap_index.xml) → a `local-sitemap.xml`
+ *     → a `locations.kml` carrying every store with name, address, phone, the
+ *     location page URL, AND exact GPS coordinates; and/or
+ *   • `/locations/{city}/` pages inside the page sitemap.
+ *
+ * This module is PURE string parsing (regex, no DOM, no network) so it is unit-
+ * testable in isolation; the route does the fetching and passes XML strings in.
+ * ES5-safe: no for…of over iterators (RegExp.exec while-loops), no block-scoped
+ * function declarations.
+ */
+
+export interface KmlLocation {
+  name:    string;          // placemark name (usually the city / market label)
+  address: string;          // full address line
+  city:    string;          // parsed from address
+  state:   string;          // parsed from address
+  zip:     string;          // parsed from address
+  phone:   string;
+  url:     string;          // the location page URL
+  lat:     number | null;
+  lng:     number | null;
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+/** Inner text of <tag>…</tag>, unwrapping an optional CDATA section. First match. */
+function tagText(block: string, tag: string): string {
+  const re = new RegExp('<' + tag + '\\b[^>]*>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</' + tag + '>', 'i');
+  const m = re.exec(block);
+  return m ? m[1].trim() : '';
+}
+
+/** All <loc> values nested inside repeated <wrapTag>…</wrapTag> blocks. */
+function locsIn(xml: string, wrapTag: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp('<' + wrapTag + '\\b[^>]*>([\\s\\S]*?)</' + wrapTag + '>', 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const lm = /<loc>\s*([\s\S]*?)\s*<\/loc>/i.exec(m[1]);
+    if (lm) out.push(lm[1].trim());
+  }
+  return out;
+}
+
+/** Parse "123 Main St, Suite 4, East Syracuse, New York, 13057, US" → city/state/zip. */
+export function parseAddress(address: string): { city: string; state: string; zip: string } {
+  const parts = String(address ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const p = parts.slice();
+  if (p.length && /^(us|usa|u\.s\.a?\.?|united states)$/i.test(p[p.length - 1])) p.pop();
+  let zip = '', state = '', city = '';
+  if (p.length && /\d/.test(p[p.length - 1])) zip = p.pop() as string;
+  if (p.length) state = p.pop() as string;
+  if (p.length) city = p.pop() as string;
+  return { city, state, zip };
+}
+
+// ─── public API ─────────────────────────────────────────────────────────────────
+
+/** <loc> entries from a <sitemapindex> (child sitemaps). */
+export function parseSitemapIndex(xml: string): string[] {
+  return locsIn(xml, 'sitemap');
+}
+
+/** <loc> entries from a <urlset> (page URLs). */
+export function parseUrlset(xml: string): string[] {
+  return locsIn(xml, 'url');
+}
+
+/**
+ * Pick the child sitemap most likely to hold locations (a "local"/"location"/
+ * "store"/"kml" sitemap), else null. Case-insensitive on the URL.
+ */
+export function pickLocationSitemap(sitemapUrls: string[]): string | null {
+  const pats = ['local', 'location', 'store', 'kml', 'geo'];
+  for (let i = 0; i < sitemapUrls.length; i++) {
+    const u = sitemapUrls[i].toLowerCase();
+    for (let j = 0; j < pats.length; j++) { if (u.indexOf(pats[j]) >= 0) return sitemapUrls[i]; }
+  }
+  return null;
+}
+
+/** Every <Placemark> in a KML document → structured locations (with GPS). */
+export function parseKmlPlacemarks(xml: string): KmlLocation[] {
+  const out: KmlLocation[] = [];
+  const re = /<Placemark\b[^>]*>([\s\S]*?)<\/Placemark>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const b = m[1];
+    const name = tagText(b, 'name');
+    const address = tagText(b, 'address');
+    const phone = tagText(b, 'phoneNumber');
+    const linkM = /<atom:link[^>]*href="([^"]+)"/i.exec(b);
+    const url = linkM ? linkM[1].trim() : '';
+    let lat: number | null = null, lng: number | null = null;
+    // <coordinates>lng,lat[,alt]</coordinates> (KML order is lon,lat)
+    const cM = /<coordinates>\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)/i.exec(b);
+    if (cM) { lng = parseFloat(cM[1]); lat = parseFloat(cM[2]); }
+    else {
+      const la = tagText(b, 'latitude'), lo = tagText(b, 'longitude');
+      if (la) lat = parseFloat(la);
+      if (lo) lng = parseFloat(lo);
+    }
+    const ad = parseAddress(address);
+    out.push({
+      name, address, city: ad.city, state: ad.state, zip: ad.zip, phone, url,
+      lat: (lat != null && isFinite(lat)) ? lat : null,
+      lng: (lng != null && isFinite(lng)) ? lng : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Fallback when no KML exists: derive location records from `/locations/{slug}/`
+ * page URLs found in a page sitemap. No coordinates (those need a geocode/Maps
+ * lookup), but the page list + city slug is still authoritative and free.
+ */
+export function parseLocationUrls(urls: string[], pathHint: string = '/locations/'): KmlLocation[] {
+  const out: KmlLocation[] = [];
+  const seen: Record<string, boolean> = {};
+  const hint = pathHint.toLowerCase();
+  for (let i = 0; i < urls.length; i++) {
+    const u = urls[i];
+    const lu = u.toLowerCase();
+    const idx = lu.indexOf(hint);
+    if (idx < 0) continue;
+    const tail = lu.slice(idx + hint.length).replace(/\/+$/, '');
+    if (!tail || tail.indexOf('/') >= 0) continue;      // only the first segment (a city slug)
+    if (seen[tail]) continue;
+    seen[tail] = true;
+    const label = tail.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    out.push({ name: label, address: '', city: label, state: '', zip: '', phone: '', url: u, lat: null, lng: null });
+  }
+  return out;
+}
+
+/** City + state vocabulary from discovered locations (lowercase) for the geo detector. */
+export function geoVocabFromLocations(locs: KmlLocation[]): string[] {
+  const set: Record<string, boolean> = {};
+  for (let i = 0; i < locs.length; i++) {
+    const c = (locs[i].city || '').toLowerCase().trim();
+    const s = (locs[i].state || '').toLowerCase().trim();
+    if (c) set[c] = true;
+    if (s) set[s] = true;
+  }
+  return Object.keys(set);
+}
