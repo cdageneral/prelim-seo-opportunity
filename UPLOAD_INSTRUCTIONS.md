@@ -1,41 +1,39 @@
-# OrbitIQ v7.305 — Upload instructions
+# OrbitIQ v7.306 — Upload instructions (re-delivery of the v7.305 fix)
 
-**What this fixes:** The **API Usage & Credits** panel showed "No usage recorded yet"
-even though Semrush / SerpAPI calls were being made. Cause: the `api_usage` database
-table was never created in the production database, so every usage write failed
-silently. This release makes the table **self-create** at runtime — no manual database
-work needed.
+**Why v7.306:** v7.305 failed to build — but **not because of this code**. During that
+upload, four unrelated core files (`tsconfig.json`, `db/index.ts`, `db/schema.ts`,
+`lib/usage/context.ts`) ended up **empty (0 bytes)** in the repo, which wiped the `@/*`
+import alias and broke the build. Those files have since been restored (main is back to
+the clean v7.304 baseline), but the usage fix came off with them. This re-applies it.
 
-## This is a PATCH (only 4 files change)
+**What it fixes:** the **API Usage & Credits** panel showing "No usage recorded yet" —
+the `api_usage` table self-creates at runtime, so usage starts recording.
 
-Built on top of the live deployment **v7.304**. Uploading these files to GitHub
-**adds/replaces only these 4 files** — it does NOT touch or revert anything else.
-
-Upload these to the repo, keeping the same folder paths:
+## Upload these 4 files (same folder paths)
 
 ```
-lib/usage/record.ts                       ← the fix (self-healing ensureUsageTable)
-app/api/usage/route.ts                    ← cross-project rollup self-heals on open
-app/api/projects/[id]/usage/route.ts      ← per-project ledger self-heals on open
-package.json                              ← version bumped to 7.305.0
+lib/usage/record.ts                       <- the fix (self-healing ensureUsageTable)
+app/api/usage/route.ts                    <- rollup self-heals on open
+app/api/projects/[id]/usage/route.ts      <- per-project ledger self-heals on open
+package.json                              <- version bumped to 7.306.0
 ```
 
-(`CHANGELOG_v7.305.md` in this folder is the changelog entry to prepend to the repo's
-`CHANGELOG.md` — optional, for the record. Do not upload it as a code file.)
+(`CHANGELOG_v7.306.md` is the changelog entry for the record - not a code file.)
 
 ## Steps
-1. In GitHub (`cdageneral/prelim-seo-opportunity`, branch `main`), upload the 4 files
-   above into their matching folders (drag the `lib/`, `app/`, and `package.json` from
-   this folder onto the repo root — GitHub preserves the paths).
-2. Commit message: **`v7.305`**.
-3. Vercel auto-builds. After it shows **READY**, open the project's **API Usage** panel
-   and click **Refresh** — the table is created on first open. Then run any
-   Semrush/SerpAPI action and the ledger starts filling in (provider, units, time,
-   project).
+1. In GitHub (`cdageneral/prelim-seo-opportunity`, `main`), upload the 4 files above into
+   their matching folders.
+2. **Before committing, check GitHub's "changed files" preview: it must show ONLY these 4
+   files.** If `tsconfig.json`, `db/index.ts`, `db/schema.ts`, or `lib/usage/context.ts`
+   appear as changed (especially shrinking to empty), **cancel** - that's the blanking
+   bug, not your change.
+3. Commit message: **`v7.306`**.
+4. Tell me when it's pushed - **I'll verify the Vercel build goes READY** and that nothing
+   got blanked, before you rely on it.
 
-## Heads-up
-- Usage counting is **forward-only**: the Semrush/SerpAPI calls you already made before
-  this release can't be back-filled — they were never recorded. New calls record from
-  here on.
-- The live version when this was built was **v7.304**. If a higher version has shipped
-  by the time you upload, tell me and I'll rebase/renumber to avoid a collision.
+## After it's live
+- Open the project's **API Usage** panel -> **Refresh** (the table is created on first
+  open). Then run any Semrush/SerpAPI action; the ledger fills in (provider, units, time,
+  project).
+- Usage counting is **forward-only** - calls made before this deploys can't be
+  back-filled.

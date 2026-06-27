@@ -1,4 +1,4 @@
-## v7.305 — 2026-06-26 · API Usage panel now actually records — `api_usage` table self-creates (no more silent drops)
+## v7.306 — 2026-06-26 · API Usage panel now actually records — `api_usage` table self-creates (no more silent drops)
 
 **What Wayne saw.** The **API Usage & Credits** panel showed *"No usage recorded yet"*
 even after real SerpAPI and Semrush calls. The recorder was firing correctly on every
