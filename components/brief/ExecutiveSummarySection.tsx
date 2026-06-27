@@ -159,6 +159,7 @@ export default function ExecutiveSummarySection({
     competitorDomains:  manualDomains,
     clientVolMin:       defaultClientThreshold,
     competitorVolMin:   defaultCompetitorThreshold,
+    includeDemand:      true,   // v7.305: include "missing demand" so the footprint total + Volume Opportunity denominator reconcile with the Keyword Landscape + Google Rank panels
   }), [analysis, dbKeywords, propClientDomain, manualDomains, defaultClientThreshold, defaultCompetitorThreshold]);
 
   const topKws: SemKw[] = useMemo(() => kwPool.map(item => ({

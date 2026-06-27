@@ -859,6 +859,7 @@ export function computeSov(
     competitorDomains: competitors ?? [],
     clientVolMin:      0,
     competitorVolMin:  0,
+    includeDemand:     true,   // v7.305: fold missing-demand volume into the SoV denominator (full-footprint parity)
   });
   const ranked = pool.filter(i => !i.isGap);
 
@@ -1142,7 +1143,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
   // Filter to !isGap: this section is about client rankings only (gap kws have no client position).
   // Pool options identical to KeywordsPanel, so ranked + excluded gaps always
   // sum to exactly the Keyword Landscape total.
-  const { topKws, gapKwCount, gapVolMonthly } = useMemo(() => {
+  const { topKws, gapKwCount, gapVolMonthly, demandKwCount, demandVolMonthly } = useMemo(() => {
     const clientDomain = analysis?.semrushSnapshot?.domain ?? domain ?? '';
     const pool = buildKwPool({
       semrushSnapshot:  analysis?.semrushSnapshot,
@@ -1151,11 +1152,17 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       competitorDomains: competitors ?? [],
       clientVolMin:     defaultClientThreshold,
       competitorVolMin: defaultCompetitorThreshold,
+      includeDemand:    true,   // v7.305: union the "missing demand" universe so Total reconciles to the Keyword Landscape
     });
-    const gaps = pool.filter(item => item.isGap);
+    const gaps   = pool.filter(item => item.isGap);
+    // v7.305: "missing demand" = real Semrush demand the footprint never ranked for
+    // (origin:'demand', isGap:false, no client position). Counted in Total + the share
+    // denominator, but kept OUT of the ranked footprint (topKws) so "Ranked Keywords"
+    // and the rankings table stay honest — they list only real client rankings (Const I.1).
+    const demand = pool.filter(item => !item.isGap && item.origin === 'demand');
     return {
       topKws: pool
-        .filter(item => !item.isGap)
+        .filter(item => !item.isGap && item.origin !== 'demand')
         .map(item => ({
           keyword:      item.keyword,
           position:     item.position != null && item.position > 0 && isFinite(item.position)
@@ -1166,6 +1173,8 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
         })) as SemKw[],
       gapKwCount:    gaps.length,
       gapVolMonthly: gaps.reduce((s, k) => s + k.searchVolume, 0),
+      demandKwCount:    demand.length,
+      demandVolMonthly: demand.reduce((s, k) => s + (k.searchVolume ?? 0), 0),
     };
   }, [analysis, dbKeywords, domain, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
 
@@ -1202,13 +1211,18 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
     ? posKws.reduce((s, k) => s + k.position * k.searchVolume, 0) / posVol
     : 0;
 
-  const volOutsideTop3 = totalVol - top3Vol;
-  const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
-  const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
+  // v7.305: share denominators include the "missing demand" volume so Pg-1 / Top-3
+  // share reflect the TRUE total market demand (full-footprint parity, Wayne 2026-06-26).
+  // Reconciles with the Executive Summary's Volume Opportunity, which sums the same
+  // demand-inclusive pool (Const II.6/II.7).
+  const footprintVolDenom = totalVol + demandVolMonthly;
+  const volOutsideTop3 = footprintVolDenom - top3Vol;
+  const pctOutsideTop3 = footprintVolDenom > 0 ? Math.round((volOutsideTop3 / footprintVolDenom) * 100) : 0;
+  const top3VolPct     = footprintVolDenom > 0 ? Math.round((top3Vol / footprintVolDenom) * 100) : 0;
   // Volume-based page 1 share: what % of total search demand is captured at positions 1–10.
   // Matches the metric users expect when they say "page 1 coverage."
   // Count-based (page1Kws / posKws.length) is surfaced as sub-text only.
-  const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
+  const page1Pct       = footprintVolDenom > 0 ? Math.round((page1Vol / footprintVolDenom) * 100) : 0;
 
   // ── Bar chart ─────────────────────────────────────────────────────────────
   // (bar chart helpers removed — bar chart replaced with SovPanel)
@@ -1375,12 +1389,12 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       <div className="grid grid-cols-5 gap-3">
         <StatCard
           label="Total Keywords"
-          value={dbLoaded ? (totalKws + gapKwCount).toLocaleString() : '—'}
+          value={dbLoaded ? (totalKws + gapKwCount + demandKwCount).toLocaleString() : '—'}
           sub={dbLoaded
-            ? `${fmtAnnual(totalVol + gapVolMonthly)} annual vol — full footprint`
+            ? `${fmtAnnual(totalVol + gapVolMonthly + demandVolMonthly)} annual vol — full footprint`
             : 'Loading…'}
           sub2={dbLoaded
-            ? `matches Keyword Landscape · ${totalKws.toLocaleString()} ranked + ${gapKwCount.toLocaleString()} gap`
+            ? `matches Keyword Landscape · ${totalKws.toLocaleString()} ranked + ${demandKwCount.toLocaleString()} missing demand + ${gapKwCount.toLocaleString()} gap`
             : undefined}
         />
         <StatCard
@@ -1389,8 +1403,8 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           sub={dbLoaded
             ? `${top3Kws} in top 3 · ${fmtAnnual(totalVol)} annual vol`
             : 'Loading…'}
-          sub2={dbLoaded && gapKwCount > 0
-            ? `${gapKwCount.toLocaleString()} gap kws (${fmtAnnual(gapVolMonthly)}/yr) excluded — no client rankings`
+          sub2={dbLoaded && (gapKwCount + demandKwCount) > 0
+            ? `${(gapKwCount + demandKwCount).toLocaleString()} kws (${fmtAnnual(gapVolMonthly + demandVolMonthly)}/yr) excluded — no client rankings · ${gapKwCount.toLocaleString()} gap + ${demandKwCount.toLocaleString()} missing demand`
             : undefined}
         />
         <StatCard
