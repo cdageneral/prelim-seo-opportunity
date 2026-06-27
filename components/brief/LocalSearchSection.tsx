@@ -7,6 +7,7 @@
  *   • Locations — client Google Business listings discovered via SerpAPI Maps
  *   • Map Pack — local 3-pack rank per local keyword (SerpAPI google + ll)
  *   • Reviews — real rating + review counts per location, vs nearby pack leaders
+ *               (+ a per-office "Fetch reviews" Google lookup, v7.307)
  *   • Local Keywords — local-intent universe with real Semrush volume + intent
  *   • Competition — Share of Local Voice across the client's packs
  *   • Opportunities — deterministic P0/P1/P2 fixes
@@ -133,6 +134,11 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [addPick, setAddPick]       = useState<string>('');   // current selection in the +Add picker
   const [locationsUrl, setLocationsUrl] = useState<string>(() => readLocationsUrl(projectId));   // v7.302 manual locations URL
   const [locQuery, setLocQuery] = useState('');   // v7.306: Locations tab search filter
+  // v7.307 — per-office "Fetch reviews" flow (Reviews tab): estimate → confirm → stream.
+  const [revFetching, setRevFetching] = useState(false);
+  const [revProgress, setRevProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
+  const [revPlan, setRevPlan]         = useState<{ offices: number; estCalls: number } | null>(null);
+  const [revError, setRevError]       = useState<string | null>(null);
 
   // hydrate scan on analysis change (snapshot → cache)
   useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -229,10 +235,9 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   // categories ASSOCIATED WITH the local-map-pack keywords (Wayne). Not gated by the curated
   // service list; not limited to keywords that happen to carry a stored taxonomy path. The local
   // set ORs the uploaded-cell + footprint roll-up + live SerpAPI signals (matches the Keyword
-  // panel's isLocalIntent). Keywords are grouped to their canonical product LINE for display only.
-  const scanInfo = useMemo<{ keywords: string[]; lines: Array<{ name: string; count: number }> }>(() => {
+  const scanInfo = useMemo(() => {
     const snap = analysis?.semrushSnapshot as any;
-    if (!categoryModel || !hasAnyLocalSignal(snap, dbKeywords)) return { keywords: [], lines: [] };
+    if (!categoryModel || !hasAnyLocalSignal(snap, dbKeywords)) return { keywords: [] as string[], lines: [] as Array<{ name: string; count: number }> };
     const lpKw = buildLocalPackKeywordSet(snap, dbKeywords);
     const saRows = (analysis?.serpApiSnapshot?.keywords ?? []) as any[];
     for (let i = 0; i < saRows.length; i++) {
@@ -242,7 +247,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
         if (kw) lpKw.add(kw);
       }
     }
-    if (lpKw.size === 0) return { keywords: [], lines: [] };
+    if (lpKw.size === 0) return { keywords: [] as string[], lines: [] as Array<{ name: string; count: number }> };
     const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
     for (let i = 0; i < categoryModel.categories.length; i++) {
       const c = categoryModel.categories[i];
@@ -334,6 +339,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     if (!q) return clientLocations;
     return clientLocations.filter(l => [l.title, l.address, l.city, l.phone].some(v => String(v ?? '').toLowerCase().indexOf(q) >= 0));
   }, [clientLocations, locQuery]);
+  // v7.307: offices still awaiting a real Google rating (drives the Fetch-reviews button label).
+  const pendingReviews = useMemo(() => clientLocations.filter(l => l.rating == null).length, [clientLocations]);
 
   // ── scan flow: dryRun → confirm → stream ────────────────────────────────────
   const requestPlan = useCallback(async () => {
@@ -392,10 +399,72 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     finally { setScanning(false); setProgress(null); }
   }, [projectId, analysis, scanKeywords, locationsUrl]);
 
+  // ── v7.307 review fetch flow: dryRun → confirm → stream (per-office Google lookup) ──
+  const requestReviewPlan = useCallback(async () => {
+    setRevError(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/local-scan`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewsMode: true, dryRun: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setRevError(d?.error ?? `Could not estimate (${r.status})`); return; }
+      const p = d.plan;
+      if (!p || (p.offices ?? 0) === 0) { setRevError('No offices found to fetch. Run a local scan first to discover your locations.'); return; }
+      setRevPlan({ offices: p.offices, estCalls: p.estCalls });
+    } catch (e) { setRevError(String((e as any)?.message ?? e)); }
+  }, [projectId]);
+
+  const runReviewFetch = useCallback(async () => {
+    setRevPlan(null); setRevError(null); setRevFetching(true);
+    setRevProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    try {
+      const r = await fetch(`/api/projects/${projectId}/local-scan`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewsMode: true }),
+      });
+      if (!r.ok || !r.body) {
+        let msg = `Fetch failed (${r.status})`;
+        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+        setRevError(msg); setRevFetching(false); setRevProgress(null); return;
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'start') {
+            setRevProgress(p => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'progress') {
+            setRevProgress(p => ({ done: ev.done ?? p?.done ?? 0, total: ev.total ?? p?.total ?? 0, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+          } else if (ev.type === 'error') {
+            setRevError(ev.error ?? 'Fetch failed');
+          } else if (ev.type === 'done' && ev.localScan) {
+            setScan(ev.localScan);
+            try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
+          }
+        }
+      }
+    } catch (e) { setRevError(String((e as any)?.message ?? e)); }
+    finally { setRevFetching(false); setRevProgress(null); }
+  }, [projectId, analysis]);
+
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const eta = progress && progress.total > 0 && progress.done > 0 && progress.done < progress.total
     ? fmtEta((progress.total - progress.done) * (((Date.now() - progress.startedAt) / 1000) / progress.done)) : '';
+  // v7.307 — review-fetch progress
+  const revPct = revProgress && revProgress.total > 0 ? Math.round((revProgress.done / revProgress.total) * 100) : 0;
+  const revEta = revProgress && revProgress.total > 0 && revProgress.done > 0 && revProgress.done < revProgress.total
+    ? fmtEta((revProgress.total - revProgress.done) * (((Date.now() - revProgress.startedAt) / 1000) / revProgress.done)) : '';
 
   const hasLocal = hasSeeds;
   const scanDate = scan?.builtAt ? new Date(scan.builtAt).toLocaleDateString() : null;
@@ -693,8 +762,46 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     </div>
                   </div>
                   <div className="orbit-card p-5" style={{ flex: 1, minWidth: 320 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Reviews by location</div>
-                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count from Google Business Profiles (via SerpAPI). <b>Pending</b> = not fetched yet (the website carries no review data) — run a per-office Google lookup to populate; a blank rating is never shown as a zero.</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Reviews by location</div>
+                      {!revFetching && (
+                        <button onClick={() => (revPlan ? runReviewFetch() : requestReviewPlan())} className="orbit-btn-sm" style={{ padding: '6px 12px', fontSize: 12 }}>
+                          {pendingReviews > 0 ? `▸ Fetch reviews (${fmt(pendingReviews)} pending)` : '↻ Refresh reviews'}
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count from Google Business Profiles (via SerpAPI). <b>Pending</b> = not fetched yet (the website carries no review data) — click <b>Fetch reviews</b> to run a per-office Google lookup; a blank rating is never shown as a zero.</div>
+
+                    {/* v7.307 — review-fetch confirm + progress (mirrors the scan flow: estimate → confirm → stream) */}
+                    {revPlan && !revFetching && (
+                      <div style={{ marginBottom: 10, padding: 11, borderRadius: 9, border: '1px solid var(--ca-108-99-255-0_3)', background: 'var(--ca-108-99-255-0_06)' }}>
+                        <div style={{ fontSize: 12, color: 'var(--c-cfccff)', fontWeight: 600 }}>Fetch Google reviews for {fmt(revPlan.offices)} office{revPlan.offices !== 1 ? 's' : ''}</div>
+                        <div style={{ fontSize: 11, color: 'var(--c-9090b8)', marginTop: 4 }}>One Google lookup per office · <b style={{ color: 'var(--c-f6c061)' }}>~{fmt(revPlan.estCalls)} SerpAPI credits</b>. Refreshes every office's real rating &amp; review count.</div>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+                          <button onClick={runReviewFetch} className="orbit-btn-sm" style={{ padding: '6px 12px', fontSize: 12 }}>Confirm &amp; fetch</button>
+                          <button onClick={() => setRevPlan(null)} className="orbit-btn-ghost" style={{ padding: '6px 12px', fontSize: 12 }}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    {revFetching && (
+                      <div style={{ marginBottom: 10, maxWidth: 480 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, marginBottom: 5 }}>
+                          <span style={{ fontSize: 11, color: 'var(--c-9090b8)' }}>
+                            <i className="ti ti-loader-2" style={{ marginRight: 5, color: 'var(--c-22d3ee)' }} />
+                            {(!revProgress || revProgress.total === 0) ? 'Starting — fetching Google reviews…' : `Office ${revProgress.done} of ${revProgress.total}${revProgress.seed ? ` · ${revProgress.seed}` : ''}`}
+                          </span>
+                          <span style={{ fontSize: 11, color: 'var(--c-6a6a90)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{revPct > 0 ? `${revPct}%` : ''}{revEta ? ` · ${revEta}` : ''}</span>
+                        </div>
+                        <div style={{ height: 6, background: 'var(--c-1a1a30)', borderRadius: 3, overflow: 'hidden' }}>
+                          {revProgress && revProgress.total > 0
+                            ? <div style={{ height: '100%', width: `${revPct}%`, background: 'var(--c-22d3ee)', transition: 'width 0.3s ease' }} />
+                            : <div style={{ height: '100%', width: '35%', background: 'var(--c-22d3ee)', opacity: 0.6, animation: 'orbitiq-lindet 1.1s ease-in-out infinite' }} />}
+                        </div>
+                        <style>{`@keyframes orbitiq-lindet{0%{margin-left:-35%}100%{margin-left:100%}}`}</style>
+                      </div>
+                    )}
+                    {revError && <div style={{ marginBottom: 10, fontSize: 11.5, color: 'var(--c-f08a8a)' }}>{revError}</div>}
+
                     <div style={{ overflowX: 'auto' }}>
                       <table className="local-tbl">
                         <thead><tr><th>Location</th><th>Rating</th><th style={{ textAlign: 'right' }}>Reviews</th><th>Status</th></tr></thead>
@@ -704,7 +811,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                               <td style={{ fontWeight: 600 }}>{l.city || l.title}</td>
                               <td>{l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> {l.rating}</> : '—'}</td>
                               <td style={{ textAlign: 'right' }}>{l.rating != null ? fmt(l.reviews) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
-                              <td>{l.rating == null ? <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }} title="Google rating not fetched yet — run a per-office Google lookup to populate">Pending</span> : l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
+                              <td>{l.rating == null ? <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }} title="Google rating not fetched yet — click Fetch reviews to run a per-office Google lookup">Pending</span> : l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
                             </tr>
                           ))}
                         </tbody>
