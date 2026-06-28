@@ -341,6 +341,25 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   }, [clientLocations, locQuery]);
   // v7.307: offices still awaiting a real Google rating (drives the Fetch-reviews button label).
   const pendingReviews = useMemo(() => clientLocations.filter(l => l.rating == null).length, [clientLocations]);
+  // v7.308 — review-coverage summary: % of locations carrying >=1 REAL Google review, plus a
+  // breakdown of the reviewed locations by review-count band. Real SerpAPI counts only (Const I.1) —
+  // every figure is a count/ratio over the fetched rows, nothing modeled.
+  const reviewCoverage = useMemo(() => {
+    const total = clientLocations.length;
+    const reviewed = clientLocations.filter(l => (l.reviews ?? 0) > 0);
+    const withReviews = reviewed.length;
+    const pct = total > 0 ? Math.round((withReviews / total) * 100) : 0;
+    const high = reviewed.filter(l => (l.reviews ?? 0) >= 100).length;
+    const med  = reviewed.filter(l => (l.reviews ?? 0) >= 25 && (l.reviews ?? 0) < 100).length;
+    const low  = reviewed.filter(l => (l.reviews ?? 0) >= 1 && (l.reviews ?? 0) < 25).length;
+    const denom = Math.max(1, withReviews);
+    const bands = [
+      { label: '100+ reviews', count: high, pct: Math.round((high / denom) * 100), color: 'var(--c-5ee68f)' },
+      { label: '25–99 reviews', count: med,  pct: Math.round((med / denom) * 100),  color: 'var(--c-f6c061)' },
+      { label: '1–24 reviews',  count: low,  pct: Math.round((low / denom) * 100),  color: 'var(--c-46cce0)' },
+    ];
+    return { total, withReviews, pct, bands };
+  }, [clientLocations]);
 
   // ── scan flow: dryRun → confirm → stream ────────────────────────────────────
   const requestPlan = useCallback(async () => {
@@ -760,6 +779,25 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                       <b style={{ color: 'var(--c-f0f0ff)', fontSize: 14 }}>{fmt(roll.reviews.totalReviews)}</b> total reviews<br />
                       range {roll.reviews.worstRating}–{roll.reviews.bestRating}★ across locations
                     </div>
+                  </div>
+                  {/* v7.308 — review-coverage card: % of locations with a real Google review + band breakdown */}
+                  <div className="orbit-card p-5" style={{ flex: '0 0 250px', minWidth: 220 }}>
+                    <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--c-8888aa)' }}>Locations with reviews</div>
+                    <div style={{ fontSize: 34, fontWeight: 800, marginTop: 4, lineHeight: 1, color: reviewCoverage.pct > 0 ? 'var(--c-5ee68f)' : 'var(--c-555570)' }}>{reviewCoverage.pct}%</div>
+                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 4, marginBottom: 14 }}>{fmt(reviewCoverage.withReviews)} of {fmt(reviewCoverage.total)} location{reviewCoverage.total !== 1 ? 's' : ''} have a Google review</div>
+                    {reviewCoverage.withReviews > 0
+                      ? reviewCoverage.bands.map((b, i) => (
+                          <div key={i} style={{ marginBottom: 9 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 11.5, marginBottom: 4 }}>
+                              <span style={{ color: 'var(--c-c8c8e0)' }}>{b.label}</span>
+                              <span style={{ color: 'var(--c-f0f0ff)', fontWeight: 700 }}>{fmt(b.count)} <span style={{ color: 'var(--c-8888aa)', fontWeight: 400 }}>loc</span></span>
+                            </div>
+                            <div style={{ height: 7, borderRadius: 4, background: 'var(--c-0e0e18)', overflow: 'hidden' }}>
+                              <i style={{ display: 'block', height: '100%', width: `${b.pct}%`, background: b.color }} />
+                            </div>
+                          </div>
+                        ))
+                      : <div style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>No reviews fetched yet — click <b>Fetch reviews</b> to populate.</div>}
                   </div>
                   <div className="orbit-card p-5" style={{ flex: 1, minWidth: 320 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
