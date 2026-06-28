@@ -621,9 +621,15 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     : <>Run a local scan to compute the index from real map-pack, listing &amp; review data.</>}
                 </div>
               </div>
-              <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, minWidth: 460 }}>
-                <Stat k="Locations" v={scan ? String(clientLocations.length) : '—'} d={scan ? `${clientLocations.filter(l => l.verified).length} verified` : 'after scan'} />
-                <Stat k="Map-Pack Presence" v={roll ? `${roll.pack.presenceRate}%` : '—'} d={roll ? `${roll.pack.inPack} of ${roll.pack.withPack} packs` : 'after scan'} color="var(--c-5ee68f)" bar={roll ? roll.pack.presenceRate : 0} />
+              <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, minWidth: 380 }}>
+                {/* v7.310 — Map-Pack Presence is the leading card; the Locations count is merged in below the % */}
+                <div style={{ background: 'var(--c-111118)', border: '1px solid var(--c-1e1e2e)', borderRadius: 11, padding: 13 }}>
+                  <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--c-8888aa)' }}>Map-Pack Presence</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, marginTop: 5, lineHeight: 1, color: roll ? 'var(--c-5ee68f)' : 'var(--c-555570)' }}>{roll ? `${roll.pack.presenceRate}%` : '—'}</div>
+                  <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 6 }}><b style={{ color: 'var(--c-f0f0ff)' }}>{scan ? fmt(clientLocations.length) : '—'}</b> location{clientLocations.length !== 1 ? 's' : ''}{scan ? ` · ${fmt(clientLocations.filter(l => l.verified).length)} verified` : ''}</div>
+                  <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 3 }}>{roll ? `${roll.pack.inPack} of ${roll.pack.withPack} packs` : 'after scan'}</div>
+                  {roll && <div style={{ height: 6, borderRadius: 4, background: 'var(--c-0e0e18)', overflow: 'hidden', marginTop: 9 }}><i style={{ display: 'block', height: '100%', width: `${roll.pack.presenceRate}%`, background: 'var(--c-5ee68f)' }} /></div>}
+                </div>
                 <Stat k="Avg Pack Rank" v={roll && roll.pack.avgRank > 0 ? String(roll.pack.avgRank) : '—'} d="when present (1–3)" color="var(--c-f6c061)" />
                 <Stat k="Avg Rating" v={roll && roll.reviews.avgRating > 0 ? `${roll.reviews.avgRating}★` : '—'} d={roll ? `${fmt(roll.reviews.totalReviews)} reviews` : 'after scan'} />
                 {/* v7.309 — review-coverage card, in-line at the end of the summary row (next to Avg Rating) */}
