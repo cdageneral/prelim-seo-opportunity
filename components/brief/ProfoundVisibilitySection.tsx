@@ -1,8 +1,11 @@
 'use client';
 
 /*
- * ProfoundVisibilitySection (v7.314)
+ * ProfoundVisibilitySection (v7.315)
  * ----------------------------------
+ * v7.315: moved the "Sentiment of mentions" widget UP into the summary-card grid, in the
+ *   slot the "Net sentiment" card used (Wayne). Falls back to the claim-level Net sentiment
+ *   card when mentionSent isn't present (old saved metrics). Removed the lower-section copy.
  * v7.314: hotfix — guard m.mentionSent (metrics persisted by an older version lack it;
  *   `(m.mentionSent || [])` prevents the client-side crash on previously-saved data).
  * v7.313: added the "Sentiment of mentions" widget (👍/neutral/👎 · count · %),
@@ -713,15 +716,19 @@ function Analysis({ m }: { m: Metrics }) {
   const clientNet = clientSent ? netPct(clientSent.pos, clientSent.neg) : null;
   const clientCov = m.coverage.find((c) => c.isClient);
   const topRival = m.coverage.find((c) => !c.isClient);
+  // v7.315: client mention-level sentiment drives the "Sentiment of mentions" card
+  // (in the slot the Net sentiment card used). Guarded for metrics saved by an earlier
+  // version that has no mentionSent field → falls back to the claim-level Net sentiment.
+  const cms = (m.mentionSent || []).find((x) => x.isClient);
 
-  const cards: Array<{ k: string; v: string; tone: string; s: string }> = [
+  const cards: Array<{ k: string; v: string; tone: string; s: string; kind?: 'sentiment' }> = [
     { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${m.clientHits} of ${fmt(m.totalRuns)} answers` },
   ];
   if (clientCov) cards.push({ k: 'Prompt coverage', v: `${clientCov.count} / ${m.promptN}`, tone: 'text-amber-500', s: `${clientCov.pct.toFixed(1)}% of tested prompts` });
   if (sovRank > 0) cards.push({ k: 'Share-of-Voice rank', v: `#${sovRank} / ${m.sov.length}`, tone: 'text-amber-500', s: 'tracked brands' });
   if (m.engines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${m.engines.length}`, tone: 'text-rose-500', s: m.engines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
   if (m.topics.length) cards.push({ k: 'Topics at 0%', v: `${topicsZero} / ${m.topics.length}`, tone: 'text-amber-500', s: 'no presence at all' });
-  if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims` });
+  if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims`, kind: 'sentiment' });
   if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
   if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain` });
 
@@ -737,11 +744,34 @@ function Analysis({ m }: { m: Metrics }) {
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => (
-          <div key={c.k} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
-            <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">{c.k}</span>
-            <span className={`text-2xl font-bold tabular-nums ${c.tone}`}>{c.v}</span>
-            <span className="text-orbit-tertiary text-[10px]">{c.s}</span>
-          </div>
+          c.kind === 'sentiment' && cms && cms.total > 0 ? (
+            <div key={c.k} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
+              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">Sentiment of mentions</span>
+              <div className="mt-1.5 space-y-1.5">
+                {([
+                  { icon: '👍', v: cms.pos, bar: 'bg-emerald-500' },
+                  { icon: '⊖', v: cms.neutral, bar: 'bg-slate-400' },
+                  { icon: '👎', v: cms.neg, bar: 'bg-rose-500' },
+                ]).map((r, i) => {
+                  const pct = cms.total ? Math.round((100 * r.v) / cms.total) : 0;
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-4 text-center text-sm leading-none">{r.icon}</span>
+                      <div className="flex-1 h-2 bg-orbit-muted rounded-full overflow-hidden"><div className={`h-full ${r.bar} rounded-full`} style={{ width: `${pct}%` }} /></div>
+                      <span className="w-16 text-right text-orbit-secondary text-[11px] tabular-nums">{fmt(r.v)} · {pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <span className="text-orbit-tertiary text-[10px] mt-1.5">{fmt(cms.total)} mentions assessed</span>
+            </div>
+          ) : (
+            <div key={c.k} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
+              <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">{c.k}</span>
+              <span className={`text-2xl font-bold tabular-nums ${c.tone}`}>{c.v}</span>
+              <span className="text-orbit-tertiary text-[10px]">{c.s}</span>
+            </div>
+          )
         ))}
       </div>
 
@@ -828,37 +858,6 @@ function Analysis({ m }: { m: Metrics }) {
       {m.sentBrands.length > 0 && (
         <>
           <p className="text-orbit-primary text-sm font-semibold pt-1">Sentiment</p>
-          {(() => {
-            // v7.314: guard — metrics persisted by an earlier version have no
-            // mentionSent field; default to [] so the panel never crashes on old data
-            // (the widget appears after the next upload re-computes it).
-            const cms = (m.mentionSent || []).find((x) => x.isClient);
-            if (!cms || cms.total === 0) return null;
-            const rows = [
-              { icon: '👍', label: 'Positive', v: cms.pos, bar: 'bg-emerald-500' },
-              { icon: '⊖', label: 'Neutral', v: cms.neutral, bar: 'bg-slate-400' },
-              { icon: '👎', label: 'Negative', v: cms.neg, bar: 'bg-rose-500' },
-            ];
-            return (
-              <Panel title="Sentiment of mentions" sub={`Each AI evaluation of ${disp(m.client)} classified by its balance of positive vs negative claims (tie = neutral)`}>
-                <div className="space-y-2.5" style={{ maxWidth: 560 }}>
-                  {rows.map((r) => {
-                    const pct = cms.total ? Math.round((100 * r.v) / cms.total) : 0;
-                    return (
-                      <div key={r.label} className="flex items-center gap-3">
-                        <span className="w-5 text-center text-base leading-none">{r.icon}</span>
-                        <div className="flex-1 h-3 bg-orbit-muted rounded-full overflow-hidden">
-                          <div className={`h-full ${r.bar} rounded-full`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <div className="w-24 text-right text-orbit-secondary text-xs tabular-nums">{fmt(r.v)} · {pct}%</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <p className="text-orbit-tertiary text-[11px] mt-3">{fmt(cms.total)} mentions assessed</p>
-              </Panel>
-            );
-          })()}
           <div className="grid md:grid-cols-2 gap-4">
             <Panel title="Net sentiment by brand" sub="Positive − Negative share of sentiment claims (client highlighted)">
               {m.sentBrands.map((s) => (
