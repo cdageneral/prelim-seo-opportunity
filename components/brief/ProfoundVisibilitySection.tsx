@@ -1,8 +1,10 @@
 'use client';
 
 /*
- * ProfoundVisibilitySection (v7.313)
+ * ProfoundVisibilitySection (v7.314)
  * ----------------------------------
+ * v7.314: hotfix — guard m.mentionSent (metrics persisted by an older version lack it;
+ *   `(m.mentionSent || [])` prevents the client-side crash on previously-saved data).
  * v7.313: added the "Sentiment of mentions" widget (👍/neutral/👎 · count · %),
  *   a per-mention rollup of the client's sentiment rows (each evaluation classified
  *   by its balance of positive vs negative claims; tie = neutral). The per-brand and
@@ -827,7 +829,10 @@ function Analysis({ m }: { m: Metrics }) {
         <>
           <p className="text-orbit-primary text-sm font-semibold pt-1">Sentiment</p>
           {(() => {
-            const cms = m.mentionSent.find((x) => x.isClient);
+            // v7.314: guard — metrics persisted by an earlier version have no
+            // mentionSent field; default to [] so the panel never crashes on old data
+            // (the widget appears after the next upload re-computes it).
+            const cms = (m.mentionSent || []).find((x) => x.isClient);
             if (!cms || cms.total === 0) return null;
             const rows = [
               { icon: '👍', label: 'Positive', v: cms.pos, bar: 'bg-emerald-500' },
