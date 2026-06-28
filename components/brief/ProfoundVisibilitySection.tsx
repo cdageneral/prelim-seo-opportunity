@@ -1,8 +1,12 @@
 'use client';
 
 /*
- * ProfoundVisibilitySection (v7.311)
+ * ProfoundVisibilitySection (v7.313)
  * ----------------------------------
+ * v7.313: added the "Sentiment of mentions" widget (👍/neutral/👎 · count · %),
+ *   a per-mention rollup of the client's sentiment rows (each evaluation classified
+ *   by its balance of positive vs negative claims; tie = neutral). The per-brand and
+ *   per-theme claim-level charts are retained below it.
  * AI Answer-Engine visibility panel, rebuilt for the second Profound export set.
  *
  * FOUR explicit upload boxes (one per file; the user drops each file in its box):
@@ -51,6 +55,7 @@ interface DomainStat { domain: string; count: number; isClient: boolean; isCompe
 interface DemandTopic { topic: string; share: number; prompts: number; }
 interface DemandPrompt { prompt: string; share: number; topic: string; }
 interface SentBrand { brand: string; pos: number; neg: number; isClient: boolean; }
+interface MentionSent { brand: string; pos: number; neutral: number; neg: number; total: number; isClient: boolean; }
 
 interface Metrics {
   client: string;
@@ -66,6 +71,7 @@ interface Metrics {
   gaps: PromptGap[];
   clientPromptCount: number;
   sentBrands: SentBrand[];
+  mentionSent: MentionSent[];
   clientThemes: ThemeStat[];
   totalCites: number;
   domains: DomainStat[];
@@ -249,6 +255,9 @@ async function computeAll(
   const assets: Record<string, boolean> = {};
   const sentByBrand: Record<string, { pos: number; neg: number }> = {};
   const themeByBrand: Record<string, Record<string, { pos: number; neg: number }>> = {};
+  // v7.313: per-brand MENTION-level sentiment — each sentiment row is one evaluation,
+  // classified by its balance of positive vs negative claims (tie → neutral).
+  const mentionByBrand: Record<string, { pos: number; neutral: number; neg: number }> = {};
   if (files.sentiment) {
     let H: Record<string, number> = {};
     const f = files.sentiment;
@@ -258,6 +267,7 @@ async function computeAll(
       if (!sc || sc[0] !== '[') return;
       let claims: Array<{ asset?: string; sentiment?: string; theme?: string }>;
       try { claims = JSON.parse(sc); } catch { return; }
+      const rowByAsset: Record<string, { p: number; n: number }> = {};
       for (let c = 0; c < claims.length; c++) {
         const a = (claims[c].asset || '').trim();
         const s = (claims[c].sentiment || '').toLowerCase();
@@ -267,9 +277,19 @@ async function computeAll(
         if (!sentByBrand[a]) sentByBrand[a] = { pos: 0, neg: 0 };
         if (!themeByBrand[a]) themeByBrand[a] = {};
         if (!themeByBrand[a][th]) themeByBrand[a][th] = { pos: 0, neg: 0 };
-        if (s === 'positive') { sentByBrand[a].pos++; themeByBrand[a][th].pos++; }
-        else if (s === 'negative') { sentByBrand[a].neg++; themeByBrand[a][th].neg++; }
+        if (!rowByAsset[a]) rowByAsset[a] = { p: 0, n: 0 };
+        if (s === 'positive') { sentByBrand[a].pos++; themeByBrand[a][th].pos++; rowByAsset[a].p++; }
+        else if (s === 'negative') { sentByBrand[a].neg++; themeByBrand[a][th].neg++; rowByAsset[a].n++; }
       }
+      // classify this row as ONE mention per asset by its claim balance (direct count)
+      Object.keys(rowByAsset).forEach((a) => {
+        const { p, n } = rowByAsset[a];
+        if (p + n === 0) return;
+        if (!mentionByBrand[a]) mentionByBrand[a] = { pos: 0, neutral: 0, neg: 0 };
+        if (p > n) mentionByBrand[a].pos++;
+        else if (n > p) mentionByBrand[a].neg++;
+        else mentionByBrand[a].neutral++;
+      });
     }, (pct, r) => setProgress({ label: 'Sentiment', pct, rows: r, startedAt }));
     slots.sentiment = { fileName: f.name, rows };
   }
@@ -464,6 +484,14 @@ async function computeAll(
     .map((b) => ({ brand: b, pos: sentByBrand[b].pos, neg: sentByBrand[b].neg, isClient: b === client }))
     .sort((a, b) => netPct(b.pos, b.neg) - netPct(a.pos, a.neg));
 
+  const mentionSent: MentionSent[] = brandList
+    .filter((b) => mentionByBrand[b])
+    .map((b) => {
+      const m = mentionByBrand[b];
+      return { brand: b, pos: m.pos, neutral: m.neutral, neg: m.neg, total: m.pos + m.neutral + m.neg, isClient: b === client };
+    })
+    .sort((a, b) => b.total - a.total);
+
   const clientThemesRaw = themeByBrand[client] || {};
   const clientThemes: ThemeStat[] = Object.keys(clientThemesRaw)
     .map((t) => ({ theme: t, pos: clientThemesRaw[t].pos, neg: clientThemesRaw[t].neg }))
@@ -489,7 +517,7 @@ async function computeAll(
   return {
     client, tracked: brandList, totalRuns, clientHits, engines, sov, overallTop, topics,
     promptN: promptKeys.length, coverage: coverageStat, gaps, clientPromptCount,
-    sentBrands, clientThemes, totalCites, domains, domainTotalDistinct: domainsSorted.length,
+    sentBrands, mentionSent, clientThemes, totalCites, domains, domainTotalDistinct: domainsSorted.length,
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
     slots, updatedAt: new Date().toISOString(),
   };
@@ -798,6 +826,34 @@ function Analysis({ m }: { m: Metrics }) {
       {m.sentBrands.length > 0 && (
         <>
           <p className="text-orbit-primary text-sm font-semibold pt-1">Sentiment</p>
+          {(() => {
+            const cms = m.mentionSent.find((x) => x.isClient);
+            if (!cms || cms.total === 0) return null;
+            const rows = [
+              { icon: '👍', label: 'Positive', v: cms.pos, bar: 'bg-emerald-500' },
+              { icon: '⊖', label: 'Neutral', v: cms.neutral, bar: 'bg-slate-400' },
+              { icon: '👎', label: 'Negative', v: cms.neg, bar: 'bg-rose-500' },
+            ];
+            return (
+              <Panel title="Sentiment of mentions" sub={`Each AI evaluation of ${disp(m.client)} classified by its balance of positive vs negative claims (tie = neutral)`}>
+                <div className="space-y-2.5" style={{ maxWidth: 560 }}>
+                  {rows.map((r) => {
+                    const pct = cms.total ? Math.round((100 * r.v) / cms.total) : 0;
+                    return (
+                      <div key={r.label} className="flex items-center gap-3">
+                        <span className="w-5 text-center text-base leading-none">{r.icon}</span>
+                        <div className="flex-1 h-3 bg-orbit-muted rounded-full overflow-hidden">
+                          <div className={`h-full ${r.bar} rounded-full`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="w-24 text-right text-orbit-secondary text-xs tabular-nums">{fmt(r.v)} · {pct}%</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="text-orbit-tertiary text-[11px] mt-3">{fmt(cms.total)} mentions assessed</p>
+              </Panel>
+            );
+          })()}
           <div className="grid md:grid-cols-2 gap-4">
             <Panel title="Net sentiment by brand" sub="Positive − Negative share of sentiment claims (client highlighted)">
               {m.sentBrands.map((s) => (
