@@ -1,235 +1,189 @@
 'use client';
 
 /*
- * ProfoundVisibilitySection (v7.294)
+ * ProfoundVisibilitySection (v7.311)
  * ----------------------------------
- * Upload-driven AI Answer-Engine visibility panel, fed by Profound CSV exports.
+ * AI Answer-Engine visibility panel, rebuilt for the second Profound export set.
  *
- * THREE upload slots, auto-routed by header signature (filename-independent):
- *   1. Responses  (raw_data*.csv / "Raw Data.csv") — REQUIRED. Per-run LLM answers
- *      across the AI engines: mention flag, position, co-mentioned brands, sentiment,
- *      themes, and the brand each sentiment row is about (the `asset` column).
- *   2. Rankings   (rankings-by-topic.csv) — OPTIONAL. Profound's computed competitive
- *      visibility leaderboard: topic x brand x rank x visibility-score%.
- *   3. Prompts    (prompts_export_*.csv)  — OPTIONAL. The prompt catalogue: topics,
- *      target platforms, analysis types.
+ * FOUR explicit upload boxes (one per file; the user drops each file in its box):
+ *   1. Responses  (visibility-with-citations.csv)  — REQUIRED. Generic competitive
+ *      prompts run across the AI engines: platform, topic, prompt, the co-mentioned
+ *      brands (`normalized_mentions`), and whether the client appears (`mentioned?`).
+ *   2. Sentiment  (sentiment-with-citations.csv)   — OPTIONAL. `sentiment_claims` JSON
+ *      per row: theme + sentiment + the brand the claim is about (`asset`). Also the
+ *      authoritative tracked-brand roster.
+ *   3. Platforms  (platforms-with_citations.csv)   — OPTIONAL. Master/citation file;
+ *      citation_1..N URLs → the sources the engines cite.
+ *   4. Prompt Volume (prompt-volume-report.csv)    — OPTIONAL. Topic / Prompt / Share —
+ *      the demand catalogue (what buyers ask, and how much).
  *
- * DATA INTEGRITY (Const I.1): every number rendered here is a DIRECT COUNT or a value
- * read verbatim from an uploaded source row. Nothing is modeled, simulated, or
- * estimated. Where a denominator is a subset (e.g. visibility-type rows only), the
- * subset is stated on-screen. Honest empty states (I.5) when a slot is not uploaded.
+ * CLIENT IDENTIFICATION (no hardcoding): the client is matched automatically from the
+ * project's own `clientName` against the brand roster the data itself defines
+ * (sentiment `asset` values + "Evaluate <Brand> on …" prompts). The remaining tracked
+ * brands become the competitive set. Works for any future project with different
+ * competitors — nothing about a specific client is baked in.
  *
- * Theme parity (Const IV.6): colours use 500/600 shades + orbit-* tokens that hold
- * contrast on BOTH the light and dark orbit surfaces; no OS `dark:` variants (the app
- * toggles theme via [data-theme="light"]).
+ * DATA INTEGRITY (Const I.1): every number is a DIRECT COUNT from an uploaded source
+ * row — nothing modeled, simulated, or estimated. Denominators that are subsets (e.g.
+ * visibility-type rows only) are stated on-screen, and any "top N" view shows the full
+ * total so nothing is silently trimmed (I.6). Honest empty states when a box is unfilled.
+ *
+ * Theme parity (Const IV.6): colours use orbit-* tokens + 500/600 chart shades that hold
+ * contrast on BOTH the light and dark orbit surfaces; no OS `dark:` variants.
+ * Progress (IV.2/IV.3): parsing shows a determinate bar (rows of total + % + ETA).
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
-// ─── Robust RFC-4180 CSV parser ───────────────────────────────────────────────
-// Handles quoted fields with embedded commas, embedded newlines, and escaped
-// quotes (""). Strips a leading UTF-8 BOM. Returns an array of rows of strings.
+// ─── Types ─────────────────────────────────────────────────────────────────────
+type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand';
 
-function parseCSV(input: string): string[][] {
-  const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
-  const rows: string[][] = [];
-  let row: string[] = [];
+interface SlotInfo { fileName: string; rows: number; }
+type SlotMap = Partial<Record<SlotKey, SlotInfo>>;
+
+interface BrandStat { brand: string; count: number; pct: number; isClient: boolean; }
+interface PlatStat { platform: string; runs: number; hits: number; }
+interface TopicStat { topic: string; runs: number; hits: number; }
+interface PromptGap { prompt: string; topic: string; rivalMentions: number; leader: string; leaderCount: number; }
+interface ThemeStat { theme: string; pos: number; neg: number; }
+interface DomainStat { domain: string; count: number; isClient: boolean; isCompetitor: boolean; }
+interface DemandTopic { topic: string; share: number; prompts: number; }
+interface DemandPrompt { prompt: string; share: number; topic: string; }
+interface SentBrand { brand: string; pos: number; neg: number; isClient: boolean; }
+
+interface Metrics {
+  client: string;
+  tracked: string[];
+  totalRuns: number;
+  clientHits: number;
+  engines: PlatStat[];
+  sov: BrandStat[];
+  overallTop: { brand: string; count: number; pct: number }[];
+  topics: TopicStat[];
+  promptN: number;
+  coverage: BrandStat[];
+  gaps: PromptGap[];
+  clientPromptCount: number;
+  sentBrands: SentBrand[];
+  clientThemes: ThemeStat[];
+  totalCites: number;
+  domains: DomainStat[];
+  domainTotalDistinct: number;
+  clientDomainCites: number;
+  demandTopics: DemandTopic[];
+  demandPrompts: DemandPrompt[];
+  demandPromptTotal: number;
+  slots: SlotMap;
+  updatedAt: string;
+}
+
+// ─── Brand normalisation + matching ─────────────────────────────────────────────
+// NOTE: "wealth" is intentionally NOT a suffix — it is part of real brand names.
+const SUFFIXES = new Set<string>([
+  'group', 'financial', 'engines', 'investments', 'advisors', 'advisory', 'planning',
+  'llc', 'inc', 'llp', 'management', 'capital', 'partners', 'co', 'company', 'the',
+]);
+
+function toks(s: string): string[] {
+  return (s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 0 && !SUFFIXES.has(t));
+}
+
+// brand tokens are a subset of some mention's tokens
+function brandIn(brand: string, mentions: string[]): boolean {
+  const bt = toks(brand);
+  if (bt.length === 0) return false;
+  for (let m = 0; m < mentions.length; m++) {
+    const mt = new Set(toks(mentions[m]));
+    let all = true;
+    for (let k = 0; k < bt.length; k++) { if (!mt.has(bt[k])) { all = false; break; } }
+    if (all) return true;
+  }
+  return false;
+}
+
+function matchClient(clientName: string, candidates: string[]): string | null {
+  const ct = new Set(toks(clientName));
+  if (ct.size === 0) return null;
+  let best: string | null = null;
+  let bestScore = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const at = toks(candidates[i]);
+    let overlap = 0;
+    for (let k = 0; k < at.length; k++) { if (ct.has(at[k])) overlap++; }
+    if (overlap > bestScore) { bestScore = overlap; best = candidates[i]; }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function clientDomainRoot(clientName: string): string {
+  return toks(clientName).join('');
+}
+
+// ─── Robust RFC-4180 streaming parser (handles quoted fields w/ embedded commas + newlines) ──
+async function streamCsv(
+  file: File,
+  onRow: (row: string[], idx: number) => void,
+  onProgress: (frac: number, rows: number) => void,
+): Promise<number> {
+  const text = await file.text();
+  const len = text.length;
+  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   let field = '';
-  let inQuotes = false;
-  let i = 0;
-  const n = text.length;
-
-  while (i < n) {
+  let row: string[] = [];
+  let inQ = false;
+  let idx = 0;
+  let lastYield = 0;
+  while (i < len) {
     const c = text[i];
-    if (inQuotes) {
+    if (inQ) {
       if (c === '"') {
         if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
-        inQuotes = false; i++; continue;
+        inQ = false; i++; continue;
       }
       field += c; i++; continue;
     }
-    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === '"') { inQ = true; i++; continue; }
     if (c === ',') { row.push(field); field = ''; i++; continue; }
-    if (c === '\r') { i++; continue; }
-    if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+    if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      onRow(row, idx); idx++; row = [];
+      i++;
+      if (idx - lastYield >= 4000) { lastYield = idx; onProgress(i / len, idx); await new Promise((r) => setTimeout(r)); }
+      continue;
+    }
     field += c; i++;
   }
-  // flush trailing field/row
-  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
-  return rows;
+  if (field.length > 0 || row.length > 0) { row.push(field); onRow(row, idx); idx++; }
+  onProgress(1, idx);
+  return idx;
 }
 
-function rowsToObjects(rows: string[][]): { headers: string[]; records: Record<string, string>[] } {
-  if (rows.length === 0) return { headers: [], records: [] };
-  const headers = rows[0].map(h => h.trim());
-  const records: Record<string, string>[] = [];
-  for (let r = 1; r < rows.length; r++) {
-    const cells = rows[r];
-    if (cells.length === 1 && cells[0].trim() === '') continue; // skip blank line
-    const obj: Record<string, string> = {};
-    for (let c = 0; c < headers.length; c++) obj[headers[c]] = (cells[c] ?? '').trim();
-    records.push(obj);
+function headerIndex(header: string[]): Record<string, number> {
+  const m: Record<string, number> = {};
+  for (let i = 0; i < header.length; i++) {
+    const key = (header[i] || '').replace(/^﻿/, '').trim().toLowerCase();
+    if (key && !(key in m)) m[key] = i;
   }
-  return { headers, records };
+  return m;
 }
 
-// ─── File-kind detection by header signature ──────────────────────────────────
-
-type FileKind = 'responses' | 'rankings' | 'prompts' | 'unknown';
-
-function detectKind(headers: string[]): FileKind {
-  const h = new Set(headers.map(x => x.toLowerCase().trim()));
-  if (h.has('visibility_rank') && h.has('visibility_score_percent') && h.has('brand')) return 'rankings';
-  if (h.has('prompt') && h.has('analysis types') && (h.has('platforms') || h.has('regions'))) return 'prompts';
-  // responses: a run id + platform + mentioned? are the stable signature across variants
-  const hasRun = h.has('run_id') || h.has('runid');
-  const hasPlatform = h.has('platform');
-  const hasMentioned = h.has('mentioned?');
-  if (hasRun && hasPlatform && hasMentioned) return 'responses';
-  if (hasPlatform && h.has('prompt') && h.has('response')) return 'responses';
-  return 'unknown';
+function splitMentions(s: string): string[] {
+  if (!s) return [];
+  return s.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
 }
 
-// ─── Domain types ─────────────────────────────────────────────────────────────
+// ─── IndexedDB persistence (compact computed metrics only — never the raw rows) ──
+const IDB_NAME = 'orbitiq-profound-geo';
+const IDB_STORE = 'metrics';
 
-interface ResponseRow {
-  runId: string;
-  date: string;
-  platform: string;
-  topic: string;
-  region: string;
-  type: string;
-  prompt: string;
-  mentions: string[];        // co-mentioned brands (visibility rows)
-  position: string;          // e.g. "#3" when mentioned
-  mentioned: boolean;        // tracked brand present
-  excerpt: string;           // response text (may be a stored excerpt after reload)
-  truncated: boolean;
-  searchQueries: string;
-  themes: string[];          // sentiment rows
-  sentiment: string;         // raw sentiment_category cell
-  asset: string;             // brand a sentiment row is about
-}
-
-interface RankingRow { topic: string; brand: string; rank: number; score: number; }
-
-interface PromptRow {
-  id: string; topic: string; prompt: string; platforms: string[]; analysisTypes: string[];
-}
-
-interface Dataset {
-  responses: ResponseRow[];
-  rankings: RankingRow[];
-  prompts: PromptRow[];
-  uploadedAt: string | null;     // ISO of last upload
-  client: string;                // detected tracked brand label
-}
-
-const EXCERPT_CAP = 600;
-
-function splitList(v: string): string[] {
-  return v.split(',').map(s => s.trim()).filter(Boolean);
-}
-
-function mapResponses(records: Record<string, string>[]): ResponseRow[] {
-  const get = (o: Record<string, string>, ...keys: string[]) => {
-    for (const k of keys) { if (o[k] != null) return o[k]; }
-    return '';
-  };
-  return records.map(o => {
-    const resp = get(o, 'response', 'Response');
-    return {
-      runId:    get(o, 'run_id', 'Run_id', 'runId'),
-      date:     get(o, 'date', 'Date'),
-      platform: get(o, 'platform', 'Platform'),
-      topic:    get(o, 'topic', 'Topic'),
-      region:   get(o, 'region', 'Region'),
-      type:     get(o, 'type', 'Type'),
-      prompt:   get(o, 'prompt', 'Prompt'),
-      mentions: splitList(get(o, 'mentions', 'Mentions')),
-      position: get(o, 'position', 'Position'),
-      mentioned: get(o, 'mentioned?', 'Mentioned?').toLowerCase() === 'yes',
-      excerpt:  resp.length > EXCERPT_CAP ? resp.slice(0, EXCERPT_CAP) : resp,
-      truncated: resp.length > EXCERPT_CAP,
-      searchQueries: get(o, 'search_queries', 'Search_queries').slice(0, 400),
-      themes:   splitList(get(o, 'themes')),
-      sentiment: get(o, 'sentiment_category'),
-      asset:    get(o, 'asset'),
-    };
-  });
-}
-
-function mapRankings(records: Record<string, string>[]): RankingRow[] {
-  return records.map(o => ({
-    topic: o['topic'] ?? '',
-    brand: o['brand'] ?? '',
-    rank: parseInt(o['visibility_rank'] ?? '0', 10) || 0,
-    score: parseFloat(o['visibility_score_percent'] ?? '0') || 0,
-  })).filter(r => r.topic && r.brand);
-}
-
-function mapPrompts(records: Record<string, string>[]): PromptRow[] {
-  return records.map(o => ({
-    id: o['ID'] ?? o['id'] ?? '',
-    topic: o['Topic'] ?? o['topic'] ?? '',
-    prompt: o['Prompt'] ?? o['prompt'] ?? '',
-    platforms: splitList(o['Platforms'] ?? o['platforms'] ?? ''),
-    analysisTypes: splitList(o['Analysis Types'] ?? o['analysis types'] ?? ''),
-  })).filter(p => p.prompt);
-}
-
-// Detect the tracked/client brand: the brand present in EVERY response flagged
-// "mentioned" (Profound sets that flag only when the tracked brand appears).
-// Falls back to the most-frequent token, then to a sensible default.
-function detectClient(responses: ResponseRow[]): string {
-  const yes = responses.filter(r => r.mentioned && r.mentions.length);
-  if (yes.length === 0) return 'Wealth Enhancement Group';
-  const counts = new Map<string, number>();
-  for (const r of yes) for (const b of r.mentions) counts.set(b, (counts.get(b) ?? 0) + 1);
-  let best = ''; let bestC = 0;
-  counts.forEach((c, b) => { if (c > bestC) { bestC = c; best = b; } });
-  // require it to appear in (nearly) all mentioned rows to trust it as the tracked brand
-  return bestC >= Math.ceil(yes.length * 0.8) ? best : (best || 'Wealth Enhancement Group');
-}
-
-function isClient(name: string, client: string): boolean {
-  const a = name.toLowerCase(); const b = client.toLowerCase();
-  if (!a || !b) return false;
-  // loose match across short/long brand variants (e.g. "Wealth Enhancement" vs "Wealth Enhancement Group")
-  const core = b.replace(/\b(group|inc|llc|advisors|advisory|planning|financial)\b/g, '').trim();
-  return a.includes(b) || b.includes(a) || (core.length > 3 && a.includes(core));
-}
-
-// ─── Merge raw response uploads (dedupe, prefer the richer row) ────────────────
-
-function mergeResponses(existing: ResponseRow[], incoming: ResponseRow[]): ResponseRow[] {
-  const key = (r: ResponseRow) => `${r.runId}|${r.platform}|${r.type}|${r.prompt}|${r.asset}`;
-  const map = new Map<string, ResponseRow>();
-  for (const r of existing) map.set(key(r), r);
-  for (const r of incoming) {
-    const k = key(r);
-    const prev = map.get(k);
-    // prefer the row carrying more signal (themes/sentiment/asset/excerpt)
-    const score = (x: ResponseRow) => x.themes.length + (x.sentiment ? 1 : 0) + (x.asset ? 1 : 0) + (x.excerpt ? 1 : 0);
-    if (!prev || score(r) > score(prev)) map.set(k, r);
-  }
-  return Array.from(map.values());
-}
-
-// ─── Persistence (per project) ────────────────────────────────────────────────
-// v7.295: store in IndexedDB, not localStorage. The full Profound dataset (~2.8 MB
-// JSON → ~5.6 MB in localStorage's UTF-16 store) exceeds the ~5 MB localStorage
-// quota, so the write failed silently and a refresh reverted to whatever smaller
-// file last fit. IndexedDB holds tens of MB and stores the structured object
-// directly. A one-time migration drains any legacy localStorage snapshot, then
-// removes that key so the old (often partial) save can't resurrect on refresh.
-
-const IDB_NAME = 'orbitiq';
-const IDB_STORE = 'profound';
-const legacyKey = (pid: string) => `orbitiq:profound:${pid}`;
-
-function openIDB(): Promise<IDBDatabase | null> {
-  return new Promise(resolve => {
+function openDb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
     if (typeof indexedDB === 'undefined') { resolve(null); return; }
     let req: IDBOpenDBRequest;
     try { req = indexedDB.open(IDB_NAME, 1); } catch { resolve(null); return; }
@@ -242,35 +196,34 @@ function openIDB(): Promise<IDBDatabase | null> {
   });
 }
 
-async function idbSave(pid: string, d: Dataset): Promise<boolean> {
-  const db = await openIDB();
+async function idbSave(pid: string, m: Metrics): Promise<boolean> {
+  const db = await openDb();
   if (!db) return false;
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     try {
       const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).put(d, pid);
+      tx.objectStore(IDB_STORE).put(m, pid);
       tx.oncomplete = () => { db.close(); resolve(true); };
       tx.onerror = () => { db.close(); resolve(false); };
-      tx.onabort = () => { db.close(); resolve(false); };
     } catch { resolve(false); }
   });
 }
 
-async function idbLoad(pid: string): Promise<Dataset | null> {
-  const db = await openIDB();
+async function idbLoad(pid: string): Promise<Metrics | null> {
+  const db = await openDb();
   if (!db) return null;
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     try {
       const tx = db.transaction(IDB_STORE, 'readonly');
       const rq = tx.objectStore(IDB_STORE).get(pid);
-      rq.onsuccess = () => { db.close(); const v = rq.result; resolve(v && Array.isArray(v.responses) ? v as Dataset : null); };
+      rq.onsuccess = () => { db.close(); resolve((rq.result as Metrics) || null); };
       rq.onerror = () => { db.close(); resolve(null); };
     } catch { resolve(null); }
   });
 }
 
 async function idbDelete(pid: string): Promise<void> {
-  const db = await openIDB();
+  const db = await openDb();
   if (!db) return;
   try {
     const tx = db.transaction(IDB_STORE, 'readwrite');
@@ -279,898 +232,651 @@ async function idbDelete(pid: string): Promise<void> {
   } catch { /* no-op */ }
 }
 
-function readLegacyLocal(pid: string): Dataset | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(legacyKey(pid));
-    if (!raw) return null;
-    const d = JSON.parse(raw) as Dataset;
-    return d && Array.isArray(d.responses) ? d : null;
-  } catch { return null; }
-}
-function clearLegacyLocal(pid: string) {
-  if (typeof window === 'undefined') return;
-  try { window.localStorage.removeItem(legacyKey(pid)); } catch { /* no-op */ }
+// ─── Compute all metrics from the currently-loaded files ────────────────────────
+type FileMap = Partial<Record<SlotKey, File>>;
+
+interface Progress { label: string; pct: number; rows: number; startedAt: number; }
+
+async function computeAll(
+  files: FileMap,
+  clientName: string,
+  setProgress: (p: Progress | null) => void,
+): Promise<Metrics> {
+  const startedAt = Date.now();
+  const slots: SlotMap = {};
+
+  // ── Sentiment pass: tracked roster + per-brand / per-theme sentiment ──
+  const assets: Record<string, boolean> = {};
+  const sentByBrand: Record<string, { pos: number; neg: number }> = {};
+  const themeByBrand: Record<string, Record<string, { pos: number; neg: number }>> = {};
+  if (files.sentiment) {
+    let H: Record<string, number> = {};
+    const f = files.sentiment;
+    const rows = await streamCsv(f, (row, idx) => {
+      if (idx === 0) { H = headerIndex(row); return; }
+      const sc = row[H['sentiment_claims']];
+      if (!sc || sc[0] !== '[') return;
+      let claims: Array<{ asset?: string; sentiment?: string; theme?: string }>;
+      try { claims = JSON.parse(sc); } catch { return; }
+      for (let c = 0; c < claims.length; c++) {
+        const a = (claims[c].asset || '').trim();
+        const s = (claims[c].sentiment || '').toLowerCase();
+        const th = (claims[c].theme || 'Other').trim();
+        if (!a) continue;
+        assets[a] = true;
+        if (!sentByBrand[a]) sentByBrand[a] = { pos: 0, neg: 0 };
+        if (!themeByBrand[a]) themeByBrand[a] = {};
+        if (!themeByBrand[a][th]) themeByBrand[a][th] = { pos: 0, neg: 0 };
+        if (s === 'positive') { sentByBrand[a].pos++; themeByBrand[a][th].pos++; }
+        else if (s === 'negative') { sentByBrand[a].neg++; themeByBrand[a][th].neg++; }
+      }
+    }, (pct, r) => setProgress({ label: 'Sentiment', pct, rows: r, startedAt }));
+    slots.sentiment = { fileName: f.name, rows };
+  }
+
+  // ── Visibility pass 1: totals, market-context brands, prompt index, eval subjects ──
+  let totalRuns = 0;
+  const platRuns: Record<string, number> = {};
+  const topicRuns: Record<string, number> = {};
+  const overallRaw: Record<string, number> = {};
+  const promptInfo: Record<string, { topic: string; runs: number }> = {};
+  const evalSubjects: Record<string, boolean> = {};
+  // capture each visibility row's mentions for pass-2 by re-streaming (files stay in memory)
+  if (files.visibility) {
+    let H: Record<string, number> = {};
+    const f = files.visibility;
+    await streamCsv(f, (row, idx) => {
+      if (idx === 0) { H = headerIndex(row); return; }
+      const type = row[H['type']] || '';
+      const ev = /^Evaluate (.+?) on /.exec(row[H['prompt']] || '');
+      if (ev) evalSubjects[ev[1].trim()] = true;
+      if (type.indexOf('Visibility') === -1) return;
+      totalRuns++;
+      const plat = row[H['platform']] || '';
+      const topic = row[H['topic']] || '';
+      const prompt = (row[H['prompt']] || '').trim();
+      platRuns[plat] = (platRuns[plat] || 0) + 1;
+      topicRuns[topic] = (topicRuns[topic] || 0) + 1;
+      if (!promptInfo[prompt]) promptInfo[prompt] = { topic, runs: 0 };
+      promptInfo[prompt].runs++;
+      const seen: Record<string, boolean> = {};
+      const ms = splitMentions(row[H['normalized_mentions']] || '');
+      for (let k = 0; k < ms.length; k++) { if (!seen[ms[k]]) { seen[ms[k]] = true; overallRaw[ms[k]] = (overallRaw[ms[k]] || 0) + 1; } }
+    }, (pct, r) => setProgress({ label: 'Responses', pct, rows: r, startedAt }));
+  }
+
+  // ── Determine client + tracked roster (no hardcoding) ──
+  const rosterFromData = Object.keys(assets).length > 0
+    ? Object.keys(assets)
+    : Object.keys(evalSubjects);
+  let tracked: string[] = rosterFromData.slice();
+  let client = matchClient(clientName, tracked.length ? tracked : Object.keys(overallRaw)) || clientName.trim();
+  if (tracked.length === 0) {
+    // No roster in the data → derive a competitive set from the most-mentioned brands.
+    const top = Object.keys(overallRaw).sort((a, b) => overallRaw[b] - overallRaw[a]);
+    const picked: string[] = [];
+    for (let i = 0; i < top.length && picked.length < 7; i++) {
+      if (toks(top[i]).join(' ') !== toks(client).join(' ')) picked.push(top[i]);
+    }
+    tracked = [client].concat(picked);
+  } else if (!tracked.some((b) => toks(b).join(' ') === toks(client).join(' '))) {
+    tracked = [client].concat(tracked);
+  }
+  const brandList = tracked.slice();
+
+  // ── Visibility pass 2: per-brand cross-tabs over the fixed roster ──
+  const trackedOverall: Record<string, number> = {};
+  const platBrand: Record<string, Record<string, number>> = {};
+  const topicBrand: Record<string, Record<string, number>> = {};
+  const promptBrand: Record<string, Record<string, number>> = {};
+  const coverage: Record<string, number> = {};
+  let clientHits = 0;
+  const platClient: Record<string, number> = {};
+  const topicClient: Record<string, number> = {};
+  brandList.forEach((b) => { trackedOverall[b] = 0; coverage[b] = 0; });
+  if (files.visibility) {
+    let H: Record<string, number> = {};
+    const f = files.visibility;
+    const rows = await streamCsv(f, (row, idx) => {
+      if (idx === 0) { H = headerIndex(row); return; }
+      const type = row[H['type']] || '';
+      if (type.indexOf('Visibility') === -1) return;
+      const plat = row[H['platform']] || '';
+      const topic = row[H['topic']] || '';
+      const prompt = (row[H['prompt']] || '').trim();
+      const ms = splitMentions(row[H['normalized_mentions']] || '');
+      for (let bi = 0; bi < brandList.length; bi++) {
+        const b = brandList[bi];
+        if (!brandIn(b, ms)) continue;
+        trackedOverall[b]++;
+        if (!platBrand[plat]) platBrand[plat] = {};
+        platBrand[plat][b] = (platBrand[plat][b] || 0) + 1;
+        if (!topicBrand[topic]) topicBrand[topic] = {};
+        topicBrand[topic][b] = (topicBrand[topic][b] || 0) + 1;
+        if (!promptBrand[prompt]) promptBrand[prompt] = {};
+        promptBrand[prompt][b] = (promptBrand[prompt][b] || 0) + 1;
+        if (b === client) {
+          clientHits++;
+          platClient[plat] = (platClient[plat] || 0) + 1;
+          topicClient[topic] = (topicClient[topic] || 0) + 1;
+        }
+      }
+    }, (pct, r) => setProgress({ label: 'Responses (analysing)', pct, rows: r, startedAt }));
+    slots.visibility = { fileName: f.name, rows };
+  }
+  // prompt coverage = distinct prompts where a brand appears at least once
+  const promptKeys = Object.keys(promptInfo);
+  promptKeys.forEach((p) => {
+    const pb = promptBrand[p] || {};
+    brandList.forEach((b) => { if ((pb[b] || 0) > 0) coverage[b]++; });
+  });
+  // winnable gaps: prompts where client absent but a competitor present
+  const gaps: PromptGap[] = [];
+  let clientPromptCount = 0;
+  promptKeys.forEach((p) => {
+    const pb = promptBrand[p] || {};
+    if ((pb[client] || 0) > 0) { clientPromptCount++; return; }
+    let rival = 0; let leader = ''; let leaderCount = 0;
+    brandList.forEach((b) => {
+      if (b === client) return;
+      const c = pb[b] || 0;
+      rival += c;
+      if (c > leaderCount) { leaderCount = c; leader = b; }
+    });
+    if (rival > 0) gaps.push({ prompt: p, topic: promptInfo[p].topic, rivalMentions: rival, leader, leaderCount });
+  });
+  gaps.sort((a, b) => b.rivalMentions - a.rivalMentions);
+
+  // ── Platforms pass: citation domains ──
+  const domainCount: Record<string, number> = {};
+  let totalCites = 0;
+  if (files.platforms) {
+    let H: Record<string, number> = {};
+    let citeCols: number[] = [];
+    const f = files.platforms;
+    const rows = await streamCsv(f, (row, idx) => {
+      if (idx === 0) {
+        H = headerIndex(row);
+        citeCols = Object.keys(H).filter((k) => /^citation_\d+$/.test(k)).map((k) => H[k]);
+        return;
+      }
+      for (let c = 0; c < citeCols.length; c++) {
+        const u = row[citeCols[c]];
+        if (!u || u.indexOf('http') !== 0) continue;
+        totalCites++;
+        let host = '';
+        try { host = new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { continue; }
+        if (host) domainCount[host] = (domainCount[host] || 0) + 1;
+      }
+    }, (pct, r) => setProgress({ label: 'Platforms & Citations', pct, rows: r, startedAt }));
+    slots.platforms = { fileName: f.name, rows };
+  }
+  const cRoot = clientDomainRoot(client);
+  let clientDomainCites = 0;
+  Object.keys(domainCount).forEach((d) => { if (cRoot && d.replace(/[^a-z0-9]/g, '').indexOf(cRoot) !== -1) clientDomainCites += domainCount[d]; });
+  const compRoots = brandList.filter((b) => b !== client).map((b) => clientDomainRoot(b)).filter((r) => r.length > 2);
+
+  // ── Demand pass: prompt-volume report ──
+  const demandTopicShare: Record<string, number> = {};
+  const demandTopicCount: Record<string, number> = {};
+  const demandPromptsArr: DemandPrompt[] = [];
+  if (files.demand) {
+    let H: Record<string, number> = {};
+    const f = files.demand;
+    const rows = await streamCsv(f, (row, idx) => {
+      if (idx === 0) { H = headerIndex(row); return; }
+      const topic = (row[H['topic']] || '').trim();
+      const prompt = (row[H['prompt']] || '').trim();
+      const share = parseFloat(row[H['share']] || '');
+      if (!topic && !prompt) return;
+      const sh = isNaN(share) ? 0 : share;
+      demandTopicShare[topic] = (demandTopicShare[topic] || 0) + sh;
+      demandTopicCount[topic] = (demandTopicCount[topic] || 0) + 1;
+      demandPromptsArr.push({ prompt, share: sh, topic });
+    }, (pct, r) => setProgress({ label: 'Prompt Volume', pct, rows: r, startedAt }));
+    slots.demand = { fileName: f.name, rows };
+  }
+
+  // ── Finalise ──
+  const engines: PlatStat[] = Object.keys(platRuns)
+    .map((p) => ({ platform: p, runs: platRuns[p], hits: platClient[p] || 0 }))
+    .sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs)));
+
+  const sov: BrandStat[] = brandList
+    .map((b) => ({ brand: b, count: trackedOverall[b] || 0, pct: totalRuns ? (100 * (trackedOverall[b] || 0)) / totalRuns : 0, isClient: b === client }))
+    .sort((a, b) => b.count - a.count);
+
+  const overallTop = Object.keys(overallRaw)
+    .map((b) => ({ brand: b, count: overallRaw[b], pct: totalRuns ? (100 * overallRaw[b]) / totalRuns : 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const topics: TopicStat[] = Object.keys(topicRuns)
+    .map((t) => ({ topic: t, runs: topicRuns[t], hits: topicClient[t] || 0 }))
+    .sort((a, b) => (a.hits / Math.max(1, a.runs)) - (b.hits / Math.max(1, b.runs)));
+
+  const coverageStat: BrandStat[] = brandList
+    .map((b) => ({ brand: b, count: coverage[b] || 0, pct: promptKeys.length ? (100 * (coverage[b] || 0)) / promptKeys.length : 0, isClient: b === client }))
+    .sort((a, b) => b.count - a.count);
+
+  const sentBrands: SentBrand[] = brandList
+    .filter((b) => sentByBrand[b])
+    .map((b) => ({ brand: b, pos: sentByBrand[b].pos, neg: sentByBrand[b].neg, isClient: b === client }))
+    .sort((a, b) => netPct(b.pos, b.neg) - netPct(a.pos, a.neg));
+
+  const clientThemesRaw = themeByBrand[client] || {};
+  const clientThemes: ThemeStat[] = Object.keys(clientThemesRaw)
+    .map((t) => ({ theme: t, pos: clientThemesRaw[t].pos, neg: clientThemesRaw[t].neg }))
+    .filter((t) => t.pos + t.neg >= 8)
+    .sort((a, b) => netPct(b.pos, b.neg) - netPct(a.pos, a.neg));
+
+  const domainsSorted = Object.keys(domainCount).sort((a, b) => domainCount[b] - domainCount[a]);
+  const domains: DomainStat[] = domainsSorted.slice(0, 25).map((d) => {
+    const dd = d.replace(/[^a-z0-9]/g, '');
+    return {
+      domain: d,
+      count: domainCount[d],
+      isClient: cRoot ? dd.indexOf(cRoot) !== -1 : false,
+      isCompetitor: compRoots.some((r) => dd.indexOf(r) !== -1),
+    };
+  });
+
+  const demandTopics: DemandTopic[] = Object.keys(demandTopicShare)
+    .map((t) => ({ topic: t, share: Math.round(demandTopicShare[t] * 10) / 10, prompts: demandTopicCount[t] }))
+    .sort((a, b) => b.share - a.share);
+  const demandPrompts = demandPromptsArr.slice().sort((a, b) => b.share - a.share).slice(0, 12);
+
+  return {
+    client, tracked: brandList, totalRuns, clientHits, engines, sov, overallTop, topics,
+    promptN: promptKeys.length, coverage: coverageStat, gaps, clientPromptCount,
+    sentBrands, clientThemes, totalCites, domains, domainTotalDistinct: domainsSorted.length,
+    clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
+    slots, updatedAt: new Date().toISOString(),
+  };
 }
 
-// ─── Small UI helpers ─────────────────────────────────────────────────────────
-
-function pctColor(p: number): string {
-  return p >= 60 ? 'text-green-600' : p >= 30 ? 'text-amber-600' : 'text-red-600';
-}
-function barColor(p: number): string {
-  return p >= 60 ? 'bg-green-500' : p >= 30 ? 'bg-amber-500' : 'bg-red-500/70';
-}
-function fmtPct(num: number, den: number): string {
-  return den > 0 ? `${((num / den) * 100).toFixed(1)}%` : '—';
+function netPct(pos: number, neg: number): number {
+  const t = pos + neg; return t ? Math.round((100 * (pos - neg)) / t) : 0;
 }
 
-function Bar({ pct }: { pct: number }) {
-  return (
-    <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
-      <div className={`h-full rounded-full ${barColor(pct)}`} style={{ width: `${Math.max(pct, 1.5)}%` }} />
-    </div>
-  );
+// ─── Small presentational helpers ───────────────────────────────────────────────
+function fmt(n: number): string { return n.toLocaleString(); }
+
+const SLOT_DEFS: Array<{ key: SlotKey; step: string; title: string; required?: boolean; file: string; desc: string }> = [
+  { key: 'visibility', step: 'Step 1', title: 'Responses', required: true, file: 'visibility-with-citations.csv', desc: 'Per-engine answers · visibility runs' },
+  { key: 'sentiment', step: 'Step 2', title: 'Sentiment', file: 'sentiment-with-citations.csv', desc: 'Sentiment claims by brand & theme' },
+  { key: 'platforms', step: 'Step 3', title: 'Platforms & Citations', file: 'platforms-with_citations.csv', desc: 'Master file · citation sources' },
+  { key: 'demand', step: 'Step 4', title: 'Prompt Volume', file: 'prompt-volume-report.csv', desc: 'Topic / prompt demand share' },
+];
+
+function disp(b: string): string {
+  const M: Record<string, string> = {
+    Creative: 'Creative Planning', Edelman: 'Edelman Financial Engines', Fisher: 'Fisher Investments',
+    Focus: 'Focus Financial', Mariner: 'Mariner', Hightower: 'Hightower', Mercera: 'Mercera',
+  };
+  return M[b] || b;
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
-type Tab = 'overview' | 'engines' | 'competitive' | 'reputation' | 'prompts' | 'responses';
-
+// ─── Component ───────────────────────────────────────────────────────────────────
 interface Props { projectId: string; clientName?: string | null; }
 
 export default function ProfoundVisibilitySection({ projectId, clientName }: Props) {
-  const emptyData = (): Dataset => ({ responses: [], rankings: [], prompts: [], uploadedAt: null, client: clientName || 'Wealth Enhancement Group' });
-  const [data, setData] = useState<Dataset>(emptyData);
-  const [hydrated, setHydrated] = useState(false);   // false until we've read IndexedDB
-  const [tab, setTab] = useState<Tab>('overview');
-  const [busy, setBusy] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [files, setFiles] = useState<FileMap>({});
+  const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [persistWarn, setPersistWarn] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const inputRefs = {
+    visibility: useRef<HTMLInputElement>(null),
+    sentiment: useRef<HTMLInputElement>(null),
+    platforms: useRef<HTMLInputElement>(null),
+    demand: useRef<HTMLInputElement>(null),
+  } as const;
 
-  const respInput = useRef<HTMLInputElement>(null);
-  const rankInput = useRef<HTMLInputElement>(null);
-  const promptInput = useRef<HTMLInputElement>(null);
+  const cName = (clientName || '').trim();
 
-  // Hydrate once per project: prefer IndexedDB; otherwise migrate a legacy
-  // localStorage snapshot into IndexedDB, then clear the legacy key.
   useEffect(() => {
     let alive = true;
     (async () => {
-      let loaded = await idbLoad(projectId);
-      if (!loaded) {
-        const legacy = readLegacyLocal(projectId);
-        if (legacy) { await idbSave(projectId, legacy); loaded = legacy; }
-      }
-      clearLegacyLocal(projectId);
-      if (!alive) return;
-      if (loaded) setData(loaded);
-      setHydrated(true);
+      const m = await idbLoad(projectId);
+      if (alive && m) setMetrics(m);
+      if (alive) setHydrated(true);
     })();
     return () => { alive = false; };
   }, [projectId]);
 
-  // Persist on change — but only after hydration, so the initial empty state
-  // never overwrites a saved dataset.
-  useEffect(() => {
-    if (!hydrated) return;
-    const isEmpty = data.responses.length === 0 && data.rankings.length === 0 && data.prompts.length === 0;
-    if (isEmpty) return;
-    let alive = true;
-    idbSave(projectId, data).then(okSaved => { if (alive) setPersistWarn(!okSaved); });
-    return () => { alive = false; };
-  }, [projectId, data, hydrated]);
-
-  const hasResp = data.responses.length > 0;
-
-  async function ingest(file: File) {
-    setError(null); setNotice(null); setBusy(file.name);
+  async function onPick(slot: SlotKey, file: File | null) {
+    if (!file) return;
+    setError(null);
+    const nextFiles: FileMap = { ...files, [slot]: file };
+    setFiles(nextFiles);
     try {
-      const text = await file.text();
-      const { headers, records } = rowsToObjects(parseCSV(text));
-      const kind = detectKind(headers);
-      if (kind === 'unknown') {
-        setError(`Could not recognise "${file.name}". Expected a Profound export (responses, rankings-by-topic, or prompts).`);
-        return;
-      }
-      setData(prev => {
-        const next: Dataset = { ...prev };
-        if (kind === 'responses') {
-          const mapped = mapResponses(records);
-          next.responses = mergeResponses(prev.responses, mapped);
-          next.client = detectClient(next.responses);
-          setNotice(`Responses loaded: ${mapped.length.toLocaleString()} rows from "${file.name}" (${next.responses.length.toLocaleString()} total after merge).`);
-        } else if (kind === 'rankings') {
-          next.rankings = mapRankings(records);
-          setNotice(`Rankings loaded: ${next.rankings.length.toLocaleString()} topic-brand rows from "${file.name}".`);
-        } else if (kind === 'prompts') {
-          next.prompts = mapPrompts(records);
-          setNotice(`Prompt catalogue loaded: ${next.prompts.length.toLocaleString()} prompts from "${file.name}".`);
-        }
-        next.uploadedAt = new Date().toISOString();
-        return next;
-      });
-    } catch (e: any) {
-      setError(`Failed to read "${file.name}": ${e?.message ?? 'unknown error'}`);
+      const m = await computeAll(nextFiles, cName || 'client', setProgress);
+      setMetrics(m);
+      void idbSave(projectId, m);
+    } catch (e) {
+      setError('Could not parse that file — check it is the matching Profound export. ' + (e instanceof Error ? e.message : ''));
     } finally {
-      setBusy(null);
+      setProgress(null);
     }
   }
 
-  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
-    // sequential so the merge/notice is deterministic
-    (async () => { for (const f of files) await ingest(f); })();
-    e.target.value = '';
-  }
-
   function clearAll() {
-    setData(emptyData());
-    setPersistWarn(false);
+    setMetrics(null); setFiles({}); setError(null);
     void idbDelete(projectId);
-    clearLegacyLocal(projectId);
-    setNotice('Cleared all uploaded Profound data for this project.');
-    setError(null);
   }
 
-  // ── Derived analytics (all real counts) ───────────────────────────────────────
-  const a = useAnalytics(data);
+  const hasData = !!metrics && metrics.totalRuns > 0;
+  const trackedBrandLabel = metrics ? disp(metrics.client) : (cName || '—');
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="text-orbit-secondary">
       {/* Header */}
-      <div className="orbit-card p-6 flex flex-col gap-4">
-        <div className="flex items-start justify-between flex-wrap gap-3">
-          <div>
-            <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">GEO / AI Answer Engines</p>
-            <h3 className="text-orbit-primary text-lg font-semibold mt-1">Profound AI Visibility</h3>
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <span className="text-[10px] bg-orbit-accent/10 border border-orbit-accent/30 text-orbit-accent px-2 py-0.5 rounded-full font-medium">
-                Uploaded data · Profound
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">AI Answer Engines</p>
+          <h3 className="text-orbit-primary text-lg font-semibold mt-1">Profound AI Visibility</h3>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className="text-[10px] bg-orbit-accent/10 border border-orbit-accent/30 text-orbit-accent px-2 py-0.5 rounded-full font-medium">
+              Uploaded data · Profound
+            </span>
+            {metrics && (
+              <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 px-2 py-0.5 rounded-full font-medium">
+                Client auto-identified: {trackedBrandLabel}
               </span>
-              {hasResp && (
-                <span className="text-orbit-tertiary text-[10px]">
-                  Tracked brand: <span className="text-orbit-secondary font-medium">{data.client}</span>
-                  {a.dataDate && <> · data dated {a.dataDate}</>}
-                  {data.uploadedAt && <> · uploaded {new Date(data.uploadedAt).toLocaleString()}</>}
-                </span>
-              )}
-            </div>
+            )}
+            {metrics && (
+              <span className="text-orbit-tertiary text-[10px]">
+                Updated {new Date(metrics.updatedAt).toLocaleString()}
+              </span>
+            )}
           </div>
-          {hasResp && (
-            <div className="text-right">
-              <span className={`text-4xl font-black ${pctColor(a.mentionRatePct)}`}>{a.mentionRatePct.toFixed(1)}<span className="text-sm font-medium text-orbit-tertiary">%</span></span>
-              <p className="text-orbit-tertiary text-[10px] mt-0.5">Answer presence · {a.mentionedRows} of {a.visRows} visibility responses</p>
-            </div>
-          )}
         </div>
-
-        {/* Upload slots — always available so the user can replace/refresh in place (Const IV.4) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <UploadSlot
-            title="Responses" required loaded={data.responses.length}
-            unit="responses" hint="raw_data*.csv · per-engine answers, sentiment, themes"
-            busy={busy} onTrigger={() => respInput.current?.click()} inputRef={respInput} onPick={onPick}
-          />
-          <UploadSlot
-            title="Rankings" loaded={data.rankings.length}
-            unit="topic-brand rows" hint="rankings-by-topic.csv · competitive leaderboard"
-            busy={busy} onTrigger={() => rankInput.current?.click()} inputRef={rankInput} onPick={onPick}
-          />
-          <UploadSlot
-            title="Prompts" loaded={data.prompts.length}
-            unit="prompts" hint="prompts_export_*.csv · question catalogue"
-            busy={busy} onTrigger={() => promptInput.current?.click()} inputRef={promptInput} onPick={onPick}
-          />
-        </div>
-
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <p className="text-orbit-tertiary text-[10px]">
-            File type is detected from the CSV header — drop any of the Profound exports into any slot. Responses are merged &amp; de-duplicated across files. Data is saved in your browser (IndexedDB) for this project, so it persists across refreshes.
-          </p>
-          {(hasResp || data.rankings.length > 0 || data.prompts.length > 0) && (
-            <button onClick={clearAll} className="text-red-600 text-[11px] hover:underline shrink-0">Clear all</button>
-          )}
-        </div>
-
-        {busy && (
-          <div className="flex items-center gap-2 text-orbit-secondary text-xs">
-            <span className="inline-block w-3 h-3 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />
-            Parsing &ldquo;{busy}&rdquo;…
-          </div>
-        )}
-        {error && <p className="text-red-600 text-xs">{error}</p>}
-        {notice && !error && <p className="text-green-600 text-xs">{notice}</p>}
-        {persistWarn && (
-          <p className="text-amber-600 text-xs">
-            ⚠ This dataset is loaded for this session but couldn&rsquo;t be saved to browser storage, so it may not persist after a refresh. Everything below still works now.
-          </p>
+        {metrics && (
+          <button onClick={clearAll} className="text-orbit-tertiary hover:text-orbit-primary text-[11px] border border-orbit-border hover:border-orbit-accent/40 rounded-lg px-2.5 py-1">
+            Clear data
+          </button>
         )}
       </div>
 
-      {/* Restoring saved data (IndexedDB read in flight) — avoids flashing the empty state */}
-      {!hydrated && !hasResp && (
-        <div className="orbit-card p-8 text-center flex items-center justify-center gap-2">
-          <span className="inline-block w-3 h-3 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />
-          <p className="text-orbit-secondary text-sm">Restoring saved data…</p>
+      {/* 4 upload boxes */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+        {SLOT_DEFS.map((s) => {
+          const loaded = metrics?.slots[s.key];
+          return (
+            <div key={s.key} className="relative">
+              <span className="absolute -top-2 left-3 z-10 text-[9px] font-semibold uppercase tracking-wider bg-orbit-accent text-white rounded px-1.5 py-0.5">{s.step}</span>
+              <button
+                onClick={() => inputRefs[s.key].current?.click()}
+                className={`w-full text-left bg-orbit-surface border ${loaded ? 'border-emerald-500/40' : 'border-orbit-border'} hover:border-orbit-accent/40 rounded-xl p-4 pt-4 transition-colors`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-orbit-primary text-xs font-semibold">{s.title}</span>
+                  {s.required && <span className="text-[9px] text-rose-500 font-bold uppercase tracking-wide">required</span>}
+                </div>
+                <p className="text-orbit-tertiary text-[10px] mt-1 font-mono truncate">{s.file}</p>
+                <p className="text-orbit-tertiary text-[10px] mt-0.5 leading-snug">{s.desc}</p>
+                <p className={`text-[10px] mt-2 font-medium ${loaded ? 'text-emerald-500' : 'text-orbit-secondary'}`}>
+                  {loaded ? `✓ ${fmt(loaded.rows)} rows` : 'Click to upload'}
+                </p>
+              </button>
+              <input
+                ref={inputRefs[s.key]} type="file" accept=".csv,text/csv" className="hidden"
+                onChange={(e) => { onPick(s.key, e.target.files?.[0] || null); e.target.value = ''; }}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="text-orbit-tertiary text-[11px] mt-3 border-t border-orbit-border pt-3">
+        Drop each Profound export into its box. The client is identified automatically by matching this project&apos;s name against the brands in the data — no client name is hardcoded. Computed results are saved in your browser (IndexedDB) for this project.
+      </p>
+
+      {/* Progress */}
+      {progress && (
+        <div className="mt-4 bg-orbit-surface border border-orbit-border rounded-lg p-4">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-orbit-secondary font-medium flex items-center gap-2">
+              <span className="inline-block w-3.5 h-3.5 border-2 border-orbit-accent border-t-transparent rounded-full animate-spin" />
+              Parsing {progress.label}…
+            </span>
+            <span className="text-orbit-tertiary tabular-nums">
+              {Math.round(progress.pct * 100)}% · {fmt(progress.rows)} rows
+              {progress.pct > 0.02 ? ` · ~${Math.max(1, Math.round(((Date.now() - progress.startedAt) / progress.pct) * (1 - progress.pct) / 1000))}s left` : ''}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
+            <div className="h-full bg-orbit-accent rounded-full transition-all" style={{ width: `${Math.round(progress.pct * 100)}%` }} />
+          </div>
         </div>
       )}
 
+      {error && (
+        <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{error}</div>
+      )}
+
       {/* Empty state */}
-      {hydrated && !hasResp && (
-        <div className="orbit-card p-8 text-center flex flex-col items-center gap-2">
-          <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center">
-            <i className="ti ti-upload text-orbit-accent text-xl" aria-hidden="true" />
-          </div>
-          <p className="text-orbit-secondary text-sm font-medium">Upload a Profound responses export to activate this panel</p>
-          <p className="text-orbit-tertiary text-xs max-w-md">
-            Start with the raw responses file (raw_data*.csv). Add rankings-by-topic and the prompts export to unlock the competitive leaderboard and prompt catalogue.
+      {!hasData && !progress && hydrated && (
+        <div className="mt-8 flex flex-col items-center text-center py-10">
+          <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/30 flex items-center justify-center text-orbit-accent text-xl">↑</div>
+          <p className="text-orbit-secondary text-sm font-medium mt-3">Upload the Profound responses export to activate this panel</p>
+          <p className="text-orbit-tertiary text-xs max-w-md mt-1">
+            Start with the required <span className="font-mono">visibility-with-citations.csv</span> in Step 1. Add Sentiment, Platforms &amp; Citations, and Prompt Volume to unlock the full analysis.
           </p>
         </div>
       )}
 
-      {/* Tabs + body */}
-      {hasResp && (
-        <>
-          <div className="flex items-center gap-1 flex-wrap">
-            {([
-              ['overview', 'Overview'],
-              ['engines', 'Engines & Topics'],
-              ['competitive', 'Competitive'],
-              ['reputation', 'Reputation'],
-              ['prompts', 'Prompts'],
-              ['responses', 'Responses'],
-            ] as [Tab, string][]).map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setTab(id)}
-                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  tab === id
-                    ? 'bg-orbit-accent/15 border-orbit-accent/40 text-orbit-accent font-medium'
-                    : 'border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/30'
-                }`}
-              >{label}</button>
-            ))}
-          </div>
+      {/* Analysis */}
+      {hasData && metrics && <Analysis m={metrics} />}
+    </div>
+  );
+}
 
-          {tab === 'overview'    && <OverviewTab a={a} client={data.client} />}
-          {tab === 'engines'     && <EnginesTab a={a} />}
-          {tab === 'competitive' && <CompetitiveTab a={a} data={data} />}
-          {tab === 'reputation'  && <ReputationTab a={a} client={data.client} />}
-          {tab === 'prompts'     && <PromptsTab data={data} />}
-          {tab === 'responses'   && <ResponsesTab data={data} />}
+// ─── Analysis render ─────────────────────────────────────────────────────────────
+function Analysis({ m }: { m: Metrics }) {
+  const visPct = m.totalRuns ? (100 * m.clientHits) / m.totalRuns : 0;
+  const enginesZero = m.engines.filter((e) => e.hits === 0).length;
+  const topicsZero = m.topics.filter((t) => t.hits === 0).length;
+  const sovRank = m.sov.findIndex((s) => s.isClient) + 1;
+  const clientSent = m.sentBrands.find((s) => s.isClient);
+  const clientNet = clientSent ? netPct(clientSent.pos, clientSent.neg) : null;
+  const clientCov = m.coverage.find((c) => c.isClient);
+  const topRival = m.coverage.find((c) => !c.isClient);
+
+  const cards: Array<{ k: string; v: string; tone: string; s: string }> = [
+    { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${m.clientHits} of ${fmt(m.totalRuns)} answers` },
+  ];
+  if (clientCov) cards.push({ k: 'Prompt coverage', v: `${clientCov.count} / ${m.promptN}`, tone: 'text-amber-500', s: `${clientCov.pct.toFixed(1)}% of tested prompts` });
+  if (sovRank > 0) cards.push({ k: 'Share-of-Voice rank', v: `#${sovRank} / ${m.sov.length}`, tone: 'text-amber-500', s: 'tracked brands' });
+  if (m.engines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${m.engines.length}`, tone: 'text-rose-500', s: m.engines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
+  if (m.topics.length) cards.push({ k: 'Topics at 0%', v: `${topicsZero} / ${m.topics.length}`, tone: 'text-amber-500', s: 'no presence at all' });
+  if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims` });
+  if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
+  if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain` });
+
+  const maxSov = Math.max(1, ...m.sov.map((s) => s.count));
+  const maxCov = Math.max(1, ...m.coverage.map((c) => c.count));
+  const maxDom = Math.max(1, ...m.domains.map((d) => d.count));
+  const maxDemand = Math.max(1, ...m.demandPrompts.map((d) => d.share));
+  const maxThemeAbs = Math.max(1, ...m.clientThemes.map((t) => Math.abs(netPct(t.pos, t.neg))));
+  const maxBrandAbs = Math.max(1, ...m.sentBrands.map((t) => Math.abs(netPct(t.pos, t.neg))));
+
+  return (
+    <div className="mt-6 space-y-6">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {cards.map((c) => (
+          <div key={c.k} className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-1">
+            <span className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest">{c.k}</span>
+            <span className={`text-2xl font-bold tabular-nums ${c.tone}`}>{c.v}</span>
+            <span className="text-orbit-tertiary text-[10px]">{c.s}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Visibility by engine + SoV */}
+      <div className="grid md:grid-cols-2 gap-4">
+        <Panel title="AI visibility by engine" sub="% of competitive answers where the client appears, per engine">
+          {m.engines.map((e) => {
+            const pct = e.runs ? (100 * e.hits) / e.runs : 0;
+            return <Bar key={e.platform} label={e.platform} valueLabel={`${pct.toFixed(1)}%`} frac={pct / Math.max(1, Math.max(...m.engines.map((x) => (x.runs ? (100 * x.hits) / x.runs : 0)), 1))} color={e.hits === 0 ? 'bg-orbit-muted' : 'bg-indigo-500'} sub={`${e.hits}/${e.runs}`} />;
+          })}
+        </Panel>
+        <Panel title="Share of Voice — tracked brands" sub="% of competitive answers mentioning each tracked firm">
+          {m.sov.map((s) => (
+            <Bar key={s.brand} label={disp(s.brand)} valueLabel={`${s.pct.toFixed(2)}%`} frac={s.count / maxSov} color={s.isClient ? 'bg-emerald-500' : 'bg-indigo-500'} sub={`${s.count}`} highlight={s.isClient} />
+          ))}
+          {m.overallTop.length > 0 && (
+            <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+              Market leaders across all answers: {m.overallTop.slice(0, 3).map((b) => `${b.brand} ${b.pct.toFixed(1)}%`).join(' · ')}. Tracked firms sit below these.
+            </p>
+          )}
+        </Panel>
+      </div>
+
+      {/* Topics */}
+      <Panel title={`Topic visibility — ${topicsZero} of ${m.topics.length} topics at 0%`} sub="Client visibility % across every topic (sorted; 0% = whitespace opportunity)">
+        <div className="space-y-1">
+          {m.topics.map((t) => {
+            const pct = t.runs ? (100 * t.hits) / t.runs : 0;
+            return <Bar key={t.topic} label={t.topic} valueLabel={`${pct.toFixed(1)}%`} frac={pct / Math.max(1, Math.max(...m.topics.map((x) => (x.runs ? (100 * x.hits) / x.runs : 0)), 1))} color={pct === 0 ? 'bg-rose-500/50' : pct < 3 ? 'bg-amber-500' : 'bg-indigo-500'} sub={`${t.hits}/${t.runs}`} small />;
+          })}
+        </div>
+      </Panel>
+
+      {/* Prompts */}
+      <p className="text-orbit-primary text-sm font-semibold pt-1">Prompt visibility &amp; demand</p>
+      <div className="grid md:grid-cols-2 gap-4">
+        <Panel title="Prompt coverage vs competitors" sub={`Distinct prompts (of ${m.promptN}) where each firm appears at least once`}>
+          {m.coverage.map((c) => (
+            <Bar key={c.brand} label={disp(c.brand)} valueLabel={`${c.count} (${c.pct.toFixed(1)}%)`} frac={c.count / maxCov} color={c.isClient ? 'bg-emerald-500' : 'bg-indigo-500'} highlight={c.isClient} />
+          ))}
+        </Panel>
+        {m.demandPrompts.length > 0 ? (
+          <Panel title="Search demand — top prompts" sub={`Highest-volume questions buyers ask (of ${fmt(m.demandPromptTotal)} prompts; share of volume)`}>
+            {m.demandPrompts.map((d, i) => (
+              <Bar key={i} label={d.prompt} valueLabel={`${d.share}%`} frac={d.share / maxDemand} color="bg-violet-400" sub={d.topic} small />
+            ))}
+          </Panel>
+        ) : (
+          <Panel title="Search demand — top prompts" sub="Upload prompt-volume-report.csv (Step 4) to unlock demand">
+            <p className="text-orbit-tertiary text-xs italic">No prompt-volume export loaded yet.</p>
+          </Panel>
+        )}
+      </div>
+
+      {/* Winnable prompts */}
+      {m.gaps.length > 0 && (
+        <Panel title={`Winnable prompts — ${m.gaps.length} where competitors appear and the client does not`} sub="Highest-leverage prompts: rivals are cited, the client is not. Target these with content + citations.">
+          <div className="max-h-80 overflow-y-auto -mx-1 px-1">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-orbit-tertiary text-[10px] uppercase tracking-wide">
+                  <th className="text-left font-medium py-1.5 pr-2">Prompt</th>
+                  <th className="text-left font-medium py-1.5 pr-2">Topic</th>
+                  <th className="text-left font-medium py-1.5 pr-2">Leading competitor</th>
+                  <th className="text-right font-medium py-1.5">Rival mentions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {m.gaps.map((g, i) => (
+                  <tr key={i} className="border-t border-orbit-border">
+                    <td className="py-1.5 pr-2 text-orbit-secondary">{g.prompt}</td>
+                    <td className="py-1.5 pr-2"><span className="text-[10px] text-orbit-accent bg-orbit-accent/10 border border-orbit-accent/20 rounded px-1.5 py-0.5">{g.topic}</span></td>
+                    <td className="py-1.5 pr-2 text-amber-500 font-medium">{disp(g.leader)} <span className="text-orbit-tertiary">·{g.leaderCount}</span></td>
+                    <td className="py-1.5 text-right text-orbit-tertiary tabular-nums">{g.rivalMentions}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
+
+      {/* Sentiment */}
+      {m.sentBrands.length > 0 && (
+        <>
+          <p className="text-orbit-primary text-sm font-semibold pt-1">Sentiment</p>
+          <div className="grid md:grid-cols-2 gap-4">
+            <Panel title="Net sentiment by brand" sub="Positive − Negative share of sentiment claims (client highlighted)">
+              {m.sentBrands.map((s) => (
+                <Diverge key={s.brand} label={disp(s.brand)} net={netPct(s.pos, s.neg)} maxAbs={maxBrandAbs} highlight={s.isClient} sub={`+${s.pos}/-${s.neg}`} />
+              ))}
+            </Panel>
+            {m.clientThemes.length > 0 && (
+              <Panel title="Client sentiment by theme" sub="Where AI engines praise vs criticise the client">
+                {m.clientThemes.map((t) => (
+                  <Diverge key={t.theme} label={t.theme} net={netPct(t.pos, t.neg)} maxAbs={maxThemeAbs} sub={`+${t.pos}/-${t.neg}`} />
+                ))}
+              </Panel>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Citations */}
+      {m.domains.length > 0 && (
+        <>
+          <p className="text-orbit-primary text-sm font-semibold pt-1">Citations</p>
+          <Panel title={`Top cited sources — ${fmt(m.domains.length)} of ${fmt(m.domainTotalDistinct)} domains`} sub="Domains the engines cite most (green = client, purple = competitor-owned). The citation battleground.">
+            {m.domains.map((d) => (
+              <Bar key={d.domain} label={d.domain} valueLabel={fmt(d.count)} frac={d.count / maxDom} color={d.isClient ? 'bg-emerald-500' : d.isCompetitor ? 'bg-violet-400' : 'bg-indigo-500'} highlight={d.isClient} small />
+            ))}
+            <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+              Third-party authority sites drive a large share of citations — earned mentions there move visibility. The client domain has {fmt(m.clientDomainCites)} citations.
+            </p>
+          </Panel>
         </>
       )}
     </div>
   );
 }
 
-// ─── Upload slot ──────────────────────────────────────────────────────────────
-
-interface SlotProps {
-  title: string; required?: boolean; loaded: number; unit: string; hint: string;
-  busy: string | null; onTrigger: () => void; inputRef: React.RefObject<HTMLInputElement>;
-  onPick: (e: React.ChangeEvent<HTMLInputElement>) => void;
-}
-function UploadSlot({ title, required, loaded, unit, hint, busy, onTrigger, inputRef, onPick }: SlotProps) {
-  const done = loaded > 0;
+// ─── Chart primitives (CSS bars; theme-safe via orbit-* + 500/600 shades) ─────────
+function Panel({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
   return (
-    <button
-      onClick={onTrigger}
-      disabled={!!busy}
-      className={`text-left rounded-lg p-3 border transition-colors ${
-        done ? 'bg-green-500/5 border-green-500/40' : 'bg-orbit-surface border-orbit-border hover:border-orbit-accent/40'
-      } ${busy ? 'cursor-wait opacity-70' : 'cursor-pointer'}`}
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-orbit-primary text-xs font-semibold flex items-center gap-1.5">
-          {done && <span className="text-green-600">✓</span>}
-          {title}
-          {required && !done && <span className="text-red-600 text-[9px] font-normal">required</span>}
-        </span>
-        <i className={`ti ti-upload text-sm ${done ? 'text-green-600' : 'text-orbit-tertiary'}`} aria-hidden="true" />
-      </div>
-      <p className="text-orbit-tertiary text-[10px] mt-1 leading-snug">{hint}</p>
-      <p className={`text-[10px] mt-1 font-medium ${done ? 'text-green-600' : 'text-orbit-tertiary'}`}>
-        {done ? `${loaded.toLocaleString()} ${unit} loaded — click to replace` : 'Click to upload'}
-      </p>
-      <input ref={inputRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={onPick} />
-    </button>
-  );
-}
-
-// ─── Analytics (memoised, all derived from real rows) ─────────────────────────
-
-interface Analytics {
-  visRows: number;
-  mentionedRows: number;
-  mentionRatePct: number;
-  dataDate: string | null;
-  platforms: { name: string; mentioned: number; total: number }[];
-  topics: { name: string; mentioned: number; total: number }[];
-  positions: { label: string; count: number }[];
-  avgPosition: number | null;
-  coMentions: { brand: string; count: number }[];   // raw share-of-voice
-  sentByBrand: { brand: string; pos: number; neg: number; total: number }[];
-  clientSent: { pos: number; neg: number; total: number } | null;
-  themesPos: { theme: string; count: number }[];
-  themesNeg: { theme: string; count: number }[];
-  topSearches: { q: string; count: number }[];
-  totalResponses: number;
-  topicCount: number;
-}
-
-function useAnalytics(data: Dataset): Analytics {
-  return useMemo(() => computeAnalytics(data), [data]);
-}
-
-function computeAnalytics(data: Dataset): Analytics {
-  const { responses, client } = data;
-  const vis = responses.filter(r => /visibility/i.test(r.type));
-  const sent = responses.filter(r => /sentiment,\s*sentiment/i.test(r.type) || (r.asset && r.sentiment));
-
-  const mentionedRows = vis.filter(r => r.mentioned).length;
-  const mentionRatePct = vis.length ? (mentionedRows / vis.length) * 100 : 0;
-
-  const dataDate = responses.find(r => r.date)?.date ?? null;
-
-  // by platform / topic (visibility)
-  const byPlat = new Map<string, { m: number; t: number }>();
-  const byTopic = new Map<string, { m: number; t: number }>();
-  for (const r of vis) {
-    const p = byPlat.get(r.platform) ?? { m: 0, t: 0 }; p.t++; if (r.mentioned) p.m++; byPlat.set(r.platform, p);
-    const tp = byTopic.get(r.topic) ?? { m: 0, t: 0 }; tp.t++; if (r.mentioned) tp.m++; byTopic.set(r.topic, tp);
-  }
-  const platforms = Array.from(byPlat, ([name, v]) => ({ name, mentioned: v.m, total: v.t })).sort((x, y) => y.total - x.total);
-  const topics = Array.from(byTopic, ([name, v]) => ({ name, mentioned: v.m, total: v.t })).sort((x, y) => (y.mentioned - x.mentioned) || (y.total - x.total));
-
-  // positions when mentioned
-  const posMap = new Map<string, number>();
-  const posNums: number[] = [];
-  for (const r of vis) {
-    if (r.mentioned && r.position) {
-      posMap.set(r.position, (posMap.get(r.position) ?? 0) + 1);
-      const num = parseInt(r.position.replace('#', ''), 10);
-      if (!isNaN(num)) posNums.push(num);
-    }
-  }
-  const positions = Array.from(posMap, ([label, count]) => ({ label, count }))
-    .sort((x, y) => parseInt(x.label.replace('#', '')) - parseInt(y.label.replace('#', '')));
-  const avgPosition = posNums.length ? posNums.reduce((s, n) => s + n, 0) / posNums.length : null;
-
-  // raw co-mention share of voice (every brand named across visibility responses)
-  const coMap = new Map<string, number>();
-  for (const r of vis) for (const b of r.mentions) coMap.set(b, (coMap.get(b) ?? 0) + 1);
-  const coMentions = Array.from(coMap, ([brand, count]) => ({ brand, count })).sort((x, y) => y.count - x.count);
-
-  // sentiment by brand (asset) + theme extraction
-  const sb = new Map<string, { pos: number; neg: number; total: number }>();
-  const tPos = new Map<string, number>();
-  const tNeg = new Map<string, number>();
-  for (const r of sent) {
-    const brand = r.asset || '(unattributed)';
-    const cats = r.sentiment.toLowerCase();
-    const hasPos = cats.includes('positive');
-    const hasNeg = cats.includes('negative');
-    const e = sb.get(brand) ?? { pos: 0, neg: 0, total: 0 };
-    if (hasPos) e.pos++; if (hasNeg) e.neg++; if (hasPos || hasNeg) e.total++;
-    sb.set(brand, e);
-    if (isClient(brand, client)) {
-      // themes: ALLCAPS tokens read as criticisms in this export; mixed-case as strengths.
-      for (const th of r.themes) {
-        const isNegTheme = th === th.toUpperCase() && /[A-Z]/.test(th);
-        const norm = th.trim();
-        if (!norm) continue;
-        if (isNegTheme || (hasNeg && !hasPos)) tNeg.set(titleCase(norm), (tNeg.get(titleCase(norm)) ?? 0) + 1);
-        else tPos.set(titleCase(norm), (tPos.get(titleCase(norm)) ?? 0) + 1);
-      }
-    }
-  }
-  const sentByBrand = Array.from(sb, ([brand, v]) => ({ brand, ...v })).sort((x, y) => y.total - x.total);
-  const clientEntry = sentByBrand.find(s => isClient(s.brand, client));
-  const clientSent = clientEntry ? { pos: clientEntry.pos, neg: clientEntry.neg, total: clientEntry.total } : null;
-  const themesPos = Array.from(tPos, ([theme, count]) => ({ theme, count })).sort((x, y) => y.count - x.count).slice(0, 18);
-  const themesNeg = Array.from(tNeg, ([theme, count]) => ({ theme, count })).sort((x, y) => y.count - x.count).slice(0, 18);
-
-  // top search queries the engines ran
-  const sq = new Map<string, number>();
-  for (const r of responses) if (r.searchQueries) {
-    for (const q of r.searchQueries.split(/[\n;]+/).map(s => s.trim()).filter(Boolean)) {
-      sq.set(q, (sq.get(q) ?? 0) + 1);
-    }
-  }
-  const topSearches = Array.from(sq, ([q, count]) => ({ q, count })).sort((x, y) => y.count - x.count).slice(0, 25);
-
-  const topicCount = new Set(responses.map(r => r.topic).filter(Boolean)).size;
-
-  return {
-    visRows: vis.length, mentionedRows, mentionRatePct, dataDate,
-    platforms, topics, positions, avgPosition, coMentions,
-    sentByBrand, clientSent, themesPos, themesNeg, topSearches,
-    totalResponses: responses.length, topicCount,
-  };
-}
-
-function titleCase(s: string): string {
-  return s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-}
-
-// ─── Tabs ─────────────────────────────────────────────────────────────────────
-
-function StatCard({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
-  return (
-    <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
-      <p className="text-orbit-tertiary text-xs">{label}</p>
-      <p className="text-2xl font-black mt-1 text-orbit-primary">{value}</p>
-      {sub && <p className="text-orbit-tertiary text-[10px] mt-1">{sub}</p>}
+    <div className="bg-orbit-surface border border-orbit-border rounded-xl p-4">
+      <p className="text-orbit-primary text-sm font-semibold">{title}</p>
+      {sub && <p className="text-orbit-tertiary text-[11px] mt-0.5 mb-3">{sub}</p>}
+      <div className="space-y-1.5">{children}</div>
     </div>
   );
 }
 
-function OverviewTab({ a, client }: { a: Analytics; client: string }) {
-  const cs = a.clientSent;
-  const csTotal = cs?.total ?? 0;
+function Bar({ label, valueLabel, frac, color, sub, highlight, small }: {
+  label: string; valueLabel?: string; frac: number; color: string; sub?: string; highlight?: boolean; small?: boolean;
+}) {
+  const w = Math.max(1.5, Math.min(100, frac * 100));
   return (
-    <div className="orbit-card p-6 flex flex-col gap-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="AI engines covered" value={a.platforms.length} sub={a.platforms.map(p => p.name).join(', ')} />
-        <StatCard label="Topics tracked" value={a.topicCount} />
-        <StatCard label="Visibility responses" value={a.visRows.toLocaleString()} sub={`${a.totalResponses.toLocaleString()} total rows incl. sentiment`} />
-        <StatCard label="Answer presence" value={<span className={pctColor(a.mentionRatePct)}>{a.mentionRatePct.toFixed(1)}%</span>} sub={`${client} in ${a.mentionedRows} of ${a.visRows}`} />
+    <div className="flex items-center gap-2">
+      <div className={`${small ? 'w-40' : 'w-44'} shrink-0 truncate ${highlight ? 'text-orbit-primary font-medium' : 'text-orbit-secondary'} text-[11px]`} title={label}>{label}</div>
+      <div className="flex-1 h-3.5 bg-orbit-muted rounded overflow-hidden">
+        <div className={`h-full ${color} rounded`} style={{ width: `${w}%` }} />
       </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div>
-          <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-2">Where {client} ranks when it appears</p>
-          {a.positions.length > 0 ? (
-            <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-2">
-              {a.positions.map(p => {
-                const max = Math.max(...a.positions.map(x => x.count));
-                return (
-                  <div key={p.label} className="flex items-center gap-2 text-xs">
-                    <span className="w-8 text-orbit-secondary tabular-nums">{p.label}</span>
-                    <Bar pct={(p.count / max) * 100} />
-                    <span className="w-8 text-right text-orbit-secondary tabular-nums">{p.count}</span>
-                  </div>
-                );
-              })}
-              {a.avgPosition != null && (
-                <p className="text-orbit-tertiary text-[10px] mt-1">Average position when mentioned: <span className="text-orbit-secondary font-medium">#{a.avgPosition.toFixed(1)}</span></p>
-              )}
-            </div>
-          ) : (
-            <p className="text-orbit-tertiary text-xs italic bg-orbit-surface border border-orbit-border rounded-lg p-4">
-              {client} was not mentioned in any visibility response — answer presence is {a.mentionRatePct.toFixed(1)}%.
-            </p>
-          )}
-        </div>
-
-        <div>
-          <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-2">{client} sentiment (from sentiment analyses)</p>
-          {cs && csTotal > 0 ? (
-            <div className="bg-orbit-surface border border-orbit-border rounded-lg p-4 flex flex-col gap-2">
-              <SentRow label="Positive" count={cs.pos} pct={(cs.pos / csTotal) * 100} tone="pos" />
-              <SentRow label="Negative" count={cs.neg} pct={(cs.neg / csTotal) * 100} tone="neg" />
-              <p className="text-orbit-tertiary text-[10px] mt-1">{csTotal} sentiment-tagged analyses · rows may carry both a positive and a negative note</p>
-            </div>
-          ) : (
-            <p className="text-orbit-tertiary text-xs italic bg-orbit-surface border border-orbit-border rounded-lg p-4">No sentiment rows attributed to {client} in this upload.</p>
-          )}
-        </div>
-      </div>
-
-      <p className="text-orbit-tertiary text-[10px] border-t border-orbit-border pt-3">
-        Every figure is a direct count of uploaded Profound rows. &ldquo;Answer presence&rdquo; is computed over visibility-type responses only; sentiment splits over sentiment-type rows. Nothing here is modeled.
-      </p>
-    </div>
-  );
-}
-
-function SentRow({ label, count, pct, tone }: { label: string; count: number; pct: number; tone: 'pos' | 'neg' }) {
-  const text = tone === 'pos' ? 'text-green-600' : 'text-red-600';
-  const bar = tone === 'pos' ? 'bg-green-500' : 'bg-red-500';
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className={`w-16 ${text}`}>{label}</span>
-      <div className="flex-1 h-2 bg-orbit-muted rounded-full overflow-hidden">
-        <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="w-16 text-right text-orbit-secondary tabular-nums">{count} · {pct.toFixed(0)}%</span>
-    </div>
-  );
-}
-
-function EnginesTab({ a }: { a: Analytics }) {
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-3">Answer presence by AI engine</p>
-        <div className="flex flex-col gap-2">
-          {a.platforms.map(p => {
-            const pct = p.total ? (p.mentioned / p.total) * 100 : 0;
-            return (
-              <div key={p.name} className="flex items-center gap-3 text-xs">
-                <span className="w-40 text-orbit-primary truncate">{p.name}</span>
-                <Bar pct={pct} />
-                <span className={`w-12 text-right tabular-nums ${pctColor(pct)}`}>{pct.toFixed(0)}%</span>
-                <span className="w-16 text-right text-orbit-tertiary tabular-nums">{p.mentioned}/{p.total}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-3">
-          Answer presence by topic <span className="normal-case">({a.topics.length} topics)</span>
-        </p>
-        <div className="bg-orbit-surface border border-orbit-border rounded-lg overflow-hidden">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-orbit-tertiary text-[10px] border-b border-orbit-border">
-                <th className="text-left font-medium px-4 py-2">Topic</th>
-                <th className="text-right font-medium px-3 py-2">Mentioned</th>
-                <th className="text-left font-medium px-4 py-2 w-[40%]">Presence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {a.topics.map(t => {
-                const pct = t.total ? (t.mentioned / t.total) * 100 : 0;
-                return (
-                  <tr key={t.name} className="border-b border-orbit-border/50 last:border-0">
-                    <td className="px-4 py-2 text-orbit-primary">{t.name}</td>
-                    <td className="px-3 py-2 text-right text-orbit-secondary tabular-nums">{t.mentioned}/{t.total}</td>
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-2">
-                        <Bar pct={pct} />
-                        <span className={`w-10 text-right tabular-nums ${pctColor(pct)}`}>{pct.toFixed(0)}%</span>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      <div className="w-24 shrink-0 text-right text-orbit-secondary text-[11px] tabular-nums">
+        {valueLabel}{sub ? <span className="text-orbit-tertiary"> · {sub}</span> : ''}
       </div>
     </div>
   );
 }
 
-function CompetitiveTab({ a, data }: { a: Analytics; data: Dataset }) {
-  const { rankings, client } = data;
-  const [openTopic, setOpenTopic] = useState<string | null>(null);
-
-  // aggregate brand leaderboard from rankings file
-  const agg = useMemo(() => {
-    const m = new Map<string, { topics: Set<string>; sum: number; best: number; firsts: number }>();
-    for (const r of rankings) {
-      const e = m.get(r.brand) ?? { topics: new Set(), sum: 0, best: 99, firsts: 0 };
-      e.topics.add(r.topic); e.sum += r.score; e.best = Math.min(e.best, r.rank); if (r.rank === 1) e.firsts++;
-      m.set(r.brand, e);
-    }
-    return Array.from(m, ([brand, e]) => ({
-      brand, topics: e.topics.size, avg: e.sum / e.topics.size, best: e.best, firsts: e.firsts,
-    })).sort((x, y) => (y.topics - x.topics) || (y.avg - x.avg));
-  }, [rankings]);
-
-  const byTopic = useMemo(() => {
-    const m = new Map<string, RankingRow[]>();
-    for (const r of rankings) { if (!m.has(r.topic)) m.set(r.topic, []); m.get(r.topic)!.push(r); }
-    m.forEach(list => list.sort((x, y) => x.rank - y.rank));
-    return Array.from(m.entries()).sort((x, y) => x[0].localeCompare(y[0]));
-  }, [rankings]);
-
-  const maxCo = a.coMentions.length ? a.coMentions[0].count : 1;
-
+function Diverge({ label, net, maxAbs, highlight, sub }: { label: string; net: number; maxAbs: number; highlight?: boolean; sub?: string }) {
+  const w = Math.min(50, (Math.abs(net) / maxAbs) * 50);
   return (
-    <div className="flex flex-col gap-5">
-      {/* Rankings leaderboard */}
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-1">Competitive leaderboard <span className="normal-case">(Profound visibility score)</span></p>
-        {rankings.length === 0 ? (
-          <p className="text-orbit-tertiary text-xs italic mt-2">Upload <span className="font-medium">rankings-by-topic.csv</span> to see the competitive leaderboard.</p>
+    <div className="flex items-center gap-2">
+      <div className={`w-44 shrink-0 truncate ${highlight ? 'text-orbit-primary font-medium' : 'text-orbit-secondary'} text-[11px]`} title={label}>{label}</div>
+      <div className="flex-1 h-3.5 bg-orbit-muted rounded relative overflow-hidden">
+        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-orbit-border" />
+        {net >= 0 ? (
+          <div className={`absolute top-0 bottom-0 left-1/2 ${highlight ? 'bg-emerald-500' : 'bg-indigo-500'} rounded-r`} style={{ width: `${w}%` }} />
         ) : (
-          <>
-            <p className="text-orbit-tertiary text-[10px] mb-3">{agg.length} brands across {byTopic.length} topics. Visibility score is Profound&rsquo;s per-topic share metric (read verbatim).</p>
-            <div className="bg-orbit-surface border border-orbit-border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-orbit-tertiary text-[10px] border-b border-orbit-border">
-                    <th className="text-left font-medium px-4 py-2">Brand</th>
-                    <th className="text-right font-medium px-3 py-2">Topics ranked</th>
-                    <th className="text-right font-medium px-3 py-2">Avg score</th>
-                    <th className="text-right font-medium px-3 py-2">Best rank</th>
-                    <th className="text-right font-medium px-4 py-2">#1 finishes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {agg.slice(0, 30).map(b => {
-                    const mine = isClient(b.brand, client);
-                    return (
-                      <tr key={b.brand} className={`border-b border-orbit-border/50 last:border-0 ${mine ? 'bg-orbit-accent/10' : ''}`}>
-                        <td className="px-4 py-2 text-orbit-primary">{b.brand}{mine && <span className="ml-2 text-[9px] bg-orbit-accent/20 text-orbit-accent px-1.5 py-0.5 rounded-full">tracked</span>}</td>
-                        <td className="px-3 py-2 text-right text-orbit-secondary tabular-nums">{b.topics}</td>
-                        <td className="px-3 py-2 text-right text-orbit-secondary tabular-nums">{b.avg.toFixed(1)}%</td>
-                        <td className="px-3 py-2 text-right text-orbit-secondary tabular-nums">#{b.best}</td>
-                        <td className="px-4 py-2 text-right text-orbit-secondary tabular-nums">{b.firsts}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Per-topic expandable */}
-            <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mt-5 mb-2">By topic</p>
-            <div className="flex flex-col gap-1.5">
-              {byTopic.map(([topic, list]) => {
-                const open = openTopic === topic;
-                const mineRow = list.find(r => isClient(r.brand, client));
-                return (
-                  <div key={topic} className="bg-orbit-surface border border-orbit-border rounded-lg">
-                    <button onClick={() => setOpenTopic(t => t === topic ? null : topic)} className="w-full flex items-center justify-between px-4 py-2 text-xs">
-                      <span className="text-orbit-primary flex items-center gap-2">
-                        <span className={`text-orbit-tertiary text-[9px] transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
-                        {topic}
-                      </span>
-                      <span className="text-orbit-tertiary text-[10px]">
-                        {mineRow ? <span className="text-orbit-accent">{client} #{mineRow.rank} · {mineRow.score.toFixed(1)}%</span> : 'tracked brand not ranked'}
-                      </span>
-                    </button>
-                    {open && (
-                      <div className="px-4 pb-3 flex flex-col gap-1.5">
-                        {list.map(r => {
-                          const mine = isClient(r.brand, client);
-                          const max = list[0]?.score || 1;
-                          return (
-                            <div key={r.brand + r.rank} className="flex items-center gap-2 text-xs">
-                              <span className="w-6 text-orbit-tertiary tabular-nums text-right">{r.rank}.</span>
-                              <span className={`w-44 truncate ${mine ? 'text-orbit-accent font-medium' : 'text-orbit-primary'}`}>{r.brand}</span>
-                              <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full ${mine ? 'bg-orbit-accent' : 'bg-orbit-accent/40'}`} style={{ width: `${(r.score / max) * 100}%` }} />
-                              </div>
-                              <span className="w-12 text-right text-orbit-secondary tabular-nums">{r.score.toFixed(1)}%</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </>
+          <div className="absolute top-0 bottom-0 bg-rose-500 rounded-l" style={{ right: '50%', width: `${w}%` }} />
         )}
       </div>
-
-      {/* Raw co-mention share of voice */}
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-1">Brand co-mentions <span className="normal-case">(raw — every brand named across visibility responses)</span></p>
-        <p className="text-orbit-tertiary text-[10px] mb-3">A second, independent lens: how often each brand was actually named in the AI answers (not Profound&rsquo;s score). Top {Math.min(a.coMentions.length, 30)} of {a.coMentions.length}.</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5">
-          {a.coMentions.slice(0, 30).map(b => {
-            const mine = isClient(b.brand, data.client);
-            return (
-              <div key={b.brand} className="flex items-center gap-2 text-xs">
-                <span className={`w-40 truncate ${mine ? 'text-orbit-accent font-medium' : 'text-orbit-primary'}`}>{b.brand}</span>
-                <div className="flex-1 h-1.5 bg-orbit-muted rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${mine ? 'bg-orbit-accent' : 'bg-orbit-accent/40'}`} style={{ width: `${(b.count / maxCo) * 100}%` }} />
-                </div>
-                <span className="w-8 text-right text-orbit-secondary tabular-nums">{b.count}</span>
-              </div>
-            );
-          })}
-        </div>
+      <div className="w-24 shrink-0 text-right text-orbit-secondary text-[11px] tabular-nums">
+        {net > 0 ? '+' : ''}{net}{sub ? <span className="text-orbit-tertiary"> · {sub}</span> : ''}
       </div>
-    </div>
-  );
-}
-
-function ReputationTab({ a, client }: { a: Analytics; client: string }) {
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-3">Sentiment by brand <span className="normal-case">(from sentiment analyses · positive / negative share)</span></p>
-        {a.sentByBrand.length === 0 ? (
-          <p className="text-orbit-tertiary text-xs italic">No sentiment rows in this upload.</p>
-        ) : (
-          <div className="flex flex-col gap-2.5">
-            {a.sentByBrand.map(b => {
-              const mine = isClient(b.brand, client);
-              const pos = b.total ? (b.pos / b.total) * 100 : 0;
-              const neg = b.total ? (b.neg / b.total) * 100 : 0;
-              return (
-                <div key={b.brand} className="flex items-center gap-3 text-xs">
-                  <span className={`w-40 truncate ${mine ? 'text-orbit-accent font-medium' : 'text-orbit-primary'}`}>{b.brand}{mine && ' ★'}</span>
-                  <div className="flex-1 h-2.5 rounded-full overflow-hidden flex bg-orbit-muted">
-                    <div className="h-full bg-green-500" style={{ width: `${pos}%` }} title={`${b.pos} positive`} />
-                    <div className="h-full bg-red-500" style={{ width: `${neg}%` }} title={`${b.neg} negative`} />
-                  </div>
-                  <span className="w-24 text-right text-orbit-tertiary tabular-nums">
-                    <span className="text-green-600">{b.pos}</span> / <span className="text-red-600">{b.neg}</span>
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <ThemeList title={`What AIs praise about ${client}`} themes={a.themesPos} tone="pos" />
-        <ThemeList title={`What AIs criticise about ${client}`} themes={a.themesNeg} tone="neg" />
-      </div>
-
-      {a.topSearches.length > 0 && (
-        <div className="orbit-card p-6">
-          <p className="text-orbit-tertiary text-[10px] font-medium uppercase tracking-widest mb-3">Search queries the engines ran <span className="normal-case">(top {a.topSearches.length})</span></p>
-          <div className="flex flex-wrap gap-1.5">
-            {a.topSearches.map(s => (
-              <span key={s.q} className="text-[11px] bg-orbit-surface border border-orbit-border rounded-full px-2.5 py-1 text-orbit-secondary">
-                {s.q}{s.count > 1 && <span className="text-orbit-tertiary"> ·{s.count}</span>}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ThemeList({ title, themes, tone }: { title: string; themes: { theme: string; count: number }[]; tone: 'pos' | 'neg' }) {
-  const accent = tone === 'pos' ? 'text-green-600' : 'text-red-600';
-  const border = tone === 'pos' ? 'border-green-500/40' : 'border-red-500/40';
-  return (
-    <div className="orbit-card p-6">
-      <p className={`text-[10px] font-medium uppercase tracking-widest mb-3 ${accent}`}>{title}</p>
-      {themes.length === 0 ? (
-        <p className="text-orbit-tertiary text-xs italic">No themes attributed to the tracked brand in this upload.</p>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {themes.map(t => (
-            <span key={t.theme} className={`text-[11px] bg-orbit-surface border rounded-full px-2.5 py-1 text-orbit-secondary ${border}`}>
-              {t.theme}{t.count > 1 && <span className="text-orbit-tertiary"> ·{t.count}</span>}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PromptsTab({ data }: { data: Dataset }) {
-  const { prompts } = data;
-  const byTopic = useMemo(() => {
-    const m = new Map<string, PromptRow[]>();
-    for (const p of prompts) { if (!m.has(p.topic)) m.set(p.topic, []); m.get(p.topic)!.push(p); }
-    return Array.from(m.entries()).sort((x, y) => x[0].localeCompare(y[0]));
-  }, [prompts]);
-  const [open, setOpen] = useState<string | null>(null);
-
-  const platforms = useMemo(() => {
-    const s = new Set<string>(); for (const p of prompts) for (const pl of p.platforms) s.add(pl); return Array.from(s).sort();
-  }, [prompts]);
-
-  if (prompts.length === 0) {
-    return (
-      <div className="orbit-card p-6">
-        <p className="text-orbit-tertiary text-xs italic">Upload <span className="font-medium">prompts_export_*.csv</span> to see the prompt catalogue.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="orbit-card p-6 flex flex-col gap-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Prompts" value={prompts.length} />
-        <StatCard label="Topics" value={byTopic.length} />
-        <StatCard label="Target engines" value={platforms.length} sub={platforms.join(', ')} />
-        <StatCard label="Avg prompts / topic" value={(prompts.length / Math.max(byTopic.length, 1)).toFixed(1)} />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {byTopic.map(([topic, list]) => {
-          const isOpen = open === topic;
-          return (
-            <div key={topic} className="bg-orbit-surface border border-orbit-border rounded-lg">
-              <button onClick={() => setOpen(t => t === topic ? null : topic)} className="w-full flex items-center justify-between px-4 py-2 text-xs">
-                <span className="text-orbit-primary flex items-center gap-2">
-                  <span className={`text-orbit-tertiary text-[9px] transition-transform ${isOpen ? 'rotate-90' : ''}`}>▶</span>
-                  {topic}
-                </span>
-                <span className="text-orbit-tertiary text-[10px]">{list.length} prompts</span>
-              </button>
-              {isOpen && (
-                <ol className="px-4 pb-3 flex flex-col gap-1.5 list-decimal list-inside">
-                  {list.map(p => (
-                    <li key={p.id} className="text-orbit-secondary text-[11px] leading-relaxed">{p.prompt}</li>
-                  ))}
-                </ol>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ResponsesTab({ data }: { data: Dataset }) {
-  const { responses, client } = data;
-  const [q, setQ] = useState('');
-  const [platform, setPlatform] = useState('all');
-  const [onlyMentioned, setOnlyMentioned] = useState(false);
-  const [limit, setLimit] = useState(50);
-
-  const platforms = useMemo(() => Array.from(new Set(responses.map(r => r.platform))).sort(), [responses]);
-  const vis = useMemo(() => responses.filter(r => /visibility/i.test(r.type)), [responses]);
-
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return vis.filter(r => {
-      if (platform !== 'all' && r.platform !== platform) return false;
-      if (onlyMentioned && !r.mentioned) return false;
-      if (needle && !(`${r.prompt} ${r.topic} ${r.excerpt} ${r.mentions.join(' ')}`.toLowerCase().includes(needle))) return false;
-      return true;
-    });
-  }, [vis, q, platform, onlyMentioned]);
-
-  return (
-    <div className="orbit-card p-6 flex flex-col gap-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <input
-          value={q} onChange={e => { setQ(e.target.value); setLimit(50); }}
-          placeholder="Search prompt, topic, response, brand…"
-          className="flex-1 min-w-[200px] bg-orbit-surface border border-orbit-border rounded-lg px-3 py-1.5 text-xs text-orbit-primary placeholder:text-orbit-tertiary focus:outline-none focus:border-orbit-accent/50"
-        />
-        <select value={platform} onChange={e => { setPlatform(e.target.value); setLimit(50); }}
-          className="bg-orbit-surface border border-orbit-border rounded-lg px-3 py-1.5 text-xs text-orbit-secondary">
-          <option value="all">All engines</option>
-          {platforms.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <label className="flex items-center gap-1.5 text-xs text-orbit-secondary cursor-pointer">
-          <input type="checkbox" checked={onlyMentioned} onChange={e => { setOnlyMentioned(e.target.checked); setLimit(50); }} />
-          Mentioned only
-        </label>
-      </div>
-      <p className="text-orbit-tertiary text-[10px]">{filtered.length.toLocaleString()} of {vis.length.toLocaleString()} visibility responses</p>
-
-      <div className="flex flex-col gap-2">
-        {filtered.slice(0, limit).map((r, i) => (
-          <div key={r.runId + r.platform + i} className="bg-orbit-surface border border-orbit-border rounded-lg p-4">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <span className="text-orbit-primary text-xs font-medium">{r.prompt}</span>
-              <span className="flex items-center gap-1.5 shrink-0">
-                <span className="text-[9px] bg-orbit-muted text-orbit-tertiary px-1.5 py-0.5 rounded-full">{r.platform}</span>
-                {r.mentioned
-                  ? <span className="text-[9px] bg-green-500/15 text-green-600 border border-green-500/30 px-1.5 py-0.5 rounded-full">✓ {client}{r.position && ` ${r.position}`}</span>
-                  : <span className="text-[9px] bg-orbit-muted text-orbit-tertiary px-1.5 py-0.5 rounded-full">not mentioned</span>}
-              </span>
-            </div>
-            <p className="text-orbit-tertiary text-[10px] mt-0.5">{r.topic}</p>
-            {r.excerpt && (
-              <p className="text-orbit-secondary text-[11px] mt-2 leading-relaxed whitespace-pre-line">
-                {r.excerpt}{r.truncated && <span className="text-orbit-tertiary italic"> … (stored excerpt — re-upload responses to view full text)</span>}
-              </p>
-            )}
-            {r.mentions.length > 0 && (
-              <p className="text-orbit-tertiary text-[10px] mt-2">
-                Brands named: {r.mentions.map((b, bi) => (
-                  <span key={bi} className={isClient(b, client) ? 'text-orbit-accent font-medium' : ''}>{b}{bi < r.mentions.length - 1 ? ', ' : ''}</span>
-                ))}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {filtered.length > limit && (
-        <button onClick={() => setLimit(l => l + 50)} className="text-orbit-accent text-xs hover:underline self-center">
-          Show more ({filtered.length - limit} remaining)
-        </button>
-      )}
-      {filtered.length === 0 && <p className="text-orbit-tertiary text-xs italic text-center py-4">No responses match your filters.</p>}
     </div>
   );
 }
