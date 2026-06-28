@@ -90,6 +90,53 @@ function firstSentences(text: string, n: number): string {
   return m.slice(0, n).join(' ').trim() || text;
 }
 
+// ─── v7.312: AI Answer Engines (Profound panel, nav 09) — rollup reader ──────────
+// The exec AI pillar/card READ the SAME computed metrics the AI Answer Engines panel
+// (ProfoundVisibilitySection) persists to IndexedDB, so they reconcile to that panel
+// (Const II.6/II.7 — a view over the deep panel, never a recompute). Honest gap (I.5)
+// when the panel has no data → the exec falls back to the LLM probe.
+interface ProfoundMetrics {
+  client:            string;
+  totalRuns:         number;
+  clientHits:        number;
+  engines:           Array<{ platform: string; runs: number; hits: number }>;
+  topics:            Array<{ topic: string; runs: number; hits: number }>;
+  coverage:          Array<{ brand: string; count: number; pct: number; isClient: boolean }>;
+  gaps:              Array<{ prompt: string; topic: string; rivalMentions: number; leader: string; leaderCount: number }>;
+  sentBrands:        Array<{ brand: string; pos: number; neg: number; isClient: boolean }>;
+  clientThemes:      Array<{ theme: string; pos: number; neg: number }>;
+  totalCites:        number;
+  clientDomainCites: number;
+  promptN:           number;
+  updatedAt:         string;
+}
+
+function loadProfoundMetrics(projectId: string): Promise<ProfoundMetrics | null> {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
+    let req: IDBOpenDBRequest;
+    try { req = indexedDB.open('orbitiq-profound-geo', 1); } catch { resolve(null); return; }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('metrics')) db.createObjectStore('metrics');
+    };
+    req.onsuccess = () => {
+      const db = req.result;
+      try {
+        const tx = db.transaction('metrics', 'readonly');
+        const rq = tx.objectStore('metrics').get(projectId);
+        rq.onsuccess = () => { db.close(); resolve((rq.result as ProfoundMetrics) || null); };
+        rq.onerror   = () => { db.close(); resolve(null); };
+      } catch { resolve(null); }
+    };
+    req.onerror = () => resolve(null);
+  });
+}
+
+function netPctOf(pos: number, neg: number): number {
+  const t = pos + neg; return t ? Math.round((100 * (pos - neg)) / t) : 0;
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatRow({ label, value, valueColor }: { label: string; value: string; valueColor?: string }) {
@@ -144,6 +191,17 @@ export default function ExecutiveSummarySection({
       .catch(() => {})
       .finally(() => setDbLoaded(true));
   }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
+
+  // ── v7.312: AI Answer Engines (Profound) metrics — read from the panel's IndexedDB
+  // store so the exec AI pillar/card reconcile to that panel (II.6/II.7). Client-side
+  // read only; honest gap when the panel hasn't been populated for this project.
+  const [pfMetrics, setPfMetrics] = useState<ProfoundMetrics | null>(null);
+  useEffect(() => {
+    let alive = true;
+    loadProfoundMetrics(projectId).then(m => { if (alive) setPfMetrics(m); });
+    return () => { alive = false; };
+  }, [projectId]);
+  const pfHasData = !!pfMetrics && pfMetrics.totalRuns > 0;
 
   // ── Canonical keyword pool via shared utility ───────────────────────────────
   // buildKwPool is the single source of truth (see lib/utils/kwVolume.ts header).
@@ -500,12 +558,23 @@ export default function ExecutiveSummarySection({
   // AI Overviews remain a fallback ONLY when no LLM probe was run (honest gap,
   // I.5) — never fabricated. Both the score pillar and the landscape line read
   // this single `aiVisPct`, so they stay consistent by construction.
+  // v7.312: the AI Answer Engines panel (Profound) is now the PRIMARY source — the
+  // client's mention rate across ALL tested AI answers (every engine). The LLM probe
+  // is the fallback ONLY when that panel has no data (honest gap, I.5). One aiVisPct
+  // drives the score pillar, the bar, the landscape line, and the card by construction.
+  const pfVisExact: number | null = pfHasData ? (100 * pfMetrics!.clientHits / pfMetrics!.totalRuns) : null;
+  const aiEnginesZero = pfHasData ? pfMetrics!.engines.filter(e => e.hits === 0).length : 0;
+  const aiEnginesTot  = pfHasData ? pfMetrics!.engines.length : 0;
+  const aiTopicsZero  = pfHasData ? pfMetrics!.topics.filter(t => t.hits === 0).length : 0;
+  const aiTopicsTot   = pfHasData ? pfMetrics!.topics.length : 0;
   const aiVisPct: number | null =
-    llmMentionPct !== null ? llmMentionPct
+    pfVisExact !== null ? Math.round(pfVisExact * 10) / 10
+    : llmMentionPct !== null ? llmMentionPct
     : aioAvail > 0 ? aioRate
     : null;
   const aiVisDenom =
-    llmMentionPct !== null ? `of ${llmMentionTotal} AI responses citing you`
+    pfHasData ? `of ${pfMetrics!.totalRuns.toLocaleString()} AI answers across ${aiEnginesTot} engines`
+    : llmMentionPct !== null ? `of ${llmMentionTotal} AI responses citing you`
     : aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
     : 'run an AI probe to measure';
   const aiVisColor = aiVisPct === null ? 'var(--c-555570)' : aiVisPct < 20 ? 'var(--c-ef4444)' : aiVisPct < 50 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
@@ -656,7 +725,13 @@ export default function ExecutiveSummarySection({
             { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility',
               big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
               sub: aiVisDenom,
-              breakdown: (nonBrandedPct !== null && brandedPct !== null) ? [
+              // v7.312: when the AI Answer Engines panel has data, the breakdown shows the
+              // two figures a CMO acts on — engines & topics with zero presence. Falls back
+              // to the LLM probe's non-branded/branded split when only the probe is present.
+              breakdown: pfHasData ? [
+                { label: 'Engines at 0%', val: `${aiEnginesZero}/${aiEnginesTot}` },
+                { label: 'Topics at 0%', val: `${aiTopicsZero}/${aiTopicsTot}` },
+              ] : (nonBrandedPct !== null && brandedPct !== null) ? [
                 { label: 'Non-branded', val: `${nonBrandedPct}%` },
                 { label: 'Branded', val: `${brandedPct}%` },
               ] : undefined },
@@ -720,6 +795,42 @@ export default function ExecutiveSummarySection({
           ))}
         </div>
       </div>
+
+      {/* ═══ v7.312: AI ANSWER ENGINES — CMO VIEW (rolls up from nav 09) ═══ */}
+      {pfHasData ? (
+        <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-239-68-68-0_12)' }}>
+          <div className="flex items-center justify-between mb-2" style={{ flexWrap: 'wrap', gap: 6 }}>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-orbit-tertiary">AI answer engines · what a CMO should know</p>
+            <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>
+              from AI Answer Engines (09) · {pfMetrics!.client} · updated {new Date(pfMetrics!.updatedAt).toLocaleDateString()}
+            </span>
+          </div>
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <SignalCard source="Invisible engines" value={`${aiEnginesZero} of ${aiEnginesTot}`}
+              desc={pfMetrics!.engines.filter(e => e.hits === 0).map(e => e.platform).join(', ') || 'present on all engines'} accentColor="var(--c-ef4444)" />
+            <SignalCard source="Topic whitespace" value={`${aiTopicsZero} of ${aiTopicsTot}`}
+              desc="topics with 0% AI presence" accentColor="var(--c-f59e0b)" />
+            <SignalCard source="Winnable prompts" value={`${pfMetrics!.gaps.length}`}
+              desc={pfMetrics!.gaps.length > 0 ? `rivals cited, you absent · led by ${pfMetrics!.gaps[0].leader}` : 'none — you appear everywhere tested'} accentColor="var(--c-f59e0b)" />
+            <SignalCard source="Prompt coverage"
+              value={(() => { const c = pfMetrics!.coverage.find(x => x.isClient); return c ? `${c.count} of ${pfMetrics!.promptN}` : '—'; })()}
+              desc="prompts where you appear" accentColor="var(--c-6c63ff)" />
+          </div>
+          {(() => {
+            const cs = pfMetrics!.sentBrands.find(s => s.isClient);
+            const worst = pfMetrics!.clientThemes.length > 0 ? pfMetrics!.clientThemes[pfMetrics!.clientThemes.length - 1] : null;
+            const bits: string[] = [];
+            if (cs) { const n = netPctOf(cs.pos, cs.neg); bits.push(`Net AI sentiment ${n > 0 ? '+' : ''}${n} (${cs.pos} positive / ${cs.neg} negative)`); }
+            if (worst && netPctOf(worst.pos, worst.neg) < 0) bits.push(`weakest theme: ${worst.theme} (${netPctOf(worst.pos, worst.neg)})`);
+            if (pfMetrics!.totalCites > 0) bits.push(`${pfMetrics!.clientDomainCites.toLocaleString()} of ${pfMetrics!.totalCites.toLocaleString()} AI citations point to your domain`);
+            return bits.length > 0 ? (
+              <p className="text-[10px] mt-2" style={{ color: 'var(--c-8888aa)', lineHeight: 1.6 }}>{bits.join(' · ')}</p>
+            ) : (
+              <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>Add the Sentiment, Platforms &amp; Prompt-Volume exports in the AI Answer Engines panel to surface sentiment, citations &amp; demand here.</p>
+            );
+          })()}
+        </div>
+      ) : null}
 
       {/* ═══ WHERE YOU DISAPPEAR ACROSS THE JOURNEY ═══ */}
       <div className="orbit-card p-4">
@@ -891,7 +1002,7 @@ export default function ExecutiveSummarySection({
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
         <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>
-          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
+          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · AI {pfHasData ? `${aiVisPct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>
 
