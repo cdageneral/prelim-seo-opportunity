@@ -89,7 +89,11 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'content',      num: '05', icon: 'ti-map-2',            label: 'Content Map',            group: 'Foundation' },
   { id: 'serp',         num: '06', icon: 'ti-trophy',           label: 'Google Ranks',           group: 'Google Platform' },
   { id: 'serpFeatures', num: '07', icon: 'ti-star',             label: 'SERP Features',          group: 'Google Platform' },
-  { id: 'llm',          num: '08', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
+  // v7.319: LLM Visibility nav link hidden for now (Wayne, 2026-06-29). Item commented out so the
+  // left-nav link is removed; the 'AI Answer Engines' item below (same group) and all data/rollups
+  // are untouched. Reversible — uncomment to restore. The 'llm' section render block stays in place
+  // but is simply unreachable while the link is hidden.
+  // { id: 'llm',          num: '08', icon: 'ti-robot',            label: 'LLM Visibility',         group: 'LLM Visibility' },
   { id: 'aiEngines',    num: '09', icon: 'ti-chart-bar',        label: 'AI Answer Engines',      group: 'LLM Visibility' },
   { id: 'local',        num: '10', icon: 'ti-map-pin',          label: 'Local Search',           group: 'Local Search' },
   { id: 'authority',    num: '11', icon: 'ti-shield',           label: 'Google Rank Authority',  group: 'Page & Entity Authority' },
