@@ -267,6 +267,36 @@ async function idbDelete(pid: string): Promise<void> {
   } catch { /* no-op */ }
 }
 
+// ─── Server-side persistence (v7.318) ────────────────────────────────────────────
+// The computed metrics also live on the project row (Neon Postgres) via
+// /api/projects/[id]/profound, so the analysis survives refreshes, new browsers/devices, and is
+// visible to ANY user who opens the project URL (the IndexedDB store above is kept only as a fast
+// local cache / offline fallback). All three are fault-tolerant: a network/DB hiccup never loses
+// the in-memory result or the local cache.
+async function serverLoad(pid: string): Promise<Metrics | null> {
+  try {
+    const r = await fetch(`/api/projects/${pid}/profound`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return (j && j.metrics) ? (j.metrics as Metrics) : null;
+  } catch { return null; }
+}
+
+async function serverSave(pid: string, m: Metrics): Promise<boolean> {
+  try {
+    const r = await fetch(`/api/projects/${pid}/profound`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metrics: m }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function serverDelete(pid: string): Promise<void> {
+  try { await fetch(`/api/projects/${pid}/profound`, { method: 'DELETE' }); } catch { /* no-op */ }
+}
+
 // ─── Compute all metrics from the currently-loaded files ────────────────────────
 type FileMap = Partial<Record<SlotKey, File>>;
 
@@ -671,8 +701,21 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
   useEffect(() => {
     let alive = true;
     (async () => {
-      const m = await idbLoad(projectId);
-      if (alive && m) setMetrics(m);
+      // v7.318: the project row (server) is the source of truth so the analysis is SHARED across
+      // refreshes, devices, and users. Load it first; fall back to the local IndexedDB cache only
+      // when the server has nothing yet — and when it does (a pre-v7.318 upload that only ever
+      // lived in this browser), migrate it up to the server so every other user finally sees it.
+      const fromServer = await serverLoad(projectId);
+      if (alive && fromServer) {
+        setMetrics(fromServer);
+        void idbSave(projectId, fromServer);          // refresh the local cache
+      } else {
+        const fromIdb = await idbLoad(projectId);
+        if (alive && fromIdb) {
+          setMetrics(fromIdb);
+          void serverSave(projectId, fromIdb);         // one-time migration into the shared store
+        }
+      }
       if (alive) setHydrated(true);
     })();
     return () => { alive = false; };
@@ -686,7 +729,8 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
     try {
       const m = await computeAll(nextFiles, cName || 'client', setProgress);
       setMetrics(m);
-      void idbSave(projectId, m);
+      void serverSave(projectId, m);   // v7.318: persist to the shared project row (survives refresh + reaches other users)
+      void idbSave(projectId, m);      // and the fast local cache
     } catch (e) {
       setError('Could not parse that file — check it is the matching Profound export. ' + (e instanceof Error ? e.message : ''));
     } finally {
@@ -696,6 +740,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
 
   function clearAll() {
     setMetrics(null); setFiles({}); setError(null);
+    void serverDelete(projectId);   // v7.318: clear the shared store so it clears for everyone
     void idbDelete(projectId);
   }
 
@@ -763,7 +808,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
       </div>
 
       <p className="text-orbit-tertiary text-[11px] mt-3 border-t border-orbit-border pt-3">
-        Drop each Profound export into its box. The client is identified automatically by matching this project&apos;s name against the brands in the data — no client name is hardcoded. Computed results are saved in your browser (IndexedDB) for this project.
+        Drop each Profound export into its box. The client is identified automatically by matching this project&apos;s name against the brands in the data — no client name is hardcoded. Computed results are saved to this project on the server, so they persist across refreshes and are available to anyone who opens this project — no re-upload needed.
       </p>
 
       {/* Progress */}
