@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/db';
 import { apiUsage, projects } from '@/db/schema';
 import { sql, eq } from 'drizzle-orm';
+import { ensureUsageTable } from '@/lib/usage/record';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +37,7 @@ function foldLine(map: Map<string, Line>, provider: string, unit: string, kind: 
 
 export async function GET() {
   try {
+    await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
     const grouped = await db
       .select({
         projectId:   apiUsage.projectId,
