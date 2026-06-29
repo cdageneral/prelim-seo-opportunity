@@ -22,8 +22,51 @@
  */
 
 import { createHash } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { db, apiUsage } from '@/db';
 import { currentUsageProject } from './context';
+
+/**
+ * Self-healing migration (v7.321) — create the `api_usage` ledger table if the
+ * production DB never had it (it was never migrated, so every insert/read failed
+ * with `relation "api_usage" does not exist`, leaving the API Usage panel empty
+ * and flooding the logs). Mirrors the established runtime auto-migration pattern
+ * used for projects columns (ALTER TABLE ... ADD COLUMN IF NOT EXISTS in
+ * app/api/projects/route.ts). Idempotent (CREATE TABLE IF NOT EXISTS), memoized
+ * so the DDL runs at most once per warm lambda, and never throws — accounting
+ * must never break a real API call. Forward-only: calls made before the table
+ * existed were not recorded and cannot be back-filled (set a baseline to anchor
+ * lifetime spend — see the usage route POST).
+ */
+let _tableEnsured: Promise<void> | null = null;
+export function ensureUsageTable(): Promise<void> {
+  if (_tableEnsured) return _tableEnsured;
+  _tableEnsured = (async () => {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS api_usage (
+        id          SERIAL PRIMARY KEY,
+        project_id  UUID REFERENCES projects(id) ON DELETE CASCADE,
+        provider    TEXT NOT NULL,
+        endpoint    TEXT NOT NULL,
+        unit        TEXT NOT NULL,
+        quantity    INTEGER NOT NULL DEFAULT 0,
+        rows        INTEGER,
+        rate        INTEGER,
+        key_hash    TEXT,
+        kind        TEXT NOT NULL DEFAULT 'usage',
+        meta        JSONB,
+        created_at  TIMESTAMP NOT NULL DEFAULT now()
+      )
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS api_usage_project_id_idx ON api_usage (project_id)`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS api_usage_created_at_idx ON api_usage (created_at)`);
+  })().catch((err) => {
+    // Reset the memo so a later call can retry; never surface to the caller.
+    _tableEnsured = null;
+    console.warn('[OrbitIQ usage] ensureUsageTable failed:', (err as any)?.message ?? err);
+  });
+  return _tableEnsured;
+}
 
 // ─── Semrush per-line unit rates (verified at developer.semrush.com, 2026-06-17) ──
 // Domain reports:  https://developer.semrush.com/api/seo/domain-reports/
@@ -69,6 +112,7 @@ export function keyFingerprint(key: string | undefined | null): string | null {
 /** Core writer. Reads projectId from context, inserts one ledger row. Never throws. */
 export async function recordUsage(input: RecordInput): Promise<void> {
   try {
+    await ensureUsageTable();   // self-create the ledger table on first write if prod never migrated it
     const quantity = Number.isFinite(input.quantity) ? Math.max(0, Math.round(input.quantity)) : 0;
     await db.insert(apiUsage).values({
       projectId: currentUsageProject(),
