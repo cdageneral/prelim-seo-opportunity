@@ -1,3 +1,29 @@
+## v7.320 — 2026-06-29 · Volume Opportunity: one ranked-footprint denominator (fixes the "100% outside top 3 / 832.9M out of 20.6M" contradiction)
+
+**What Wayne saw.** The Google-Rank **Volume Opportunity** card read **"100% of volume outside top 3"** and **"832.9M / yr … out of 20.6M total"** while its own bars showed **2.3M (10.9%) sitting in Positions 1–3**. 100% and an impossible "832.9M out of 20.6M" can't both be right.
+
+**Root cause.** Introduced in v7.305. The card's **headline** ("% outside top 3", the big "/ yr" figure) and the **PG-1 / Top-3 share** stat cards divided by `footprintVolDenom = totalVol + demandVolMonthly` — ranked volume **plus** "missing demand" (≈814M/yr of keywords the client doesn't rank for at all). The card's **bars** and the **"out of … total"** label kept dividing by `totalVol` (ranked-only, 20.6M/yr). Two denominators in one card. Because the missing-demand pool dwarfs the ranked footprint, the top-3 slice rounded away and the headline collapsed to 100%; it also labeled ~814M of **unranked** demand as "pos 4+", which is wrong — those keywords have no SERP position. The Executive Summary's Volume Opportunity had the same demand-inclusive basis (`includeDemand:true`), so it matched the broken 100% rather than the bars.
+
+**What Wayne decided (2026-06-29).** Volume Opportunity uses the **ranked-footprint basis**: opportunity among keywords the client actually ranks for. Uncaptured / full-market demand continues to live in the **Share-of-Voice** panel (Const I.5a), which already shows "open / uncaptured demand".
+
+**What shipped (changed files only).**
+- `components/brief/GoogleSerpSection.tsx` — `volOutsideTop3`, `pctOutsideTop3`, `top3VolPct`, and `page1Pct` now divide by `totalVol` (ranked footprint). Removed the `footprintVolDenom` local. Headline, "out of … total" label, bars, and the PG-1 / Top-3 stat cards now share **one** denominator. `demandVolMonthly` is still shown in the "Total Keywords — full footprint" card (correctly labeled), untouched.
+- `components/brief/ExecutiveSummarySection.tsx` — its `totalVol` now excludes `origin:'demand'` volume too (mirroring how gaps were already excluded in v7.127, and how GoogleSerp's `topKws` drops demand). `includeDemand:true` stays, so the keyword **count** card still matches the Keyword Landscape panel — only the ranked-volume basis changes. This re-reconciles the exec Volume Opportunity with the Google-Rank panel (Const II.6/II.7).
+
+**Result.** Headline now reads ≈**89% outside top 3** (= 100% − the Positions 1–3 share), the "/ yr" figure equals `ranked total − top-3` against the same 20.6M base, the three bars still sum to 100%, and the Executive Summary agrees with the Google-Rank panel by construction.
+
+**Verification (Art. V).** Isolated `tsc --noEmit` clean under the **project tsconfig with no `target` override** (Const V.1a) over a typed reproduction of both changed code paths (real `PoolItem` shape, `origin` union). A node + jsdom harness on a **real-scale fixture** (≈8K pool items; ranked ≈20M/yr, demand ≈828M/yr) asserts: headline is no longer pinned at 100% (87% on the fixture); headline denominator === bars denominator; `volOutsideTop3 === totalVol − top3Vol`; bars sum to 100%; **Exec `totalVol` === GoogleSerp `totalVol`** and **Exec % === GoogleSerp %** (reconciliation, II.6/II.7); and a regression check confirming the old demand-inclusive path produced 100% + an "out-of-total" larger than the stated total. Dual-theme render (Const IV.6/V.5): **no color or markup changed** — only the numeric bindings — so every CSS var still resolves in both light and dark; harness parity assertion passes. Scroll root (`overflow-y-auto flex-1`) intact (IV.1). Manifest identical to v7.319 (112 files); `package.json` synced to 7.320.0 (VI). Changed files only, in place at exact paths (VI.6). Builds on the live v7.319 tree (commit `92bc0d5`).
+
+**Supersedes (Art. V.6 / IX note).** This is a deliberate behavior change to the v7.305 "full-footprint parity" decision for the Volume Opportunity / PG-1 / Top-3 share metrics (Wayne, 2026-06-29): those metrics revert to the ranked-footprint basis. The full-market demand view is unchanged in the Share-of-Voice panel.
+
+## v7.319 — 2026-06-29 · Hide the "LLM Visibility" left-nav link (temporary)
+
+**What Wayne asked.** Hide the **LLM Visibility** link in the left navigation for now.
+
+**What shipped.** In `app/projects/[id]/page.tsx`, the `NAV_ITEMS` entry `{ id: 'llm', … label: 'LLM Visibility' }` is commented out, so the left-nav link no longer appears. Everything else is untouched: the **AI Answer Engines** item (same "LLM Visibility" group) stays, the underlying `LLMVisibilitySection` render block remains in the file (simply unreachable while the link is hidden), and no data, rollups, or Executive-Summary figures change. Fully reversible — uncomment the one line to restore the link.
+
+**Verification (Art. V).** **Real project `tsc --noEmit` clean** (full app, project tsconfig, no `target` override — Const V.1a). No styling/data/architecture change — the edit removes one nav array item — so theme parity (IV.6), scroll (IV.1), and the regression suite are unaffected by construction. Changed files only, in place at exact paths (Const VI.6). Builds on the live v7.318 tree.
+
 # OrbitIQ Changelog
 
 ## v7.304 — 2026-06-26 · Offices populate with real address/phone/GPS in ONE fetch (embedded map markers); reviews show "Pending", not "0/Weak"
