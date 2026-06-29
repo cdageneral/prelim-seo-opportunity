@@ -1,4 +1,19 @@
-## v7.320 — 2026-06-29 · Volume Opportunity: one ranked-footprint denominator (fixes the "100% outside top 3 / 832.9M out of 20.6M" contradiction)
+## v7.321 — 2026-06-29 · API Usage panel shows nothing — self-create the `api_usage` ledger table (it was never migrated in prod)
+
+**What Wayne saw.** The **API Usage** panel (both the per-project section and the cross-project Dashboard rollup) showed **no results**, even though real Semrush/SerpAPI/Profound/LLM calls had been made.
+
+**Root cause (verified on live prod, not assumed).** Production runtime logs on the live deployment (v7.320, commit `71d7165`, dep `dpl_hxu9vbyra9ei…`) showed, on every panel open:
+`[OrbitIQ usage] rollup failed: relation "api_usage" does not exist` and `[OrbitIQ usage] project summary failed: relation "api_usage" does not exist`. The `api_usage` ledger table was **never created** in the production Neon database (`drizzle-kit push` never ran for it). So every `recordUsage()` insert silently failed (it's caught so it never breaks a real API call), nothing was ever recorded, and both read routes fell back to their honest empty-ledger state (I.5) → the panel was correctly empty because the ledger was empty. A self-heal added back in the v7.305–v7.307 line was lost when `main` was reset, so v7.320 had no table-creation path.
+
+**What shipped (changed files only).**
+- `lib/usage/record.ts` — new memoized, idempotent `ensureUsageTable()` that runs `CREATE TABLE IF NOT EXISTS api_usage (…)` plus the two indexes (`project_id`, `created_at`), mirroring the established runtime auto-migration pattern (`ALTER TABLE … ADD COLUMN IF NOT EXISTS` in `app/api/projects/route.ts`). Column set/types/defaults match `db/schema.ts` exactly. It never throws (resets its memo on failure so a later call retries). `recordUsage()` calls it before the first insert.
+- `app/api/usage/route.ts` and `app/api/projects/[id]/usage/route.ts` — call `ensureUsageTable()` at the top of the read `GET` handlers (and the baseline `POST`), so simply **opening either panel** creates the table immediately and the `relation does not exist` log spam stops.
+
+**What this does and doesn't recover.** Forward-only by construction (Const I.1 — real data only): API calls made **before** the table existed were never recorded and **cannot** be back-filled. The panel will now populate as new billable calls are made, and the lifetime figure can be anchored to the real provider-dashboard number via the existing per-project **baseline** (POST `/api/projects/[id]/usage`) — a real, user-entered reconciliation value, never modeled.
+
+**Verification (Art. V).** `tsc --noEmit` on `lib/usage/record.ts` clean (exit 0) under the **project tsconfig with no `target` override** (Const V.1a); the 3-file scoped check showed only pre-existing `next/server` module-resolution artifacts of the minimal sandbox install (that import is unchanged and builds on Vercel), zero errors in the added code. A node behavioral harness on the real transpiled `record.ts` (db/`sql`/context mocked) passed **9/9**: emits `CREATE TABLE IF NOT EXISTS` + 2 indexes; DDL carries all 12 schema columns with matching NOT NULL/defaults; memoized (no repeat DDL); `recordUsage` ensures the table **before** the insert; never throws on DDL failure; retries cleanly after a failure. No UI/styling/data-model change → theme parity (IV.6), scroll (IV.1), and taxonomy/architecture articles unaffected by construction; the real Vercel build is the backstop (VI.7). Changed files only, in place at exact paths (VI.6). Builds on the live v7.320 tree (commit `71d7165`). `package.json` synced to 7.321.0.
+
+
 
 **What Wayne saw.** The Google-Rank **Volume Opportunity** card read **"100% of volume outside top 3"** and **"832.9M / yr … out of 20.6M total"** while its own bars showed **2.3M (10.9%) sitting in Positions 1–3**. 100% and an impossible "832.9M out of 20.6M" can't both be right.
 
