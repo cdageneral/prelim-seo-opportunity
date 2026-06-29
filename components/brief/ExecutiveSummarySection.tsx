@@ -247,7 +247,14 @@ export default function ExecutiveSummarySection({
   // only the volume basis changes here. (top3Vol/page1Vol/posVol/weightedPos
   // already excluded gaps for free, since they filter on posKws where
   // position !== null.)
-  const totalVol   = kwPool.reduce((s, item) => s + (item.isGap ? 0 : (item.searchVolume ?? 0)), 0);
+  // v7.320: also exclude origin:'demand' ("missing demand") volume from the Volume
+  // Opportunity / share denominator, mirroring how GoogleSerpSection's topKws drops it and
+  // how gaps are already excluded above (v7.127). Demand keywords carry position=null, so
+  // leaving them in folded ~814M of UNRANKED volume into the "Page 2+ (11+)" bucket and
+  // pushed "% outside top 3" to ~100%. `includeDemand` stays true so the keyword COUNT card
+  // still matches the Keyword Landscape panel — only the ranked-volume basis changes here,
+  // re-reconciling with the Google Rank panel's ranked totalVol (Const II.6/II.7).
+  const totalVol   = kwPool.reduce((s, item) => s + ((item.isGap || item.origin === 'demand') ? 0 : (item.searchVolume ?? 0)), 0);
   const top3Vol    = posKws.filter(k => k.position <= 3).reduce((s, k) => s + k.searchVolume, 0);
   const page1Vol   = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
   const posVol     = posKws.reduce((s, k) => s + k.searchVolume, 0);

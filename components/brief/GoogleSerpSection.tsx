@@ -1211,18 +1211,24 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
     ? posKws.reduce((s, k) => s + k.position * k.searchVolume, 0) / posVol
     : 0;
 
-  // v7.305: share denominators include the "missing demand" volume so Pg-1 / Top-3
-  // share reflect the TRUE total market demand (full-footprint parity, Wayne 2026-06-26).
-  // Reconciles with the Executive Summary's Volume Opportunity, which sums the same
-  // demand-inclusive pool (Const II.6/II.7).
-  const footprintVolDenom = totalVol + demandVolMonthly;
-  const volOutsideTop3 = footprintVolDenom - top3Vol;
-  const pctOutsideTop3 = footprintVolDenom > 0 ? Math.round((volOutsideTop3 / footprintVolDenom) * 100) : 0;
-  const top3VolPct     = footprintVolDenom > 0 ? Math.round((top3Vol / footprintVolDenom) * 100) : 0;
-  // Volume-based page 1 share: what % of total search demand is captured at positions 1–10.
-  // Matches the metric users expect when they say "page 1 coverage."
+  // v7.320: RANKED-FOOTPRINT basis (Wayne 2026-06-29). The Volume Opportunity card — its
+  // headline "% outside top 3" / "pos 4+" figure, the "out of … total" label, AND the
+  // Positions 1–3 / 4–10 / Page 2+ bars — must all share ONE denominator: the ranked
+  // footprint volume (totalVol). v7.305 had divided the headline and the Pg-1/Top-3 share
+  // metrics by `totalVol + demandVolMonthly` (ranked + "missing demand"). Because the
+  // missing-demand pool dwarfs the ranked footprint, that made "% outside top 3" round to
+  // 100% even with real top-3 volume on file, printed an impossible "832.9M out of 20.6M
+  // total", and labeled ~814M of UNRANKED demand as "pos 4+". Missing-demand keywords have
+  // no SERP position, so they cannot be "outside top 3"; the full-market / uncaptured-demand
+  // story lives in the Share-of-Voice panel instead (Const I.5a). This restores internal
+  // consistency with the bars and reconciles with the Executive Summary's Volume Opportunity,
+  // which now uses the same ranked basis (Const II.6/II.7).
+  const volOutsideTop3 = totalVol - top3Vol;
+  const pctOutsideTop3 = totalVol > 0 ? Math.round((volOutsideTop3 / totalVol) * 100) : 0;
+  const top3VolPct     = totalVol > 0 ? Math.round((top3Vol / totalVol) * 100) : 0;
+  // Volume-based page-1 share: % of the RANKED footprint volume captured at positions 1–10.
   // Count-based (page1Kws / posKws.length) is surfaced as sub-text only.
-  const page1Pct       = footprintVolDenom > 0 ? Math.round((page1Vol / footprintVolDenom) * 100) : 0;
+  const page1Pct       = totalVol > 0 ? Math.round((page1Vol / totalVol) * 100) : 0;
 
   // ── Bar chart ─────────────────────────────────────────────────────────────
   // (bar chart helpers removed — bar chart replaced with SovPanel)
