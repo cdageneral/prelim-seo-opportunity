@@ -66,6 +66,15 @@ export const projects = pgTable('projects', {
   // runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
   scopeWorkstreams:          jsonb('scope_workstreams').$type<Record<string, string[]>>(),
   scopeWorkstreamsUpdatedAt: timestamp('scope_workstreams_updated_at'),
+  // v7.318: Profound AI Visibility computed metrics — SERVER-SIDE persistence so the
+  // uploaded-export analysis survives refreshes, new browsers/devices, and is visible to ANY
+  // user opening the project URL (replaces the old browser-only IndexedDB store). Holds ONLY
+  // the compact computed Metrics object the panel renders — aggregated from the user's REAL
+  // Profound CSV rows (Const I.1); never the raw rows, never a modeled value. Auto-migrated at
+  // runtime via ADD COLUMN IF NOT EXISTS (and ensured in the projects-list route per the
+  // v7.268 lesson — the list query selects every schema column). No manual db:push.
+  profoundData:              jsonb('profound_data'),
+  profoundDataUpdatedAt:     timestamp('profound_data_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
