@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { apiUsage } from '@/db/schema';
 import { and, eq, sql, desc, isNotNull } from 'drizzle-orm';
+import { ensureUsageTable } from '@/lib/usage/record';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +37,7 @@ interface ProviderLine {
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const projectId = params.id;
   try {
+    await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
     const grouped = await db
       .select({
         provider: apiUsage.provider,
@@ -124,6 +126,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   try {
+    await ensureUsageTable();   // ensure the ledger table exists before writing a baseline
     // Upsert semantics: a baseline is a single anchor per provider+unit, so clear
     // any prior baseline rows for this combination before inserting the new one.
     await db.delete(apiUsage).where(and(
