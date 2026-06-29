@@ -1,8 +1,14 @@
 'use client';
 
 /*
- * ProfoundVisibilitySection (v7.315)
+ * ProfoundVisibilitySection (v7.316)
  * ----------------------------------
+ * v7.316: added Step 5 — Citation Landscape (citations_data.csv): a 5th upload box that
+ *   parses the granular citation-source export (one row per cited URL: hostname, platform,
+ *   category, mentioned). Surfaces four insights — owned-vs-competitor citation gap, earned-
+ *   media target list, source mix by engine, and the brand-mention surface. The client's own
+ *   ("Owned") domain is read from the file's own Owned labels (Profound-assigned), not hardcoded
+ *   (Const I.1: every count is a direct tally of source rows; honest empty state until loaded).
  * v7.315: moved the "Sentiment of mentions" widget UP into the summary-card grid, in the
  *   slot the "Net sentiment" card used (Wayne). Falls back to the claim-level Net sentiment
  *   card when mentionSent isn't present (old saved metrics). Removed the lower-section copy.
@@ -46,7 +52,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
-type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand';
+type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand' | 'citations';
 
 interface SlotInfo { fileName: string; rows: number; }
 type SlotMap = Partial<Record<SlotKey, SlotInfo>>;
@@ -61,6 +67,11 @@ interface DemandTopic { topic: string; share: number; prompts: number; }
 interface DemandPrompt { prompt: string; share: number; topic: string; }
 interface SentBrand { brand: string; pos: number; neg: number; isClient: boolean; }
 interface MentionSent { brand: string; pos: number; neutral: number; neg: number; total: number; isClient: boolean; }
+// Step 5 — Citation Landscape (citations_data.csv)
+interface CiteCatStat { category: string; count: number; pct: number; }
+interface CiteDomain { hostname: string; count: number; }
+interface EngineSourceMix { platform: string; total: number; earned: number; competition: number; owned: number; other: number; }
+interface MentionSource { hostname: string; count: number; isClient: boolean; }
 
 interface Metrics {
   client: string;
@@ -85,6 +96,19 @@ interface Metrics {
   demandTopics: DemandTopic[];
   demandPrompts: DemandPrompt[];
   demandPromptTotal: number;
+  // Step 5 — Citation Landscape
+  citeTotal: number;
+  citeOwned: number;
+  citeOwnedShare: number;
+  citeOwnedDomain: string;
+  citeCompetition: number;
+  citeCatMix: CiteCatStat[];
+  earnedTargets: CiteDomain[];
+  competitorCites: CiteDomain[];
+  engineSourceMix: EngineSourceMix[];
+  citeMentions: number;
+  citeMentionSources: MentionSource[];
+  citeMentionByPlatform: { platform: string; count: number }[];
   slots: SlotMap;
   updatedAt: string;
 }
@@ -462,6 +486,51 @@ async function computeAll(
     slots.demand = { fileName: f.name, rows };
   }
 
+  // ── Citation-landscape pass: citations_data.csv (each row = one cited source URL) ──
+  // Direct tally only (Const I.1). The client's own domain is whatever the file labels
+  // category=Owned — Profound assigns it, so nothing about the client is hardcoded.
+  const citeCatCount: Record<string, number> = {};
+  const earnedDomain: Record<string, number> = {};
+  const compDomainCite: Record<string, number> = {};
+  const ownedDomainCite: Record<string, number> = {};
+  const engMix: Record<string, { total: number; earned: number; competition: number; owned: number; other: number }> = {};
+  const mentionHost: Record<string, number> = {};
+  const mentionPlat: Record<string, number> = {};
+  let citeTotal = 0;
+  let citeMentions = 0;
+  if (files.citations) {
+    let H: Record<string, number> = {};
+    const f = files.citations;
+    const rows = await streamCsv(f, (row, idx) => {
+      if (idx === 0) { H = headerIndex(row); return; }
+      const host = (row[H['hostname']] || '').replace(/^www\./, '').toLowerCase().trim();
+      const plat = (row[H['platform']] || '').trim();
+      const cat = (row[H['category']] || 'Other').trim() || 'Other';
+      const mentioned = (row[H['mentioned']] || '').trim().toLowerCase() === 'mentioned';
+      if (!host && !plat) return;
+      citeTotal++;
+      citeCatCount[cat] = (citeCatCount[cat] || 0) + 1;
+      const lc = cat.toLowerCase();
+      if (lc === 'earned media' && host) earnedDomain[host] = (earnedDomain[host] || 0) + 1;
+      if (lc === 'competition' && host) compDomainCite[host] = (compDomainCite[host] || 0) + 1;
+      if (lc === 'owned' && host) ownedDomainCite[host] = (ownedDomainCite[host] || 0) + 1;
+      if (plat) {
+        if (!engMix[plat]) engMix[plat] = { total: 0, earned: 0, competition: 0, owned: 0, other: 0 };
+        engMix[plat].total++;
+        if (lc === 'earned media') engMix[plat].earned++;
+        else if (lc === 'competition') engMix[plat].competition++;
+        else if (lc === 'owned') engMix[plat].owned++;
+        else engMix[plat].other++;
+      }
+      if (mentioned) {
+        citeMentions++;
+        if (host) mentionHost[host] = (mentionHost[host] || 0) + 1;
+        if (plat) mentionPlat[plat] = (mentionPlat[plat] || 0) + 1;
+      }
+    }, (pct, r) => setProgress({ label: 'Citation Landscape', pct, rows: r, startedAt }));
+    slots.citations = { fileName: f.name, rows };
+  }
+
   // ── Finalise ──
   const engines: PlatStat[] = Object.keys(platRuns)
     .map((p) => ({ platform: p, runs: platRuns[p], hits: platClient[p] || 0 }))
@@ -519,11 +588,40 @@ async function computeAll(
     .sort((a, b) => b.share - a.share);
   const demandPrompts = demandPromptsArr.slice().sort((a, b) => b.share - a.share).slice(0, 12);
 
+  // ── Citation-landscape finalise ──
+  const ownedDomainsSorted = Object.keys(ownedDomainCite).sort((a, b) => ownedDomainCite[b] - ownedDomainCite[a]);
+  const citeOwnedDomain = ownedDomainsSorted[0] || '';
+  let citeOwned = 0;
+  ownedDomainsSorted.forEach((d) => { citeOwned += ownedDomainCite[d]; });
+  const citeCompetition = citeCatCount['Competition'] || 0;
+  const citeOwnedShare = citeTotal ? (100 * citeOwned) / citeTotal : 0;
+  const citeCatMix: CiteCatStat[] = Object.keys(citeCatCount)
+    .map((c) => ({ category: c, count: citeCatCount[c], pct: citeTotal ? (100 * citeCatCount[c]) / citeTotal : 0 }))
+    .sort((a, b) => b.count - a.count);
+  const earnedTargets: CiteDomain[] = Object.keys(earnedDomain)
+    .map((h) => ({ hostname: h, count: earnedDomain[h] }))
+    .sort((a, b) => b.count - a.count).slice(0, 10);
+  const competitorCites: CiteDomain[] = Object.keys(compDomainCite)
+    .map((h) => ({ hostname: h, count: compDomainCite[h] }))
+    .sort((a, b) => b.count - a.count).slice(0, 10);
+  const engineSourceMix: EngineSourceMix[] = Object.keys(engMix)
+    .map((p) => ({ platform: p, total: engMix[p].total, earned: engMix[p].earned, competition: engMix[p].competition, owned: engMix[p].owned, other: engMix[p].other }))
+    .sort((a, b) => b.total - a.total);
+  const ownedKey = citeOwnedDomain.replace(/[^a-z0-9]/g, '');
+  const citeMentionSources: MentionSource[] = Object.keys(mentionHost)
+    .map((h) => ({ hostname: h, count: mentionHost[h], isClient: ownedKey.length > 0 && h.replace(/[^a-z0-9]/g, '').indexOf(ownedKey) !== -1 }))
+    .sort((a, b) => b.count - a.count).slice(0, 10);
+  const citeMentionByPlatform = Object.keys(mentionPlat)
+    .map((p) => ({ platform: p, count: mentionPlat[p] }))
+    .sort((a, b) => b.count - a.count);
+
   return {
     client, tracked: brandList, totalRuns, clientHits, engines, sov, overallTop, topics,
     promptN: promptKeys.length, coverage: coverageStat, gaps, clientPromptCount,
     sentBrands, mentionSent, clientThemes, totalCites, domains, domainTotalDistinct: domainsSorted.length,
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
+    citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
+    earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
     slots, updatedAt: new Date().toISOString(),
   };
 }
@@ -540,6 +638,7 @@ const SLOT_DEFS: Array<{ key: SlotKey; step: string; title: string; required?: b
   { key: 'sentiment', step: 'Step 2', title: 'Sentiment', file: 'sentiment-with-citations.csv', desc: 'Sentiment claims by brand & theme' },
   { key: 'platforms', step: 'Step 3', title: 'Platforms & Citations', file: 'platforms-with_citations.csv', desc: 'Master file · citation sources' },
   { key: 'demand', step: 'Step 4', title: 'Prompt Volume', file: 'prompt-volume-report.csv', desc: 'Topic / prompt demand share' },
+  { key: 'citations', step: 'Step 5', title: 'Citation Landscape', file: 'citations_data.csv', desc: 'Every cited source · category & brand mentions' },
 ];
 
 function disp(b: string): string {
@@ -564,6 +663,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
     sentiment: useRef<HTMLInputElement>(null),
     platforms: useRef<HTMLInputElement>(null),
     demand: useRef<HTMLInputElement>(null),
+    citations: useRef<HTMLInputElement>(null),
   } as const;
 
   const cName = (clientName || '').trim();
@@ -632,8 +732,8 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
         )}
       </div>
 
-      {/* 4 upload boxes */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+      {/* 5 upload boxes */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
         {SLOT_DEFS.map((s) => {
           const loaded = metrics?.slots[s.key];
           return (
@@ -731,6 +831,7 @@ function Analysis({ m }: { m: Metrics }) {
   if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims`, kind: 'sentiment' });
   if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
   if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain` });
+  if ((m.citeTotal || 0) > 0) cards.push({ k: 'Owned citation share', v: m.citeOwnedShare.toFixed(1) + '%', tone: 'text-rose-500', s: `${fmt(m.citeOwned)} of ${fmt(m.citeTotal)} cited sources` });
 
   const maxSov = Math.max(1, ...m.sov.map((s) => s.count));
   const maxCov = Math.max(1, ...m.coverage.map((c) => c.count));
@@ -889,6 +990,80 @@ function Analysis({ m }: { m: Metrics }) {
           </Panel>
         </>
       )}
+
+      {/* Step 5 — Citation Landscape (citations_data.csv) */}
+      {(m.citeTotal || 0) > 0 && (
+        <>
+          <p className="text-orbit-primary text-sm font-semibold pt-1">Citation Landscape</p>
+          <p className="text-orbit-tertiary text-[11px] -mt-3 leading-snug">
+            The source supply chain behind the answers — every cited URL across {fmt(m.citeTotal)} citations, classified by Profound.{m.citeOwnedDomain ? ` Owned = ${m.citeOwnedDomain}.` : ''}
+          </p>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <Panel title="Owned vs competitor citation gap" sub="Share of all cited sources by ownership — the core GEO opportunity">
+              {m.citeCatMix.map((c) => (
+                <Bar key={c.category} label={c.category} valueLabel={`${c.pct.toFixed(1)}%`} frac={c.count / Math.max(1, ...m.citeCatMix.map((x) => x.count))} color={catColor(c.category)} sub={fmt(c.count)} highlight={c.category.toLowerCase() === 'owned'} small />
+              ))}
+              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-[10px] text-orbit-tertiary">
+                <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500" />Owned</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-indigo-500" />Earned</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-500" />Competition</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-violet-400" />Social</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-sm bg-sky-500" />Institution</span>
+              </div>
+              <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+                Owned {m.citeOwnedShare.toFixed(1)}% ({fmt(m.citeOwned)}) vs Competition {m.citeTotal ? ((100 * m.citeCompetition) / m.citeTotal).toFixed(1) : '0'}% ({fmt(m.citeCompetition)}). Closing this gap is the GEO program in one number.
+              </p>
+            </Panel>
+
+            <Panel title="Source mix by engine" sub="How each AI engine sources answers — earned vs competition vs owned vs other">
+              {m.engineSourceMix.map((e) => (
+                <StackBar
+                  key={e.platform}
+                  label={e.platform}
+                  sub={`${e.total ? Math.round((100 * e.earned) / e.total) : 0}% earned`}
+                  segs={[
+                    { frac: e.total ? e.earned / e.total : 0, color: 'bg-indigo-500' },
+                    { frac: e.total ? e.competition / e.total : 0, color: 'bg-amber-500' },
+                    { frac: e.total ? e.owned / e.total : 0, color: 'bg-emerald-500' },
+                    { frac: e.total ? e.other / e.total : 0, color: 'bg-orbit-muted' },
+                  ]}
+                />
+              ))}
+              <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+                Engines leaning earned reward PR/placements; engines leaning &quot;other&quot; reward broad authority. Bars: earned · competition · owned · other.
+              </p>
+            </Panel>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <Panel title="Earned-media targets" sub="Third-party domains AI trusts most — the placement hit-list">
+              {m.earnedTargets.length > 0 ? m.earnedTargets.map((d) => (
+                <Bar key={d.hostname} label={d.hostname} valueLabel={fmt(d.count)} frac={d.count / Math.max(1, ...m.earnedTargets.map((x) => x.count))} color="bg-indigo-500" small />
+              )) : <p className="text-orbit-tertiary text-xs italic">No earned-media citations in this export.</p>}
+            </Panel>
+
+            <Panel title="Competitor citation dominance" sub="Rival-owned domains cited inside AI answers">
+              {m.competitorCites.length > 0 ? m.competitorCites.map((d) => (
+                <Bar key={d.hostname} label={d.hostname} valueLabel={fmt(d.count)} frac={d.count / Math.max(1, ...m.competitorCites.map((x) => x.count))} color="bg-amber-500" small />
+              )) : <p className="text-orbit-tertiary text-xs italic">No competitor-owned citations in this export.</p>}
+            </Panel>
+          </div>
+
+          {m.citeMentions > 0 && (
+            <Panel title={`Brand-mention surface — ${fmt(m.citeMentions)} citations name the client`} sub="The third-party pages where the client is actually mentioned inside cited sources">
+              {m.citeMentionSources.map((d) => (
+                <Bar key={d.hostname} label={d.hostname} valueLabel={fmt(d.count)} frac={d.count / Math.max(1, ...m.citeMentionSources.map((x) => x.count))} color={d.isClient ? 'bg-emerald-500' : 'bg-indigo-500'} highlight={d.isClient} small />
+              ))}
+              {m.citeMentionByPlatform.length > 0 && (
+                <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+                  By engine: {m.citeMentionByPlatform.map((p) => `${p.platform} ${p.count}`).join(' · ')}.
+                </p>
+              )}
+            </Panel>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -937,6 +1112,33 @@ function Diverge({ label, net, maxAbs, highlight, sub }: { label: string; net: n
       <div className="w-24 shrink-0 text-right text-orbit-secondary text-[11px] tabular-nums">
         {net > 0 ? '+' : ''}{net}{sub ? <span className="text-orbit-tertiary"> · {sub}</span> : ''}
       </div>
+    </div>
+  );
+}
+
+// ─── Step 5 helpers — category colour map + stacked source-mix bar (theme-safe) ──
+function catColor(cat: string): string {
+  switch (cat.toLowerCase()) {
+    case 'owned': return 'bg-emerald-500';
+    case 'earned media': return 'bg-indigo-500';
+    case 'competition': return 'bg-amber-500';
+    case 'social': return 'bg-violet-400';
+    case 'institution': return 'bg-sky-500';
+    case 'pr wire': return 'bg-rose-400';
+    default: return 'bg-orbit-muted';
+  }
+}
+
+function StackBar({ label, segs, sub }: { label: string; segs: Array<{ frac: number; color: string }>; sub?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-40 shrink-0 truncate text-orbit-secondary text-[11px]" title={label}>{label}</div>
+      <div className="flex-1 h-3.5 bg-orbit-muted rounded overflow-hidden flex">
+        {segs.map((s, i) => (
+          <div key={i} className={`h-full ${s.color}`} style={{ width: `${Math.max(0, Math.min(100, s.frac * 100))}%` }} />
+        ))}
+      </div>
+      <div className="w-24 shrink-0 text-right text-orbit-secondary text-[11px] tabular-nums">{sub}</div>
     </div>
   );
 }
