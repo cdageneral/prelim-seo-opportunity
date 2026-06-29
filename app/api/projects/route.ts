@@ -67,6 +67,14 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_workstreams_updated_at TIMESTAMP`);
   } catch { /* already exists */ }
+  // v7.318: Profound panel server-side persistence. The list query below selects every schema
+  // column, so these MUST be ensured here too (v7.268 lesson) or the dashboard 500s.
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_data JSONB`);                     // v7.318
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_data_updated_at TIMESTAMP`);      // v7.318
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
