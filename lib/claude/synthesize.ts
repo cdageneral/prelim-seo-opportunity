@@ -15,6 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { groupCategoriesByIntent } from '@/lib/claude/intentGroups';
+import { classifyUmbrellaScopes } from '@/lib/category/scopeModel';   // v7.326: scope gate (core vs adjacent vertical)
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
 import { getLLMProbeSnapshotV2, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
@@ -198,6 +199,13 @@ export interface CategoryBreakdownResult {
   intentGroups?:           Array<{ category: string; name: string; stage: string; keywords: string[] }>;
   brandKeywords?:          string[];
   intentEngine?:           string;
+  // v7.326: AUTO scope per UMBRELLA (path[0]) — 'core' = client competes in this vertical
+  // (≥ CORE_MIN_CLIENT_KW client footprint keywords) | 'adjacent' = competitor-only vertical
+  // the client is absent from. Stored so the scope gate reads it (Const II.8), never re-derives
+  // it lexically at a read site. Brand/location/Other umbrellas are always 'core' (never gated —
+  // the brand guard handles brand verticals). Absent on pre-v7.326 analyses → every umbrella is
+  // treated as core (honest default, Const I.5). Keyed by exact umbrella name.
+  umbrellaScope?:          Record<string, 'core' | 'adjacent'>;
 }
 
 // v7.86: with uncapped Semrush pulls a footprint can be 30k+ keywords →
@@ -406,6 +414,11 @@ export async function generateCategoryBreakdown(
   const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
   const catTypeByName     = new Map<string, CatType>();
   const umbrellaByCat     = new Map<string, string>();             // category (theme) → umbrella (path[0])
+  // v7.326: per-UMBRELLA client-footprint keyword count + the set of brand/location umbrellas,
+  // used to classify each umbrella core (client competes) vs adjacent (competitor-only). EVERY
+  // umbrella is seeded to 0 so a competitor-only vertical (zero client keywords) is still scored.
+  const clientKwByUmbrella = new Map<string, number>();
+  const navUmbrellas       = new Set<string>();
   for (let i = 0; i < merged.length; i++) {
     const kw = merged[i]; if (!kw) continue;
     const P    = pathByIndex.get(i)!;
@@ -430,6 +443,14 @@ export async function generateCategoryBreakdown(
     assignmentByIndex.set(i, cat);
     if (!catTypeByName.has(cat))   catTypeByName.set(cat, type);
     if (!umbrellaByCat.has(cat))   umbrellaByCat.set(cat, umbrella);
+    // v7.326: tally client presence per umbrella for the scope gate. A keyword is "client
+    // footprint" when the client ranks/owns it (clientPosition !== null); gap keywords
+    // (competitor-only) are null and do NOT count toward an umbrella's client presence.
+    if (umbrella) {
+      if (!clientKwByUmbrella.has(umbrella)) clientKwByUmbrella.set(umbrella, 0);
+      if (kw.clientPosition !== null) clientKwByUmbrella.set(umbrella, clientKwByUmbrella.get(umbrella)! + 1);
+      if (type === 'brand' || type === 'location') navUmbrellas.add(umbrella);
+    }
   }
 
   // ── Compute demand sums in TypeScript over the FULL footprint ──────────────
@@ -507,6 +528,16 @@ export async function generateCategoryBreakdown(
   {
     const umbrellas = new Set(result.categories.filter(c => c.parent).map(c => c.parent));
     console.log(`[OrbitIQ] Taxonomy: ${Object.keys(keywordPaths).length} keyword paths, ${umbrellas.size} umbrella(s)`);
+  }
+
+  // ── v7.326: scope gate — classify each umbrella core vs adjacent ────────────
+  // Footprint-derived AUTO classification (the per-project promote/demote override is applied
+  // later at read time, so a promote takes effect without re-analysis). Brand/location/Other
+  // umbrellas are never gated. Stored on the breakdown so the gate reads it (Const II.8).
+  result.umbrellaScope = classifyUmbrellaScopes(clientKwByUmbrella, navUmbrellas);
+  {
+    const adj = Object.entries(result.umbrellaScope).filter(([, s]) => s === 'adjacent').map(([n]) => n);
+    console.log(`[OrbitIQ] Scope: ${Object.keys(result.umbrellaScope).length} umbrella(s), ${adj.length} adjacent (competitor-only)${adj.length ? ` — ${adj.slice(0, 6).join(', ')}${adj.length > 6 ? '…' : ''}` : ''}`);
   }
 
   // ── v7.199: AI search-intent grouping (the "automatic" half of Wayne's hybrid) ──
