@@ -66,6 +66,13 @@ export const projects = pgTable('projects', {
   // runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
   scopeWorkstreams:          jsonb('scope_workstreams').$type<Record<string, string[]>>(),
   scopeWorkstreamsUpdatedAt: timestamp('scope_workstreams_updated_at'),
+  // v7.326: competitor-gap SCOPE-gate overrides — umbrella name → 'core' | 'adjacent'
+  // (promote an adjacent / competitor-only vertical into the gap landscape, or demote a
+  // vertical the auto-rule mis-scored). Persisted per project so a promote/demote survives
+  // reloads and takes effect WITHOUT re-analysis. Empty = pure auto classification. Auto-
+  // migrated at runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
+  scopeOverrides:            jsonb('scope_overrides').$type<Record<string, 'core' | 'adjacent'>>(),
+  scopeOverridesUpdatedAt:   timestamp('scope_overrides_updated_at'),
   // v7.318: Profound AI Visibility computed metrics — SERVER-SIDE persistence so the
   // uploaded-export analysis survives refreshes, new browsers/devices, and is visible to ANY
   // user opening the project URL (replaces the old browser-only IndexedDB store). Holds ONLY
