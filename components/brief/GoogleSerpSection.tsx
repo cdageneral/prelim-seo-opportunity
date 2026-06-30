@@ -1202,6 +1202,62 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       .finally(() => setDbLoaded(true));
   }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
 
+  // ── v7.323: opt-in "Top SERP rivals" enrichment ────────────────────────────
+  // Upload-footprint projects never pull Semrush competitor footprints, so the v7.322
+  // SoV SERP-rival slices have no data. This deliberate, cost-shown action pulls only
+  // the auto-discovered competitor footprints and patches the snapshot; the result is
+  // injected into the donut without a full reload.
+  type SerpPos = Record<string, Array<{ keyword: string; position: number }>>;
+  const [serpOverride, setSerpOverride] = useState<SerpPos | null>(null);
+  const [serpState,    setSerpState]    = useState<'idle' | 'estimating' | 'confirm' | 'running' | 'done' | 'error'>('idle');
+  const [serpEstimate, setSerpEstimate] = useState<{ totalUnits: number; competitors: Array<{ domain: string; keywords: number }>; isCeiling?: boolean } | null>(null);
+  const [serpMsg,      setSerpMsg]      = useState('');
+  const [serpElapsed,  setSerpElapsed]  = useState(0);
+
+  // Live elapsed-seconds indicator while the pull runs — shows the wait is alive (Art IV.2).
+  useEffect(() => {
+    if (serpState !== 'running') return;
+    setSerpElapsed(0);
+    const t = setInterval(() => setSerpElapsed(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [serpState]);
+
+  async function fetchSerpEstimate() {
+    setSerpState('estimating'); setSerpMsg('');
+    try {
+      const r = await fetch(`/api/projects/${projectId}/serp-rivals`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Could not estimate the pull.');
+      setSerpEstimate(d); setSerpState('confirm');
+    } catch (e: any) { setSerpMsg(String(e?.message ?? e)); setSerpState('error'); }
+  }
+
+  async function runSerpPull() {
+    setSerpState('running'); setSerpMsg('');
+    try {
+      const r = await fetch(`/api/projects/${projectId}/serp-rivals`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'The pull failed.');
+      setSerpOverride((d.serpCompetitorPositions ?? {}) as SerpPos);
+      const n = d.rivalsFound ?? 0;
+      setSerpMsg(n > 0
+        ? `Added ${n} SERP rival${n === 1 ? '' : 's'}.`
+        : ((d.warnings && d.warnings[0]) || 'Competitors pulled, but none rank page 1 on your footprint yet.'));
+      setSerpState('done');
+    } catch (e: any) { setSerpMsg(String(e?.message ?? e)); setSerpState('error'); }
+  }
+
+  // Inject the freshly-pulled positions into the analysis the SoV donut reads, so the
+  // slices appear immediately without a page reload. Real positions only — never modeled.
+  const sovAnalysis = serpOverride
+    ? { ...analysis, semrushSnapshot: { ...(analysis?.semrushSnapshot ?? {}), serpCompetitorPositions: serpOverride } }
+    : analysis;
+  const sovHasSerp = !!(
+    (analysis?.semrushSnapshot?.serpCompetitorPositions &&
+      Object.keys(analysis.semrushSnapshot.serpCompetitorPositions).length) ||
+    (serpOverride && Object.keys(serpOverride).length)
+  );
+
   // ── Data ──────────────────────────────────────────────────────────────────
 
   // Merge semrush topKeywords + ranked DB keywords so this panel reflects
@@ -1510,7 +1566,50 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       <div className="grid grid-cols-2 gap-3">
 
         {/* Share of Voice */}
-        <SovPanel analysis={analysis} competitors={competitors} dbKeywords={dbKeywords} clientLabel={projectName ?? domain} />
+        <SovPanel analysis={sovAnalysis} competitors={competitors} dbKeywords={dbKeywords} clientLabel={projectName ?? domain} />
+
+        {/* v7.323: opt-in pull of the top SERP rivals for projects whose snapshot has none
+            (upload-footprint projects, or pre-v7.322 auto snapshots). Costs Semrush units,
+            shown before running; pulls ONLY competitor footprints — uploaded data untouched. */}
+        {!sovHasSerp && (
+          <div style={{ marginTop: '8px', padding: '10px 12px', background: 'var(--c-131325)', border: '1px solid var(--c-2a2a4a)', borderRadius: '8px' }}>
+            <p style={{ fontSize: '11px', color: 'var(--c-8a8ab0)', margin: '0 0 8px', lineHeight: 1.55 }}>
+              <span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>Top SERP rivals</span> aren&rsquo;t loaded for this project. Pull the largest organic competitors from Semrush to add them to the donut as page-1-capture slices. Re-pulls only competitor footprints &mdash; your uploaded data is untouched &mdash; and costs Semrush units.
+            </p>
+
+            {serpState === 'idle' && (
+              <button onClick={fetchSerpEstimate}
+                style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-1a1a38)', color: 'var(--c-c0c0e8)', border: '1px solid var(--c-3a3a5c)' }}>
+                Add top SERP rivals&hellip;
+              </button>
+            )}
+            {serpState === 'estimating' && <span style={{ fontSize: '11px', color: 'var(--c-7070a0)' }}>Estimating cost&hellip;</span>}
+            {serpState === 'confirm' && serpEstimate && (
+              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '7px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)', lineHeight: 1.5 }}>
+                  ~<span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>{serpEstimate.totalUnits.toLocaleString()}</span>{serpEstimate.isCeiling ? ' (max)' : ''} Semrush units &middot; {serpEstimate.competitors.length} competitor{serpEstimate.competitors.length === 1 ? '' : 's'}{serpEstimate.competitors.length > 0 ? `: ${serpEstimate.competitors.map(c => c.domain).join(', ')}` : ''}
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={runSerpPull}
+                    style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-6c63ff)', color: 'var(--c-f0f0ff)', border: '1px solid var(--c-6c63ff)' }}>
+                    Pull now (~{serpEstimate.totalUnits.toLocaleString()} units)
+                  </button>
+                  <button onClick={() => setSerpState('idle')}
+                    style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-7070a0)', border: '1px solid var(--c-3a3a5c)' }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {serpState === 'running' && (
+              <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)' }}>
+                Pulling {serpEstimate?.competitors.length ?? ''} competitor footprint{(serpEstimate?.competitors.length ?? 0) === 1 ? '' : 's'} from Semrush&hellip; {serpElapsed}s
+              </span>
+            )}
+            {serpState === 'done'  && <span style={{ fontSize: '11px', color: 'var(--c-4ade80)' }}>{serpMsg}</span>}
+            {serpState === 'error' && <span style={{ fontSize: '11px', color: 'var(--c-f87171)' }}>{serpMsg}</span>}
+          </div>
+        )}
 
         {/* Volume Opportunity */}
         <div className="orbit-card p-5 flex flex-col gap-4">
