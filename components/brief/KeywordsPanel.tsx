@@ -719,28 +719,34 @@ export default function KeywordsPanel({
     }
   }
 
-  // ── v7.243: per-box "Clear all" — genuinely DELETES that box's data (Wayne) ──────
-  // base       → delete client base keyword rows (keywords/clear scope:client)
-  // competitor → delete competitor keyword rows + competitor entries
+  // ── v7.243 / v7.325: per-box "Clear all" — genuinely DELETES that box's data ─────
+  // base       → delete ALL client data: client rows + the snapshot client footprint
+  //              (topKeywords/demand/taxonomy) so clusters/journeys/exec empty too.
+  // competitor → delete ALL competitor data: competitor rows + tracked competitors +
+  //              the snapshot gap/competitor footprint so the Competitor Gap card → 0.
   // product    → DELETE the product lane of the demand universe (+ its funnel paths)
   // pre        → DELETE the pre-product lane of the demand universe
+  // v7.325 fix: base/competitor now hit /keywords/clear-scope, which clears BOTH the
+  // uploaded rows AND the saved analysis snapshot. The old /keywords/clear only deleted
+  // rows, leaving the snapshot-side count populated (the v7.324 bug: Competitor Gap
+  // stayed full while Local Intent's gap-local rows were wiped). The new route also
+  // removes the tracked competitors, so the separate DELETE /competitors call is gone.
   // After any clear we trigger a FULL refresh so every panel reflects the deletion.
   async function clearBox(kind: ClearKind) {
     if (clearingBox) return;
     setClearingBox(kind);
     setBuildError(null);
     try {
-      if (kind === 'base') {
-        await fetch(`/api/projects/${projectId}/keywords/clear`, {
+      if (kind === 'base' || kind === 'competitor') {
+        const scope = kind === 'base' ? 'client' : 'competitor';
+        const res = await fetch(`/api/projects/${projectId}/keywords/clear-scope`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope: 'client' }),
+          body: JSON.stringify({ scope }),
         });
-      } else if (kind === 'competitor') {
-        await fetch(`/api/projects/${projectId}/keywords/clear`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope: 'competitor' }),
-        });
-        await fetch(`/api/projects/${projectId}/competitors`, { method: 'DELETE' });
+        if (!res.ok) {
+          const msg = await res.json().catch(() => ({}));
+          throw new Error((msg as any)?.error || `clear ${scope} failed (${res.status})`);
+        }
       } else {
         await fetch(`/api/projects/${projectId}/demand-universe`, {
           method: 'DELETE', headers: { 'Content-Type': 'application/json' },
@@ -749,12 +755,13 @@ export default function KeywordsPanel({
       }
       await fetchDb();
       onKeywordsChanged?.();      // refetch keywords across panels
-      onDeepJourneyBuilt?.();     // refetch project + analysis (competitors / demand)
+      onDeepJourneyBuilt?.();     // refetch project + analysis (snapshot now cleared)
     } catch (e) {
       setBuildError(`Clear failed: ${String((e as any)?.message ?? e)}`);
     } finally {
       setClearingBox(null);
       setConfirmClear(null);
+      setCardConfirm(null);       // v7.325: also close the summary-card confirm
     }
   }
   // Segment rows: summary-card filter only (no rank filter) — the category
