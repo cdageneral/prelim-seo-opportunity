@@ -58,6 +58,8 @@ interface Project {
   brandTermsUpdatedAt?:     string | null;
   excludedBrands?:          string[] | null;        // v7.208: competitor-brand blocklist
   excludedBrandsUpdatedAt?: string | null;
+  scopeOverrides?:          Record<string, 'core' | 'adjacent'> | null;   // v7.326: scope-gate promote/demote
+  scopeOverridesUpdatedAt?: string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -284,11 +286,19 @@ export default function ProjectBriefPage() {
     () => (Array.isArray(project?.excludedBrands) ? (project!.excludedBrands as string[]) : []),
     [project],
   );
+  // v7.326: per-project scope-gate overrides (umbrella → 'core'|'adjacent'). Injected onto the
+  // snapshot as `_scopeOverrides` the same way as `_brandTerms`, so every panel's buildKwPool
+  // honours a promote/demote from one source — no per-panel threading (Const II.7). A promote
+  // takes effect on the next render with no re-analysis (the keywords are already in the snapshot).
+  const scopeOverrides = useMemo<Record<string, 'core' | 'adjacent'>>(
+    () => ((project as any)?.scopeOverrides && typeof (project as any).scopeOverrides === 'object' ? (project as any).scopeOverrides : {}),
+    [project],
+  );
   const analysisForPanels = useMemo(
     () => (analysis
-      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands } }
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides } }
       : analysis),
-    [analysis, brandTerms, excludedBrands],
+    [analysis, brandTerms, excludedBrands, scopeOverrides],
   );
 
   // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
@@ -1407,6 +1417,7 @@ export default function ProjectBriefPage() {
               onStartSerpScan={requestSerpScan}                  // v7.132: button delegates to the page-level auto-batch loop
               onOpenCompetitors={() => setShowCompetitors(true)}                 // v7.241: workflow button 2 → Competitors modal
               onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}  // v7.241: workflow buttons 3 & 4 → refetch analysis so new demand backfills everywhere
+              onScopeChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}  // v7.326: promote/demote a vertical → refetch project (new _scopeOverrides) so every panel re-filters
             />
           )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
