@@ -757,13 +757,20 @@ export function ctrAt(p: number): number {
 interface SovRawEntry {
   domain:  string;
   traffic: number;
-  type:    'client' | 'competitor' | 'open';
+  type:    'client' | 'competitor' | 'serp' | 'open';
   color:   string;
 }
 
 // v7.246: competitor slice palette (cyan family — distinct from client purple,
 // muted-open). Cycles if more competitors than colors.
 const SOV_COMP_COLORS = ['var(--c-06b6d4)', 'var(--c-0891b2)', 'var(--c-22d3ee)', 'var(--c-0e7490)', 'var(--c-67e8f9)'];
+
+// v7.322: top-SERP-rival slice palette (amber/gold family — distinct from client
+// purple and the cyan uploaded-competitor family). All three tokens are defined in
+// BOTH light and dark themes (Const IV.6 parity). Cycles if ever more than the colors.
+const SOV_SERP_COLORS = ['var(--c-f59e0b)', 'var(--c-d9a23f)', 'var(--c-fbbf24)'];
+// How many top SERP rivals to surface as slices (Wayne, 2026-06-30: "top 3 sites").
+const SOV_SERP_TOP_N = 3;
 
 interface SovArc extends SovRawEntry {
   pct:        number;
@@ -835,7 +842,15 @@ export interface SovComputed {
   // surfaced as honest gaps (I.5), never given a modeled or zero slice as fact.
   compEntries:     Array<{ domain: string; capturedClicks: number; pct: number; kwCount: number }>;
   compGaps:        Array<{ domain: string; rows: number; hasPositions: boolean; minPos: number | null }>;
-  // donut slices: [client captured, ...competitors, open/uncaptured]
+  // v7.322 — top SERP rivals on the client footprint by page-1 click capture. Same
+  // basis/denominator as compEntries (Σ footprint-volume × CTR at the rival's real
+  // page-1 position over shared keywords), but sourced from Semrush auto-discovered
+  // competitor footprints already pulled for the gap analysis (snapshot
+  // `serpCompetitorPositions`) rather than uploaded CSVs. Ranked desc, capped at
+  // SOV_SERP_TOP_N. A domain already shown as an uploaded competitor is NOT repeated
+  // here. Empty when the snapshot predates v7.322 or has no overlap (honest gap, I.5).
+  serpEntries:     Array<{ domain: string; capturedClicks: number; pct: number; kwCount: number }>;
+  // donut slices: [client captured, ...uploaded competitors, ...top SERP rivals, open/uncaptured]
   rawEntries:      SovRawEntry[];
   total:           number;   // = availableClicks (donut denominator)
 }
@@ -935,8 +950,42 @@ export function computeSov(
       minPos:       isFinite(d.minPos) ? d.minPos : null,
     }));
 
+  // ── v7.322: top SERP rivals on the SAME footprint + denominator ─────────────
+  // Each Semrush auto-discovered competitor's slice = Σ(live footprint volume × CTR at
+  // its real page-1 position) over keywords it shares with the client footprint —
+  // identical basis to the uploaded-competitor slices above, just sourced from the
+  // snapshot's `serpCompetitorPositions` (real positions already pulled for the gap
+  // analysis, zero extra Semrush units) instead of uploaded CSV rows. Applying the LIVE
+  // `footprintVol` keeps the denominator identical to the client's (Const II.7). A
+  // domain already shown as an uploaded competitor is skipped so the two sections never
+  // double-list one site. Ranked desc, capped at SOV_SERP_TOP_N (Wayne: top 3 sites).
+  const snapSerpPos     = (snap.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>;
+  const uploadedDomains = new Set(compDiag.keys());   // every competitor that had dbKeywords rows
+  type SovCompEntry     = { domain: string; capturedClicks: number; pct: number; kwCount: number };
+  const serpEntries: SovCompEntry[] = Object.entries(snapSerpPos)
+    .map(([rawDom, positions]): SovCompEntry | null => {
+      const dom = normSovDomain(rawDom);
+      if (!dom || dom === clientNorm || uploadedDomains.has(dom)) return null;
+      let captured = 0; let kw = 0;
+      for (const pos of (positions ?? [])) {
+        const p = pos.position;
+        if (p == null || p < 1 || p > 10) continue;
+        const k = (pos.keyword ?? '').toLowerCase().trim();
+        if (!footprintVol.has(k)) continue;              // live footprint overlap only — stable denominator
+        captured += (footprintVol.get(k) ?? 0) * ctrAt(p);
+        kw++;
+      }
+      return captured > 0
+        ? { domain: dom, capturedClicks: captured, pct: availableClicks > 0 ? captured / availableClicks : 0, kwCount: kw }
+        : null;
+    })
+    .filter((e): e is SovCompEntry => e != null)
+    .sort((a, b) => b.capturedClicks - a.capturedClicks)
+    .slice(0, SOV_SERP_TOP_N);
+
   const compCapTotal = compEntries.reduce((s, c) => s + c.capturedClicks, 0);
-  const openClicks   = Math.max(0, availableClicks - capturedClicks - compCapTotal);
+  const serpCapTotal = serpEntries.reduce((s, c) => s + c.capturedClicks, 0);
+  const openClicks   = Math.max(0, availableClicks - capturedClicks - compCapTotal - serpCapTotal);
 
   const rawEntries: SovRawEntry[] = availableClicks > 0
     ? [
@@ -946,6 +995,12 @@ export function computeSov(
           traffic: c.capturedClicks,
           type:    'competitor' as const,
           color:   SOV_COMP_COLORS[idx % SOV_COMP_COLORS.length],
+        })),
+        ...serpEntries.map((c, idx) => ({
+          domain:  c.domain,
+          traffic: c.capturedClicks,
+          type:    'serp' as const,
+          color:   SOV_SERP_COLORS[idx % SOV_SERP_COLORS.length],
         })),
         { domain: 'Open / uncaptured demand', traffic: openClicks, type: 'open' as const, color: 'var(--c-2a2a44)' },
       ]
@@ -964,6 +1019,7 @@ export function computeSov(
     ctrSource:       CTR_SOURCE_LABEL,
     compEntries,
     compGaps,
+    serpEntries,
     rawEntries,
     total:           availableClicks,
   };
@@ -1002,7 +1058,9 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
   });
   const clientArc = arcs.find(a => a.type === 'client');
   const compArcs  = arcs.filter(a => a.type === 'competitor');
+  const serpArcs  = arcs.filter(a => a.type === 'serp');   // v7.322: top SERP rivals
   const openArc   = arcs.find(a => a.type === 'open');
+  const anyCompArcs = compArcs.length > 0 || serpArcs.length > 0;
   const sovDisplay = sovPct > 0 && sovPct < 0.01 ? (sovPct * 100).toFixed(1) : String(Math.round(sovPct * 100));
 
   return (
@@ -1053,14 +1111,28 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           {compArcs.length > 0 && (
             <>
               <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
-                Competitors (page-1 capture)
+                {serpArcs.length > 0 ? 'Tracked competitors (page-1 capture)' : 'Competitors (page-1 capture)'}
               </p>
               {compArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
             </>
           )}
 
+          {/* v7.322: top SERP rivals — Semrush auto-discovered organic competitors,
+              scored on the SAME page-1-capture basis + denominator from real positions. */}
+          {serpArcs.length > 0 && (
+            <>
+              <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-d9a23f)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '8px 0 3px' }}>
+                Top SERP rivals (page-1 capture)
+              </p>
+              {serpArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+              <p style={{ fontSize: '9px', color: 'var(--c-55557a)', lineHeight: 1.5, margin: '3px 0 0' }}>
+                largest organic rivals on your footprint &middot; real page-1 positions, same denominator
+              </p>
+            </>
+          )}
+
           {openArc && (
-            <div style={{ marginTop: compArcs.length > 0 ? '7px' : '0', paddingTop: compArcs.length > 0 ? '5px' : '0', borderTop: compArcs.length > 0 ? '1px solid var(--c-1a1a2e)' : 'none' }}>
+            <div style={{ marginTop: anyCompArcs ? '7px' : '0', paddingTop: anyCompArcs ? '5px' : '0', borderTop: anyCompArcs ? '1px solid var(--c-1a1a2e)' : 'none' }}>
               <LegendRow arc={openArc} />
             </div>
           )}
@@ -1068,7 +1140,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, margin: '6px 0 0' }}>
             Client wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
             {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint
-            {compArcs.length > 0 ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
+            {anyCompArcs ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
           </p>
         </div>
       </div>
