@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData, serpCellHasLocalPack } from '@/lib/utils/kwVolume';
+import { buildScopeResolver } from '@/lib/category/scopeModel';   // v7.326: scope gate (adjacent-vertical staging)
 import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
@@ -102,6 +103,9 @@ interface Props {
   // demand topics backfill into every panel (Const II.3).
   onOpenCompetitors?:  () => void;
   onDeepJourneyBuilt?: () => void;
+  // v7.326: fired after a scope-gate promote/demote persists, so the page refetches the project
+  // (new _scopeOverrides) and every panel re-filters the now-promoted/demoted vertical.
+  onScopeChanged?:     () => void;
 }
 
 // ─── Category breakdown types ─────────────────────────────────────────────────
@@ -478,7 +482,7 @@ export default function KeywordsPanel({
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
-  onOpenCompetitors, onDeepJourneyBuilt,
+  onOpenCompetitors, onDeepJourneyBuilt, onScopeChanged,
 }: Props) {
   const clientDomain      = (analysis?.semrushSnapshot?.domain as string) || domain || '';
   const competitorDomains = competitors;
@@ -841,6 +845,63 @@ export default function KeywordsPanel({
       clientCount:   brandedCount + nonBrandCount,             // client footprint — for the "N client + M gap" sub-line
     };
   }, [scopedSummaryRows]);
+
+  // ── v7.326: ADJACENT VERTICALS (scope-gate staging) ────────────────────────
+  // Competitor-only umbrellas the client doesn't compete in (e.g. "Car Insurance" for a
+  // lender). They are EXCLUDED from every panel + all volume totals by buildKwPool's default
+  // scope filter; this is the ONLY place they surface. Built with includeAdjacent:true and
+  // grouped by umbrella so the user can PROMOTE a vertical into the gap landscape (the client
+  // is expanding into it) — a flag flip, no re-pull (the keywords are already in the snapshot).
+  const adjacentVerticals = useMemo(() => {
+    const snap = analysis?.semrushSnapshot;
+    if (!snap) return [] as Array<{ umbrella: string; count: number; vol: number }>;
+    const resolver = buildScopeResolver(snap, {});            // reads _scopeOverrides off the snapshot
+    if (resolver.adjacentUmbrellas.length === 0) return [];
+    const fullPool = buildKwPool({
+      semrushSnapshot: snap, uploadedKeywords: dbKeywords, clientDomain,
+      competitorDomains, brandTerms, includeAdjacent: true,
+    });
+    const byUmb = new Map<string, { count: number; vol: number }>();
+    for (const it of fullPool) {
+      const u = resolver.umbrellaOfKeyword(it.keyword.toLowerCase().trim());
+      if (!u || !resolver.isAdjacent(u)) continue;
+      const e = byUmb.get(u) ?? { count: 0, vol: 0 };
+      e.count += 1;
+      e.vol   += (it.searchVolume ?? 0) * 12;                 // annual, to match the summary cards
+      byUmb.set(u, e);
+    }
+    return Array.from(byUmb.entries())
+      .map(([umbrella, v]) => ({ umbrella, ...v }))
+      .sort((a, b) => b.vol - a.vol);
+  }, [analysis, dbKeywords, clientDomain, competitorDomains, brandTerms]);
+
+  const [adjacentOpen, setAdjacentOpen] = useState(false);
+  const [scopeBusy,    setScopeBusy]    = useState<string | null>(null);   // umbrella being promoted
+
+  // Promote an adjacent vertical into the gap landscape (or demote back). Persists the full
+  // override map, then asks the page to refetch the project so every panel re-filters.
+  async function setVerticalScope(umbrella: string, to: 'core' | 'adjacent') {
+    if (!projectId || !umbrella) return;
+    setScopeBusy(umbrella);
+    try {
+      const cur: Record<string, 'core' | 'adjacent'> = {
+        ...(((analysis?.semrushSnapshot as any)?._scopeOverrides) ?? {}),
+      };
+      if (to === 'core') cur[umbrella] = 'core';
+      else               delete cur[umbrella];                // demote back to the auto (adjacent) classification
+      const res = await fetch(`/api/projects/${projectId}/scope-overrides`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ overrides: cur }),
+      });
+      if (!res.ok) throw new Error(`scope-overrides ${res.status}`);
+      onScopeChanged?.();                                     // page refetches project → all panels re-filter
+    } catch (err) {
+      console.error('[OrbitIQ] promote vertical failed', err);
+    } finally {
+      setScopeBusy(null);
+    }
+  }
 
   // ── v7.252: READ-ONLY provenance of the All Keywords count ──────────────────
   // Partitions the SAME rows the All Keywords card counts by their REAL source so
@@ -1701,6 +1762,62 @@ export default function KeywordsPanel({
           </div>
         );
       })()}
+
+      {/* ── v7.326: Adjacent verticals (competitor-only) — scope-gate staging ────── */}
+      {/* Competitor gap umbrellas the client doesn't compete in. EXCLUDED from every    */}
+      {/* panel + all volume totals (so they never inflate the footprint); surfaced ONLY */}
+      {/* here. Promote one into the gap landscape when the client is expanding into it.  */}
+      {adjacentVerticals.length > 0 && (
+        <div style={{ margin: '14px 0 4px', border: '1px solid var(--c-3a2508)', borderRadius: 10, background: 'var(--c-1a1008)', overflow: 'hidden' }}>
+          <button
+            onClick={() => setAdjacentOpen(o => !o)}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+          >
+            <i className={`ti ti-chevron-${adjacentOpen ? 'down' : 'right'}`} style={{ color: 'var(--c-c99c4a)', fontSize: 14 }} />
+            <i className="ti ti-eye-off" style={{ color: 'var(--c-c99c4a)', fontSize: 14 }} />
+            <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-c99c4a)' }}>
+              Adjacent verticals — competitor-only
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--c-8a8aa8)' }}>
+              {adjacentVerticals.length} vertical{adjacentVerticals.length === 1 ? '' : 's'} · excluded from totals
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-6a6a90)' }}>
+              {adjacentVerticals.reduce((s, v) => s + v.count, 0).toLocaleString()} kw ·{' '}
+              {adjacentVerticals.reduce((s, v) => s + v.vol, 0).toLocaleString()}/yr quarantined
+            </span>
+          </button>
+          {adjacentOpen && (
+            <div style={{ padding: '4px 12px 12px' }}>
+              <div style={{ fontSize: 11, color: 'var(--c-8a8aa8)', padding: '2px 2px 10px', lineHeight: 1.5 }}>
+                These are competitor gap keywords in verticals your client doesn’t compete in, so they’re kept
+                out of the footprint, volume totals and every other panel. If the client is moving into one,
+                <b style={{ color: 'var(--c-c99c4a)' }}> Add to landscape</b> to count it as a competitor gap.
+              </div>
+              {adjacentVerticals.map(v => (
+                <div key={v.umbrella} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderTop: '1px solid var(--c-3a2508)' }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-c8c8e8)' }}>{v.umbrella}</span>
+                  <span style={{ fontSize: 10.5, fontFamily: 'monospace', color: 'var(--c-6a6a90)' }}>
+                    {v.count.toLocaleString()} kw · {v.vol.toLocaleString()}/yr
+                  </span>
+                  <button
+                    onClick={() => setVerticalScope(v.umbrella, 'core')}
+                    disabled={scopeBusy === v.umbrella}
+                    style={{
+                      marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
+                      fontSize: 11.5, fontWeight: 600, padding: '5px 12px', borderRadius: 999,
+                      color: 'var(--c-46cce0)', background: 'transparent', border: '1px solid var(--c-46cce0)',
+                      cursor: scopeBusy === v.umbrella ? 'default' : 'pointer', opacity: scopeBusy === v.umbrella ? 0.5 : 1,
+                    }}
+                  >
+                    <i className={`ti ti-${scopeBusy === v.umbrella ? 'loader-2' : 'plus'}`} style={{ fontSize: 13 }} />
+                    {scopeBusy === v.umbrella ? 'Adding…' : 'Add to landscape'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── v7.241: Workflow bar — 4 build stages (Wayne). Sits between the summary */}
       {/* cards and the journey toggle. (1) client base keywords — status only,     */}
