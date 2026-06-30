@@ -101,6 +101,17 @@ export interface SemrushSnapshot {
   // and each competitor are directly comparable. Absent on pre-v7.136 snapshots.
   competitorPositionDist?: Record<string, Record<string, number>>;  // counts
   competitorPositionVol?:  Record<string, Record<string, number>>;  // monthly volume
+  // v7.322: per-competitor PAGE-1 ranks ON THE CLIENT FOOTPRINT, keyed by competitor
+  // domain. Each entry is the competitor's real Semrush position (1–10) for a keyword
+  // that is also in the client's ranked footprint (topKeywords). Computed from the
+  // competitor organic rows ALREADY pulled for the gap analysis — zero additional
+  // Semrush units. The Share-of-Voice panel reads these to score each competitor's
+  // page-1 click CAPTURE on the SAME footprint + denominator as the client (Const
+  // I.1 real positions; II.7 shared denominator). Unlike `gapKeywords` (which strips
+  // keywords the client also ranks for, so a competitor's share would be undercounted),
+  // this RETAINS the full overlap — it is the competitor's true page-1 share, not a
+  // gap floor. Absent on pre-v7.322 snapshots (panel falls back to uploaded competitors).
+  serpCompetitorPositions?: Record<string, Array<{ keyword: string; position: number }>>;
   fetchedAt:    string;
   warnings?:    string[];                // v7.96: non-fatal problems during the pull (e.g. failed gap fetches)
   // v7.286: REAL local-pack signal rolled up from the footprint's `Fl` SERP-features.
@@ -566,6 +577,36 @@ export async function getSemrushSnapshot(
     competitorPositionVol[comp]  = buildCompetitorVolumeDistribution(rows);
   });
 
+  // v7.322 — Top SERP competitor PAGE-1 capture inputs (zero extra Semrush units).
+  // gapResults[i] is competitor i's FULL organic footprint (with positions), pulled
+  // above for the gap analysis BEFORE any gap filtering. Intersect it with the CLIENT
+  // footprint keyword set (topKeywords) and keep only the competitor's page-1 ranks
+  // (pos 1–10). The Share-of-Voice panel scores each competitor's page-1 click capture
+  // from these on the SAME footprint + denominator as the client (Const I.1 — real
+  // Semrush positions; II.7 — shared denominator). Crucially, this RETAINS keywords the
+  // client also ranks for (which `gapKeywords` strips), so it is the competitor's true
+  // page-1 share, not an opportunity-gap floor. Volumes are NOT stored here — the panel
+  // applies the live footprint volume per keyword, so the denominator stays identical
+  // to the client's and to the Total/Ranked/Pg-1 cards.
+  const clientFootprintKeys = new Set(topKeywords.map(k => k.keyword.toLowerCase().trim()));
+  const serpCompetitorPositions: Record<string, Array<{ keyword: string; position: number }>> = {};
+  gapDomains.forEach((comp, i) => {
+    const rows = gapResults[i] ?? [];
+    if (rows.length === 0) return;
+    const seenKw = new Set<string>();
+    const hits: Array<{ keyword: string; position: number }> = [];
+    for (const r of rows) {
+      const p = r.competitorPosition;
+      if (p == null || p < 1 || p > 10) continue;          // page-1 window — matches the SoV capture math
+      const k = (r.keyword ?? '').toLowerCase().trim();
+      if (!k || !clientFootprintKeys.has(k)) continue;      // overlap with the client footprint only
+      if (seenKw.has(k)) continue;                          // one rank per keyword (domain_organic is 1 row/kw)
+      seenKw.add(k);
+      hits.push({ keyword: k, position: p });
+    }
+    if (hits.length > 0) serpCompetitorPositions[comp] = hits;
+  });
+
   // Build a set of keywords the client already ranks for (from topKeywords).
   // These should never appear as gap keywords — competitor ranking for them too is not a gap.
   const clientRankedTexts = new Set(topKeywords.map(k => k.keyword.toLowerCase().trim()));
@@ -667,6 +708,7 @@ export async function getSemrushSnapshot(
     positionVol,
     competitorPositionDist,
     competitorPositionVol,
+    serpCompetitorPositions,
     fetchedAt: new Date().toISOString(),
     warnings,
     localPackKeywords,
