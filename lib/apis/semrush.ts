@@ -381,6 +381,133 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
   }));
 }
 
+// ─── Top SERP rivals (page-1 ranks on the client footprint) ───────────────────
+
+// v7.323 — SINGLE SOURCE OF TRUTH for the snapshot's `serpCompetitorPositions`.
+// Given the CLIENT footprint keywords and a set of competitor domains each carrying
+// their full organic rows (with positions), keep, per domain, the competitor's page-1
+// ranks (pos 1–10) for keywords that are ALSO in the client footprint. Retains
+// client-overlap keywords (unlike `gapKeywords`, which strips them) so the
+// Share-of-Voice panel scores each rival's TRUE page-1 capture on the same footprint
+// + denominator as the client (Const I.1 real positions; II.7 shared denominator).
+// Used by getSemrushSnapshot (auto path) AND enrichSerpCompetitors (upload path).
+export function buildSerpCompetitorPositions(
+  topKeywords: Array<{ keyword: string }>,
+  perDomain:   Array<{ domain: string; rows: SemrushKeywordGap[] }>,
+): Record<string, Array<{ keyword: string; position: number }>> {
+  const clientFootprintKeys = new Set(topKeywords.map(k => (k.keyword ?? '').toLowerCase().trim()));
+  const out: Record<string, Array<{ keyword: string; position: number }>> = {};
+  for (const { domain, rows } of perDomain) {
+    if (!rows || rows.length === 0) continue;
+    const seenKw = new Set<string>();
+    const hits: Array<{ keyword: string; position: number }> = [];
+    for (const r of rows) {
+      const p = r.competitorPosition;
+      if (p == null || p < 1 || p > 10) continue;          // page-1 window — matches the SoV capture math
+      const k = (r.keyword ?? '').toLowerCase().trim();
+      if (!k || !clientFootprintKeys.has(k)) continue;      // overlap with the client footprint only
+      if (seenKw.has(k)) continue;                          // one rank per keyword (domain_organic is 1 row/kw)
+      seenKw.add(k);
+      hits.push({ keyword: k, position: p });
+    }
+    if (hits.length > 0) out[domain] = hits;
+  }
+  return out;
+}
+
+// v7.323 — Competitor-ONLY enrichment for UPLOAD-footprint projects. Their snapshot is
+// built by buildSnapshotFromUploads, which never pulls Semrush competitor footprints, so
+// the SoV panel has no SERP rivals. This pulls the Semrush auto-discovered organic
+// competitors (+ any manual ones) and their FULL footprints (the same domain_organic
+// pulls getSemrushSnapshot makes), then intersects with the client's UPLOADED footprint
+// (topKeywords) to produce `serpCompetitorPositions`. The client footprint is NOT
+// re-pulled — only competitor footprints — so an upload project's own data is untouched.
+// Bounded to 5 competitor domains (same cap as the auto path). Usage is auto-recorded by
+// semrushGet under the current usage-project context.
+export async function enrichSerpCompetitors(
+  clientDomain:      string,
+  topKeywords:       Array<{ keyword: string }>,
+  manualCompetitors: string[] = [],
+  competitorVolMin = 0,
+  database = 'us',
+): Promise<{
+  serpCompetitorPositions: Record<string, Array<{ keyword: string; position: number }>>;
+  competitorsPulled:       string[];
+  warnings:                string[];
+}> {
+  const warnings: string[] = [];
+  const autoCompetitors = await getCompetitors(clientDomain, database).catch(() => [] as SemrushCompetitor[]);
+  const autoSet    = new Set(autoCompetitors.map(c => c.domain));
+  const gapDomains = [
+    ...autoCompetitors.map(c => c.domain),
+    ...manualCompetitors.filter(d => !autoSet.has(d)),
+  ].filter(Boolean).slice(0, 5);
+
+  if (gapDomains.length === 0) {
+    warnings.push(
+      'No organic competitors found for this domain (Semrush auto-discovery returned none and ' +
+      'no manual competitors are set), so there are no SERP rivals to add.'
+    );
+    return { serpCompetitorPositions: {}, competitorsPulled: [], warnings };
+  }
+
+  const perDomain = await Promise.all(gapDomains.map(async comp => {
+    try {
+      const rows = await getKeywordGap(clientDomain, comp, 0, competitorVolMin, database);
+      return { domain: comp, rows };
+    } catch (err) {
+      warnings.push(`Competitor footprint pull for ${comp} failed: ${String((err as any)?.message ?? err)}.`);
+      return { domain: comp, rows: [] as SemrushKeywordGap[] };
+    }
+  }));
+
+  const serpCompetitorPositions = buildSerpCompetitorPositions(topKeywords, perDomain);
+  const competitorsPulled = perDomain.filter(d => d.rows.length > 0).map(d => d.domain);
+  if (Object.keys(serpCompetitorPositions).length === 0) {
+    warnings.push(
+      'Competitors were pulled, but none rank page 1 on your uploaded footprint, so there are no ' +
+      'SERP-rival slices to add yet (honest gap — no modeled slice).'
+    );
+  }
+  return { serpCompetitorPositions, competitorsPulled, warnings };
+}
+
+// v7.323 — Semrush unit estimate for enrichSerpCompetitors (competitor footprints only;
+// the client footprint is NOT re-pulled). Mirrors estimateSemrushPull's per-domain count
+// logic. The estimate is a CEILING when a competitor volume floor is set (filtered rows
+// are fetched/billed at fewer than the unfiltered footprint count).
+export async function estimateSerpCompetitorPull(
+  domain: string,
+  manualCompetitors: string[] = [],
+  competitorVolMin = 0,
+  database = 'us',
+): Promise<{
+  competitors: Array<{ domain: string; keywords: number }>;
+  totalRows:   number;
+  totalUnits:  number;
+  isCeiling:   boolean;
+}> {
+  const autoCompetitors = await getCompetitors(domain, database).catch(() => [] as SemrushCompetitor[]);
+  const autoSet    = new Set(autoCompetitors.map(c => c.domain));
+  const gapDomains = [
+    ...autoCompetitors.map(c => c.domain),
+    ...manualCompetitors.filter(d => !autoSet.has(d)),
+  ].filter(Boolean).slice(0, 5);
+
+  const competitors: Array<{ domain: string; keywords: number }> = [];
+  for (const d of gapDomains) {
+    const known = autoCompetitors.find(c => c.domain === d)?.organicKeywords;
+    if (known && known > 0) {
+      competitors.push({ domain: d, keywords: known });
+    } else {
+      const ov = await getDomainOverview(d, database).catch(() => null);
+      competitors.push({ domain: d, keywords: ov?.organicKeywords ?? 0 });
+    }
+  }
+  const totalRows = competitors.reduce((s, c) => s + c.keywords, 0);
+  return { competitors, totalRows, totalUnits: totalRows * 10, isCeiling: competitorVolMin > 0 };
+}
+
 // ─── Keyword Gap ──────────────────────────────────────────────────────────────
 
 // v7.86: cap removed — pulls the competitor's FULL organic footprint
@@ -588,24 +715,12 @@ export async function getSemrushSnapshot(
   // page-1 share, not an opportunity-gap floor. Volumes are NOT stored here — the panel
   // applies the live footprint volume per keyword, so the denominator stays identical
   // to the client's and to the Total/Ranked/Pg-1 cards.
-  const clientFootprintKeys = new Set(topKeywords.map(k => k.keyword.toLowerCase().trim()));
-  const serpCompetitorPositions: Record<string, Array<{ keyword: string; position: number }>> = {};
-  gapDomains.forEach((comp, i) => {
-    const rows = gapResults[i] ?? [];
-    if (rows.length === 0) return;
-    const seenKw = new Set<string>();
-    const hits: Array<{ keyword: string; position: number }> = [];
-    for (const r of rows) {
-      const p = r.competitorPosition;
-      if (p == null || p < 1 || p > 10) continue;          // page-1 window — matches the SoV capture math
-      const k = (r.keyword ?? '').toLowerCase().trim();
-      if (!k || !clientFootprintKeys.has(k)) continue;      // overlap with the client footprint only
-      if (seenKw.has(k)) continue;                          // one rank per keyword (domain_organic is 1 row/kw)
-      seenKw.add(k);
-      hits.push({ keyword: k, position: p });
-    }
-    if (hits.length > 0) serpCompetitorPositions[comp] = hits;
-  });
+  // v7.323: extracted to buildSerpCompetitorPositions() (single source of truth) so
+  // the upload-footprint enrichment path (enrichSerpCompetitors) computes it identically.
+  const serpCompetitorPositions = buildSerpCompetitorPositions(
+    topKeywords,
+    gapDomains.map((comp, i) => ({ domain: comp, rows: gapResults[i] ?? [] })),
+  );
 
   // Build a set of keywords the client already ranks for (from topKeywords).
   // These should never appear as gap keywords — competitor ranking for them too is not a gap.
