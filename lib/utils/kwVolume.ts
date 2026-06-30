@@ -13,6 +13,8 @@
  *   uploadedKws   — exclude blocked, dedupe, NO threshold
  */
 
+import { buildScopeResolver, type UmbrellaScope } from '@/lib/category/scopeModel';   // v7.326: scope gate
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface KwPoolItem {
@@ -54,6 +56,14 @@ export interface KwPoolOptions {
   // (`semrushSnapshot._demandUniverse.topics`) into the pool as origin:'demand'.
   // Defaults FALSE so every existing caller is byte-for-byte unchanged.
   includeDemand?:     boolean;
+  // v7.326: scope gate. `scopeOverrides` = per-project umbrella promote/demote
+  // (umbrella name → 'core'|'adjacent'); override wins over the stored auto scope.
+  // By default the pool DROPS every keyword in an ADJACENT (competitor-only) umbrella so
+  // an out-of-scope vertical (e.g. "car insurance" for a lender) never inflates footprint
+  // or volume and never reaches a panel. The staging panel passes includeAdjacent:true to
+  // see them. Pre-v7.326 snapshots have no `umbrellaScope` → nothing is adjacent → unchanged.
+  scopeOverrides?:    Record<string, UmbrellaScope>;
+  includeAdjacent?:   boolean;
 }
 
 export interface VolumeMetrics {
@@ -317,6 +327,8 @@ export function buildKwPool({
   competitorVolMin               = 0,
   brandTerms                     = [],
   includeDemand                  = false,
+  scopeOverrides                 = {},
+  includeAdjacent                = false,
 }: KwPoolOptions): KwPoolItem[] {
   // v7.206: brand vocabulary. Prefer the explicit option; otherwise fall back to
   // `_brandTerms` carried on the snapshot (injected once at page load from
@@ -589,6 +601,21 @@ export function buildKwPool({
       };
       pool.push(item);
       byKw.set(kwLow, item);
+    }
+  }
+
+  // ── v7.326: SCOPE GATE (single chokepoint) ─────────────────────────────────
+  // Drop every keyword whose umbrella is ADJACENT (a competitor-only vertical the client
+  // doesn't compete in). Because every panel + scan route builds its pool here, this one
+  // filter removes out-of-scope verticals from ALL of them at once — they never inflate
+  // footprint/volume and never render (the brand-guard leak pattern is avoided by filtering
+  // at the source, not per panel). The staging panel passes includeAdjacent to see them.
+  // Honest fallback: pre-v7.326 snapshots carry no umbrellaScope → resolver marks nothing
+  // adjacent → pool is byte-for-byte unchanged (Const I.5).
+  if (!includeAdjacent) {
+    const scope = buildScopeResolver(snap, scopeOverrides);
+    if (scope.adjacentUmbrellas.length > 0) {
+      return pool.filter(p => !scope.isAdjacentKeyword(p.keyword.toLowerCase().trim()));
     }
   }
 
