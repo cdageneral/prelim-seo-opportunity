@@ -528,6 +528,14 @@ export default function KeywordsPanel({
   type ClearKind = 'base' | 'competitor' | 'product' | 'pre';
   const [confirmClear, setConfirmClear] = useState<ClearKind | null>(null);
   const [clearingBox,  setClearingBox]  = useState<ClearKind | null>(null);
+  // v7.324: per-summary-card trash. Two scopes, both genuine scoped DB deletes
+  // (reuse clearBox → /keywords/clear, Const "delete, never hide"):
+  //   'client'     → ALL client data at once (branded + non-branded + local are
+  //                  the same client footprint, so a trash on any of those three
+  //                  cards erases all three together — Wayne's decision).
+  //   'competitor' → all competitor-gap data (+ tracked competitor entries).
+  // Separate state from the workflow bar's confirmClear so the two don't cross-fire.
+  const [cardConfirm, setCardConfirm] = useState<'client' | 'competitor' | null>(null);
   // v7.244: shared minimum-volume floor for the product & pre-product builds (Const I.6
   // opt-in). 0 = no floor. Applied to both "Run expansion" and "Run build".
   const [minVolume, setMinVolume] = useState<number>(0);
@@ -1471,6 +1479,7 @@ export default function KeywordsPanel({
           dimBdr:   string;
           icon:     string;
           subtitle: string;
+          clearScope?: 'client' | 'competitor';   // v7.324: which trash this card shows
         }> = [
           {
             id: 'all', label: 'All Keywords', count: kwSummary.allCount, vol: kwSummary.allVol,
@@ -1485,13 +1494,13 @@ export default function KeywordsPanel({
             id: 'branded', label: 'Branded', count: kwSummary.brandedCount, vol: kwSummary.brandedVol,
             accent: 'var(--c-c882ff)', activeBg: 'var(--ca-200-130-255-0_10)', activeBdr: 'var(--ca-200-130-255-0_45)',
             dimBg: 'var(--ca-200-130-255-0_04)', dimBdr: 'var(--ca-200-130-255-0_15)',
-            icon: 'ti-tag', subtitle: 'Client or competitor brand',
+            icon: 'ti-tag', subtitle: 'Client or competitor brand', clearScope: 'client',
           },
           {
             id: 'nonBranded', label: 'Non-branded', count: kwSummary.nonBrandCount, vol: kwSummary.nonBrandVol,
             accent: 'var(--c-38bdf8)', activeBg: 'var(--ca-56-189-248-0_10)', activeBdr: 'var(--ca-56-189-248-0_45)',
             dimBg: 'var(--ca-56-189-248-0_04)', dimBdr: 'var(--ca-56-189-248-0_15)',
-            icon: 'ti-search', subtitle: 'Generic / category terms',
+            icon: 'ti-search', subtitle: 'Generic / category terms', clearScope: 'client',
           },
           {
             // v7.287: Local Intent — keywords that trigger a Google Local Pack (map pack). Sub-line
@@ -1507,22 +1516,37 @@ export default function KeywordsPanel({
               : (!localDataPresent
                   ? '⚠ No SERP-features in upload — re-upload to populate'
                   : `${kwSummary.localClientCount.toLocaleString()} client + ${kwSummary.localGapCount.toLocaleString()} gap`),
+            clearScope: 'client',
           },
           {
             id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,
             accent: 'var(--c-f59e0b)', activeBg: 'var(--ca-245-158-11-0_10)', activeBdr: 'var(--ca-245-158-11-0_45)',
             dimBg: 'var(--ca-245-158-11-0_04)', dimBdr: 'var(--ca-245-158-11-0_15)',
-            icon: 'ti-arrows-diff', subtitle: 'Competitor ranks, client doesn\'t',
+            icon: 'ti-arrows-diff', subtitle: 'Competitor ranks, client doesn\'t', clearScope: 'competitor',
           },
         ];
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
             {KW_CARDS.map(card => {
               const active = filter === card.id;
+              // v7.324: per-card trash — show only when that scope actually has data
+              // to delete (honest: no dangling delete on an empty box).
+              const showTrash = dbLoaded && !!card.clearScope && (
+                card.clearScope === 'client'
+                  ? (kwSummary.clientCount ?? 0) > 0
+                  : (kwSummary.gapCount ?? 0) > 0
+              );
+              const confirming = cardConfirm === card.clearScope && !!card.clearScope;
+              const isClearing = card.clearScope === 'client'
+                ? clearingBox === 'base'
+                : card.clearScope === 'competitor' ? clearingBox === 'competitor' : false;
               return (
-                <button
+                <div
                   key={card.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setFilter(card.id)}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(card.id); } }}
                   style={{
                     background:   active ? card.activeBg : card.dimBg,
                     border:       `1px solid ${active ? card.activeBdr : card.dimBdr}`,
@@ -1534,10 +1558,10 @@ export default function KeywordsPanel({
                     outline:      'none',
                   }}
                   onMouseEnter={e => {
-                    if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.activeBdr;
+                    if (!active) (e.currentTarget as HTMLDivElement).style.borderColor = card.activeBdr;
                   }}
                   onMouseLeave={e => {
-                    if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = card.dimBdr;
+                    if (!active) (e.currentTarget as HTMLDivElement).style.borderColor = card.dimBdr;
                   }}
                 >
                   {/* Icon + label */}
@@ -1549,6 +1573,25 @@ export default function KeywordsPanel({
                     {active && (
                       <span style={{ marginLeft: 'auto', fontSize: 8, fontWeight: 700, background: card.activeBg, border: `1px solid ${card.activeBdr}`, color: card.accent, borderRadius: 20, padding: '2px 7px' }}>
                         ACTIVE
+                      </span>
+                    )}
+                    {/* v7.324: trash → delete this card's data (client cards delete ALL */}
+                    {/* client data together; competitor card deletes competitor data).   */}
+                    {showTrash && !confirming && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title={card.clearScope === 'client'
+                          ? 'Delete all client data (branded + non-branded + local) — permanent'
+                          : 'Delete all competitor data — permanent'}
+                        aria-label={card.clearScope === 'client' ? 'Delete all client data' : 'Delete all competitor data'}
+                        onClick={e => { e.stopPropagation(); setCardConfirm(card.clearScope!); }}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setCardConfirm(card.clearScope!); } }}
+                        style={{ marginLeft: active ? 6 : 'auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, border: '1px solid var(--c-2a2a40)', background: 'transparent', color: 'var(--c-8a8aa8)', cursor: 'pointer', flexShrink: 0 }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLSpanElement).style.color = 'var(--c-f87171)'; (e.currentTarget as HTMLSpanElement).style.borderColor = 'var(--c-f87171)'; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLSpanElement).style.color = 'var(--c-8a8aa8)'; (e.currentTarget as HTMLSpanElement).style.borderColor = 'var(--c-2a2a40)'; }}
+                      >
+                        <i className="ti ti-trash" style={{ fontSize: 11 }} aria-hidden="true" />
                       </span>
                     )}
                   </div>
@@ -1567,11 +1610,42 @@ export default function KeywordsPanel({
                     <span style={{ fontSize: 11, color: 'var(--c-8080a8)', fontWeight: 400, marginLeft: 4 }}>annual vol</span>
                   </div>
 
-                  {/* Subtitle */}
-                  <div style={{ fontSize: 11, color: 'var(--c-7070a0)', marginTop: 2 }}>
-                    {card.subtitle}
-                  </div>
-                </button>
+                  {/* Subtitle — or inline two-step delete confirm (v7.324) */}
+                  {confirming ? (
+                    <div
+                      onClick={e => e.stopPropagation()}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}
+                    >
+                      <span style={{ flexBasis: '100%', fontSize: 10.5, fontWeight: 600, color: 'var(--c-f87171)' }}>
+                        {card.clearScope === 'client' ? 'Delete ALL client data?' : 'Delete ALL competitor data?'}
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={isClearing ? -1 : 0}
+                        aria-label="Confirm delete"
+                        onClick={e => { e.stopPropagation(); if (isClearing) return; setCardConfirm(null); clearBox(card.clearScope === 'client' ? 'base' : 'competitor'); }}
+                        onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && !isClearing) { e.preventDefault(); e.stopPropagation(); setCardConfirm(null); clearBox(card.clearScope === 'client' ? 'base' : 'competitor'); } }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--c-f87171)', background: 'var(--ca-248-113-113-0_2)', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 9px', cursor: isClearing ? 'default' : 'pointer' }}
+                      >
+                        <i className={`ti ${isClearing ? 'ti-loader-2' : 'ti-trash'}`} style={{ fontSize: 11 }} aria-hidden="true" />{isClearing ? 'Deleting…' : 'Delete'}
+                      </span>
+                      <span
+                        role="button"
+                        tabIndex={isClearing ? -1 : 0}
+                        aria-label="Cancel delete"
+                        onClick={e => { e.stopPropagation(); if (!isClearing) setCardConfirm(null); }}
+                        onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && !isClearing) { e.preventDefault(); e.stopPropagation(); setCardConfirm(null); } }}
+                        style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 9px', cursor: isClearing ? 'default' : 'pointer' }}
+                      >
+                        Cancel
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: 'var(--c-7070a0)', marginTop: 2 }}>
+                      {card.subtitle}
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
