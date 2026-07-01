@@ -1,3 +1,15 @@
+## v7.333 — 2026-07-01 · SERP Features: download icon on the AI Overviews / People Also Ask / Video Carousel summary cards
+
+**Wayne asked.** Add a download icon to each of the AIO/PAA/Video summary cards, same as before -- the excel should contain all the information.
+
+**What shipped -- 1 new file, 1 changed file.** New lib/export/serpFeatureExport.ts: per-keyword XLSX (Feature, Keyword, Search Volume, Scan Status, Cited, Source), mirroring the existing rankBucketExport/topicExport dynamic-import pattern so xlsx stays out of the static bundle. components/brief/SerpFeaturesSection.tsx: reused SegmentDownloadButton, the same green download control from v7.328. FeatureRateCard's root changed from a button to a div role=button matching the v7.324 summary-card-trash pattern so it can legally host the nested download control without invalid nested-button HTML. A new buildFeatureExportRows draws directly from the v7.332 buildFeaturePool pool so a download always matches what is on screen -- the same Available count and the same Has-the-feature keyword list -- filtered to hasFeature, highest-volume first.
+
+**Real data only.** Search volume is the real project_keywords.search_volume column, already returned by the keywords route, just not read by this component before. An unscanned keyword's Cited column exports Unknown, never a guessed No Const I.5.
+
+**Verification Art. V.** Isolated tsc clean exit 0 under the project tsconfig.json, no target override V.1a. jsdom harness at the same 6,511-keyword scale confirms all 3 download controls render, clicking the icon does NOT switch tabs stopPropagation intact, clicking the card body still switches tabs, Enter-key activation still works on the new div role=button card, and no illegal nested button. A standalone unit test round-trips a real xlsx file through the actual xlsx library and confirms the exact column set and order and that an unscanned row's Cited cell reads Unknown. Zero new CSS tokens -- the only color is SegmentDownloadButton's own var dash dash c-34d399, already proven in both themes.
+
+**Files.** components/brief/SerpFeaturesSection.tsx. lib/export/serpFeatureExport.ts new. package.json to 7.333.0.
+
 ## v7.332 — 2026-07-01 · SERP Features: keyword lists now match the Available/Gap count (Semrush = source of truth)
 
 **Bug Wayne hit.** On the Video Carousel tab, the "6,112 uncaptured" gap banner sat directly above a keyword list showing "No video carousel" on every visible row — the count and the list looked contradictory.
