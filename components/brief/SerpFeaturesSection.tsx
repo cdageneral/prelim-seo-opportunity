@@ -54,7 +54,7 @@ interface Props {
 
 type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
 type LandscapeTab = 'brands' | 'others' | 'all';
-type KwFilter    = 'aio' | 'missing' | 'won' | 'all';
+type KwFilter    = 'aio' | 'missing' | 'won' | 'unscanned' | 'all';
 
 // ── Domain helpers ─────────────────────────────────────────────────────────────
 
@@ -120,6 +120,66 @@ function countUploadFeatures(rows: UploadKwRow[], scannedSet: Set<string>): Uplo
   return { rowsWithFeatureData: withData, aio, paa, video, more };
 }
 
+// ── v7.332 (Wayne: "let's just use the semrush serp features as a source of
+// truth"): the AVAILABLE count already blended scan-detected + Semrush-upload
+// data (below), but the per-keyword LISTS only ever iterated scannedKws — a
+// handful of keywords — so a keyword shown "No video carousel" in the list sat
+// directly under a "6,112 uncaptured" gap banner built from a totally different
+// (much larger) pool. This helper builds ONE pool per feature so the list and
+// the count are always the same footprint. Rule: a SCANNED keyword's own live
+// SerpAPI detection is the strongest evidence and always wins (Const I.1 — real,
+// fresh, verified data). An UNSCANNED keyword falls back to Semrush's uploaded
+// "SERP Features by Keyword" column — the source of truth for the part of the
+// footprint that hasn't been scanned. WHO is cited can only ever come from a
+// live scan (Semrush has no citation data), so `cited` is `null` — unknown, not
+// "not cited" — for anything never scanned (Const I.5, never guess a negative).
+interface FeaturePoolRow {
+  keyword:     string;
+  hasFeature:  boolean;
+  fromSemrush: boolean;        // true = classified from the Semrush upload column (unscanned); false = live scan detection
+  isScanned:   boolean;
+  cited:       boolean | null; // null = never scanned, citation status unknown
+}
+
+function buildFeaturePool(
+  uploadRows:     UploadKwRow[],
+  scannedKws:     SerpKw[],
+  bucketKey:      string,
+  scanHasFeature: (kw: SerpKw) => boolean,
+  citedFn:        (kw: SerpKw) => boolean,
+): FeaturePoolRow[] {
+  const scannedMap = new Map(scannedKws.map(k => [(k.keyword ?? '').trim().toLowerCase(), k]));
+  const seen = new Set<string>();
+  const out: FeaturePoolRow[] = [];
+
+  for (const r of uploadRows) {
+    const kwLow = (r.keyword ?? '').trim().toLowerCase();
+    if (!kwLow || seen.has(kwLow) || r.source === 'blocked') continue;
+    seen.add(kwLow);
+    const scannedKw = scannedMap.get(kwLow);
+    const hasFeature = scannedKw
+      ? scanHasFeature(scannedKw)
+      : (r.serpFeatures ? semrushFeaturesToBuckets(r.serpFeatures).has(bucketKey) : false);
+    out.push({
+      keyword:     r.keyword,
+      hasFeature,
+      fromSemrush: !scannedKw,
+      isScanned:   !!scannedKw,
+      cited:       scannedKw ? citedFn(scannedKw) : null,
+    });
+  }
+  // Scanned keywords with no matching upload row (e.g. an ad-hoc single-keyword
+  // scan outside the uploaded footprint) — no Semrush data exists for them, so
+  // fall back to the live scan's own detection; still real, never guessed.
+  for (const k of scannedKws) {
+    const kwLow = (k.keyword ?? '').trim().toLowerCase();
+    if (!kwLow || seen.has(kwLow)) continue;
+    seen.add(kwLow);
+    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k) });
+  }
+  return out;
+}
+
 // ── Data computation ───────────────────────────────────────────────────────────
 
 interface BrandStats {
@@ -138,6 +198,7 @@ interface EnrichedKw extends SerpKw {
   topWinnerDomain:     string | null;
   topWinnerPosition:   number | null; // position of top tracked brand in source list
   isClientCited:       boolean;
+  scanStatus?:         'scanned' | 'unscanned';   // v7.332: 'unscanned' = Semrush-flagged only, citation unknown
 }
 
 function useAIOData(
@@ -235,7 +296,7 @@ function useAIOData(
     // Enriched keyword data for drilldown
     const enrichedKws: EnrichedKw[] = scannedKws.map(kw => {
       if (!kw.hasAIO) {
-        return { ...kw, citationCount: 0, clientCitedPosition: null, topWinnerName: '—', topWinnerDomain: null, topWinnerPosition: null, isClientCited: false };
+        return { ...kw, citationCount: 0, clientCitedPosition: null, topWinnerName: '—', topWinnerDomain: null, topWinnerPosition: null, isClientCited: false, scanStatus: 'scanned' as const };
       }
       const sources = kw.aioSources ?? [];
       const clientIdx = sources.findIndex(s => domainsMatch(s.domain, clientDomain));
@@ -260,6 +321,7 @@ function useAIOData(
         topWinnerDomain,
         topWinnerPosition,
         isClientCited:       clientIdx >= 0,
+        scanStatus:          'scanned' as const,
       };
     });
 
@@ -305,6 +367,27 @@ function CitedBadge({ cited }: { cited: boolean }) {
     <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-0a2a0a)', border: '1px solid var(--c-22c55e44)', color: 'var(--c-22c55e)', whiteSpace: 'nowrap' }}>✓ Cited</span>
   ) : (
     <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a0a0a)', border: '1px solid var(--c-ef444433)', color: 'var(--c-ef4444)', whiteSpace: 'nowrap' }}>✗ Not cited</span>
+  );
+}
+
+// v7.332: a THIRD status — never assert "not cited" for a keyword that was
+// never scanned (Semrush can't say who's cited; Const I.5, honest gap).
+function ScanStatusBadge({ status, cited, provenance }: { status: 'scanned' | 'unscanned'; cited?: boolean; provenance?: 'semrush' | 'scan' }) {
+  if (status === 'unscanned') {
+    return (
+      <span title="Confirmed via uploaded Semrush SERP-feature data — not yet SerpAPI-scanned, so who's cited is unknown." style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-8888aa)', whiteSpace: 'nowrap' }}>
+        ○ Not yet scanned
+      </span>
+    );
+  }
+  return <CitedBadge cited={!!cited} />;
+}
+
+function ProvenanceTag({ fromSemrush }: { fromSemrush: boolean }) {
+  return (
+    <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '8px', background: 'var(--c-12121e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-555570)', flexShrink: 0 }}>
+      {fromSemrush ? 'Semrush' : 'SerpAPI scan'}
+    </span>
   );
 }
 
@@ -619,28 +702,33 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const counts = useMemo(() => ({
-    aio:     keywords.filter(k => k.hasAIO).length,
-    missing: keywords.filter(k => k.hasAIO && !k.isClientCited).length,
-    won:     keywords.filter(k => k.hasAIO && k.isClientCited).length,
-    all:     keywords.length,
+    aio:       keywords.filter(k => k.hasAIO).length,
+    // v7.332: "missing" = verified not cited by a live scan — never claimed for
+    // a keyword that was only Semrush-flagged and never scanned (Const I.5).
+    missing:   keywords.filter(k => k.hasAIO && k.scanStatus !== 'unscanned' && !k.isClientCited).length,
+    won:       keywords.filter(k => k.hasAIO && k.isClientCited).length,
+    unscanned: keywords.filter(k => k.hasAIO && k.scanStatus === 'unscanned').length,
+    all:       keywords.length,
   }), [keywords]);
 
   const filtered = useMemo(() => {
     let kws = keywords;
     if (search.trim()) kws = kws.filter(k => k.keyword.toLowerCase().includes(search.toLowerCase()));
     switch (filter) {
-      case 'aio':     return kws.filter(k => k.hasAIO);
-      case 'missing': return kws.filter(k => k.hasAIO && !k.isClientCited);
-      case 'won':     return kws.filter(k => k.hasAIO && k.isClientCited);
-      default:        return kws;
+      case 'aio':       return kws.filter(k => k.hasAIO);
+      case 'missing':   return kws.filter(k => k.hasAIO && k.scanStatus !== 'unscanned' && !k.isClientCited);
+      case 'won':       return kws.filter(k => k.hasAIO && k.isClientCited);
+      case 'unscanned': return kws.filter(k => k.hasAIO && k.scanStatus === 'unscanned');
+      default:          return kws;
     }
   }, [keywords, filter, search]);
 
   const PILLS: Array<{ key: KwFilter; label: string; color: string }> = [
-    { key: 'aio',     label: 'AIOs',    color: 'var(--c-6c63ff)' },
-    { key: 'missing', label: 'Missing', color: 'var(--c-ef4444)' },
-    { key: 'won',     label: 'Won',     color: 'var(--c-22c55e)' },
-    { key: 'all',     label: 'All',     color: 'var(--c-555570)' },
+    { key: 'aio',       label: 'AIOs',           color: 'var(--c-6c63ff)' },
+    { key: 'missing',   label: 'Missing',        color: 'var(--c-ef4444)' },
+    { key: 'won',       label: 'Won',            color: 'var(--c-22c55e)' },
+    { key: 'unscanned', label: 'Not yet scanned', color: 'var(--c-8888aa)' },
+    { key: 'all',       label: 'All',            color: 'var(--c-555570)' },
   ];
 
   function toggleExpand(kw: string) {
@@ -672,7 +760,7 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
       {/* Controls */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: '4px' }}>
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           {PILLS.map(p => (
             <button key={p.key} onClick={() => setFilter(p.key)} style={{
               display: 'inline-flex', alignItems: 'center', gap: '5px',
@@ -692,7 +780,7 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
       </div>
 
       {/* Table header */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px 1fr 100px', gap: '0 10px', padding: '5px 12px', borderBottom: '1px solid var(--c-1a1a2a)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px 1fr 120px', gap: '0 10px', padding: '5px 12px', borderBottom: '1px solid var(--c-1a1a2a)' }}>
         {['Keyword', 'AIO', 'Citations', 'Top Winner', clientName || 'Client'].map((h, i) => (
           <span key={h} style={{ fontSize: '9px', fontWeight: 700, color: 'var(--c-333350)', textTransform: 'uppercase', letterSpacing: '.06em', textAlign: i > 1 ? 'center' : 'left' }}>{h}</span>
         ))}
@@ -705,13 +793,14 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
           {filtered.map(kw => {
             const isExpanded = expanded.has(kw.keyword);
+            const isUnscanned = kw.scanStatus === 'unscanned';
             // v7.126: expandable when there's ANYTHING verified to show — citations or captured answer text
-            const hasSources = kw.hasAIO && ((kw.aioSources?.length ?? 0) > 0 || !!kw.aioText);
+            const hasSources = kw.hasAIO && !isUnscanned && ((kw.aioSources?.length ?? 0) > 0 || !!kw.aioText);
             return (
               <div key={kw.keyword} style={{ background: 'var(--c-08080f)', border: '1px solid var(--c-12121e)', borderRadius: '7px', overflow: 'hidden' }}>
                 <button
                   onClick={() => hasSources && toggleExpand(kw.keyword)}
-                  style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 60px 70px 1fr 100px', gap: '0 10px', padding: '9px 12px', background: 'transparent', border: 'none', cursor: hasSources ? 'pointer' : 'default', textAlign: 'left', alignItems: 'center' }}
+                  style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 60px 70px 1fr 120px', gap: '0 10px', padding: '9px 12px', background: 'transparent', border: 'none', cursor: hasSources ? 'pointer' : 'default', textAlign: 'left', alignItems: 'center' }}
                 >
                   {/* Keyword */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
@@ -719,6 +808,7 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
                       <span style={{ fontSize: '9px', color: 'var(--c-333350)', transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform .15s', display: 'inline-block', flexShrink: 0 }}>▶</span>
                     )}
                     <span style={{ fontSize: '12px', color: 'var(--c-d0d0f0)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{kw.keyword}</span>
+                    {isUnscanned && <ProvenanceTag fromSemrush />}
                   </div>
                   {/* AIO badge */}
                   <div style={{ textAlign: 'center' }}>
@@ -728,13 +818,13 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
                   </div>
                   {/* Citations */}
                   <div style={{ textAlign: 'center' }}>
-                    {kw.hasAIO
+                    {kw.hasAIO && !isUnscanned
                       ? <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--c-c0c0e8)' }}>{kw.citationCount}</span>
                       : <span style={{ fontSize: '10px', color: 'var(--c-2a2a40)' }}>—</span>}
                   </div>
                   {/* Top Winner */}
                   <div style={{ minWidth: 0, paddingLeft: '4px' }}>
-                    {kw.hasAIO && kw.topWinnerName !== '—' ? (
+                    {kw.hasAIO && !isUnscanned && kw.topWinnerName !== '—' ? (
                       <span style={{ fontSize: '11px', color: 'var(--c-a0a0c8)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
                         {kw.topWinnerName}
                         {kw.topWinnerPosition && <span style={{ marginLeft: '4px', fontSize: '9px', color: 'var(--c-555570)' }}>#{kw.topWinnerPosition}</span>}
@@ -744,9 +834,11 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
                   {/* Client position */}
                   <div style={{ textAlign: 'center' }}>
                     {kw.hasAIO ? (
-                      kw.clientCitedPosition !== null
-                        ? <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700, background: 'var(--ca-34-197-94-0_12)', border: '1px solid var(--ca-34-197-94-0_3)', color: 'var(--c-22c55e)' }}>#{kw.clientCitedPosition}</span>
-                        : <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--ca-239-68-68-0_1)', border: '1px solid var(--ca-239-68-68-0_25)', color: 'var(--c-ef4444)' }}>missing</span>
+                      isUnscanned
+                        ? <ScanStatusBadge status="unscanned" />
+                        : kw.clientCitedPosition !== null
+                          ? <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700, background: 'var(--ca-34-197-94-0_12)', border: '1px solid var(--ca-34-197-94-0_3)', color: 'var(--c-22c55e)' }}>#{kw.clientCitedPosition}</span>
+                          : <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--ca-239-68-68-0_1)', border: '1px solid var(--ca-239-68-68-0_25)', color: 'var(--c-ef4444)' }}>missing</span>
                     ) : <span style={{ fontSize: '10px', color: 'var(--c-2a2a40)' }}>—</span>}
                   </div>
                 </button>
@@ -861,6 +953,61 @@ const ADD_FEATURES = [
   { key: 'image_pack',       label: 'Image Pack',       color: 'var(--c-8b5cf6)', desc: 'Google image results row' },
 ];
 
+// ── v7.332: shared row renderer for the PAA / Video full-footprint lists ──────
+// Replaces the old "iterate scannedKws only" list — now iterates the merged
+// Semrush + scan pool so it reconciles with the tab's own Available/Gap count.
+function FeaturePoolList({ pool, featureLabel, presentLabel }: {
+  pool: FeaturePoolRow[];
+  featureLabel: string;   // e.g. 'PAA box' | 'Video carousel'
+  presentLabel: string;   // badge text when hasFeature, e.g. 'PAA present' | 'Video carousel'
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const [search, setSearch]   = useState('');
+
+  const base = useMemo(() => showAll ? pool : pool.filter(r => r.hasFeature), [pool, showAll]);
+  const rows = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    const list = s ? base.filter(r => r.keyword.toLowerCase().includes(s)) : base;
+    // available-first so the gap is immediately visible; scanned before unscanned within each group
+    return [...list].sort((a, b) => (Number(b.hasFeature) - Number(a.hasFeature)) || (Number(b.isScanned) - Number(a.isScanned)));
+  }, [base, search]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <button onClick={() => setShowAll(false)} style={{ padding: '5px 11px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: !showAll ? 'var(--ca-108-99-255-0_12)' : 'transparent', border: `1px solid ${!showAll ? 'var(--c-6c63ff)' : 'var(--c-1e1e35)'}`, color: !showAll ? 'var(--c-8b85ff)' : 'var(--c-555570)', cursor: 'pointer' }}>
+          Has {featureLabel} <span style={{ fontSize: '9px', padding: '0 4px', borderRadius: '3px', background: 'var(--c-1a1a2a)', marginLeft: '4px' }}>{pool.filter(r => r.hasFeature).length.toLocaleString()}</span>
+        </button>
+        <button onClick={() => setShowAll(true)} style={{ padding: '5px 11px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: showAll ? 'var(--ca-108-99-255-0_12)' : 'transparent', border: `1px solid ${showAll ? 'var(--c-6c63ff)' : 'var(--c-1e1e35)'}`, color: showAll ? 'var(--c-8b85ff)' : 'var(--c-555570)', cursor: 'pointer' }}>
+          All keywords <span style={{ fontSize: '9px', padding: '0 4px', borderRadius: '3px', background: 'var(--c-1a1a2a)', marginLeft: '4px' }}>{pool.length.toLocaleString()}</span>
+        </button>
+        <input type="text" placeholder="Search keyword…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1, minWidth: '160px', padding: '5px 10px', borderRadius: '6px', background: 'var(--c-0a0a18)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-d0d0f0)', fontSize: '11px', outline: 'none' }} />
+      </div>
+
+      {rows.length === 0 ? (
+        <p style={{ fontSize: '12px', color: 'var(--c-555570)', textAlign: 'center', padding: '16px 0' }}>No keywords match.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {rows.map((r) => (
+            <div key={r.keyword} style={{ background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', borderRadius: '8px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <p style={{ fontSize: '12px', color: 'var(--c-d0d0f0)', fontWeight: 500, margin: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.keyword}</p>
+              {r.hasFeature ? (
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1000)', border: '1px solid var(--c-f59e0b44)', color: 'var(--c-f59e0b)' }}>{presentLabel}</span>
+                  <ScanStatusBadge status={r.isScanned ? 'scanned' : 'unscanned'} cited={r.cited === true} />
+                  <ProvenanceTag fromSemrush={r.fromSemrush} />
+                </div>
+              ) : (
+                <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-555570)', flexShrink: 0 }}>No {featureLabel}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned, onStartSerpScan, serpScanRunning, serpScanProgress }: Props) {
@@ -961,6 +1108,25 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const aioAvail  = aioAvailScan + uploadFeat.aio;
   const aioRate   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
 
+  // v7.332: full pools (Semrush source of truth for the unscanned majority,
+  // live scan for the scanned few) — one pool per feature, shared by the
+  // aggregate count AND the keyword list so they never disagree again.
+  const aioPool = useMemo(
+    () => buildFeaturePool(uploadRows ?? [], scannedKws, 'ai_overview',
+      k => !!k.hasAIO, k => (k.aioSources ?? []).some(s => domainsMatch(s.domain, clientDomain))),
+    [uploadRows, scannedKws, clientDomain]
+  );
+  const paaPool = useMemo(
+    () => buildFeaturePool(uploadRows ?? [], scannedKws, 'paa',
+      k => (k.paaQuestions?.length ?? 0) > 0, k => !!k.paaClientCited),
+    [uploadRows, scannedKws]
+  );
+  const videoPool = useMemo(
+    () => buildFeaturePool(uploadRows ?? [], scannedKws, 'video_carousel',
+      k => !!k.serpFeatures?.includes('video_carousel'), k => !!k.videoClientCited),
+    [uploadRows, scannedKws]
+  );
+
   // PAA (live from scanned set — stored summaries go stale after in-panel scans)
   const paaAvailScan = scannedKws.filter(k => (k.paaQuestions?.length ?? 0) > 0).length;
   const paaAcq       = scannedKws.filter(k => k.paaClientCited).length;
@@ -972,6 +1138,23 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const videoAcq       = scannedKws.filter(k => k.videoClientCited).length;
   const videoAvail = videoAvailScan + uploadFeat.video;
   const videoRate  = videoAvail > 0 ? Math.round((videoAcq / videoAvail) * 100) : 0;
+
+  // v7.332: the AIO Keyword Drilldown now covers the full footprint too — scanned
+  // rows keep their rich citation detail (aio.enrichedKws); Semrush-flagged
+  // upload-only rows get a lightweight stub with scanStatus:'unscanned' so the
+  // UI never claims a citation verdict it doesn't have.
+  const aioFullKws: EnrichedKw[] = useMemo(() => {
+    const scannedRows = aio.enrichedKws;
+    const extra: EnrichedKw[] = aioPool
+      .filter(r => r.hasFeature && !r.isScanned)
+      .map(r => ({
+        keyword: r.keyword, serpFeatures: [], hasAIO: true, aioSources: [], paaQuestions: [],
+        paaClientCited: false, videoClientCited: false, clientRank: null,
+        citationCount: 0, clientCitedPosition: null, topWinnerName: '—', topWinnerDomain: null,
+        topWinnerPosition: null, isClientCited: false, scanStatus: 'unscanned' as const,
+      }));
+    return [...scannedRows, ...extra];
+  }, [aio.enrichedKws, aioPool]);
 
   // Combined weighted coverage (hybrid availability; captured = scan-verified)
   const totalAvail   = aioAvail + paaAvail + videoAvail;
@@ -1257,7 +1440,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       {uploadFeat.rowsWithFeatureData > 0 && (
         <div style={{ padding: '8px 14px', borderRadius: '8px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)' }}>
           <p style={{ fontSize: '10px', color: 'var(--c-555570)', margin: 0 }}>
-            Availability combines {scanned} SerpAPI-scanned keyword{scanned !== 1 ? 's' : ''} with {uploadFeat.rowsWithFeatureData.toLocaleString()} uploaded keywords carrying Semrush SERP-feature data (deduped). Captured/citation metrics require knowing WHO is cited on each SERP — uploads can&apos;t provide that, so those come from scanned keywords only. Scan more keywords to verify capture across the footprint.
+            Availability combines {scanned} SerpAPI-scanned keyword{scanned !== 1 ? 's' : ''} with {uploadFeat.rowsWithFeatureData.toLocaleString()} uploaded keywords carrying Semrush SERP-feature data (deduped). Semrush&apos;s SERP-feature data is treated as the source of truth for whether a feature exists on a keyword you haven&apos;t scanned yet — a scanned keyword&apos;s own live result always wins. Captured/citation metrics require knowing WHO is cited on each SERP — Semrush can&apos;t provide that, so those stay scanned-keyword-only; keywords below marked &ldquo;Not yet scanned&rdquo; have a confirmed feature but an unverified citation status.
           </p>
         </div>
       )}
@@ -1331,7 +1514,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               <div>
                 <SectionLabel text="Keyword Drilldown" />
                 <KeywordDrilldown
-                  keywords={aio.enrichedKws}
+                  keywords={aioFullKws}
                   clientDomain={clientDomain}
                   clientName={displayClientName}
                   competitors={competitors}
@@ -1342,7 +1525,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
         </div>
       )}
 
-      {/* ═══ PAA TAB — unchanged ═══ */}
+      {/* ═══ PAA TAB ═══ */}
       {activeTab === 'paa' && (
         <div className="orbit-card p-5 flex flex-col gap-4">
           <div className="flex items-start justify-between gap-4">
@@ -1375,40 +1558,17 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             />
           )}
 
-          {scannedKws.length === 0 ? (
-            <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No SERP scan data available.</p>
+          {/* v7.332: full-footprint list (Semrush + scan pool) replaces the old
+              scannedKws-only iteration — reconciles with the Available/Gap count above. */}
+          {paaPool.length === 0 ? (
+            <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No SERP scan or uploaded feature data available.</p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {scannedKws.map((kw: SerpKw) => {
-                const hasPAA = (kw.paaQuestions ?? []).length > 0;
-                return (
-                  <div key={kw.keyword} style={{ background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', borderRadius: '8px', padding: '12px 14px' }}>
-                    <p style={{ fontSize: '12px', color: 'var(--c-d0d0f0)', fontWeight: 500, margin: '0 0 6px' }}>{kw.keyword}</p>
-                    {hasPAA ? (
-                      <>
-                        <div className="flex items-center gap-2 flex-wrap mb-2">
-                          <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-001820)', border: '1px solid var(--c-06b6d444)', color: 'var(--c-06b6d4)' }}>
-                            PAA present · {kw.paaQuestions.length} question{kw.paaQuestions.length !== 1 ? 's' : ''}
-                          </span>
-                          <CitedBadge cited={kw.paaClientCited} />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                          {kw.paaQuestions.slice(0, 3).map((q: string, i: number) => <p key={i} style={{ fontSize: '10px', color: 'var(--c-555570)', margin: 0 }}>· {q}</p>)}
-                          {kw.paaQuestions.length > 3 && <p style={{ fontSize: '10px', color: 'var(--c-333350)', margin: 0 }}>+{kw.paaQuestions.length - 3} more questions</p>}
-                        </div>
-                      </>
-                    ) : (
-                      <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-555570)' }}>No PAA box</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <FeaturePoolList pool={paaPool} featureLabel="PAA box" presentLabel="PAA present" />
           )}
         </div>
       )}
 
-      {/* ═══ VIDEO TAB — unchanged ═══ */}
+      {/* ═══ VIDEO TAB ═══ */}
       {activeTab === 'video' && (
         <div className="orbit-card p-5 flex flex-col gap-4">
           <div className="flex items-start justify-between gap-4">
@@ -1443,20 +1603,15 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
             />
           )}
 
-          {scannedKws.length === 0 ? <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No SERP scan data available.</p> : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {scannedKws.map((kw: SerpKw) => {
-                const hasVideo = kw.serpFeatures?.includes('video_carousel');
-                return (
-                  <div key={kw.keyword} style={{ background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', borderRadius: '8px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <p style={{ fontSize: '12px', color: 'var(--c-d0d0f0)', fontWeight: 500, margin: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{kw.keyword}</p>
-                    {hasVideo ? <div className="flex items-center gap-2 flex-shrink-0"><span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1000)', border: '1px solid var(--c-f59e0b44)', color: 'var(--c-f59e0b)' }}>Video carousel</span><CitedBadge cited={kw.videoClientCited} /></div>
-                      : <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-555570)', flexShrink: 0 }}>No video carousel</span>}
-                  </div>
-                );
-              })}
-            </div>
+          {/* v7.332: full-footprint list (Semrush + scan pool) — this is the exact
+              fix for the "GAP: 6,112 uncaptured" banner sitting above a list that
+              only ever showed the ~5 scanned keywords. Now the list IS that pool. */}
+          {videoPool.length === 0 ? (
+            <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No SERP scan or uploaded feature data available.</p>
+          ) : (
+            <FeaturePoolList pool={videoPool} featureLabel="video carousel" presentLabel="Video carousel" />
           )}
+
           {videoAvail === 0 && scannedKws.length > 0 && (
             <div style={{ background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)', borderRadius: '8px', padding: '16px', textAlign: 'center' }}>
               <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>No video carousels detected. Creating a YouTube channel and optimizing video content for key terms could unlock this SERP feature.</p>
