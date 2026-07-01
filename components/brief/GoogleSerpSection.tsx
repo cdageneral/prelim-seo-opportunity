@@ -1,6 +1,8 @@
 'use client';
 import { useState, useMemo, useEffect, type ReactNode } from 'react';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import SegmentDownloadButton from './SegmentDownloadButton';
+import { exportRankBucketXLSX } from '@/lib/export/rankBucketExport';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1438,6 +1440,39 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
     return stats;
   }, [topKws, cb]);
 
+  // ── v7.330: Rank-bucket summary cards ───────────────────────────────────────
+  // Per-bucket keyword count + monthly volume, computed from the SAME posKws the
+  // Volume Opportunity card + keyword table use (Const II.7 — one source). Share % is
+  // bucket volume ÷ ranked-footprint volume (totalVol), so it reconciles with the
+  // Volume Opportunity bars (v7.320 ranked basis). Real rows only (Const I.1).
+  const bucketStats = useMemo(() => {
+    const m: Record<string, { count: number; vol: number }> = {};
+    for (const b of POSITION_BUCKETS) m[b.key] = { count: 0, vol: 0 };
+    for (const k of posKws) {
+      const b = POSITION_BUCKETS.find(bb => k.position >= bb.min && k.position <= bb.max);
+      if (!b) continue;
+      m[b.key].count++;
+      m[b.key].vol += k.searchVolume ?? 0;
+    }
+    return m;
+  }, [posKws]);
+
+  // Download ONE bucket as XLSX — one row per keyword: rank bucket, stored topic
+  // category (blank when the analysis carries no taxonomy — honest gap, I.5),
+  // keyword, monthly search volume. Highest-volume first.
+  function downloadRankBucket(b: typeof POSITION_BUCKETS[number]) {
+    const rows = posKws
+      .filter(k => k.position >= b.min && k.position <= b.max)
+      .sort((a, c) => (c.searchVolume ?? 0) - (a.searchVolume ?? 0))
+      .map(k => ({
+        bucket:   b.label,
+        category: (cb ? (inferCategoryForKw(k.keyword, cb.keywordCategories, cb.categories) ?? '') : ''),
+        keyword:  k.keyword,
+        volume:   k.searchVolume ?? 0,
+      }));
+    void exportRankBucketXLSX(rows, { clientName: projectName ?? domain ?? 'client', segment: b.label });
+  }
+
   // ── Keyword Table ─────────────────────────────────────────────────────────
   const filteredKws = useMemo(() => {
     let kws = [...topKws];
@@ -1562,6 +1597,54 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           sub={dbLoaded ? `${fmtAnnual(top3Vol)} / yr in positions 1–3` : 'Loading…'}
           color="var(--c-22c55e)"
         />
+      </div>
+
+      {/* ── Rank-bucket filter cards (v7.330) ──
+          Click a card to filter the keyword table to that bucket (click the active card
+          again to clear back to All); the green icon downloads that bucket's keywords as
+          Excel (rank bucket · topic category · keyword · monthly volume, one row per kw).
+          Replaces the old filter-pill row that used to sit above the keyword table. */}
+      <div className="grid grid-cols-4 gap-3">
+        {POSITION_BUCKETS.map(b => {
+          const st       = bucketStats[b.key] ?? { count: 0, vol: 0 };
+          const active   = filter === b.key;
+          const sharePct = totalVol > 0 ? (st.vol / totalVol) * 100 : 0;
+          return (
+            <div
+              key={b.key}
+              role="button"
+              tabIndex={0}
+              aria-pressed={active}
+              aria-label={`Filter keyword table to ${b.label}`}
+              onClick={() => setFilter(active ? 'all' : (b.key as BucketKey))}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(active ? 'all' : (b.key as BucketKey)); } }}
+              className="orbit-card"
+              style={{
+                position: 'relative', cursor: 'pointer', overflow: 'hidden',
+                padding: active ? '13px' : '14px',
+                border: active ? `2px solid ${b.hex}` : '1px solid var(--orbit-border)',
+                transition: 'border-color .12s',
+              }}
+            >
+              {active && (
+                <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: b.hex, opacity: 0.08, pointerEvents: 'none' }} />
+              )}
+              <div style={{ position: 'relative', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', fontWeight: 500, color: 'var(--c-8888aa)', textTransform: 'uppercase', letterSpacing: '.06em' }}>{b.label}</span>
+                <SegmentDownloadButton title={`Download ${b.label} keywords (Excel)`} onDownload={() => downloadRankBucket(b)} />
+              </div>
+              <p style={{ position: 'relative', fontSize: '26px', fontWeight: 700, color: 'var(--c-f0f0ff)', margin: '8px 0 0', lineHeight: 1 }}>
+                {dbLoaded ? st.count.toLocaleString() : '—'}
+              </p>
+              <p style={{ position: 'relative', fontSize: '11px', color: 'var(--c-6a6a90)', margin: '5px 0 0' }}>
+                {fmtAnnual(st.vol)} / yr &middot; {sharePct.toFixed(1)}% of vol
+              </p>
+              <div style={{ position: 'relative', background: 'var(--c-1e1e2e)', borderRadius: '3px', height: '4px', marginTop: '9px' }}>
+                <div style={{ background: b.hex, borderRadius: '3px', height: '4px', width: `${Math.min(100, sharePct)}%`, transition: 'width .6s ease' }} />
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* ── Two-col: Chart + Opportunity ── */}
@@ -1734,28 +1817,22 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
             </p>
           </div>
 
-          {/* Filter pills */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {([{ key: 'all', label: 'All', hex: 'var(--c-8888b0)' }, ...POSITION_BUCKETS] as const).map(b => {
-              const active = filter === b.key;
-              return (
-                <button
-                  key={b.key}
-                  onClick={() => setFilter(b.key as BucketKey)}
-                  style={{
-                    padding: '3px 10px', borderRadius: '20px', fontSize: '10px', cursor: 'pointer',
-                    background: active ? `${b.hex}22` : 'transparent',
-                    border: `1px solid ${active ? b.hex : 'var(--c-2a2a44)'}`,
-                    color: active ? b.hex : 'var(--c-505070)',
-                    fontWeight: active ? 600 : 400,
-                    transition: 'all .12s',
-                  }}
-                >
-                  {b.label}
-                </button>
-              );
-            })}
-          </div>
+          {/* v7.330: the rank-bucket summary cards above are now the filter control
+              (Option A — the old filter-pill row was removed). Keep just a small "Clear"
+              affordance here when a bucket filter is active, so the table has an escape
+              hatch without scrolling back up to the cards. */}
+          {filter !== 'all' && (
+            <button
+              onClick={() => setFilter('all')}
+              style={{
+                padding: '3px 10px', borderRadius: '20px', fontSize: '10px', cursor: 'pointer',
+                background: 'transparent', border: '1px solid var(--c-2a2a44)',
+                color: 'var(--c-8888aa)', fontWeight: 500, transition: 'all .12s',
+              }}
+            >
+              Clear filter ✕
+            </button>
+          )}
         </div>
 
         {/* Table */}
