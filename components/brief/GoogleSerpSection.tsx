@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, type ReactNode } from 'react';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1026,7 +1026,7 @@ export function computeSov(
 }
 
 
-export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string }) {
+export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title, footer }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string; footer?: ReactNode }) {
   const {
     basis, rawEntries, total, sovPct, capturedClicks, availableClicks,
     totalVolMonthly, page1VolMonthly, page1KwCount, totalKwCount, clientDisplay, ctrSource,
@@ -1041,6 +1041,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
         <p style={{ fontSize: '12px', color: 'var(--c-555570)' }}>
           No page-1 keyword data available yet. Run an analysis to populate.
         </p>
+        {footer}
       </div>
     );
   }
@@ -1180,6 +1181,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <p style={{ fontSize: '9px', color: 'var(--c-44446a)', margin: 0, lineHeight: 1.5 }}>
         SoV = &Sigma;(volume &times; CTR at client position, pos 1&ndash;10) &divide; &Sigma;(volume &times; {PAGE1_CTR_SUM.toFixed(3)} page-1 CTR sum). Volume &amp; position are measured; CTR is the labeled model curve.
       </p>
+      {footer}
     </div>
   );
 }
@@ -1565,51 +1567,57 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       {/* ── Two-col: Chart + Opportunity ── */}
       <div className="grid grid-cols-2 gap-3">
 
-        {/* Share of Voice */}
-        <SovPanel analysis={sovAnalysis} competitors={competitors} dbKeywords={dbKeywords} clientLabel={projectName ?? domain} />
+        {/* Share of Voice — v7.329: the opt-in "Add top SERP rivals" control now lives
+            INSIDE this card (passed as `footer`), not as its own grid cell, so Volume
+            Opportunity sits directly to its right again. */}
+        <SovPanel
+          analysis={sovAnalysis}
+          competitors={competitors}
+          dbKeywords={dbKeywords}
+          clientLabel={projectName ?? domain}
+          footer={!sovHasSerp ? (
+            /* v7.323: opt-in pull of the top SERP rivals for projects whose snapshot has none
+               (upload-footprint projects, or pre-v7.322 auto snapshots). Costs Semrush units,
+               shown before running; pulls ONLY competitor footprints — uploaded data untouched. */
+            <div style={{ marginTop: '2px', padding: '10px 12px', background: 'var(--c-131325)', border: '1px solid var(--c-2a2a4a)', borderRadius: '8px' }}>
+              <p style={{ fontSize: '11px', color: 'var(--c-8a8ab0)', margin: '0 0 8px', lineHeight: 1.55 }}>
+                <span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>Top SERP rivals</span> aren&rsquo;t loaded for this project. Pull the largest organic competitors from Semrush to add them to the donut as page-1-capture slices. Re-pulls only competitor footprints &mdash; your uploaded data is untouched &mdash; and costs Semrush units.
+              </p>
 
-        {/* v7.323: opt-in pull of the top SERP rivals for projects whose snapshot has none
-            (upload-footprint projects, or pre-v7.322 auto snapshots). Costs Semrush units,
-            shown before running; pulls ONLY competitor footprints — uploaded data untouched. */}
-        {!sovHasSerp && (
-          <div style={{ marginTop: '8px', padding: '10px 12px', background: 'var(--c-131325)', border: '1px solid var(--c-2a2a4a)', borderRadius: '8px' }}>
-            <p style={{ fontSize: '11px', color: 'var(--c-8a8ab0)', margin: '0 0 8px', lineHeight: 1.55 }}>
-              <span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>Top SERP rivals</span> aren&rsquo;t loaded for this project. Pull the largest organic competitors from Semrush to add them to the donut as page-1-capture slices. Re-pulls only competitor footprints &mdash; your uploaded data is untouched &mdash; and costs Semrush units.
-            </p>
-
-            {serpState === 'idle' && (
-              <button onClick={fetchSerpEstimate}
-                style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-1a1a38)', color: 'var(--c-c0c0e8)', border: '1px solid var(--c-3a3a5c)' }}>
-                Add top SERP rivals&hellip;
-              </button>
-            )}
-            {serpState === 'estimating' && <span style={{ fontSize: '11px', color: 'var(--c-7070a0)' }}>Estimating cost&hellip;</span>}
-            {serpState === 'confirm' && serpEstimate && (
-              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '7px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)', lineHeight: 1.5 }}>
-                  ~<span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>{serpEstimate.totalUnits.toLocaleString()}</span>{serpEstimate.isCeiling ? ' (max)' : ''} Semrush units &middot; {serpEstimate.competitors.length} competitor{serpEstimate.competitors.length === 1 ? '' : 's'}{serpEstimate.competitors.length > 0 ? `: ${serpEstimate.competitors.map(c => c.domain).join(', ')}` : ''}
-                </span>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={runSerpPull}
-                    style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-6c63ff)', color: 'var(--c-f0f0ff)', border: '1px solid var(--c-6c63ff)' }}>
-                    Pull now (~{serpEstimate.totalUnits.toLocaleString()} units)
-                  </button>
-                  <button onClick={() => setSerpState('idle')}
-                    style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-7070a0)', border: '1px solid var(--c-3a3a5c)' }}>
-                    Cancel
-                  </button>
+              {serpState === 'idle' && (
+                <button onClick={fetchSerpEstimate}
+                  style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-1a1a38)', color: 'var(--c-c0c0e8)', border: '1px solid var(--c-3a3a5c)' }}>
+                  Add top SERP rivals&hellip;
+                </button>
+              )}
+              {serpState === 'estimating' && <span style={{ fontSize: '11px', color: 'var(--c-7070a0)' }}>Estimating cost&hellip;</span>}
+              {serpState === 'confirm' && serpEstimate && (
+                <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '7px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)', lineHeight: 1.5 }}>
+                    ~<span style={{ color: 'var(--c-d9a23f)', fontWeight: 600 }}>{serpEstimate.totalUnits.toLocaleString()}</span>{serpEstimate.isCeiling ? ' (max)' : ''} Semrush units &middot; {serpEstimate.competitors.length} competitor{serpEstimate.competitors.length === 1 ? '' : 's'}{serpEstimate.competitors.length > 0 ? `: ${serpEstimate.competitors.map(c => c.domain).join(', ')}` : ''}
+                  </span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={runSerpPull}
+                      style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-6c63ff)', color: 'var(--c-f0f0ff)', border: '1px solid var(--c-6c63ff)' }}>
+                      Pull now (~{serpEstimate.totalUnits.toLocaleString()} units)
+                    </button>
+                    <button onClick={() => setSerpState('idle')}
+                      style={{ fontSize: '11px', fontWeight: 500, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-7070a0)', border: '1px solid var(--c-3a3a5c)' }}>
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
-            {serpState === 'running' && (
-              <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)' }}>
-                Pulling {serpEstimate?.competitors.length ?? ''} competitor footprint{(serpEstimate?.competitors.length ?? 0) === 1 ? '' : 's'} from Semrush&hellip; {serpElapsed}s
-              </span>
-            )}
-            {serpState === 'done'  && <span style={{ fontSize: '11px', color: 'var(--c-4ade80)' }}>{serpMsg}</span>}
-            {serpState === 'error' && <span style={{ fontSize: '11px', color: 'var(--c-f87171)' }}>{serpMsg}</span>}
-          </div>
-        )}
+              )}
+              {serpState === 'running' && (
+                <span style={{ fontSize: '11px', color: 'var(--c-9a9ac0)' }}>
+                  Pulling {serpEstimate?.competitors.length ?? ''} competitor footprint{(serpEstimate?.competitors.length ?? 0) === 1 ? '' : 's'} from Semrush&hellip; {serpElapsed}s
+                </span>
+              )}
+              {serpState === 'done'  && <span style={{ fontSize: '11px', color: 'var(--c-4ade80)' }}>{serpMsg}</span>}
+              {serpState === 'error' && <span style={{ fontSize: '11px', color: 'var(--c-f87171)' }}>{serpMsg}</span>}
+            </div>
+          ) : null}
+        />
 
         {/* Volume Opportunity */}
         <div className="orbit-card p-5 flex flex-col gap-4">
