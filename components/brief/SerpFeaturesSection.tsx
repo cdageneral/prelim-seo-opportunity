@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import SegmentDownloadButton from './SegmentDownloadButton';
+import { exportSerpFeatureXLSX, type SerpFeatureKeywordRow } from '@/lib/export/serpFeatureExport';
 
 /**
  * SerpFeaturesSection — v7.40
@@ -73,7 +75,10 @@ function domainsMatch(a: string, b: string): boolean {
 // onto the same feature buckets the SerpAPI scan uses. Matching is
 // case-insensitive substring so minor Semrush label variations still map.
 
-interface UploadKwRow { keyword: string; serpFeatures: string | null; source: string; }
+// v7.333: searchVolume is a real column the /keywords route already returns
+// (project_keywords.search_volume) — added here so the per-feature download
+// can show real monthly volume next to each keyword (Const I.1, not modeled).
+interface UploadKwRow { keyword: string; serpFeatures: string | null; source: string; searchVolume?: number | null; }
 
 function semrushFeaturesToBuckets(raw: string): Set<string> {
   const out = new Set<string>();
@@ -139,6 +144,7 @@ interface FeaturePoolRow {
   fromSemrush: boolean;        // true = classified from the Semrush upload column (unscanned); false = live scan detection
   isScanned:   boolean;
   cited:       boolean | null; // null = never scanned, citation status unknown
+  volume:      number;         // v7.333: real monthly search volume, for the card download
 }
 
 function buildFeaturePool(
@@ -166,18 +172,40 @@ function buildFeaturePool(
       fromSemrush: !scannedKw,
       isScanned:   !!scannedKw,
       cited:       scannedKw ? citedFn(scannedKw) : null,
+      volume:      Number(r.searchVolume) || 0,
     });
   }
   // Scanned keywords with no matching upload row (e.g. an ad-hoc single-keyword
   // scan outside the uploaded footprint) — no Semrush data exists for them, so
   // fall back to the live scan's own detection; still real, never guessed.
+  // No uploaded row also means no stored search volume for these — 0, same
+  // "unknown numeric" convention topicExport/rankBucketExport already use.
   for (const k of scannedKws) {
     const kwLow = (k.keyword ?? '').trim().toLowerCase();
     if (!kwLow || seen.has(kwLow)) continue;
     seen.add(kwLow);
-    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k) });
+    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k), volume: 0 });
   }
   return out;
+}
+
+// v7.333: rows for the per-card Excel download (AI Overviews / People Also Ask /
+// Video Carousel summary cards). Filters to hasFeature — the same "available"
+// set the card's own count and its FeaturePoolList show — so the download
+// always reconciles with what's on screen (Const II.7). Highest-volume first,
+// matching the existing rankBucketExport/topicExport convention.
+function buildFeatureExportRows(pool: FeaturePoolRow[], featureLabel: string): SerpFeatureKeywordRow[] {
+  return pool
+    .filter(r => r.hasFeature)
+    .sort((a, b) => b.volume - a.volume)
+    .map(r => ({
+      feature:    featureLabel,
+      keyword:    r.keyword,
+      volume:     r.volume,
+      scanStatus: r.isScanned ? 'Scanned' as const : 'Not yet scanned' as const,
+      cited:      !r.isScanned ? 'Unknown' as const : (r.cited ? 'Yes' as const : 'No' as const),
+      source:     r.fromSemrush ? 'Semrush upload' as const : 'SerpAPI scan' as const,
+    }));
 }
 
 // ── Data computation ───────────────────────────────────────────────────────────
@@ -335,20 +363,34 @@ function useAIOData(
 
 // ── Shared sub-components ──────────────────────────────────────────────────────
 
-function FeatureRateCard({ label, color, rate, acquired, available, active, onClick }: {
+// v7.333: gained an optional per-card Excel download (Wayne). The card is
+// clickable to select the tab AND (when present) hosts a nested download
+// icon — a <button> cannot legally contain another interactive control, so
+// (matching the v7.324 summary-card trash pattern) the root is a
+// <div role="button"> with real keyboard support, not a <button>.
+function FeatureRateCard({ label, color, rate, acquired, available, active, onClick, onDownload, downloadTitle }: {
   label: string; color: string; rate: number; acquired: number; available: number;
-  active: boolean; onClick: () => void;
+  active: boolean; onClick: () => void; onDownload?: () => void; downloadTitle?: string;
 }) {
   return (
-    <button onClick={onClick} className="flex flex-col gap-2 text-left" style={{
-      flex: 1, padding: '14px', borderRadius: '10px',
-      background: active ? `${color}12` : 'var(--c-0f0f1e)',
-      border: `1.5px solid ${active ? color : 'var(--c-1e1e35)'}`,
-      cursor: 'pointer', transition: 'all .15s',
-    }}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
+      className="flex flex-col gap-2 text-left"
+      style={{
+        flex: 1, padding: '14px', borderRadius: '10px',
+        background: active ? `${color}12` : 'var(--c-0f0f1e)',
+        border: `1.5px solid ${active ? color : 'var(--c-1e1e35)'}`,
+        cursor: 'pointer', transition: 'all .15s',
+      }}>
       <div className="flex items-center gap-2">
         <span className="rounded-full shrink-0" style={{ width: '8px', height: '8px', background: color }} />
         <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-8888aa)', textTransform: 'uppercase', letterSpacing: '.07em', flex: 1 }}>{label}</span>
+        {onDownload && available > 0 && (
+          <SegmentDownloadButton onDownload={onDownload} title={downloadTitle ?? `Download ${label} keywords (.xlsx)`} />
+        )}
         <span style={{ fontSize: '18px', fontWeight: 700, color }}>{rate}%</span>
       </div>
       <p style={{ fontSize: '11px', color: 'var(--c-555570)', margin: 0 }}>
@@ -358,7 +400,7 @@ function FeatureRateCard({ label, color, rate, acquired, available, active, onCl
       <div style={{ background: 'var(--c-1e1e2e)', borderRadius: '3px', height: '3px' }}>
         <div style={{ background: color, borderRadius: '3px', height: '3px', width: `${Math.min(100, rate)}%` }} />
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -1447,9 +1489,15 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
 
       {/* Feature Tab Selector */}
       <div className="flex gap-2 flex-wrap">
-        <FeatureRateCard label="AI Overviews"    color="var(--c-6c63ff)" rate={aioRate}   acquired={aioAcq}   available={aioAvail}   active={activeTab === 'aio'}   onClick={() => setActiveTab('aio')} />
-        <FeatureRateCard label="People Also Ask" color="var(--c-06b6d4)" rate={paaRate}   acquired={paaAcq}   available={paaAvail}   active={activeTab === 'paa'}   onClick={() => setActiveTab('paa')} />
-        <FeatureRateCard label="Video Carousel"  color="var(--c-f59e0b)" rate={videoRate} acquired={videoAcq} available={videoAvail} active={activeTab === 'video'} onClick={() => setActiveTab('video')} />
+        <FeatureRateCard label="AI Overviews"    color="var(--c-6c63ff)" rate={aioRate}   acquired={aioAcq}   available={aioAvail}   active={activeTab === 'aio'}   onClick={() => setActiveTab('aio')}
+          onDownload={() => exportSerpFeatureXLSX(buildFeatureExportRows(aioPool, 'AI Overview'), { clientName: displayClientName, segment: 'AI Overviews' })}
+          downloadTitle="Download AI Overview keywords (.xlsx)" />
+        <FeatureRateCard label="People Also Ask" color="var(--c-06b6d4)" rate={paaRate}   acquired={paaAcq}   available={paaAvail}   active={activeTab === 'paa'}   onClick={() => setActiveTab('paa')}
+          onDownload={() => exportSerpFeatureXLSX(buildFeatureExportRows(paaPool, 'People Also Ask'), { clientName: displayClientName, segment: 'People Also Ask' })}
+          downloadTitle="Download People Also Ask keywords (.xlsx)" />
+        <FeatureRateCard label="Video Carousel"  color="var(--c-f59e0b)" rate={videoRate} acquired={videoAcq} available={videoAvail} active={activeTab === 'video'} onClick={() => setActiveTab('video')}
+          onDownload={() => exportSerpFeatureXLSX(buildFeatureExportRows(videoPool, 'Video Carousel'), { clientName: displayClientName, segment: 'Video Carousel' })}
+          downloadTitle="Download Video Carousel keywords (.xlsx)" />
         <button onClick={() => setActiveTab('more')} className="flex flex-col gap-2 text-left" style={{ flex: 1, padding: '14px', borderRadius: '10px', background: activeTab === 'more' ? 'var(--c-22c55e12)' : 'var(--c-0f0f1e)', border: `1.5px solid ${activeTab === 'more' ? 'var(--c-22c55e)' : 'var(--c-1e1e35)'}`, cursor: 'pointer', minWidth: '120px' }}>
           <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-8888aa)', textTransform: 'uppercase', letterSpacing: '.07em' }}>More Features</span>
           <p style={{ fontSize: '11px', color: 'var(--c-555570)', margin: 0 }}>Snippets · KP · Local · Shopping</p>
