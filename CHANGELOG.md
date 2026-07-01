@@ -1,3 +1,19 @@
+## v7.332 — 2026-07-01 · SERP Features: keyword lists now match the Available/Gap count (Semrush = source of truth)
+
+**Bug Wayne hit.** On the Video Carousel tab, the "6,112 uncaptured" gap banner sat directly above a keyword list showing "No video carousel" on every visible row — the count and the list looked contradictory.
+
+**Root cause (verified against the live app, not assumed).** The AIO/PAA/Video "available" counts already correctly blended two real sources — SerpAPI-scanned keywords (live-verified) plus Semrush's uploaded "SERP Features by Keyword" column for the rest of the footprint. But the per-tab keyword LIST only ever iterated the ~5 SerpAPI-scanned keywords, never the ~6,500 Semrush-classified ones. Same footprint math powering two completely different lists.
+
+**Fix — one file, components/brief/SerpFeaturesSection.tsx.** Wayne's direction: let's just use the Semrush SERP features as a source of truth. Added buildFeaturePool, one shared helper used by AIO/PAA/Video: a scanned keyword's own live SerpAPI result always wins strongest, freshest evidence, Const I.1; an unscanned keyword falls back to Semrush's uploaded classification — the source of truth for the part of the footprint that hasn't been scanned yet. WHO is cited still comes only from a live scan Semrush has no citation data, so cited stays null — unknown, not not cited — for anything never scanned Const I.5, never guess a negative. The Video and PAA tabs now render from this pool via a new FeaturePoolList component default view = has the feature, toggle to see all keywords, search box, a provenance tag per row showing Semrush vs. SerpAPI scan. The AIO Keyword Drilldown now includes Semrush-flagged unscanned keywords too, with a new Not yet scanned status distinct from Missing verified not cited so an unverified row is never mislabeled as a loss — new filter pill added.
+
+**Verification Art. V.** Isolated tsc clean exit 0 under the project tsconfig.json — no target override V.1a. New jsdom harness rendered the real compiled component at real scale 5 scanned plus 6,511 uploaded keywords, mirroring this exact case: confirmed the Video tab list renders exactly 6,112 Video carousel rows matching the Available count was 5 before this fix, zero console errors, AIO Keyword Drilldown correctly shows Not yet scanned instead of a false missing for unscanned rows, panel scroll container intact IV.1. Theme parity IV.6/V.5: every CSS token used in the new/changed code was cross-checked against globals.css and confirmed defined in both the dark and light blocks — one invented token was caught by this check and corrected before packaging.
+
+**Honest gap — not run this release.** The full retained multi-release regression suite was not available in this environment dev-only file, not in the shipped manifest. This is a single-file, additive change that touches no taxonomy/cluster/journey/rank logic, so regression risk is low, but this is disclosed as a gap rather than a claimed pass Const V.6.
+
+**Known follow-up logged, not fixed this release.** The More Features tab's Full SERP feature inventory by keyword list still iterates scanned keywords only — the same underlying pattern, lower severity since it isn't paired with a Gap banner. Flagging for a future release.
+
+**Files.** components/brief/SerpFeaturesSection.tsx. package.json to 7.332.0.
+
 ## v7.331 - 2026-07-01 - Google Ranks: rank-bucket cards also filter the Category Performance section (categories + expanded keywords)
 
 **What Wayne asked.** After v7.330 the rank-bucket cards filtered the keyword table but NOT the Category Performance section below it. Make the categories and keywords there filter to the selected bucket too.
