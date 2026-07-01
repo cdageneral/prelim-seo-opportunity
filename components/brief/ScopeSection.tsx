@@ -321,6 +321,7 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
       ) : (
         <ContentExplorer plan={scopedPlan!} mode="plan"
           removable
+          clientName={clientDomain || 'client'}
           savingIds={savingIds}
           onRemove={removeFromScope} />
       )}

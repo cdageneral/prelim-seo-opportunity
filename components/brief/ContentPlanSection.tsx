@@ -6,6 +6,8 @@ import {
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
+import SegmentDownloadButton from '@/components/brief/SegmentDownloadButton';   // v7.328: per-segment XLSX download
+import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 
 // ─── palette (matches the app's orbit-* dark theme) ─────────────────────────────
 const COL = {
@@ -63,8 +65,9 @@ function DistMeter({ d }: { d: number }) {
 }
 
 // ─── filter / summary card ───────────────────────────────────────────────────────
-function FCard({ active, onClick, label, icon, val, sub, color, children }: {
+function FCard({ active, onClick, label, icon, val, sub, color, children, onDownload }: {
   active: boolean; onClick: () => void; label: string; icon?: string; val: string | number; sub: string; color: string; children?: any;
+  onDownload?: () => void;   // v7.328: when set, renders a green Excel-download control top-right
 }) {
   return (
     <button onClick={onClick} style={{
@@ -72,6 +75,7 @@ function FCard({ active, onClick, label, icon, val, sub, color, children }: {
       padding: '14px 16px', cursor: 'pointer', position: 'relative', transition: 'border-color 0.12s',
     }}>
       {active && <i className="ti ti-check" style={{ position: 'absolute', top: 11, right: 12, fontSize: 12, color }} />}
+      {onDownload && <SegmentDownloadButton onDownload={onDownload} title="Download as Excel" style={{ position: 'absolute', top: 11, right: active ? 30 : 12 }} />}
       <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: COL.dim, display: 'flex', alignItems: 'center', gap: 6 }}>
         {icon && <i className={`ti ${icon}`} style={{ color }} />}{label}
       </div>
@@ -83,8 +87,9 @@ function FCard({ active, onClick, label, icon, val, sub, color, children }: {
 }
 
 // ─── v7.249: SERP-page filter chip ───────────────────────────────────────────────
-function PChip({ active, onClick, label, count, color }: {
+function PChip({ active, onClick, label, count, color, onDownload }: {
   active: boolean; onClick: () => void; label: string; count: number; color: string;
+  onDownload?: () => void;   // v7.328: inline green Excel-download control after the count
 }) {
   return (
     <button onClick={onClick} style={{
@@ -96,6 +101,7 @@ function PChip({ active, onClick, label, count, color }: {
     }}>
       {label}
       <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 10.5, color: active ? color : COL.mut2 }}>{count}</span>
+      {onDownload && <SegmentDownloadButton onDownload={onDownload} title="Download as Excel" />}
     </button>
   );
 }
@@ -330,8 +336,9 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, clientName }: {
   plan: ContentPlan; mode: 'content' | 'plan';
+  clientName?: string;   // v7.328: filename stem for per-segment XLSX exports
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
   // row adds that topic to the Content Plan panel; selection persists to the project DB.
   selectable?: boolean; selectedIds?: Set<string>; onToggleSelect?: (id: string) => void; savingIds?: Set<string>;
@@ -347,6 +354,19 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
 
   const sc = plan.scope;
   const T = plan.topics;
+
+  // v7.328: ContentTopic → export row (one row per topic). Real data only; blank when absent.
+  const cn = clientName || 'client';
+  const ctRow = (t: ContentTopic): ExportTopicRow => ({
+    topic: t.name,
+    keywords: t.brief.keywords.map((k) => k.keyword),
+    totalVolume: t.totalVol,
+    url: t.url,
+    priority: t.priority,
+    stage: t.stage,
+    label: t.state === 'existing' ? 'Existing' : 'Net-new',
+  });
+  const dl = (arr: ContentTopic[], segment: string) => exportSegmentXLSX(arr.map(ctRow), { clientName: cn, segment });
 
   // v7.249: rows passing the summary-card filter, BEFORE the SERP-page filter — the
   // page-bucket counts are taken from this subset so the chips reflect the active view.
@@ -380,7 +400,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       {mode === 'content' ? (
         <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, margin: '14px 0 16px' }}>
-          <FCard active={cFilter === 'all'} onClick={() => setCFilter('all')} label="All topics" icon="ti-stack-2" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo total demand`} color="var(--c-c8c8e8)">
+          <FCard active={cFilter === 'all'} onClick={() => setCFilter('all')} label="All topics" icon="ti-stack-2" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo total demand`} color="var(--c-c8c8e8)" onDownload={() => dl(T, 'All topics')}>
             <div style={{ height: 6, borderRadius: 3, background: COL.line, overflow: 'hidden', marginTop: 10, display: 'flex' }}>
               <div style={{ width: `${sc.totalVol ? (sc.existingVol / sc.totalVol) * 100 : 0}%`, background: COL.green }} />
               <div style={{ width: `${sc.totalVol ? (sc.buildVol / sc.totalVol) * 100 : 0}%`, background: COL.orange }} />
@@ -389,18 +409,19 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
               <span style={{ color: COL.green }}>{sc.existing} existing</span><span style={{ color: COL.orange }}>{sc.build} net-new</span>
             </div>
           </FCard>
-          <FCard active={cFilter === 'existing'} onClick={() => setCFilter('existing')} label="Existing → optimise" icon="ti-refresh" val={sc.existing} sub={`${fmtVol(sc.existingVol)}/mo · pages you have`} color={COL.green} />
-          <FCard active={cFilter === 'build'} onClick={() => setCFilter('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo · pages to create`} color={COL.orange} />
-          <FCard active={cFilter === 'quickwin'} onClick={() => setCFilter('quickwin')} label="Quick wins" icon="ti-bolt" val={sc.quickWins} sub={`${fmtVol(sc.quickWinVol)}/mo · fast ROI`} color={COL.amber} />
+          <FCard active={cFilter === 'existing'} onClick={() => setCFilter('existing')} label="Existing → optimise" icon="ti-refresh" val={sc.existing} sub={`${fmtVol(sc.existingVol)}/mo · pages you have`} color={COL.green} onDownload={() => dl(T.filter((t) => t.state === 'existing'), 'Existing optimise')} />
+          <FCard active={cFilter === 'build'} onClick={() => setCFilter('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo · pages to create`} color={COL.orange} onDownload={() => dl(T.filter((t) => t.state !== 'existing'), 'Net-new build')} />
+          <FCard active={cFilter === 'quickwin'} onClick={() => setCFilter('quickwin')} label="Quick wins" icon="ti-bolt" val={sc.quickWins} sub={`${fmtVol(sc.quickWinVol)}/mo · fast ROI`} color={COL.amber} onDownload={() => dl(T.filter((t) => t.quickWin), 'Quick wins')} />
         </div>
         {/* v7.249: SERP-page filter — bucket pages by the client's real best Semrush position */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
           <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
             <i className="ti ti-trophy" /> Where you rank
           </span>
-          <PChip active={posFilter === 'all'} onClick={() => setPosFilter('all')} label="All" count={cFiltered.length} color="var(--c-c8c8e8)" />
+          <PChip active={posFilter === 'all'} onClick={() => setPosFilter('all')} label="All" count={cFiltered.length} color="var(--c-c8c8e8)" onDownload={() => dl(cFiltered, 'All ranks')} />
           {(['p1', 'p2', 'p3', 'p4', 'unranked'] as PosKey[]).map((k) => (
-            <PChip key={k} active={posFilter === k} onClick={() => setPosFilter(k)} label={PAGE_META[k].label} count={posCounts[k]} color={PAGE_META[k].color} />
+            <PChip key={k} active={posFilter === k} onClick={() => setPosFilter(k)} label={PAGE_META[k].label} count={posCounts[k]} color={PAGE_META[k].color}
+              onDownload={() => dl(cFiltered.filter((t) => posBucketOf(t.bestPosition) === k), `Where you rank ${PAGE_META[k].label}`)} />
           ))}
         </div>
         </>
@@ -408,16 +429,16 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         <>
           {/* scope row: total / existing / net-new (all carry volume) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, margin: '16px 0 14px' }}>
-            <FCard active={pStatus === 'all'} onClick={() => setPStatus('all')} label="Total articles" icon="ti-files" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo combined demand`} color="var(--c-c8c8e8)" />
-            <FCard active={pStatus === 'existing'} onClick={() => setPStatus('existing')} label="Existing → optimise" icon="ti-refresh" val={sc.existing} sub={`${fmtVol(sc.existingVol)}/mo`} color={COL.green} />
-            <FCard active={pStatus === 'build'} onClick={() => setPStatus('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo`} color={COL.orange} />
+            <FCard active={pStatus === 'all'} onClick={() => setPStatus('all')} label="Total articles" icon="ti-files" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo combined demand`} color="var(--c-c8c8e8)" onDownload={() => dl(T, 'Total articles')} />
+            <FCard active={pStatus === 'existing'} onClick={() => setPStatus('existing')} label="Existing → optimise" icon="ti-refresh" val={sc.existing} sub={`${fmtVol(sc.existingVol)}/mo`} color={COL.green} onDownload={() => dl(T.filter((t) => t.state === 'existing'), 'Existing optimise')} />
+            <FCard active={pStatus === 'build'} onClick={() => setPStatus('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo`} color={COL.orange} onDownload={() => dl(T.filter((t) => t.state !== 'existing'), 'Net-new build')} />
           </div>
           {/* priority filter cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, margin: '0 0 16px' }}>
-            <FCard active={pPriority === 'all'} onClick={() => setPPriority('all')} label="All priorities" icon="ti-list" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo`} color="var(--c-c8c8e8)" />
-            <FCard active={pPriority === 'P0'} onClick={() => setPPriority('P0')} label="P0 · Do first" val={sc.p0} sub={`${fmtVol(sc.p0Vol)}/mo`} color={priColor.P0} />
-            <FCard active={pPriority === 'P1'} onClick={() => setPPriority('P1')} label="P1 · Next" val={sc.p1} sub={`${fmtVol(sc.p1Vol)}/mo`} color={priColor.P1} />
-            <FCard active={pPriority === 'P2'} onClick={() => setPPriority('P2')} label="P2 · Later" val={sc.p2} sub={`${fmtVol(sc.p2Vol)}/mo`} color={priColor.P2} />
+            <FCard active={pPriority === 'all'} onClick={() => setPPriority('all')} label="All priorities" icon="ti-list" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo`} color="var(--c-c8c8e8)" onDownload={() => dl(T, 'All priorities')} />
+            <FCard active={pPriority === 'P0'} onClick={() => setPPriority('P0')} label="P0 · Do first" val={sc.p0} sub={`${fmtVol(sc.p0Vol)}/mo`} color={priColor.P0} onDownload={() => dl(T.filter((t) => t.priority === 'P0'), 'P0 Do first')} />
+            <FCard active={pPriority === 'P1'} onClick={() => setPPriority('P1')} label="P1 · Next" val={sc.p1} sub={`${fmtVol(sc.p1Vol)}/mo`} color={priColor.P1} onDownload={() => dl(T.filter((t) => t.priority === 'P1'), 'P1 Next')} />
+            <FCard active={pPriority === 'P2'} onClick={() => setPPriority('P2')} label="P2 · Later" val={sc.p2} sub={`${fmtVol(sc.p2Vol)}/mo`} color={priColor.P2} onDownload={() => dl(T.filter((t) => t.priority === 'P2'), 'P2 Later')} />
           </div>
         </>
       )}
@@ -695,6 +716,7 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       ) : (
         <ContentExplorer plan={selectedPlan!} mode="plan"
           removable
+          clientName={clientDomain || 'client'}
           savingIds={savingIds}
           onRemove={removeSelection} />
       )}

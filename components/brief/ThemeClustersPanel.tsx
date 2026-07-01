@@ -5,6 +5,8 @@ import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a)
 import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTree';   // v7.239: ONE shared tree builder — same source as the Keyword panel (Const II.7)
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
+import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
+import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1939,6 +1941,31 @@ function ClustersTab({
   // (fully-won topics score compGapPct=0 which would falsely pass < 0.25)
   const oppStats      = topicStats.filter(s => !s.isDemand && s.compGapPct < 0.25 && !s.isLeading);
 
+  // v7.328: TopicStat → export row (one row per topic). Real data only; blank when absent.
+  const cn = clientDomain || 'client';
+  const statRow = (st: TopicStat): ExportTopicRow => ({
+    topic: st.topic.product || st.topic.parentName,
+    keywords: st.topic.keywords.map((k) => k.keyword),
+    totalVolume: st.topic.totalVolume,
+    url: st.topic.pageUrl ?? '',
+    priority: '',
+    stage: st.stage,
+    label: st.isClientFootprint ? 'Existing' : 'Net-new',
+  });
+  // Bare Topic (scope tabs are derived from flatten(), not stats) → same mapping; the
+  // Existing/Net-new label comes from whether the client ranks (footprint) here.
+  const topicRow = (t: Topic): ExportTopicRow => ({
+    topic: t.product || t.parentName,
+    keywords: t.keywords.map((k) => k.keyword),
+    totalVolume: t.totalVolume,
+    url: t.pageUrl ?? '',
+    priority: '',
+    stage: t.stage,
+    label: t.keywords.some((k) => k.position !== null) ? 'Existing' : 'Net-new',
+  });
+  const dlStats = (arr: TopicStat[], segment: string) => exportSegmentXLSX(arr.map(statRow), { clientName: cn, segment });
+  const dlTopics = (arr: Topic[], segment: string) => exportSegmentXLSX(arr.map(topicRow), { clientName: cn, segment });
+
   // ── Funnel-stage roll-up (v7.169) ──────────────────────────────────────────
   // Each TOPIC sits in exactly one stage (its intent), split into client-footprint
   // vs competitor-gap vs demand. Annual vol = topic monthly × 12.
@@ -2048,6 +2075,7 @@ function ClustersTab({
     dimBg:    string;
     dimBdr:   string;
     icon:     string;
+    data:     TopicStat[];   // v7.328: rows this card exports
   }> = [
     {
       key:      'leading',
@@ -2061,6 +2089,7 @@ function ClustersTab({
       dimBg:    'var(--ca-74-222-128-0_04)',
       dimBdr:   'var(--ca-74-222-128-0_15)',
       icon:     'ti-trophy',
+      data:     leadingStats,
     },
     {
       key:      'trailing',
@@ -2074,6 +2103,7 @@ function ClustersTab({
       dimBg:    'var(--ca-244-114-182-0_04)',
       dimBdr:   'var(--ca-244-114-182-0_15)',
       icon:     'ti-trending-down',
+      data:     trailingStats,
     },
     {
       key:      'opportunity',
@@ -2087,6 +2117,7 @@ function ClustersTab({
       dimBg:    'var(--ca-56-189-248-0_04)',
       dimBdr:   'var(--ca-56-189-248-0_15)',
       icon:     'ti-target',
+      data:     oppStats,
     },
   ];
 
@@ -2110,6 +2141,7 @@ function ClustersTab({
             <button
               onClick={() => setFilter('all')}
               style={{
+                position:     'relative',
                 display: 'flex', alignItems: 'center', gap: 28,
                 padding: '20px 24px',
                 background:   allActive ? 'var(--ca-155-150-255-0_10)' : 'var(--ca-155-150-255-0_04)',
@@ -2124,6 +2156,7 @@ function ClustersTab({
               onMouseEnter={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_40)'; }}
               onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_18)'; }}
             >
+              <SegmentDownloadButton onDownload={() => dlStats(topicStats, 'All clusters')} title="Download as Excel" size={14} style={{ position: 'absolute', top: 12, right: 14 }} />
               <div style={{ textAlign: 'center', flexShrink: 0 }}>
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 4 }}>
                   Total clusters
@@ -2208,6 +2241,7 @@ function ClustersTab({
                         ACTIVE
                       </span>
                     )}
+                    <SegmentDownloadButton onDownload={() => dlStats(card.data, card.label)} title="Download as Excel" style={{ marginLeft: 'auto' }} />
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--c-7070a0)' }}>
                     {card.subtitle}
@@ -2356,6 +2390,13 @@ function ClustersTab({
                     </div>
                   </div>
 
+                  {/* v7.328: download this stage's topics as Excel (span role=button —
+                      stopPropagation keeps the band's filter click from firing). */}
+                  <SegmentDownloadButton
+                    onDownload={() => dlStats(topicStats.filter(s => s.stage === r.stage), `${meta.label} stage`)}
+                    title="Download as Excel"
+                    style={{ alignSelf: 'center' }}
+                  />
                   {/* Clickable affordance — filter icon, fades in on hover */}
                   <i
                     className="ti ti-filter"
@@ -2381,8 +2422,17 @@ function ClustersTab({
       {/* solution-aware, full funnel — the SAME split the Journey & Content Map  */}
       {/* panels use (single source of truth).                                    */}
       {(() => {
-        const preTopicsN     = flatten(clusters.filter(c =>  isPreProductCluster(c))).length;
-        const productTopicsN = flatten(clusters.filter(c => !isPreProductCluster(c))).length;
+        // v7.328: keep the topic arrays (not just counts) so each scope tab can export the
+        // EXACT rows its count reflects (Const I.3 — export count == displayed count).
+        const preTopics     = flatten(clusters.filter(c =>  isPreProductCluster(c)));
+        const productTopics = flatten(clusters.filter(c => !isPreProductCluster(c)));
+        const preTopicsN     = preTopics.length;
+        const productTopicsN = productTopics.length;
+        const scopeDownload: Record<'all' | 'product' | 'pre', () => void> = {
+          all:     () => dlTopics(productTopics.concat(preTopics), 'All journeys'),
+          product: () => dlTopics(productTopics, 'Product journey'),
+          pre:     () => dlTopics(preTopics, 'Pre-product journey'),
+        };
         const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
           { key: 'all',     label: 'All journeys',        count: productTopicsN + preTopicsN, hint: 'Product + pre-product topics',           accent: 'var(--c-c8c8e8)' },
           { key: 'product', label: 'Product journey',     count: productTopicsN,              hint: 'Solution-aware demand · full funnel',    accent: 'var(--c-9b96ff)', dot: true },
@@ -2416,6 +2466,7 @@ function ClustersTab({
                     {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
                     {s.label}
                     <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>{s.count}</span>
+                    <SegmentDownloadButton onDownload={scopeDownload[s.key]} title="Download as Excel" />
                   </button>
                 );
               })}

@@ -1570,6 +1570,7 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         <div style={{ marginBottom: 26 }}>
           <ContentExplorer plan={plan} mode="content"
             selectable
+            clientName={clientDomain || 'client'}
             selectedIds={selectedIds}
             savingIds={savingIds}
             onToggleSelect={toggleSelect} />

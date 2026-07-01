@@ -12,6 +12,8 @@ import {
   type StepFacet,
 } from '@/lib/journey/graph';
 import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens
+import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
+import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 
 // SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -2110,7 +2112,7 @@ function PlanCheckbox({ state, saving, onToggle, label, size = 16 }: {
 // the cluster count instead of the demand-universe graph. The map is a collapsible
 // parent-category list (the flat node map can't legibly show thousands of clusters),
 // grouped into the two journey lanes. Every number is a real roll-up of the topics.
-export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null, projectId = '', kwVersion = 0 }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; projectId?: string; kwVersion?: number }) {
+export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null, projectId = '', kwVersion = 0, clientName = 'client' }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; projectId?: string; kwVersion?: number; clientName?: string }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   // v7.247: Product / Pre-product / All journey scope (matches the Cluster panel).
@@ -2167,8 +2169,23 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
     { lane: 'pre-product', label: 'Pre-product · problem-aware',  accent: 'var(--c-22d3ee)' },
   ];
 
-  const cell = (label: string, val: number | string, color: string, sub?: string) => (
-    <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+  // v7.328: CanonicalJourneyTopic row → export row (one row per topic). Real data only.
+  const cn = clientName || 'client';
+  const rowOf = (r: { t: CanonicalJourneyTopic; action: 'optimize' | 'build' }): ExportTopicRow => ({
+    topic: r.t.product || r.t.parentName,
+    keywords: r.t.keywords.map((k) => k.keyword),
+    totalVolume: r.t.totalVolume,
+    url: r.t.pageUrl ?? '',
+    priority: '',
+    stage: r.t.stage,
+    label: r.action === 'optimize' ? 'Existing' : 'Net-new',
+  });
+  const dlRows = (arr: Array<{ t: CanonicalJourneyTopic; action: 'optimize' | 'build' }>, segment: string) =>
+    exportSegmentXLSX(arr.map(rowOf), { clientName: cn, segment });
+
+  const cell = (label: string, val: number | string, color: string, sub?: string, onDownload?: () => void) => (
+    <div style={{ position: 'relative', background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
+      {onDownload && <SegmentDownloadButton onDownload={onDownload} title="Download as Excel" style={{ position: 'absolute', top: 10, right: 12 }} />}
       <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color, margin: '2px 0 0' }}>{val.toLocaleString?.() ?? val}</div>
       {sub && <div style={{ fontSize: 10, color: 'var(--c-5a5a80)', marginTop: 2 }}>{sub}</div>}
@@ -2190,9 +2207,9 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
           )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
-          {cell('Topics in journey', total, 'var(--c-c8c8e8)')}
-          {cell('Existing — optimize', optimize, STATE_COLOR.existing)}
-          {cell('Net-new — build', build, STATE_COLOR.missing, `${preBuild} pre · ${prodBuild} product`)}
+          {cell('Topics in journey', total, 'var(--c-c8c8e8)', undefined, () => dlRows(scopedRows, 'Topics in journey'))}
+          {cell('Existing — optimize', optimize, STATE_COLOR.existing, undefined, () => dlRows(scopedRows.filter(r => r.action === 'optimize'), 'Existing optimize'))}
+          {cell('Net-new — build', build, STATE_COLOR.missing, `${preBuild} pre · ${prodBuild} product`, () => dlRows(scopedRows.filter(r => r.action === 'build'), 'Net-new build'))}
           <div style={{ background: 'var(--c-0d0d1e)', borderRadius: 8, padding: '12px 14px' }}>
             <div style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>Coverage</div>
             <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--c-c8c8e8)', margin: '2px 0 6px' }}>{coverage}%</div>
@@ -2208,6 +2225,13 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
       {/* (product = solution-aware full funnel; pre-product = problem/trigger,       */}
       {/* awareness only — Const III.2a, single source of truth across panels).        */}
       {(() => {
+        // v7.328: export the EXACT rows each tab's count reflects (from `rows`, the
+        // segment-filtered set — same source the lane counts use).
+        const scopeDownload: Record<'all' | 'product' | 'pre', () => void> = {
+          all:     () => dlRows(rows, 'All journeys'),
+          product: () => dlRows(rows.filter(r => r.lane === 'product'), 'Product journey'),
+          pre:     () => dlRows(rows.filter(r => r.lane === 'pre-product'), 'Pre-product journey'),
+        };
         const SCOPES: Array<{ key: 'all' | 'product' | 'pre'; label: string; count: number; hint: string; accent: string; dot?: boolean }> = [
           { key: 'all',     label: 'All journeys',        count: productN + preN, hint: 'Product + pre-product topics',                   accent: 'var(--c-c8c8e8)' },
           { key: 'product', label: 'Product journey',     count: productN,        hint: 'Solution-aware demand · full funnel',            accent: 'var(--c-9b96ff)', dot: true },
@@ -2239,6 +2263,7 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
                     {s.dot && <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.accent, flexShrink: 0 }} />}
                     {s.label}
                     <span style={{ fontSize: 11, fontWeight: 600, color: on ? s.accent : 'var(--c-585878)' }}>{s.count.toLocaleString()}</span>
+                    <SegmentDownloadButton onDownload={scopeDownload[s.key]} title="Download as Excel" />
                   </button>
                 );
               })}
@@ -3283,6 +3308,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               topics={(filteredCanonicalTopics ?? canonicalTopics) as CanonicalJourneyTopic[]}
               problemSeeds={(demandUniverse?.problemSeeds ?? (analysis?.semrushSnapshot as any)?._demandUniverse?.problemSeeds ?? []) as string[]}
               segmentLabel={activeSegment ? activeSegment.name : (activeBucketId === SHARED_BUCKET ? 'Shared / all personas' : null)}
+              clientName={clientDomain || 'client'}
               projectId={projectId}
               kwVersion={kwVersion}
             />
