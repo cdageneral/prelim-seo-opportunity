@@ -200,10 +200,12 @@ function CategoryPerformanceSection({
   cb,
   categoryRankStats,
   topKws,
+  filter,
 }: {
   cb:                CategoryBreakdown;
   categoryRankStats: Record<string, CatRankStats>;
   topKws:            SemKw[];
+  filter:            BucketKey;
 }) {
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
@@ -211,13 +213,26 @@ function CategoryPerformanceSection({
   const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
   if (procedureCats.length === 0 && navCats.length === 0) return null;
 
-  // Keywords for the currently expanded category, sorted by position
+  // v7.331: when a rank-bucket card is active, show only categories that have keywords
+  // ranking in that bucket, and (when expanded) only that bucket's keywords. Each
+  // category's own metrics are unchanged (Wayne's choice) — this filters VISIBILITY
+  // only, using the already-stored per-bucket dist (no re-derivation, Const II.8).
+  const bucket   = filter === 'all' ? null : (POSITION_BUCKETS.find(b => b.key === filter) ?? null);
+  const catInBucket = (name: string) =>
+    !bucket || ((categoryRankStats[name]?.dist as Record<string, number> | undefined)?.[filter] ?? 0) > 0;
+  const shownProcedure = procedureCats.filter(c => catInBucket(c.name));
+  const shownNav       = navCats.filter(c => catInBucket(c.name));
+
+  // Keywords for the currently expanded category, sorted by position — also scoped to
+  // the active bucket so an expanded row lists only that bucket's keywords.
   const expandedKws = useMemo(() => {
     if (!expandedCat) return [];
+    const b = filter === 'all' ? null : (POSITION_BUCKETS.find(x => x.key === filter) ?? null);
     return topKws
       .filter(kw => inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories) === expandedCat)
-      .sort((a, b) => (a.position ?? 9999) - (b.position ?? 9999));
-  }, [expandedCat, topKws, cb]);
+      .filter(kw => !b || (kw.position !== null && kw.position >= b.min && kw.position <= b.max))
+      .sort((a, c) => (a.position ?? 9999) - (c.position ?? 9999));
+  }, [expandedCat, topKws, cb, filter]);
 
   function toggle(name: string) {
     setExpandedCat(prev => (prev === name ? null : name));
@@ -229,7 +244,12 @@ function CategoryPerformanceSection({
       <div className="flex items-center justify-between mb-4">
         <div>
           <p className="text-orbit-secondary text-xs font-medium uppercase tracking-widest">Category Performance</p>
-          <p className="text-orbit-primary text-sm font-semibold mt-0.5">Demand &amp; ranking by category · click a row to expand</p>
+          <p className="text-orbit-primary text-sm font-semibold mt-0.5">
+            Demand &amp; ranking by category · click a row to expand
+            {bucket && (
+              <span style={{ color: bucket.hex, fontWeight: 600 }}> · filtered to {bucket.label}</span>
+            )}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           {RANK_BUCKET_META.map(b => (
@@ -250,13 +270,13 @@ function CategoryPerformanceSection({
         ))}
       </div>
 
-      {/* Procedure section */}
-      {procedureCats.length > 0 && (
+      {/* Procedure section (v7.331: shown lists are filtered to the active bucket) */}
+      {shownProcedure.length > 0 && (
         <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-4a4a72)', letterSpacing: '.08em', textTransform: 'uppercase', padding: '6px 0 2px' }}>
           Procedure Lines
         </p>
       )}
-      {procedureCats.map(cat => (
+      {shownProcedure.map(cat => (
         <CatRow
           key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={false}
           isExpanded={expandedCat === cat.name} onToggle={toggle} expandedKws={expandedKws}
@@ -264,17 +284,24 @@ function CategoryPerformanceSection({
       ))}
 
       {/* Brand & navigation section */}
-      {navCats.length > 0 && (
+      {shownNav.length > 0 && (
         <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-4a4a72)', letterSpacing: '.08em', textTransform: 'uppercase', padding: '8px 0 2px', borderTop: '1px solid var(--c-111120)', marginTop: '4px' }}>
           Brand &amp; Navigation
         </p>
       )}
-      {navCats.map(cat => (
+      {shownNav.map(cat => (
         <CatRow
           key={cat.name} cat={cat} stats={categoryRankStats[cat.name]} dimmed={true}
           isExpanded={expandedCat === cat.name} onToggle={toggle} expandedKws={expandedKws}
         />
       ))}
+
+      {/* Honest empty state when a bucket filter matches no categories (I.5) */}
+      {bucket && shownProcedure.length === 0 && shownNav.length === 0 && (
+        <p style={{ fontSize: '11px', color: 'var(--c-6a6a90)', padding: '10px 0 2px' }}>
+          No categories have keywords ranking in {bucket.label}. Clear the rank-bucket filter to see all categories.
+        </p>
+      )}
     </div>
   );
 }
@@ -1800,6 +1827,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
           cb={cb}
           categoryRankStats={categoryRankStats}
           topKws={topKws}
+          filter={filter}
         />
       )}
 
