@@ -75,6 +75,18 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_data_updated_at TIMESTAMP`);      // v7.318
   } catch { /* already exists */ }
+  // v7.327: competitor-gap SCOPE-gate overrides (added to the schema in v7.326). The list
+  // query below selects every schema column, so these MUST be ensured here too or the whole
+  // dashboard — and every /api/projects[/id][/content-plan] read/write behind it — 500s with
+  // `column "scope_overrides" does not exist` (the exact v7.268 lesson; v7.326 shipped the
+  // column + its own scope-overrides route ensure but forgot this list route, so any DB that
+  // hadn't yet hit that route broke, taking the selection checkboxes down across panels).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_overrides JSONB`);                   // v7.327 (schema v7.326)
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_overrides_updated_at TIMESTAMP`);    // v7.327 (schema v7.326)
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
