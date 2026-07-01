@@ -1,3 +1,13 @@
+## v7.329 — 2026-07-01 · Google Rank SoV: "Add top SERP rivals" control moved inside the Share-of-Voice card; Volume Opportunity restored to its right
+
+**What Wayne asked.** On the Google Rank panel, put the "Add top SERP rivals" control on the Share-of-Voice card instead of its own separate card, and move the Volume Opportunity card back up to the right of Share of Voice.
+
+**What shipped.** The opt-in SERP-rivals block (estimate → pull → inject) now renders INSIDE the SoV card via a new optional `footer` prop on `SovPanel`, so the two-up row reads `[Share of Voice | Volume Opportunity]` again. The standalone third card is gone.
+
+**Verification (Art. V).** `tsc` clean (exit 0) under the project tsconfig with no `target` override (V.1a). Pure layout relocation — no new color tokens, so theme parity holds in both light and dark (Const IV.6 / V.5), confirmed with a dual-theme render. Exact one-file diff vs the live v7.323 blob; panel scroll container and the SoV page-1-capture math untouched.
+
+**Files.** `components/brief/GoogleSerpSection.tsx` (SovPanel gains optional `footer`; the SoV/Volume grid drops the standalone SERP cell). `package.json` → 7.329.0.
+
 ## v7.328 — 2026-07-01 · Per-segment Excel download on every card, funnel stage, and filter/journey tab
 
 **What Wayne asked.** Add a download icon to each summary card so you can export that segment to Excel — including the theme/topic, its keywords, volume, existing-URL map, priority/stage, and a net-new-vs-existing label. Extended (Wayne's choice) to **every** card, funnel stage, and filter/journey tab across all three panels.
