@@ -4,9 +4,29 @@
  * Generates a self-contained HTML document from analysis data.
  * Designed to be rendered by Puppeteer with full CSS styling.
  * The dark OrbitIQ brand is preserved in print via CSS variables.
+ *
+ * v7.335 (QC audit B2, Const I.5a/II.7): the hero capture % and the Share of
+ * Voice section now render the CURRENT models — page-1 capture from the live
+ * canonical pool (buildKwPool + computeVolumeMetrics, same math as the Exec
+ * hero) and the shared page-1 click-capture SoV (lib/sov/model.ts, same math as
+ * SovPanel) — computed by the route and passed in as `computed`. The stored
+ * analysis fields (marketCaptureRate / totalCategoryVolume / clientOwnedVolume,
+ * the pre-v7.245 model) remain ONLY as an honest, explicitly-labeled fallback
+ * when the snapshot cannot build a pool (Const I.5). The old competitor
+ * organicTraffic "Share of Voice" bars are gone — they showed a structurally
+ * different (competitor-relative) model than the app.
  */
 
-export function buildBriefHTML(analysis: any): string {
+import type { SovComputed } from '@/lib/sov/model';
+
+export interface PdfComputed {
+  /** Live canonical-pool capture metrics (computeVolumeMetrics on buildKwPool). */
+  metrics?: { totalMonthly: number; page1Monthly: number; captureRate: number } | null;
+  /** Shared page-1 click-capture SoV (lib/sov/model.ts computeSov). */
+  sov?: SovComputed | null;
+}
+
+export function buildBriefHTML(analysis: any, computed?: PdfComputed): string {
   const project     = analysis.project ?? {};
   const opps        = (analysis.opportunities ?? []).sort((a: any, b: any) => a.rank - b.rank);
   const personas    = analysis.personas ?? [];
@@ -15,9 +35,37 @@ export function buildBriefHTML(analysis: any): string {
   const serp        = analysis.serpApiSnapshot ?? {};
   const narrative   = semrush._narrative ?? {};
 
-  const captureRate   = analysis.marketCaptureRate ?? 0;
-  const totalVol      = analysis.totalCategoryVolume ?? 0;
-  const clientVol     = analysis.clientOwnedVolume ?? 0;
+  // v7.335 (QC audit B2): prefer LIVE canonical-pool metrics; stored fields are the
+  // labeled fallback for snapshots that can't build a pool (honest fallback, I.5).
+  const liveMetrics = computed?.metrics && computed.metrics.totalMonthly > 0 ? computed.metrics : null;
+  const captureRate   = liveMetrics ? liveMetrics.captureRate  : (analysis.marketCaptureRate ?? 0);
+  const totalVol      = liveMetrics ? liveMetrics.totalMonthly : (analysis.totalCategoryVolume ?? 0);
+  const clientVol     = liveMetrics ? liveMetrics.page1Monthly : (analysis.clientOwnedVolume ?? 0);
+  const captureLabel  = liveMetrics ? 'page-1 capture rate' : 'market capture rate (stored at analysis time)';
+  const captureSource = liveMetrics
+    ? 'Semrush keyword footprint · page-1 volume ÷ total volume'
+    : 'Source: stored analysis (legacy pre-v7.245 model)';
+  const clientVolLabel  = liveMetrics ? 'Page-1 keyword volume/mo' : 'Client organic visits/mo';
+  const clientVolSource = liveMetrics ? 'Source: Semrush keyword footprint (canonical pool)' : 'Source: Semrush Domain Overview';
+  const totalVolLabel   = liveMetrics ? 'Total footprint volume/mo' : 'Total category traffic/mo';
+  const totalVolSource  = liveMetrics ? 'Source: Semrush keyword footprint (canonical pool)' : 'Source: Semrush Competitive Landscape';
+  // v7.335 (QC audit B2, Const I.5a): shared page-1 click-capture SoV. Absent /
+  // empty-basis SoV renders an honest empty state — NEVER the old competitor bars.
+  const sov = computed?.sov && computed.sov.basis === 'capture' && computed.sov.availableClicks > 0 ? computed.sov : null;
+  // Mirrors SovPanel/LegendRow: sub-1% shares show one decimal, not a misleading 0%.
+  const pct = (p: number) => p > 0 && p < 0.01 ? `${(p * 100).toFixed(1)}%` : `${Math.round(p * 100)}%`;
+  // Slice rows mirror the donut legend: uploaded competitors (cyan) + top SERP
+  // rivals (amber, capped at 3 by the model), ranked by captured clicks. Open =
+  // page-1 clicks nobody shown is winning — exact remainder, same denominator.
+  const sovSlices = sov
+    ? [
+        ...sov.compEntries.map(c => ({ ...c, color: '#06B6D4' })),
+        ...sov.serpEntries.map(c => ({ ...c, color: '#F59E0B' })),
+      ].sort((a, b) => b.capturedClicks - a.capturedClicks)
+    : [];
+  const sovOpenPct = sov
+    ? Math.max(0, (sov.availableClicks - sov.capturedClicks - sovSlices.reduce((t, c) => t + c.capturedClicks, 0)) / sov.availableClicks)
+    : 0;
   const aioAvail      = analysis.aioAvailable ?? 0;
   const aioAcq        = analysis.aioAcquired ?? 0;
   const profoundScore = profound.overallScore ?? 0;
@@ -147,9 +195,9 @@ export function buildBriefHTML(analysis: any): string {
       <div class="client-meta" style="margin-top:6px">Organic Growth Intelligence Brief</div>
     </div>
     <div style="text-align:right">
-      <div class="capture-hero">${Math.round(captureRate * 100)}%</div>
-      <div style="font-size:9px;color:#8888AA;margin-top:3px">market capture rate</div>
-      <div style="font-size:7px;color:#555570;margin-top:2px">Source: Semrush</div>
+      <div class="capture-hero">${pct(captureRate)}</div>
+      <div style="font-size:9px;color:#8888AA;margin-top:3px">${captureLabel}</div>
+      <div style="font-size:7px;color:#555570;margin-top:2px">${escapeHtml(captureSource)}</div>
       <div class="date-badge" style="margin-top:12px">Generated ${date}</div>
     </div>
   </div>
@@ -164,13 +212,13 @@ export function buildBriefHTML(analysis: any): string {
       <div class="two-col" style="margin-bottom:10px">
         <div class="stat-card">
           <div class="stat-value">${fmt(clientVol)}</div>
-          <div class="stat-label">Client organic visits/mo</div>
-          <div class="stat-source">Source: Semrush Domain Overview</div>
+          <div class="stat-label">${clientVolLabel}</div>
+          <div class="stat-source">${clientVolSource}</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${fmt(totalVol)}</div>
-          <div class="stat-label">Total category traffic/mo</div>
-          <div class="stat-source">Source: Semrush Competitive Landscape</div>
+          <div class="stat-label">${totalVolLabel}</div>
+          <div class="stat-source">${totalVolSource}</div>
         </div>
       </div>
       <div class="bar-track">
@@ -182,16 +230,35 @@ export function buildBriefHTML(analysis: any): string {
     <!-- Competitor Gap -->
     <div class="section">
       <div class="section-label">Competitor Gap</div>
-      <div class="section-title">Share of Voice</div>
-      ${(semrush.competitors ?? []).slice(0, 5).map((c: any) => {
-        const maxT = Math.max(clientVol, ...(semrush.competitors ?? []).map((x: any) => x.organicTraffic ?? 0));
-        const pct  = maxT > 0 ? (c.organicTraffic / maxT) * 100 : 0;
-        return `<div class="platform-row">
-          <div class="platform-name">${escapeHtml(c.domain)}</div>
-          <div class="platform-track"><div class="platform-fill" style="width:${pct}%"></div></div>
-          <div class="platform-score">${fmt(c.organicTraffic ?? 0)}</div>
-        </div>`;
-      }).join('')}
+      <div class="section-title">Share of Voice &mdash; page-1 click capture</div>
+      ${sov ? `
+      <div style="font-size:8px;color:#8888AA;margin:-6px 0 8px">modeled clicks won &divide; all page-1 clicks available across the footprint</div>
+      <div class="platform-row">
+        <div class="platform-name" style="color:#F0F0FF;font-weight:600">${escapeHtml(sov.clientDisplay.replace(/^www\./, ''))}</div>
+        <div class="platform-track"><div class="platform-fill" style="width:${Math.min(100, sov.sovPct * 100)}%;background:#6C63FF"></div></div>
+        <div class="platform-score">${pct(sov.sovPct)}</div>
+      </div>
+      ${sovSlices.map(c => `<div class="platform-row">
+        <div class="platform-name">${escapeHtml(c.domain.replace(/^www\./, ''))}</div>
+        <div class="platform-track"><div class="platform-fill" style="width:${Math.min(100, c.pct * 100)}%;background:${c.color}"></div></div>
+        <div class="platform-score" style="color:${c.color}">${pct(c.pct)}</div>
+      </div>`).join('')}
+      <div class="platform-row">
+        <div class="platform-name" style="color:#555570">Open / uncaptured</div>
+        <div class="platform-track"><div class="platform-fill" style="width:${Math.min(100, sovOpenPct * 100)}%;background:#2A2A3D"></div></div>
+        <div class="platform-score" style="color:#8888AA">${pct(sovOpenPct)}</div>
+      </div>
+      <div style="font-size:8px;color:#8888AA;margin-top:6px">
+        Client wins ~${Math.round(sov.capturedClicks).toLocaleString()} of ~${Math.round(sov.availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint${sovSlices.length > 0 ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
+      </div>
+      <div style="margin-top:6px;font-size:7.5px">
+        <span style="display:inline-block;padding:1px 7px;border-radius:20px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);color:#F59E0B">modeled estimate</span>
+        <span style="color:#555570;margin-left:5px">CTR curve: ${escapeHtml(sov.ctrSource)}</span>
+      </div>
+      <div style="font-size:7px;color:#555570;margin-top:4px">
+        data: ${sov.totalKwCount.toLocaleString()} footprint kws &middot; ${sov.page1KwCount.toLocaleString()} rank pg 1 &middot; volume &amp; position are measured Semrush rows; only the CTR multiplier is modeled.
+      </div>` : `
+      <div style="font-size:9px;color:#8888AA">No page-1 keyword data available to compute Share of Voice for this analysis. Re-run the analysis (or upload keyword rankings) to populate this section.</div>`}
       ${narrative.competitiveReality ? `<div class="narrative" style="margin-top:8px"><p>${escapeHtml(narrative.competitiveReality)}</p></div>` : ''}
     </div>
   </div>
