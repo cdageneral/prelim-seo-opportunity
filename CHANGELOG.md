@@ -1,3 +1,13 @@
+## v7.334 — 2026-07-01 · QC-audit consistency fixes: ThemeClusters header, Exec as-of stamps, Journey topic groups
+
+**What was wrong.** The 2026-07-01 QC audit — full report in GEO/OrbitIQ_QC_Audit_2026-07-01.md in Wayne's records — confirmed three cross-panel inconsistencies live on WEG. A1: the Theme Clusters header said 360 topic clusters while the Total-clusters card, funnel, journey chips, Exec Summary and Journeys panel all said 531 — the header still counted with the legacy intent flatten instead of the stored-taxonomy flatten the cards use. A2: the Exec narrative and bottom roll-up carry synthesis-time figures — 9 percent capture, AIO 20 percent — beside live cards showing 3 percent SoV and 2 percent AIO. A3: the Journeys lane line called its parentName groups categories, showing 271 against the Cluster panel's 173 stored categories for the same 531 topics.
+
+**What shipped.** ThemeClustersPanel header now counts with the SAME flatten ClustersTab renders — taxonomy build when keywordPaths exist, intent flatten only as the pre-taxonomy fallback — so header equals card by construction, Const II.7. Exec Summary stamps the narrative, the AI-generated priorities and the roll-up AIO token as written at analysis with the analysis date — honest freshness, Const I.5; recomputing the AIO roll-up live is the logged follow-up, QC audit B4. Journeys lane line now says topic groups instead of categories.
+
+**Verification Art. V.** Isolated tsc 5.4.5 clean, exit 0, under the project tsconfig verbatim, no target override, V.1a, with real react and xlsx types. jsdom harness at real scale — 1,244 keywords, 173 categories, 531 taxonomy topics — 13 of 13 checks pass: header equals card, all three as-of stamps, topic-groups label, panel scroll retained IV.1, CSS-var-only new styling in both themes IV.6. Base files were byte-verified against live main at ed7d319 via git blob SHAs before patching, so the v7.328 per-segment download features are fully preserved in these files.
+
+**Files.** components/brief/ThemeClustersPanel.tsx, components/brief/ExecutiveSummarySection.tsx, components/brief/JourneySection.tsx, package.json to 7.334.0.
+
 ## v7.333 — 2026-07-01 · SERP Features: download icon on the AI Overviews / People Also Ask / Video Carousel summary cards
 
 **Wayne asked.** Add a download icon to each of the AIO/PAA/Video summary cards, same as before -- the excel should contain all the information.
