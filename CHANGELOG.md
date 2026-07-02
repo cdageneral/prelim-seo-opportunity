@@ -1,3 +1,19 @@
+## v7.337 — 2026-07-02 · QC-audit cleanup batch (B4, B9a, B9b, B12, B14) + dead-panel removal
+
+**B14 — competitor-gap estimate and pull now span every competitor domain, Const I.6.** The Semrush gap step was capped at 5 competitor domains at four call sites (including the cost estimate); Wayne chose to remove the cap (2026-07-01). New analyses estimate and pull gap keywords across all configured competitor domains, so the cost estimate shows the true, larger figure up front. (lib/apis/semrush.ts, lib/utils/kwVolume.ts, app/api/projects/[id]/semrush-estimate/route.ts)
+
+**B9a — competitor-brand drop is one tested implementation.** Consolidated the demand-lens competitor-brand drop into a single exported buildCompetitorBrandDropTest in kwVolume, replacing duplicated inline logic. (lib/utils/kwVolume.ts)
+
+**B9b — Journey demand fallback fails honestly, Const I.5/II.8.** When the canonical build cannot produce the demand lens, the Journey panel logs the failure and shows an honest amber notice instead of silently degrading; its lexical fallback is removed so it reads stored membership only, matching ContentMap. (components/brief/JourneySection.tsx, app/projects/[id]/page.tsx)
+
+**B12 — one shared path-tree.** KeywordsPanel and serviceLines build their product-line path tree from a single shared lib/category/pathTree, removing duplicated tree logic. (lib/category/pathTree.ts, lib/local/serviceLines.ts, components/brief/KeywordsPanel.tsx)
+
+**B4 — Executive SERP-features roll-up is live, not "at analysis."** The Exec Summary AIO/PAA/Video tokens roll up from a shared lib/serp/featurePool over the live pool; the stale "(at analysis)" suffix is dropped and the retained-suite check updated with a dated note. (lib/serp/featurePool.ts, components/brief/SerpFeaturesSection.tsx, ExecutiveSummarySection.tsx)
+
+**Dead-panel removal, B13 (Wayne approved 2026-07-01).** Removed six unused brief panels with zero code references: MarketGapSection, CompetitorGapSection, FootprintSection, OpportunitiesSection, PersonasSection, ReportsPanel.
+
+**Build.** tsc clean under the project tsconfig (no target override, Const V.1a); jsdom harness + retained regression suite pass; changed-files-only deploy (Const VI.6).
+
 ## v7.336 — 2026-07-01 · QC-audit fixes B3/B5/B6 + the ContentMap cluster-builder mirror
 
 **B3 — server scan routes now see brandTerms, excludedBrands and scopeOverrides, Const II.7 and III.1d.** serp-scan and local-scan built their pools from the raw DB snapshot, so scan candidate sets included user-blocklisted keywords and ignored promote and demote scope overrides — their X-of-N counts drifted from panel totals. Both routes now wrap the snapshot with the shared hydrateSnapshotForPool from v7.335 before buildKwPool; local-scan's secondary raw-snapshot brand-token read fixed too. The underscore fields never persist to the DB — verified the raw snapshot is not mutated.
