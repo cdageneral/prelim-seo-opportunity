@@ -11,7 +11,8 @@ import {
   type EdgeKind as JEdgeKind,
   type StepFacet,
 } from '@/lib/journey/graph';
-import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens
+import { buildKwPool, filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens; v7.335: canonical pool for buildClusters (Const II.7, QC audit B1)
+import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.335 (QC audit B1): guard on buildClusters/classifier category reads (Const III.1a)
 import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 
@@ -538,11 +539,19 @@ export function buildJourneyClassifier(
 ): { classify: (keyword: string) => JourneyClass; themeOf: (keyword: string) => string } {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
+  // v7.335 (QC audit B1): same shared competitor-brand category guard as buildClusters
+  // (Const III.1a) — this `cb.categories` read was unguarded too, so the classifier
+  // filed competitor-brand keywords as PRODUCT for its consumers (Keyword + Cluster
+  // panels). The client's OWN brand category is kept by the guard; the `storedMap`
+  // read is guarded through the `catNames.has(...)` membership check in classify() below.
+  const catGuard = buildCategoryGuard(semSnap, clientDomain, competitorDomains);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
-    (cb?.categories ?? []).map((c: any) => ({
-      name: c.name,
-      type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
-    }));
+    (cb?.categories ?? [])
+      .filter((c: any) => !catGuard.isCompetitorBrandCategory(String(c?.name ?? ''), c?.type))
+      .map((c: any) => ({
+        name: c.name,
+        type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
+      }));
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
   const vocab = deriveProblemVocab(analysis);
   const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
@@ -594,48 +603,46 @@ export function buildClusters(
 ): ThemeCluster[] {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
+  // v7.335 (QC audit B1): shared competitor-brand category guard (Const III.1a) on this
+  // `cb.categories` read — previously unguarded, so competitor brand categories (e.g.
+  // "Wells Fargo Brand Searches") became clusters and Exec-journey coverage rows that
+  // every canonical panel had already dropped. The client's OWN brand category is kept
+  // by the guard; the `storedMap` read is guarded through the `catMap.has(...)`
+  // membership check in the assignment loop below.
+  const catGuard = buildCategoryGuard(semSnap, clientDomain, competitorDomains);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
-    (cb?.categories ?? []).map((c: any) => ({
-      name: c.name,
-      type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
-    }));
+    (cb?.categories ?? [])
+      .filter((c: any) => !catGuard.isCompetitorBrandCategory(String(c?.name ?? ''), c?.type))
+      .map((c: any) => ({
+        name: c.name,
+        type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
+      }));
   if (!categories.length) return [];
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
 
-  // Respect the blocked list — same keywords hidden in KeywordsPanel hide from clusters too
-  const blockedSet = new Set(
-    uploadedKeywords
-      .filter((k: any) => k.source === 'blocked')
-      .map((k: any) => (k.keyword ?? '').toLowerCase())
-  );
-
-  const pool: KwItem[] = [];
-  for (const kw of (semSnap.topKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow)) continue;
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null });
-  }
-  const seen = new Set(pool.map((k: KwItem) => k.keyword.toLowerCase()));
-  for (const kw of (semSnap.gapKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null });
-  }
-  // Uploaded/CSV keywords from DB — no cap, full set
-  for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (!kwLow || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    pool.push({
-      keyword:      kw.keyword,
-      searchVolume: kw.search_volume ?? kw.searchVolume ?? 0,
-      position:     kw.position ?? null,
-      isGap:        kw.type === 'gap',
-      competitor:   null,
-    });
-  }
+  // v7.335 (QC audit B1): the keyword pool now comes from the canonical buildKwPool —
+  // the single source of truth every panel shares (Const II.7) — instead of a parallel
+  // inline build that honoured ONLY the blocked list. This picks up the exclusions the
+  // inline pool skipped: competitor-brand keywords/categories (Const III.1a), the user
+  // brand blocklist (`_excludedBrands`), and the v7.326 adjacent-umbrella scope gate
+  // (Const III.1d) — so journey clusters and the Exec Summary rollup agree with the
+  // Keyword/Cluster panels. Same sources as before (topKeywords + gapKeywords + uploads,
+  // blocked rows excluded; no demand union, no volume floors); buildKwPool reads
+  // `_brandTerms` / `_excludedBrands` / `_scopeOverrides` off the snapshot itself
+  // (injected once at page load).
+  const pool: KwItem[] = buildKwPool({
+    semrushSnapshot:   semSnap,
+    uploadedKeywords,
+    clientDomain,
+    competitorDomains,
+  }).map((p): KwItem => ({
+    keyword:      p.keyword,
+    searchVolume: p.searchVolume,
+    position:     p.position,
+    isGap:        p.isGap,
+    competitor:   p.competitor,
+  }));
 
   // ── Assign keywords by SOLUTION AWARENESS (v7.154 / v7.187) ───────────────────
   // v7.187: problem vocabulary is derived from THIS project's audience language.
