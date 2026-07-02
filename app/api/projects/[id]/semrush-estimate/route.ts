@@ -2,8 +2,9 @@
  * GET /api/projects/[id]/semrush-estimate — pre-run Semrush cost estimate (v7.86)
  *
  * Returns the keyword-row counts and API-unit cost of a full uncapped
- * analysis pull (client footprint + up to 5 competitor footprints), so the
- * UI can show a confirmation with real numbers before any units are spent.
+ * analysis pull (client footprint + EVERY configured/auto-discovered competitor
+ * footprint — the 5-competitor cap was removed in v7.337, QC audit B14, Const I.6),
+ * so the UI can show a confirmation with real numbers before any units are spent.
  * The estimate itself costs only a handful of rows.
  *
  * Returns: { client, competitors, totalRows, totalUnits }  (see SemrushPullEstimate)
