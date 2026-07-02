@@ -4,6 +4,8 @@ import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { planFromSnapshot, buildContentPlanFromTopics, briefTitleFromKeywords } from '@/lib/journey/contentPlan';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
+import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mirror): canonical pool for buildClusters (Const II.7)
+import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.336 (QC audit B1 mirror): guard on buildClusters category reads (Const III.1a)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -451,7 +453,9 @@ function pagesForKws(kws: KwItem[]): { pages: string[]; rankedCount: number } {
   return { pages: Array.from(pages), rankedCount };
 }
 
-function buildClusters(
+// v7.336 (QC audit B1 mirror): exported for parity with JourneySection.buildClusters and
+// for the retained regression harness (Const V.6) — no runtime behavior change.
+export function buildClusters(
   analysis: any,
   claudeAssignments: Record<string, IntentType>,
   clientDomain: string,
@@ -461,51 +465,55 @@ function buildClusters(
 ): ThemeCluster[] {
   const semSnap = analysis?.semrushSnapshot ?? {};
   const cb = semSnap._categoryBreakdown ?? null;
+  // v7.336 (QC audit B1 mirror): shared competitor-brand category guard (Const III.1a) on
+  // this `cb.categories` read — the same guard JourneySection.buildClusters gained in
+  // v7.335. Previously unguarded, so a competitor brand category (e.g. "Wells Fargo
+  // Brand Searches") could become a content cluster and briefs that every canonical
+  // panel had already dropped. The client's OWN brand category is kept by the guard;
+  // the `storedMap` read is guarded through the `catMap.has(...)` membership check in
+  // the assignment loop below.
+  const catGuard = buildCategoryGuard(semSnap, clientDomain, competitorDomains);
   const categories: Array<{ name: string; type: 'procedure' | 'brand' | 'location' }> =
-    (cb?.categories ?? []).map((c: any) => ({
-      name: c.name,
-      type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
-    }));
+    (cb?.categories ?? [])
+      .filter((c: any) => !catGuard.isCompetitorBrandCategory(String(c?.name ?? ''), c?.type))
+      .map((c: any) => ({
+        name: c.name,
+        type: (c.type === 'brand' || c.type === 'location') ? c.type : 'procedure' as const,
+      }));
   if (!categories.length) return [];
 
   const storedMap: Record<string, string> = cb?.keywordCategories ?? {};
-  const blockedSet = new Set(
-    uploadedKeywords
-      .filter((k: any) => k.source === 'blocked')
-      .map((k: any) => (k.keyword ?? '').toLowerCase())
-  );
 
-  // v7.163: prefer the per-keyword URL already on the snapshot row, fall back to
-  // the merged urlByKeyword map (snapshot.topKeywords[].url + on-demand _pageMap).
+  // v7.163: prefer the per-keyword URL already on the pool row, fall back to the
+  // merged urlByKeyword map (snapshot.topKeywords[].url + on-demand _pageMap).
   const urlFor = (kwLow: string, rowUrl?: string): string => (rowUrl || urlByKeyword[kwLow] || '');
 
-  const pool: KwItem[] = [];
-  for (const kw of (semSnap.topKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow)) continue;
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: kw.position ?? null, isGap: false, competitor: null, url: urlFor(kwLow, (kw as any).url) });
-  }
-  const seen = new Set(pool.map((k: KwItem) => k.keyword.toLowerCase()));
-  for (const kw of (semSnap.gapKeywords ?? [])) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (blockedSet.has(kwLow) || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    pool.push({ keyword: kw.keyword, searchVolume: kw.searchVolume ?? 0, position: null, isGap: true, competitor: (kw as any).competitor ?? null, url: '' });
-  }
-  // Uploaded/CSV keywords from DB — no cap, full set
-  for (const kw of uploadedKeywords.filter((k: any) => k.source !== 'blocked')) {
-    const kwLow = (kw.keyword ?? '').toLowerCase();
-    if (!kwLow || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    pool.push({
-      keyword:      kw.keyword,
-      searchVolume: kw.search_volume ?? kw.searchVolume ?? 0,
-      position:     kw.position ?? null,
-      isGap:        kw.type === 'gap',
-      competitor:   null,
-      url:          kw.type === 'gap' ? '' : urlFor(kwLow, kw.url),
-    });
-  }
+  // v7.336 (QC audit B1 mirror): the keyword pool now comes from the canonical
+  // buildKwPool — the single source of truth every panel shares (Const II.7) — instead
+  // of a parallel inline build that honoured ONLY the blocked list. Mirrors
+  // JourneySection.buildClusters (v7.335, QC audit B1). This picks up the exclusions
+  // the inline pool skipped: competitor-brand keywords/categories (Const III.1a), the
+  // user brand blocklist (`_excludedBrands`), and the v7.326 adjacent-umbrella scope
+  // gate (Const III.1d) — so the content-map cluster grid agrees with the
+  // Keyword/Cluster/Journey panels. Same sources as before (topKeywords + gapKeywords
+  // + uploads, blocked rows excluded; no demand union, no volume floors — the shared
+  // basis is unfloored, Const I.6); buildKwPool reads `_brandTerms` /
+  // `_excludedBrands` / `_scopeOverrides` off the snapshot itself (injected once at
+  // page load). Real ranking URLs ride the pool rows (kwVolume v7.251) with the same
+  // urlByKeyword fallback as before (v7.163); gap rows carry no client URL.
+  const pool: KwItem[] = buildKwPool({
+    semrushSnapshot:   semSnap,
+    uploadedKeywords,
+    clientDomain,
+    competitorDomains,
+  }).map((p): KwItem => ({
+    keyword:      p.keyword,
+    searchVolume: p.searchVolume,
+    position:     p.position,
+    isGap:        p.isGap,
+    competitor:   p.competitor,
+    url:          p.isGap ? '' : urlFor(p.keyword.toLowerCase().trim(), p.url),
+  }));
 
   // v7.154/v7.187: route keywords by solution awareness (mirrors JourneySection).
   const vocab = deriveProblemVocab(analysis);
@@ -518,13 +526,22 @@ function buildClusters(
   const relevanceTokens = buildRelevanceTokens(categories, clientDomain, competitorDomains, vocab.langTokens);
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
+    // v7.336 (QC audit B1 mirror, Const II.8): STORED membership only — the lexical
+    // shared-word fallback (matchKeywordToCategory) no longer decides cluster
+    // membership. Reconstructing membership by string matching at this read site
+    // fabricated assignments the stored taxonomy never made (one shared long word
+    // was enough to file a keyword under a category). A keyword with no stored
+    // category now flows to the honest catch-all below — client-relevant keywords
+    // join a pre-product problem theme, the rest are dropped — exactly like every
+    // other unassigned keyword (Const I.5). The `catMap.has(...)` check doubles as
+    // the category guard on the storedMap read (a keyword stored under a dropped
+    // competitor-brand category is not re-filed; buildKwPool has already excluded
+    // it from the pool). NOTE: assignPageToCluster below still uses the lexical
+    // matcher, but only to pick which EXISTING cluster a ranking page displays
+    // under — it never adds keywords or volume to a cluster.
     let cand: string | null = null;
     const stored = storedMap[key];
     if (stored && catMap.has(stored)) cand = stored;
-    else {
-      const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
-      if (matched && catMap.has(matched)) cand = matched;
-    }
     // v7.248 (Wayne): mapping to ANY product/service category => product (parity with the
     // shared classifier). Drops the literal-substring sub-gate that leaked product keywords
     // filed under broad parents into the pre-product problem pool (Const III.2a).

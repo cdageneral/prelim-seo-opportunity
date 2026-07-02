@@ -134,39 +134,23 @@ function buildPositionDist(kws: SemKw[]): Record<string, number> {
   return dist;
 }
 
-// ── Category inference ─────────────────────────────────────────────────────────
-// Maps a keyword to a category name using three tiers:
-//   1. Exact lookup in keywordCategories (the 40-keyword MVP map from synthesis)
-//   2. ALL significant words (4+ chars) of the category appear in the keyword
-//      → sorted longest-name-first so "Fat Transfer Breast Augmentation" beats "Liposuction"
-//   3. ANY long word (5+ chars) from the category appears in the keyword
-// This extends coverage to the full CSV keyword list without needing re-synthesis.
-function inferCategoryForKw(
-  keyword:          string,
+// ── Category membership (v7.336, QC audit B6) ──────────────────────────────────
+// STORED membership only (Const II.8/III.1b): a keyword belongs to a category iff the
+// stored `keywordCategories` map (the synthesis taxonomy) says so. The old Tier 2/3
+// lexical fallback — shared-word string matching against category names — RECONSTRUCTED
+// membership at this read site and fabricated assignments the stored taxonomy never
+// made ("Mortgage Rates and Calculators" lexically swallowed every "…calculator" term;
+// a keyword sharing one long word with a category name got filed under it). Keywords
+// with no stored membership now surface in an honest "Uncategorized" bucket
+// (Const I.5) instead — never a string-matched guess.
+const UNCATEGORIZED = 'Uncategorized';
+
+function storedCategoryForKw(
+  keyword:           string,
   keywordCategories: Record<string, string>,
-  categories:        CategoryRow[],
 ): string | null {
   const kwLower = keyword.toLowerCase().trim();
-
-  // Tier 1 — exact map
-  if (keywordCategories[kwLower]) return keywordCategories[kwLower];
-
-  // Sort categories longest-name-first so specific multi-word categories win over short ones
-  const byLen = [...categories].sort((a, b) => b.name.length - a.name.length);
-
-  // Tier 2 — ALL words of category name (4+ chars) present in keyword
-  for (const cat of byLen) {
-    const words = cat.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4);
-    if (words.length > 0 && words.every(w => kwLower.includes(w))) return cat.name;
-  }
-
-  // Tier 3 — ANY long word (5+ chars) from category name present in keyword
-  for (const cat of byLen) {
-    const words = cat.name.toLowerCase().split(/\s+/).filter(w => w.length >= 5);
-    if (words.some(w => kwLower.includes(w))) return cat.name;
-  }
-
-  return null;
+  return keywordCategories[kwLower] ?? null;
 }
 
 // ── Stat Card ──────────────────────────────────────────────────────────────────
@@ -212,7 +196,19 @@ function CategoryPerformanceSection({
 
   const procedureCats = cb.categories.filter(c => c.type === 'procedure');
   const navCats       = cb.categories.filter(c => c.type === 'brand' || c.type === 'location');
-  if (procedureCats.length === 0 && navCats.length === 0) return null;
+
+  // v7.336 (QC audit B6, Const I.5/II.8): keywords with NO stored category membership
+  // are no longer lexically filed into a category — they surface here as an honest
+  // "Uncategorized" group at the END of the table. Its row is a real roll-up of its
+  // own keywords (categoryRankStats accumulated under UNCATEGORIZED): demand = the
+  // summed monthly volume of those keywords, page 1 = their summed page-1 volume.
+  // Nothing is modeled and no stored category row is fabricated for it.
+  const uncatStats = categoryRankStats[UNCATEGORIZED];
+  const uncatRow: CategoryRow | null = uncatStats
+    ? { name: UNCATEGORIZED, type: 'procedure', monthlyDemand: uncatStats.monthlyVol, page1Demand: uncatStats.page1Vol, top3Demand: 0 }
+    : null;
+
+  if (procedureCats.length === 0 && navCats.length === 0 && !uncatRow) return null;
 
   // v7.331: when a rank-bucket card is active, show only categories that have keywords
   // ranking in that bucket, and (when expanded) only that bucket's keywords. Each
@@ -223,6 +219,7 @@ function CategoryPerformanceSection({
     !bucket || ((categoryRankStats[name]?.dist as Record<string, number> | undefined)?.[filter] ?? 0) > 0;
   const shownProcedure = procedureCats.filter(c => catInBucket(c.name));
   const shownNav       = navCats.filter(c => catInBucket(c.name));
+  const showUncat      = uncatRow !== null && catInBucket(UNCATEGORIZED);   // v7.336 (B6): honest bucket honours the rank-bucket filter too
 
   // Keywords for the currently expanded category, sorted by position — also scoped to
   // the active bucket so an expanded row lists only that bucket's keywords.
@@ -230,7 +227,7 @@ function CategoryPerformanceSection({
     if (!expandedCat) return [];
     const b = filter === 'all' ? null : (POSITION_BUCKETS.find(x => x.key === filter) ?? null);
     return topKws
-      .filter(kw => inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories) === expandedCat)
+      .filter(kw => (storedCategoryForKw(kw.keyword, cb.keywordCategories) ?? UNCATEGORIZED) === expandedCat)   // v7.336 (B6): stored membership only; null → honest Uncategorized bucket
       .filter(kw => !b || (kw.position !== null && kw.position >= b.min && kw.position <= b.max))
       .sort((a, c) => (a.position ?? 9999) - (c.position ?? 9999));
   }, [expandedCat, topKws, cb, filter]);
@@ -297,8 +294,23 @@ function CategoryPerformanceSection({
         />
       ))}
 
+      {/* v7.336 (QC audit B6, Const I.5): honest Uncategorized group — keywords with no
+          stored category membership, rendered LAST and dimmed, never string-matched into
+          a real category. Expands like any other row. */}
+      {showUncat && uncatRow && (
+        <>
+          <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-4a4a72)', letterSpacing: '.08em', textTransform: 'uppercase', padding: '8px 0 2px', borderTop: '1px solid var(--c-111120)', marginTop: '4px' }}>
+            Uncategorized
+          </p>
+          <CatRow
+            key={UNCATEGORIZED} cat={uncatRow} stats={uncatStats} dimmed={true}
+            isExpanded={expandedCat === UNCATEGORIZED} onToggle={toggle} expandedKws={expandedKws}
+          />
+        </>
+      )}
+
       {/* Honest empty state when a bucket filter matches no categories (I.5) */}
-      {bucket && shownProcedure.length === 0 && shownNav.length === 0 && (
+      {bucket && shownProcedure.length === 0 && shownNav.length === 0 && !showUncat && (
         <p style={{ fontSize: '11px', color: 'var(--c-6a6a90)', padding: '10px 0 2px' }}>
           No categories have keywords ranking in {bucket.label}. Clear the rank-bucket filter to see all categories.
         </p>
@@ -438,7 +450,10 @@ function CategoryPositionSummary({
     const byCat = new Map<string, Map<string, number>>();
     for (const r of compRowsWithPos) {
       if ((r.position as number) > 10) continue;
-      const cat = inferCategoryForKw(r.keyword, cb.keywordCategories, cb.categories);
+      // v7.336 (QC audit B6, Const II.8): stored membership only — an uploaded
+      // competitor row with no stored category is skipped here (it cannot be
+      // lexically filed under a client category), an honest omission (Const I.5).
+      const cat = storedCategoryForKw(r.keyword, cb.keywordCategories);
       if (!cat) continue;
       const d = normSovDomain(r.domain as string);
       let m = byCat.get(cat);
@@ -639,7 +654,7 @@ function CatRow({
           {fmtAnn(annualDemand)}
         </span>
 
-        {/* Page 1 (from full keyword footprint via inferCategoryForKw) */}
+        {/* Page 1 (from full keyword footprint via stored category membership — v7.336 B6) */}
         <span style={{ fontSize: '12px', fontWeight: hasPage1 ? 600 : 400, color: hasPage1 ? (dimmed ? 'var(--c-555570)' : 'var(--c-8b85ff)') : 'var(--c-444458)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
           {hasPage1 ? fmtAnn(page1Monthly) : '—'}
         </span>
@@ -1191,8 +1206,11 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
   }, [rawCb, analysis, domain, competitors]);
 
   // Compute per-category rank stats from the FULL merged topKws list.
-  // Uses inferCategoryForKw so CSV keywords that weren't in the 40-keyword
-  // MVP synthesis map still get assigned to the right category via text matching.
+  // v7.336 (QC audit B6, Const II.8/III.1b): STORED membership only. Keywords not in
+  // the stored keywordCategories map accumulate under the honest UNCATEGORIZED bucket
+  // (rendered as its own group at the end of Category Performance) instead of being
+  // string-matched into a category the taxonomy never assigned. Nothing is dropped
+  // from the stats (Const I.6) and nothing is fabricated (Const I.5).
   const categoryRankStats = useMemo<Record<string, CatRankStats>>(() => {
     if (!cb?.keywordCategories || !cb?.categories) return {};
     const stats: Record<string, CatRankStats> = {};
@@ -1201,8 +1219,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       dist: { '1-3': 0, '4-10': 0, '11-20': 0, '21+': 0 },
     });
     for (const kw of topKws) {
-      const cat = inferCategoryForKw(kw.keyword, cb.keywordCategories, cb.categories);
-      if (!cat) continue;
+      const cat = storedCategoryForKw(kw.keyword, cb.keywordCategories) ?? UNCATEGORIZED;
       if (!stats[cat]) stats[cat] = empty();
       stats[cat].monthlyVol += kw.searchVolume;
       if (kw.position === null) continue;  // no position — count vol only
@@ -1236,15 +1253,16 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
   }, [posKws]);
 
   // Download ONE bucket as XLSX — one row per keyword: rank bucket, stored topic
-  // category (blank when the analysis carries no taxonomy — honest gap, I.5),
-  // keyword, monthly search volume. Highest-volume first.
+  // category ("Uncategorized" when the keyword has no stored membership — honest
+  // bucket, I.5; v7.336 QC audit B6: never string-matched), keyword, monthly search
+  // volume. Highest-volume first.
   function downloadRankBucket(b: typeof POSITION_BUCKETS[number]) {
     const rows = posKws
       .filter(k => k.position >= b.min && k.position <= b.max)
       .sort((a, c) => (c.searchVolume ?? 0) - (a.searchVolume ?? 0))
       .map(k => ({
         bucket:   b.label,
-        category: (cb ? (inferCategoryForKw(k.keyword, cb.keywordCategories, cb.categories) ?? '') : ''),
+        category: (cb ? (storedCategoryForKw(k.keyword, cb.keywordCategories) ?? UNCATEGORIZED) : ''),
         keyword:  k.keyword,
         volume:   k.searchVolume ?? 0,
       }));

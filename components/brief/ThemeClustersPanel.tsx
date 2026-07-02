@@ -66,6 +66,14 @@ interface Props {
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
   analysis:                 any;
   competitors:              string[];
+  // v7.336 (QC audit B5, Const I.6): these project-default volume thresholds are NO
+  // LONGER applied to this panel's cluster build. The shared canonical-topic basis is
+  // UNFLOORED (thresholds 0,0 — completeness by default) everywhere a shared total is
+  // computed, and this panel was the one consumer still flooring it, so its topic/keyword
+  // counts diverged from the page-level Journey build, Exec, Content Map, Content Plan and
+  // Scope (all 0,0) whenever a project set thresholds. Props kept for API stability
+  // (page.tsx still passes them); per-panel thresholds remain view-level filters where a
+  // panel explicitly offers them.
   defaultClientThreshold?:     number;
   defaultCompetitorThreshold?: number;
   // v7.220: the page-level Claude intent-assignment map (single source of truth, Const
@@ -2654,12 +2662,17 @@ export default function ThemeClustersPanel({
 
   // v7.203: pre-product (life-problem) clusters + the set of keywords they claim,
   // using the Journey panel's solution-awareness definition (single source of truth).
+  // v7.336 (QC audit B5, Const I.6/II.7): built on the UNFLOORED canonical basis
+  // (thresholds 0,0) — the SAME basis every buildCanonicalClusterTopics consumer
+  // (page-level Journey build, Exec, Content Map, Content Plan, Scope) and computeSov
+  // use — instead of the project volume thresholds. Flooring only this panel's build
+  // made its header/cards disagree with every canonical count on threshold-set projects.
   const journeyBuild = useMemo(
     () => buildPreProductClusters(
       effectiveAnalysis, clientDomain, competitors, uploadedKeywords ?? [],
-      defaultClientThreshold, defaultCompetitorThreshold,
+      0, 0,
     ),
-    [effectiveAnalysis, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold],
+    [effectiveAnalysis, clientDomain, competitors, uploadedKeywords],
   );
 
   // Product-lane clusters — built EXCLUDING the pre-product keywords so a keyword is
@@ -2675,9 +2688,9 @@ export default function ThemeClustersPanel({
   const baseClusters = useMemo(
     () => buildThemeClusters(
       effectiveAnalysis, effectiveAssigns, clientDomain, competitors, uploadedKeywords ?? [],
-      defaultClientThreshold, defaultCompetitorThreshold, journeyBuild.preProductKws,
+      0, 0, journeyBuild.preProductKws,   // v7.336 (QC audit B5): unfloored canonical basis (Const I.6)
     ),
-    [effectiveAnalysis, effectiveAssigns, clientDomain, competitors, uploadedKeywords, defaultClientThreshold, defaultCompetitorThreshold, journeyBuild],
+    [effectiveAnalysis, effectiveAssigns, clientDomain, competitors, uploadedKeywords, journeyBuild],
   );
 
   // Full tagged cluster list (product lane + pre-product problem themes). The journey
