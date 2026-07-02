@@ -1,5 +1,5 @@
 /**
- * lib/category/categoryGuard.ts — v7.226
+ * lib/category/categoryGuard.ts — v7.226 · v7.335 (QC audit B7: + client brand vocabulary)
  *
  * SINGLE SOURCE OF TRUTH for the competitor-brand category guard (Constitution III.1a).
  *
@@ -52,14 +52,25 @@ export function buildCategoryGuard(
   const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, competitorDomains);
   const excludedBrandTokens = buildExcludedBrandTokens(snap);
 
+  // v7.335 (QC audit B7, Const III.1a): client brand vocabulary. Until now the
+  // isClientBrand check called isBrandedKeyword with NO brandTerms, so a client
+  // whose brand-category name is only recognizable via project.brandTerms (the
+  // TD / "Toronto Dominion" class — the domain root "td" never appears in the
+  // category name) failed the check and had its OWN brand category dropped as a
+  // competitor's. Read `_brandTerms` from the snapshot this guard already
+  // receives — the exact vocabulary buildKwPool applies (kwVolume.ts
+  // effectiveBrandTerms, v7.206) — so guard and pool agree on what counts as the
+  // client's own brand (Const II.7). Signature unchanged; callers compile as-is.
+  const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
+
   // Mirrors ThemeClustersPanel's three `continue` guards at the render loop. The client's
-  // own brand category is kept because `isBrandedKeyword(name, clientDomain, [])` is true
-  // for it, negating every drop condition. Empty competitor-domain list passed to
-  // isBrandedKeyword on purpose — only the CLIENT brand protects a category from the drop
-  // (this matches the reference impl exactly).
+  // own brand category is kept because `isBrandedKeyword(name, clientDomain, [], brandTerms)`
+  // is true for it, negating every drop condition. Empty competitor-domain list passed to
+  // isBrandedKeyword on purpose — only the CLIENT brand (domain root + brandTerms
+  // vocabulary, v7.335) protects a category from the drop.
   const isCompetitorBrandCategory = (name: string, type?: string): boolean => {
     if (!name) return false;
-    const isClientBrand = isBrandedKeyword(name, clientDomain, []);
+    const isClientBrand = isBrandedKeyword(name, clientDomain, [], brandTerms);   // v7.335: + brand vocabulary (QC audit B7)
     if (type === 'brand' && !isClientBrand) return true;
     if (textHasCompetitorBrand(name, compBrandTokens) && !isClientBrand) return true;
     if (textHasCompetitorBrand(name, excludedBrandTokens) && !isClientBrand) return true;
