@@ -303,6 +303,111 @@ export function isBrandedKeyword(
   return false;
 }
 
+// ─── v7.337 (QC audit B9a): competitor-brand guards — ONE implementation ──────
+// The full competitor-brand exclusion machinery buildKwPool applies (v7.195/196/199/
+// 201/208) built in ONE place, so consumers that render demand topics OUTSIDE
+// buildKwPool — JourneySection's demand-lens fallback — can apply the IDENTICAL
+// drop test (Const II.7/III.1). Before v7.337 the demand lens honoured only the user
+// blocklist (filterUniverseExcludedBrands), so an auto-discovered competitor-brand
+// keyword could appear in demand-mode Journey while excluded everywhere else.
+// The client's own brand (domain root + `_brandTerms` vocabulary) is never dropped.
+interface CompetitorBrandGuards {
+  effectiveBrandTerms:   string[];
+  isExcludedBrand:       (kwRaw: string) => boolean;   // v7.208 user blocklist
+  isCompetitorBranded:   (kwRaw: string) => boolean;   // v7.195 string-branded to a competitor
+  isAutoCompetitorBrand: (kwRaw: string) => boolean;   // v7.201 auto-discovered brand tokens
+  brandCatExcludedKw:    Set<string>;                  // v7.196/199 brand-category members + AI-flagged
+  drop:                  (kwLow: string, kwRaw: string) => boolean;   // the §5 composition
+}
+
+function buildCompetitorBrandGuards(
+  snap: any,
+  clientDomain: string,
+  compDomains: string[],                 // configured + uploaded-gap competitor domains (merged)
+  brandTerms: string[] = [],
+  uploadedGapDomains: string[] = [],
+): CompetitorBrandGuards {
+  // v7.206: brand vocabulary — explicit option first, else `_brandTerms` off the snapshot.
+  const effectiveBrandTerms: string[] =
+    (Array.isArray(brandTerms) && brandTerms.length > 0)
+      ? brandTerms
+      : (Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : []);
+
+  // v7.208: user-maintained blocklist (client's own brand never stripped).
+  const excludedBrandTokens = buildExcludedBrandTokens(snap);
+  const isExcludedBrand = (kw: string): boolean =>
+    excludedBrandTokens.size > 0
+    && textHasCompetitorBrand(kw, excludedBrandTokens)
+    && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+
+  // v7.195: branded to a competitor (any compDomain) but NOT to the client.
+  const isCompetitorBranded = (kw: string): boolean =>
+    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+
+  // v7.201: deterministic auto-discovered competitor-brand tokens.
+  const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, compDomains, uploadedGapDomains);
+  const isAutoCompetitorBrand = (kw: string): boolean =>
+    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+
+  // v7.196: competitor BRAND-CATEGORY members + v7.199 AI-flagged brand terms.
+  const cb = snap?._categoryBreakdown ?? null;
+  const cbCats: Array<{ name: string; type?: string }> = cb?.categories ?? [];
+  const kwCatMap: Record<string, string> = cb?.keywordCategories ?? {};
+  const competitorBrandCats = new Set<string>(
+    cbCats
+      .filter(c => {
+        if (!c?.name) return false;
+        if (isBrandedKeyword(c.name, clientDomain, [], effectiveBrandTerms)) return false;   // client's own brand → keep
+        const isBrandType        = c.type === 'brand';
+        const namedLikeCompetitor = compDomains.length > 0 && isBrandedKeyword(c.name, '', compDomains);
+        return isBrandType || namedLikeCompetitor;                      // competitor / third-party brand
+      })
+      .map(c => c.name),
+  );
+  const brandCatExcludedKw = new Set<string>();
+  if (competitorBrandCats.size > 0) {
+    for (const [kwLow, catName] of Object.entries(kwCatMap)) {
+      if (competitorBrandCats.has(catName)) brandCatExcludedKw.add(kwLow);
+    }
+  }
+  for (const k of (cb?.brandKeywords ?? []) as string[]) {
+    const kl = String(k ?? '').toLowerCase().trim();
+    if (kl) brandCatExcludedKw.add(kl);
+  }
+
+  // The unified §5 competitor-brand test (identical composition to pre-v7.337 buildKwPool).
+  const drop = (kwLow: string, kwRaw: string): boolean =>
+    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw) || isExcludedBrand(kwRaw);
+
+  return { effectiveBrandTerms, isExcludedBrand, isCompetitorBranded, isAutoCompetitorBrand, brandCatExcludedKw, drop };
+}
+
+/**
+ * v7.337 (QC audit B9a): the FULL competitor-brand drop test as a standalone predicate.
+ * Returns true when `keyword` must be excluded as a competitor/third-party brand term:
+ * brand-category membership (incl. AI-flagged terms), string competitor-brand match,
+ * auto-discovered competitor-brand token, or the user blocklist — the exact §5
+ * `dropCompetitorBrand` composition buildKwPool applies to the demand lens, from the
+ * SAME internal builder (one implementation, Const II.7). Pass the configured
+ * competitor domains; auto-discovered competitors come off the snapshot itself.
+ * The client's own brand is never dropped.
+ */
+export function buildCompetitorBrandDropTest(
+  snap: any,
+  clientDomain: string,
+  competitorDomains: string[] = [],
+  brandTerms: string[] = [],
+): (keyword: string) => boolean {
+  const compDomains = Array.from(new Set((competitorDomains ?? []).filter(Boolean)));
+  const g = buildCompetitorBrandGuards(snap, clientDomain, compDomains, brandTerms);
+  return (keyword: string): boolean => {
+    const kwRaw = String(keyword ?? '');
+    const kwLow = kwRaw.toLowerCase().trim();
+    if (!kwLow) return false;
+    return g.drop(kwLow, kwRaw);
+  };
+}
+
 // ─── Core pool builder ────────────────────────────────────────────────────────
 
 /**
@@ -330,26 +435,6 @@ export function buildKwPool({
   scopeOverrides                 = {},
   includeAdjacent                = false,
 }: KwPoolOptions): KwPoolItem[] {
-  // v7.206: brand vocabulary. Prefer the explicit option; otherwise fall back to
-  // `_brandTerms` carried on the snapshot (injected once at page load from
-  // project.brandTerms). This makes EVERY buildKwPool caller — Keyword, Cluster,
-  // Journey, Content Map — share one client brand vocabulary without threading the
-  // list through every component signature (single source of truth, Art II.7).
-  const effectiveBrandTerms: string[] =
-    (Array.isArray(brandTerms) && brandTerms.length > 0)
-      ? brandTerms
-      : (Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : []);
-
-  // v7.208: user-maintained competitor/third-party brand blocklist. Any keyword
-  // carrying an excluded term is dropped everywhere (footprint §1–4 + demand §5),
-  // whether it came from Semrush or a CSV upload — but the client's OWN brand is
-  // never stripped (guarded against effectiveBrandTerms + clientDomain).
-  const excludedBrandTokens = buildExcludedBrandTokens(snap);
-  const isExcludedBrand = (kw: string): boolean =>
-    excludedBrandTokens.size > 0
-    && textHasCompetitorBrand(kw, excludedBrandTokens)
-    && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
-
   const blockedSet = new Set<string>(
     uploaded
       .filter((k: any) => k.source === 'blocked')
@@ -373,62 +458,20 @@ export function buildKwPool({
   const compDomains: string[] = Array.from(
     new Set([...competitorDomains, ...uploadedGapDomains].filter(Boolean)),
   );
-  // Branded to a competitor (any compDomain) but NOT to the client → exclude.
-  const isCompetitorBranded = (kw: string): boolean =>
-    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
 
-  // ── v7.201: DETERMINISTIC auto-discovered competitor-brand exclusion ─────────
-  // Strip keywords carrying a brand the user never configured but Semrush surfaced as
-  // a top organic competitor (snap.competitors[].domain — real data already in the
-  // snapshot). Catches client-RANKED competitor-brand terms ("schwab 529") that §1/§2
-  // previously kept because they only checked the AI brandKeywords list. Full-token,
-  // strict match; the client's own brand is never stripped (token removed + guard).
-  const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, competitorDomains, uploadedGapDomains);
-  const isAutoCompetitorBrand = (kw: string): boolean =>
-    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
-
-  // ── v7.196: competitor BRAND-CATEGORY exclusion ─────────────────────────────
-  // Per-keyword string matching can't catch a competitor's brand searches when they
-  // are written as abbreviations or in another language ("boa", "bofa", "bof",
-  // "美国银行" for Bank of America). But the upstream categoriser already groups them
-  // under a brand-type category named after that brand (e.g. "Bank of America"), with
-  // a keyword→category map. So we exclude every keyword mapped to a brand category
-  // that is NOT the client's own brand. This is the reliable signal — it removes the
-  // whole competitor brand cluster regardless of how each member term is spelled.
-  // The client's own brand category (its name contains the client's brand) is KEPT.
-  const cb = snap?._categoryBreakdown ?? null;
-  const cbCats: Array<{ name: string; type?: string }> = cb?.categories ?? [];
-  const kwCatMap: Record<string, string> = cb?.keywordCategories ?? {};
-  const competitorBrandCats = new Set<string>(
-    cbCats
-      .filter(c => {
-        if (!c?.name) return false;
-        if (isBrandedKeyword(c.name, clientDomain, [], effectiveBrandTerms)) return false;   // client's own brand → keep
-        const isBrandType        = c.type === 'brand';
-        const namedLikeCompetitor = compDomains.length > 0 && isBrandedKeyword(c.name, '', compDomains);
-        return isBrandType || namedLikeCompetitor;                      // competitor / third-party brand
-      })
-      .map(c => c.name),
-  );
-  const brandCatExcludedKw = new Set<string>();
-  if (competitorBrandCats.size > 0) {
-    for (const [kwLow, catName] of Object.entries(kwCatMap)) {
-      if (competitorBrandCats.has(catName)) brandCatExcludedKw.add(kwLow);
-    }
-  }
-  // v7.199: AI-flagged brand terms (from the "Refine with AI" pass). These catch
-  // brand names string/domain matching can't — abbreviations and brands not in the
-  // competitor list ("schwab", "charles schwab 529", "vanguard"). Hard-excluded
-  // everywhere (added to brandCatExcludedKw, which §1–§5 all honour below). The AI is
-  // instructed to flag only NON-client brands, so the client footprint is untouched.
-  for (const k of (cb?.brandKeywords ?? []) as string[]) {
-    const kl = String(k ?? '').toLowerCase().trim();
-    if (kl) brandCatExcludedKw.add(kl);
-  }
-  // Unified competitor-brand test used by the competitor-sourced sections (§3–§5):
-  // a member of a competitor brand category, OR string-branded to a competitor.
-  const dropCompetitorBrand = (kwLow: string, kwRaw: string): boolean =>
-    brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw) || isExcludedBrand(kwRaw);
+  // v7.337 (QC audit B9a, Const II.7): the brand-exclusion machinery — v7.206 brand
+  // vocabulary, v7.208 user blocklist, v7.195 competitor-branded, v7.201 auto-discovered
+  // tokens, v7.196/199 brand-category members, and the unified §5 dropCompetitorBrand
+  // composition — now comes from buildCompetitorBrandGuards, the ONE builder shared with
+  // buildCompetitorBrandDropTest (JourneySection's demand-lens filter). Same inputs,
+  // same order, same tests as pre-v7.337 (verified byte-equal old-vs-new in the v7.337
+  // harness); see the builder above for the full per-rule documentation.
+  const guards = buildCompetitorBrandGuards(snap, clientDomain, compDomains, brandTerms, uploadedGapDomains);
+  const effectiveBrandTerms   = guards.effectiveBrandTerms;
+  const isExcludedBrand       = guards.isExcludedBrand;
+  const isAutoCompetitorBrand = guards.isAutoCompetitorBrand;
+  const brandCatExcludedKw    = guards.brandCatExcludedKw;
+  const dropCompetitorBrand   = guards.drop;
 
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
