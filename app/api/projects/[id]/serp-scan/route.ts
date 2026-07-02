@@ -25,6 +25,8 @@ import { batchKeywordScan, buildSnapshotFromKeywordData } from '@/lib/apis/serp'
 import { getMarket } from '@/lib/utils/markets';
 import type { KeywordSerpData } from '@/lib/apis/serp';
 import { buildKwPool } from '@/lib/utils/kwVolume';
+// v7.336 (QC audit B3): server-side snapshot hydration — same helper the v7.335 PDF route uses.
+import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 
 export const maxDuration = 300;
 
@@ -108,9 +110,24 @@ export async function POST(
   const dbKws = await db.select().from(projectKeywords)
     .where(eq(projectKeywords.projectId, projectId));
 
+  // ── v7.336 (QC audit B3, Const II.7/III.1a/III.1d) ─────────────────────────
+  // Hydrate the raw DB snapshot with the project row's client brand vocabulary,
+  // competitor-brand blocklist and scope-gate overrides (_brandTerms /
+  // _excludedBrands / _scopeOverrides) EXACTLY as the client page does
+  // (app/projects/[id]/page.tsx `analysisForPanels`), via the shared
+  // hydrateSnapshotForPool the v7.335 PDF route already uses. The raw snapshot
+  // carries none of these fields, so this scan's pool previously included
+  // user-blocklisted keywords and ignored promote/demote scope overrides —
+  // spending SerpAPI credits on keywords no on-screen panel counts. buildKwPool
+  // reads all three off the snapshot itself (kwVolume `effectiveBrandTerms` /
+  // `buildExcludedBrandTokens`; scope via buildScopeResolver, which reads
+  // `snap._scopeOverrides` — scopeModel.ts), so hydration alone carries them,
+  // with no explicit option threading — the same semantics as every client panel.
+  const hydratedSnap = hydrateSnapshotForPool(project, analysis.semrushSnapshot);
+
   // Canonical pool — identical options to KeywordsPanel so coverage counts match
   const pool = buildKwPool({
-    semrushSnapshot:   analysis.semrushSnapshot,
+    semrushSnapshot:   hydratedSnap,
     uploadedKeywords:  dbKws,
     clientDomain:      domain,
     competitorDomains: manualCompetitorDomains,
