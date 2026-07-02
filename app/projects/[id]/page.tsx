@@ -12,6 +12,9 @@ import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
+// v7.337 (QC audit B4-proper, Const II.7): live SERP-feature roll-up for the nav score —
+// same shared builders the SERP Features panel + Executive Summary compute from.
+import { computeSerpFeatureRollup, normDomain as serpNormDomain } from '@/lib/serp/featurePool';
 import RefreshModal         from '@/components/brief/RefreshModal';
 import EditProjectModal     from '@/components/brief/EditProjectModal';
 import GoogleSerpSection    from '@/components/brief/GoogleSerpSection';
@@ -109,7 +112,7 @@ const NAV_GROUPS = ['', 'Foundation', 'Google Platform', 'LLM Visibility', 'Loca
 
 // ── Score calculator ──────────────────────────────────────────────────────────
 
-function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, string>> {
+function calcNavScores(analysis: Analysis | null, dbKeywords: any[] = []): Partial<Record<NavSection, string>> {
   if (!analysis || analysis.status !== 'completed') return {};
 
   const captureRate  = analysis.marketCaptureRate;
@@ -118,20 +121,21 @@ function calcNavScores(analysis: Analysis | null): Partial<Record<NavSection, st
   const totalKws     = Object.values(posDist as Record<string, number>).reduce((a: number, b: number) => a + b, 0);
   const page1Kws     = ((posDist['1-3'] as number) ?? 0) + ((posDist['4-10'] as number) ?? 0);
   const serpScore    = totalKws > 0 ? (page1Kws / totalKws) * 100 : null;
-  const aioAvail     = analysis.aioAvailable ?? 0;
-  const aioAcq       = analysis.aioAcquired  ?? 0;
   const llmScore     = (analysis.profoundSnapshot as any)?.overallScore ?? null;
 
-  // Combined SERP feature coverage rate (AIO + PAA + Video)
+  // Combined SERP feature coverage rate (AIO + PAA + Video) — v7.337 (QC audit
+  // B4-proper, Const II.6/II.7): computed LIVE from the scanned SERP rows on
+  // analysis.serpApiSnapshot + the uploaded Semrush feature cells (the page's
+  // /keywords rows), via the SAME shared roll-up the SERP Features panel and the
+  // Executive Summary use — instead of the stored-at-analysis
+  // aioAvailable/aioAcquired + serpFeatureSummary columns (stale after scans).
   const serpSnapForScore = analysis.serpApiSnapshot ?? {};
-  const featSumForScore  = serpSnapForScore.serpFeatureSummary;
-  const paaAvailScore    = featSumForScore?.withPAA          ?? 0;
-  const paaAcqScore      = featSumForScore?.paaClientCited   ?? 0;
-  const videoAvailScore  = featSumForScore?.withVideo         ?? 0;
-  const videoAcqScore    = featSumForScore?.videoClientCited  ?? 0;
-  const totalAvailScore  = aioAvail + paaAvailScore + videoAvailScore;
-  const totalAcqScore    = aioAcq   + paaAcqScore   + videoAcqScore;
-  const combinedSerpRate = totalAvailScore > 0 ? (totalAcqScore / totalAvailScore) * 100 : null;
+  const rollup = computeSerpFeatureRollup(
+    dbKeywords ?? [],
+    (serpSnapForScore.keywords ?? []) as any[],
+    serpNormDomain(serpSnapForScore.domain ?? (semSnap as any).domain ?? ''),
+  );
+  const combinedSerpRate = rollup.totalAvail > 0 ? (rollup.totalAcq / rollup.totalAvail) * 100 : null;
 
   const scores: Partial<Record<NavSection, string>> = {};
   if (captureRate != null) {
@@ -269,7 +273,20 @@ export default function ProjectBriefPage() {
   const analysis   = project?.analyses?.find((a: any) => a.status === 'completed') ?? latestAnalysis;
   const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
-  const navScores  = calcNavScores(analysis);
+  // v7.337 (B4-proper): the page-level /keywords rows — moved up from the canonical-topics
+  // block below so the nav score can fold the uploaded SERP-feature cells into its live
+  // roll-up (same fetch, same rows; kwVersion bump → refetch as before).
+  const [pageKeywords, setPageKeywords] = useState<any[]>([]);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then((r: Response) => (r.ok ? r.json() : { keywords: [] }))
+      .then((d: any) => { if (!cancelled) setPageKeywords(d.keywords ?? []); })
+      .catch(() => { if (!cancelled) setPageKeywords([]); });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+  const navScores  = calcNavScores(analysis, pageKeywords);
 
   // v7.206: client brand vocabulary. Injected once onto the analysis snapshot as
   // `_brandTerms` so every panel's buildKwPool picks it up via the snapshot fallback
@@ -305,16 +322,7 @@ export default function ProjectBriefPage() {
   // the Journey, so "Topics in journey" reconciles to the cluster count (one node per
   // cluster). Done here (not inside Journey) because ThemeClustersPanel imports Journey,
   // so Journey can't import the builder back — the page is the cycle-free seam.
-  const [pageKeywords, setPageKeywords] = useState<any[]>([]);
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    fetch(`/api/projects/${projectId}/keywords`)
-      .then((r: Response) => (r.ok ? r.json() : { keywords: [] }))
-      .then((d: any) => { if (!cancelled) setPageKeywords(d.keywords ?? []); })
-      .catch(() => { if (!cancelled) setPageKeywords([]); });
-    return () => { cancelled = true; };
-  }, [projectId, kwVersion]);
+  // (v7.337: the pageKeywords fetch these builds consume moved up beside navScores.)
   // v7.220: lift the Claude intent-assignment pass to the PAGE so it runs regardless of
   // which tab is open and feeds every canonical view from one map (Const II.7). Before
   // this, only the Cluster panel ran the pass; the Journey/Content canonical builds used
@@ -355,14 +363,23 @@ export default function ProjectBriefPage() {
     return () => { cancelled = true; };
   }, [analysisForPanels, projectId]);
 
-  const journeyCanonicalTopics = useMemo(() => {
-    if (!analysisForPanels) return [];
+  // v7.337 (QC audit B9b, Const I.5): the catch here used to swallow the error and
+  // return [], silently flipping the Journey into its demand-lens fallback with no
+  // trace anywhere. The error is now logged and a flag rides along so JourneySection
+  // can render an honest one-line notice in the fallback view. Fallback behavior is
+  // otherwise unchanged (topics stay empty on failure — never a guessed build).
+  const journeyCanonical = useMemo<{ topics: ReturnType<typeof buildCanonicalClusterTopics>; buildFailed: boolean }>(() => {
+    if (!analysisForPanels) return { topics: [], buildFailed: false };
     const clientDomain = ((analysisForPanels as any).semrushSnapshot?.domain as string) ?? '';
     const compDomains = (project?.competitors ?? []).map((c: any) => c.domain);
     try {
-      return buildCanonicalClusterTopics(analysisForPanels, clientDomain, compDomains, pageKeywords, pageClaudeAssigns);
-    } catch { return []; }
+      return { topics: buildCanonicalClusterTopics(analysisForPanels, clientDomain, compDomains, pageKeywords, pageClaudeAssigns), buildFailed: false };
+    } catch (err) {
+      console.error('[OrbitIQ v7.337] Canonical topic build FAILED — Journey panel falls back to the demand lens:', err);
+      return { topics: [], buildFailed: true };
+    }
   }, [analysisForPanels, project, pageKeywords, pageClaudeAssigns]);
+  const journeyCanonicalTopics = journeyCanonical.topics;
 
   const fetchProject = useCallback(async () => {
     const res  = await fetch(`/api/projects/${projectId}`);
@@ -1541,6 +1558,7 @@ export default function ProjectBriefPage() {
                 analysis={analysisForPanels}
                 competitors={competitorDomains}
                 canonicalTopics={journeyCanonicalTopics}
+                canonicalBuildFailed={journeyCanonical.buildFailed}
                 onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}
               />
             </div>
@@ -1661,7 +1679,7 @@ function DataSourceCard({
         <div style={{ background: 'var(--c-0f0f1e)', border: '0.5px solid var(--c-1e1e35)', borderRadius: '8px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
             <i className="ti ti-info-circle" style={{ fontSize: '13px', color: 'var(--c-6c63ff)' }} aria-hidden="true" />
-            <span style={{ fontSize: '11px', color: 'var(--c-8080b0)', fontWeight: 500 }}>Semrush will fetch the FULL keyword footprint for the client + up to 5 competitor domains (10 API units per keyword row — exact cost estimate shown before the run starts)</span>
+            <span style={{ fontSize: '11px', color: 'var(--c-8080b0)', fontWeight: 500 }}>Semrush will fetch the FULL keyword footprint for the client + every configured/auto-discovered competitor domain (10 API units per keyword row — exact cost estimate shown before the run starts)</span>
           </div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
             <DomainPill domain={clientDomain} label="client" />
