@@ -2,9 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z }       from 'zod';
 import { put }     from '@vercel/blob';
 import { db }      from '@/db';
-import { analyses, reports } from '@/db/schema';
+import { analyses, reports, projectKeywords, competitors } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 import { buildBriefHTML } from '@/lib/pdf/template';
+// v7.335 (QC audit B2, Const I.5a/II.7): the PDF now computes the SAME page-1
+// capture + Share-of-Voice the app renders, instead of the stored pre-v7.245 model.
+import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot';
+import { buildKwPool, computeVolumeMetrics }  from '@/lib/utils/kwVolume';
+import { computeSov }                          from '@/lib/sov/model';
 
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 60;
@@ -25,7 +30,42 @@ export async function POST(req: NextRequest) {
 
   if (!analysis) return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
 
-  const html = buildBriefHTML(analysis as any);
+  // ── v7.335 (QC audit B2, Const I.5a/II.7) ──────────────────────────────────
+  // Build the SAME canonical pool the app's panels read: snapshot hydrated with
+  // the project row's _brandTerms/_excludedBrands/_scopeOverrides (mirroring
+  // app/projects/[id]/page.tsx via hydrateSnapshotForPool), uploaded
+  // project_keywords rows, tracked competitor domains, and the project-default
+  // volume thresholds (same semantics as the Exec hero). Capture comes from
+  // computeVolumeMetrics on that pool; Share of Voice from the shared page-1
+  // click-capture model (lib/sov/model.ts — the exact math SovPanel renders).
+  // The template falls back to the stored legacy fields, clearly labeled, ONLY
+  // when this snapshot cannot build a pool (honest fallback, Const I.5).
+  const project = (analysis as any).project ?? {};
+  const [kwRows, compRows] = await Promise.all([
+    db.select().from(projectKeywords).where(eq(projectKeywords.projectId, (analysis as any).projectId)),
+    db.select().from(competitors).where(eq(competitors.projectId, (analysis as any).projectId)),
+  ]);
+  const snap              = hydrateSnapshotForPool(project, (analysis as any).semrushSnapshot ?? {});
+  const clientDomain      = (snap?.domain ?? '') as string;
+  const competitorDomains = compRows.map(c => c.domain).filter(Boolean);
+  const pool = buildKwPool({
+    semrushSnapshot:   snap,
+    uploadedKeywords:  kwRows,
+    clientDomain,
+    competitorDomains,
+    clientVolMin:      project.kwVolThresholdClient ?? 0,
+    competitorVolMin:  project.kwVolThresholdCompetitor ?? 0,
+    includeDemand:     true,   // same footprint basis as the Exec hero (v7.305)
+  });
+  const metrics = computeVolumeMetrics(pool);
+  const sov = computeSov({
+    analysis:    { ...(analysis as any), semrushSnapshot: snap },
+    competitors: competitorDomains,
+    dbKeywords:  kwRows,
+    clientLabel: project.clientName ?? '',
+  });
+
+  const html = buildBriefHTML({ ...(analysis as any), semrushSnapshot: snap }, { metrics, sov });
   let pdfBuffer: Buffer;
 
   try {
