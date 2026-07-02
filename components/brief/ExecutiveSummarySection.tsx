@@ -541,6 +541,13 @@ export default function ExecutiveSummarySection({
     narrative.strategicCall           ??
     narrative.competitorGapNarrative  ?? '';
   const narrativeText = rawNarrative ? firstSentences(rawNarrative, 4) : '';
+  // v7.334: the AI narrative + AI-generated priorities are written ONCE at analysis time,
+  // while the cards on this page recompute live (pool + later scans/uploads). Stamp the
+  // synthesis-time content with its analysis date so a reader never takes those figures
+  // as current (QC audit A2: narrative said "9% capture" beside a live 3% SoV card).
+  const analysisDateLabel = analysis?.completedAt
+    ? new Date(analysis.completedAt).toLocaleDateString()
+    : null;
 
   // ── Color helpers ─────────────────────────────────────────────────────────
   const captureColor = captureRate < 0.15 ? 'var(--c-ef4444)' : captureRate < 0.35 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
@@ -710,6 +717,10 @@ export default function ExecutiveSummarySection({
           </p>
           <p className="text-orbit-secondary mt-2" style={{ fontSize: 11, lineHeight: 1.6 }}>
             {narrativeText}
+          </p>
+          {/* v7.334: honest freshness label (I.5) — narrative figures are analysis-time */}
+          <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
+            AI narrative written at analysis{analysisDateLabel ? ` (${analysisDateLabel})` : ''} — the cards below recompute live and are the current numbers.
           </p>
         </div>
       ) : null}
@@ -976,7 +987,7 @@ export default function ExecutiveSummarySection({
       <div>
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
           style={{ borderTop: '1px solid var(--c-1e1e2e)', paddingTop: 10 }}>
-          The continuous cycle · {hasFallbackActions ? 'recommended priorities to secure coverage' : 'AI-generated priorities to secure coverage'}
+          The continuous cycle · {hasFallbackActions ? 'recommended priorities to secure coverage' : 'AI-generated priorities to secure coverage'}{!hasFallbackActions && analysisDateLabel ? ` · written at analysis (${analysisDateLabel})` : ''}
         </p>
         <div className="grid grid-cols-3 gap-3">
           {actions.map((a, i) => {
@@ -1009,7 +1020,7 @@ export default function ExecutiveSummarySection({
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
         <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>
-          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · AI {pfHasData ? `${aiVisPct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
+          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · AI {pfHasData ? `${aiVisPct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}% (at analysis)` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>
 

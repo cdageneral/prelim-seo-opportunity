@@ -2321,7 +2321,7 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
                 <PlanCheckbox state={planStateForIds(laneIds)} saving={savingForIds(laneIds)} onToggle={() => toggleIds(laneIds)} label={`Add lane to Content Plan: ${L.label}`} />
                 <span style={{ width: 8, height: 8, borderRadius: 2, background: L.accent }} />
                 <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: L.accent }}>{L.label}</span>
-                <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{laneCount.toLocaleString()} topics · {lm.size} categories</span>
+                <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)' }}>{laneCount.toLocaleString()} topics · {lm.size} topic groups</span>{/* v7.334: `lm` groups by parentName (one level above the topic) — a different unit than the Cluster panel's stored categories, so calling both "categories" showed two different numbers for the same 531 topics (QC audit A3) */}
               </div>
               {parents.map(([name, rs]) => {
                 const key = L.lane + '::' + name;

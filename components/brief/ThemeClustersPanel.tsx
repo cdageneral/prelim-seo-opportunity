@@ -2792,7 +2792,16 @@ export default function ThemeClustersPanel({
   // v7.190: a "topic" is now a PRODUCT × funnel-stage row (broad themes split into
   // their product sub-clusters), so count the flattened table rows.
   // v7.203: count across both lanes (product + pre-product).
-  const topicCnt   = flattenTopics(allClusters).length;
+  // v7.334: count with the SAME flatten ClustersTab renders — the stored-taxonomy build
+  // when keywordPaths exist, the intent flatten only as the pre-taxonomy fallback — so
+  // the header reconciles with the "Total clusters" card by construction (Const II.7;
+  // QC audit A1: header said 360 while the cards/funnel/chips/Exec all said 531).
+  const topicCnt   = useMemo(
+    () => (keywordPathsMap.size > 0
+      ? buildTopicsFromTaxonomy(allClusters, keywordPathsMap)
+      : flattenTopics(allClusters)).length,
+    [allClusters, keywordPathsMap],
+  );
   const catCnt     = allClusters.length;
 
   return (
