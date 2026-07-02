@@ -37,6 +37,8 @@ import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+// v7.336 (QC audit B3): server-side snapshot hydration — same helper the v7.335 PDF route uses.
+import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
   pickLocationSitemap, parseLocationPageJsonLd, parseEmbeddedLocationMarkers, type KmlLocation,
@@ -341,8 +343,26 @@ export async function POST(
   const dbKws = await db.select().from(projectKeywords).where(eq(projectKeywords.projectId, projectId));
   const manualCompetitorDomains: string[] = ((project as any).competitors ?? [])
     .map((c: { domain: string }) => c.domain).filter(Boolean);
+  // ── v7.336 (QC audit B3, Const II.7/III.1a/III.1d) ─────────────────────────
+  // Hydrate the raw DB snapshot with the project row's client brand vocabulary,
+  // competitor-brand blocklist and scope-gate overrides (_brandTerms /
+  // _excludedBrands / _scopeOverrides) EXACTLY as the client page does
+  // (app/projects/[id]/page.tsx `analysisForPanels`), via the shared
+  // hydrateSnapshotForPool the v7.335 PDF route already uses. The raw snapshot
+  // carries none of these fields, so this scan's pool previously included
+  // user-blocklisted keywords and ignored promote/demote scope overrides, and the
+  // service-seed brand guard below read empty _brandTerms/_excludedBrands.
+  // buildKwPool reads all three off the snapshot itself (kwVolume
+  // `effectiveBrandTerms` / `buildExcludedBrandTokens`; scope via
+  // buildScopeResolver, which reads `snap._scopeOverrides` — scopeModel.ts), so
+  // hydration alone carries them — the same semantics as every client panel.
+  // NOTE: the _localScan persistence sites below intentionally keep spreading the
+  // RAW `analysis.semrushSnapshot` so the injected read-time `_`-fields are never
+  // written back to the DB.
+  const hydratedSnap = hydrateSnapshotForPool(project, analysis.semrushSnapshot);
+
   const pool = buildKwPool({
-    semrushSnapshot:   analysis.semrushSnapshot,
+    semrushSnapshot:   hydratedSnap,
     uploadedKeywords:  dbKws,
     clientDomain,
     competitorDomains: manualCompetitorDomains,
@@ -584,7 +604,11 @@ export async function POST(
         // v7.284: prefer Wayne's curated service list (exact terms, his order);
         // otherwise fall back to the auto top-N. Either way the source categories
         // are run through the competitor-brand guard at this read site (III.1a).
-        const snap = analysis.semrushSnapshot as any;
+        // v7.336 (QC audit B3): read the HYDRATED snapshot — on the raw DB snapshot
+        // `_brandTerms` / `_excludedBrands` are always absent (they are injected at
+        // page load client-side), so this guard silently ran with an empty brand
+        // vocabulary and an empty user blocklist on every server scan.
+        const snap = hydratedSnap as any;
         const brandTermsList: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
         const compTokens = buildCompetitorBrandTokens(snap, clientDomain, manualCompetitorDomains);
         const exclTokens = buildExcludedBrandTokens(snap);
