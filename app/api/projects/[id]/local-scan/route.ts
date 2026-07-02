@@ -43,6 +43,8 @@ import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
   pickLocationSitemap, parseLocationPageJsonLd, parseEmbeddedLocationMarkers, type KmlLocation,
 } from '@/lib/local/sitemap';
+// v7.338 — generic multi-level store-locator directory crawler (Yext-style /{country}/{state}/{city}/{slug}).
+import { crawlLocations } from '@/lib/local/crawl';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
 import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
 import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
@@ -158,9 +160,13 @@ async function enrichOfficesFromPages(
 }
 
 // v7.302 — discover offices from a manually-provided URL: HTML locations page, sitemap, or KML.
+// v7.338 — when none of those single-fetch shapes match, treat the URL as the front door of a
+// multi-level store-locator DIRECTORY and CRAWL it (opts.allowCrawl; skipped in dryRun so an
+// estimate never fires a full crawl). onProgress streams the live found/visited counts.
 async function discoverFromUrl(
   url: string,
   clientDomain: string,
+  opts?: { allowCrawl?: boolean; onProgress?: (p: { found: number; visited: number; queued: number; phase: string }) => void },
 ): Promise<{ locations: KmlLocation[]; source: string }> {
   if (!url) return { locations: [], source: 'none' };
   const txt = await fetchText(url);
@@ -198,6 +204,17 @@ async function discoverFromUrl(
   }
   const locs = parseLocationUrls(hrefs);
   if (locs.length) return { locations: locs, source: 'manual-page' };
+  // v7.338 — nothing matched a single-fetch shape: this seed is the top of a multi-level
+  // store-locator directory (state → city → store), so no single page lists every office.
+  // Crawl the tree from here and hydrate each store's REAL address/GPS/phone from its own
+  // page markup (meta geo.position + maps-link + tel:, Const I.1). Branches only. Skipped in
+  // dryRun (allowCrawl=false) so a cheap estimate never triggers a full crawl.
+  if (opts?.allowCrawl) {
+    const crawled = await crawlLocations(url, fetchText, opts?.onProgress);
+    if (crawled.locations.length) {
+      return { locations: crawled.locations, source: crawled.partial ? 'manual-crawl-partial' : 'manual-crawl' };
+    }
+  }
   return { locations: [], source: 'none' };
 }
 
@@ -475,8 +492,16 @@ export async function POST(
         let listings: LocalListing[] = [];
         let source = 'none';
         // v7.302 — a manually-provided Locations URL wins (free). Works for HTML pages, sitemaps, KML.
+        // v7.338 — and, when the URL is a multi-level directory, a full crawl (real run only, so a
+        // dryRun estimate never fires the crawl; progress is streamed live).
         if (locationsUrl) {
-          const m = await discoverFromUrl(locationsUrl, clientDomain);
+          const m = await discoverFromUrl(locationsUrl, clientDomain, {
+            allowCrawl: !dryRun,
+            onProgress: dryRun ? undefined : (p) => send({
+              type: 'progress', done: p.found, total: p.found + p.queued,
+              phase: `Crawling locations — found ${p.found}, scanned ${p.visited} pages…`,
+            }),
+          });
           if (m.locations.length > 0) {
             source = m.source;
             listings = m.locations.map(l => kmlToListing(l, clientDomain));
@@ -514,6 +539,8 @@ export async function POST(
         listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
 
         // v7.303 — enrich offices with real address/phone/GPS from each page's JSON-LD (real run only).
+        // v7.338 — crawl-sourced offices already carry full address/GPS/phone, so this is a no-op for
+        // them (enrich only targets rows still missing data); it still backfills sitemap/KML rows.
         if (!dryRun && listings.length > 0) await enrichOfficesFromPages(listings, send);
 
         // ── v7.299 KEYWORD MODE: scan each real local-intent keyword's map pack ───────
