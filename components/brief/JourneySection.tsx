@@ -11,7 +11,7 @@ import {
   type EdgeKind as JEdgeKind,
   type StepFacet,
 } from '@/lib/journey/graph';
-import { buildKwPool, filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens; v7.335: canonical pool for buildClusters (Const II.7, QC audit B1)
+import { buildKwPool, filterUniverseExcludedBrands, buildCompetitorBrandDropTest } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens; v7.335: canonical pool for buildClusters (Const II.7, QC audit B1); v7.337: FULL competitor-brand drop test on the demand lens (QC audit B9a)
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.335 (QC audit B1): guard on buildClusters/classifier category reads (Const III.1a)
 import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
@@ -73,6 +73,11 @@ interface Props {
   // to the cluster count (Const II.7/III.4). Passed as a prop because JourneySection can't
   // import ThemeClustersPanel (that module imports this one — would be a cycle).
   canonicalTopics?: CanonicalJourneyTopic[];
+  // v7.337 (QC audit B9b, Const I.5): true when the page's canonical topic build THREW
+  // (buildCanonicalClusterTopics failed) — i.e. the panel is in its fallback mode because
+  // of an error, not because canonical topics genuinely don't exist yet. The fallback
+  // view renders an honest one-line notice instead of silently impersonating the default.
+  canonicalBuildFailed?: boolean;
   // v7.222: fired after a deep-journey build finishes + is persisted, so the page can
   // refetch the analysis snapshot (now carrying _demandUniverse) and refresh the
   // Keyword / Clusters / Content panels in one step — no manual reload (Const II.4 loop).
@@ -263,28 +268,13 @@ function detectIntent(keyword: string): IntentType {
   return 'unmatched';
 }
 
-function matchKeywordToCategory(
-  keyword: string,
-  categories: Array<{ name: string; type: string }>,
-  clientDomain: string,
-  competitorDomains: string[],
-): string | null {
-  const kwLow = keyword.toLowerCase();
-  for (const cat of categories) {
-    if (cat.type === 'brand' && isBranded(keyword, clientDomain, competitorDomains)) return cat.name;
-    if (cat.type === 'location') {
-      const locSigs = ['near me','near ',' in ','location','clinic','center'];
-      if (isBranded(keyword, clientDomain, competitorDomains) && locSigs.some((s: string) => kwLow.includes(s))) return cat.name;
-    }
-  }
-  for (const cat of categories) {
-    if (cat.type !== 'procedure') continue;
-    const catWords = cat.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter((w: string) => w.length >= 4 && !['with','from','that','this','body','area'].includes(w));
-    for (const w of catWords) { if (kwLow.includes(w)) return cat.name; }
-  }
-  return null;
-}
+// v7.337 (QC audit — ContentMap v7.336 mirror, Const II.8): matchKeywordToCategory was
+// DELETED. It was the lexical shared-word fallback that reconstructed category membership
+// by string matching when a keyword had no stored assignment — fabricating memberships the
+// stored taxonomy never made (one shared long word was enough). buildClusters and
+// buildJourneyClassifier below now use STORED membership only, exactly like
+// ContentMapSection.buildClusters since v7.336; with its last call sites gone the
+// function itself is dead code and is removed.
 
 // ─── Solution-awareness classification (v7.154) ─────────────────────────────────
 //
@@ -560,15 +550,13 @@ export function buildJourneyClassifier(
   function classify(keyword: string): JourneyClass {
     if (categories.length === 0) return 'offtopic';
     const key = keyword.toLowerCase();
-    // Candidate solution category: trust the server map first, then the name heuristic
-    // (identical order to buildClusters).
+    // v7.337 (ContentMap v7.336 mirror, Const II.8): STORED membership only — the lexical
+    // shared-word fallback no longer decides membership here (see the deletion note above).
+    // A keyword with no stored category flows to the same catch-all as everywhere else:
+    // client-relevant → pre-product, otherwise off-topic.
     let cand: string | null = null;
     const stored = storedMap[key];
     if (stored && catNames.has(stored)) cand = stored;
-    else {
-      const matched = matchKeywordToCategory(keyword, categories, clientDomain, competitorDomains);
-      if (matched && catNames.has(matched)) cand = matched;
-    }
     // v7.248 (Wayne): a keyword that maps to ANY product/service category — by stored
     // membership (Const II.8) or the same name match buildClusters uses — is PRODUCT,
     // full stop. The earlier literal-substring sub-gate (namesSolutionFor) leaked product
@@ -661,14 +649,17 @@ export function buildClusters(
 
   for (const kw of pool) {
     const key = kw.keyword.toLowerCase();
-    // Candidate solution category: trust the server map first, then the name heuristic.
+    // v7.337 (ContentMap v7.336 mirror, Const II.8): STORED membership only — the lexical
+    // shared-word fallback (matchKeywordToCategory) no longer decides cluster membership;
+    // it fabricated assignments the stored taxonomy never made. A keyword with no stored
+    // category flows to the honest catch-all below (client-relevant → pre-product problem
+    // theme, the rest dropped) — the same path ContentMapSection.buildClusters uses. The
+    // `catMap.has(...)` check doubles as the category guard on the storedMap read. NOTE:
+    // the v7.154 namesSolutionFor product/pre-product gate on STORED assignments is
+    // intentionally retained (unchanged behavior for stored-mapped keywords).
     let cand: string | null = null;
     const stored = storedMap[key];
     if (stored && catMap.has(stored)) cand = stored;
-    else {
-      const matched = matchKeywordToCategory(kw.keyword, categories, clientDomain, competitorDomains);
-      if (matched && catMap.has(matched)) cand = matched;
-    }
     if (cand) {
       const catType = categories.find((c: { name: string }) => c.name === cand)!.type;
       const procWords = procWordsByCat.get(cand) ?? [];
@@ -2837,7 +2828,7 @@ function GraphDetail({ node, graph, onClose, anchored }: { node: JGNode | null; 
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function JourneySection({ projectId, kwVersion, analysis, competitors, canonicalTopics, onDeepJourneyBuilt }: Props) {
+export default function JourneySection({ projectId, kwVersion, analysis, competitors, canonicalTopics, canonicalBuildFailed, onDeepJourneyBuilt }: Props) {
   const [claudeAssignments, setClaudeAssignments] = useState<Record<string, IntentType>>({});
   const [uploadedKeywords,  setUploadedKeywords]  = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<string>('combined');
@@ -2930,15 +2921,32 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     setBuildError(null);
   }, [analysis?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // v7.337 (QC audit B9a, Const III.1): the demand lens previously honoured ONLY the
+  // user blocklist (filterUniverseExcludedBrands above) — an AUTO-DISCOVERED
+  // competitor-brand keyword could surface in demand-mode Journey while buildKwPool
+  // dropped it from every canonical panel. Apply the FULL canonical competitor-brand
+  // drop test (the same §5 composition buildKwPool uses, via the shared
+  // buildCompetitorBrandDropTest — one implementation, Const II.7) to the topics this
+  // panel renders. Applied at RENDER (not at set-time) so a fresh in-session deep-journey
+  // build is covered too. The client's own brand demand is never dropped; problemSeeds
+  // and all other universe fields pass through untouched.
+  const demandForRender = useMemo<DemandUniverse | null>(() => {
+    if (!demandUniverse) return demandUniverse;
+    const snap = (analysis?.semrushSnapshot as any) ?? {};
+    const dropBrand = buildCompetitorBrandDropTest(snap, clientDomain, competitors ?? []);
+    const topics = (demandUniverse.topics ?? []).filter((t: DemandTopic) => !dropBrand(String(t?.keyword ?? '')));
+    return { ...demandUniverse, topics };
+  }, [demandUniverse, analysis, clientDomain, competitors]);
+
   // v7.155: when the demand universe exists, build the journey from it (theme ×
   // funnel stage, every node volume-backed) overlaid with the ranking footprint.
   // v7.158: filtered per active segment via seed→segment provenance.
-  const demandMode = !!(demandUniverse && (demandUniverse.topics?.length ?? 0) > 0);
+  const demandMode = !!(demandForRender && (demandForRender.topics?.length ?? 0) > 0);
   const footprint  = useMemo(() => buildFootprintSets(analysis, uploadedKeywords), [analysis, uploadedKeywords]);
   // v7.170: exclusive theme→persona partition (segment.id or SHARED_BUCKET).
   const seedBucket = useMemo(
-    () => demandMode ? assignSeedSegments(demandUniverse as DemandUniverse, segments) : new Map<string, string>(),
-    [demandMode, demandUniverse, segments],
+    () => demandMode ? assignSeedSegments(demandForRender as DemandUniverse, segments) : new Map<string, string>(),
+    [demandMode, demandForRender, segments],
   );
   // activeTab is 'combined' (→ null, no filter), a segment.id, or SHARED_BUCKET.
   const activeBucketId = activeTab === 'combined' ? null : activeTab;
@@ -2992,8 +3000,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   }, [analysis, uploadedKeywords]);
 
   const demand = useMemo(
-    () => demandMode ? buildDemandNodes(demandUniverse as DemandUniverse, footprint.client, footprint.competitor, activeBucketId, seedBucket, rankByKeyword) : null,
-    [demandMode, demandUniverse, footprint, activeBucketId, seedBucket, rankByKeyword],
+    () => demandMode ? buildDemandNodes(demandForRender as DemandUniverse, footprint.client, footprint.competitor, activeBucketId, seedBucket, rankByKeyword) : null,
+    [demandMode, demandForRender, footprint, activeBucketId, seedBucket, rankByKeyword],
   );
 
   // v7.211: when the page supplies the canonical cluster topics, the journey shows ONE
@@ -3031,14 +3039,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // inside buildJourneyGraph, so labels improve when AI names exist but never block.
   const themeLabels = useMemo(() => {
     const m: Record<string, string> = {};
-    const seeds = (demandUniverse?.problemSeeds ?? []).map((s: string) => s.toLowerCase());
+    const seeds = (demandForRender?.problemSeeds ?? []).map((s: string) => s.toLowerCase());
     for (const seed of seeds) {
       for (const kw of Object.keys(problemAssignments)) {
         if (kw.includes(seed)) { m[seed] = problemAssignments[kw]; break; }
       }
     }
     return m;
-  }, [demandUniverse, problemAssignments]);
+  }, [demandForRender, problemAssignments]);
 
   // v7.189: the per-topic JOURNEY graph — each topic (seed) expands into ordered
   // step nodes (what it is → why → what affects it → how to → compare → act) chained
@@ -3047,11 +3055,11 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // and meshed topics into one hub. The Content panel still uses buildJourneyGraph
   // (via lib/journey/contentPlan) — that rollup is intentionally left unchanged.
   const graph = useMemo<JGraph | null>(
-    () => demandMode ? buildTopicJourneyGraph(demandUniverse as any, {
+    () => demandMode ? buildTopicJourneyGraph(demandForRender as any, {
       clientRanked: footprint.client, competitorRanked: footprint.competitor,
       urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels,
     }) : null,
-    [demandMode, demandUniverse, footprint, urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels],
+    [demandMode, demandForRender, footprint, urlByKeyword, rankByKeyword, activeBucketId, seedBucket, themeLabels],
   );
 
   // v7.156: consume the route's NDJSON progress stream so the UI shows a
@@ -3300,6 +3308,16 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
       </div>
 
       <Legend />
+
+      {/* v7.337 (QC audit B9b, Const I.5): when the page's canonical topic build FAILED,
+          this panel silently fell back to the demand/footprint lens and impersonated the
+          default view. Render an honest one-line notice. Existing CSS vars only — the
+          amber trio ContentMap's gapLabel already uses in both themes (Const IV.6). */}
+      {canonicalBuildFailed && (canonicalTopics?.length ?? 0) === 0 && (
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-fbbf24)', background: 'var(--ca-245-158-11-0_1)', border: '1px solid var(--ca-245-158-11-0_25)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+          Canonical topic build unavailable — showing {demandMode ? 'demand-lens' : 'ranking-footprint'} topics.
+        </div>
+      )}
 
       {(canonicalTopics?.length ?? 0) > 0 ? (
         /* v7.221: canonical clusters are the single source of truth (Const II.7) — the

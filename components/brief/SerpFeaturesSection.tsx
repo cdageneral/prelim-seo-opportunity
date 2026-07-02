@@ -2,6 +2,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import SegmentDownloadButton from './SegmentDownloadButton';
 import { exportSerpFeatureXLSX, type SerpFeatureKeywordRow } from '@/lib/export/serpFeatureExport';
+// v7.337 (QC audit B4-proper, Const II.7): the upload-mapping/pool/count builders moved
+// verbatim to lib/serp/featurePool so the Executive Summary + nav scores compute the SAME
+// live AIO/PAA/Video roll-up this panel shows (they previously read stored-at-analysis
+// columns). This panel's behavior is byte-equal (verified old-vs-new in the v7.337 harness).
+import {
+  normDomain, domainsMatch, semrushFeaturesToBuckets, countUploadFeatures, buildFeaturePool,
+  computeSerpFeatureRollup, type UploadKwRow, type FeaturePoolRow,
+} from '@/lib/serp/featurePool';
 
 /**
  * SerpFeaturesSection — v7.40
@@ -58,136 +66,12 @@ type FeatureTab  = 'aio' | 'paa' | 'video' | 'more';
 type LandscapeTab = 'brands' | 'others' | 'all';
 type KwFilter    = 'aio' | 'missing' | 'won' | 'unscanned' | 'all';
 
-// ── Domain helpers ─────────────────────────────────────────────────────────────
+// ── Domain helpers: normDomain/domainsMatch — moved to lib/serp/featurePool (v7.337) ──
 
-function normDomain(d: string): string {
-  return (d ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase().trim();
-}
-function domainsMatch(a: string, b: string): boolean {
-  const na = normDomain(a), nb = normDomain(b);
-  if (!na || !nb) return false;
-  return na === nb || na.endsWith('.' + nb) || nb.endsWith('.' + na);
-}
-
-// ── v7.103: uploaded Semrush "SERP Features by Keyword" support ───────────────
-// Semrush exports list features as a comma-separated cell, e.g.
-// "AI overview, People also ask, Video, Featured snippet". We map those names
-// onto the same feature buckets the SerpAPI scan uses. Matching is
-// case-insensitive substring so minor Semrush label variations still map.
-
-// v7.333: searchVolume is a real column the /keywords route already returns
-// (project_keywords.search_volume) — added here so the per-feature download
-// can show real monthly volume next to each keyword (Const I.1, not modeled).
-interface UploadKwRow { keyword: string; serpFeatures: string | null; source: string; searchVolume?: number | null; }
-
-function semrushFeaturesToBuckets(raw: string): Set<string> {
-  const out = new Set<string>();
-  const f = raw.toLowerCase();
-  if (f.includes('ai overview'))                          out.add('ai_overview');
-  if (f.includes('people also ask'))                      out.add('paa');
-  if (f.includes('video'))                                out.add('video_carousel'); // covers "Video", "Featured video", "Video carousel"
-  if (f.includes('featured snippet'))                     out.add('featured_snippet');
-  if (f.includes('knowledge panel'))                      out.add('knowledge_panel');
-  if (f.includes('local pack'))                           out.add('local_pack');
-  if (f.includes('shopping'))                             out.add('shopping');
-  if (f.includes('image'))                                out.add('image_pack');
-  return out;
-}
-
-interface UploadFeatureCounts {
-  rowsWithFeatureData: number;  // uploaded keywords carrying a SERP Features cell (deduped, unscanned only)
-  aio:   number;
-  paa:   number;
-  video: number;
-  more:  Record<string, number>; // featured_snippet / knowledge_panel / local_pack / shopping / image_pack
-}
-
-function countUploadFeatures(rows: UploadKwRow[], scannedSet: Set<string>): UploadFeatureCounts {
-  const more: Record<string, number> = { featured_snippet: 0, knowledge_panel: 0, local_pack: 0, shopping: 0, image_pack: 0 };
-  let aio = 0, paa = 0, video = 0, withData = 0;
-  // Dedupe by keyword — the same keyword can exist under client + competitor rows.
-  const seen = new Set<string>();
-  for (const r of rows) {
-    const kw = (r.keyword ?? '').trim().toLowerCase();
-    if (!kw || seen.has(kw)) continue;
-    seen.add(kw);
-    if (scannedSet.has(kw)) continue;            // scanned keywords already counted from live SERP data
-    if (r.source === 'blocked') continue;
-    if (!r.serpFeatures) continue;
-    const buckets = semrushFeaturesToBuckets(r.serpFeatures);
-    if (buckets.size === 0) continue;
-    withData++;
-    if (buckets.has('ai_overview'))   aio++;
-    if (buckets.has('paa'))           paa++;
-    if (buckets.has('video_carousel')) video++;
-    for (const k of Object.keys(more)) if (buckets.has(k)) more[k]++;
-  }
-  return { rowsWithFeatureData: withData, aio, paa, video, more };
-}
-
-// ── v7.332 (Wayne: "let's just use the semrush serp features as a source of
-// truth"): the AVAILABLE count already blended scan-detected + Semrush-upload
-// data (below), but the per-keyword LISTS only ever iterated scannedKws — a
-// handful of keywords — so a keyword shown "No video carousel" in the list sat
-// directly under a "6,112 uncaptured" gap banner built from a totally different
-// (much larger) pool. This helper builds ONE pool per feature so the list and
-// the count are always the same footprint. Rule: a SCANNED keyword's own live
-// SerpAPI detection is the strongest evidence and always wins (Const I.1 — real,
-// fresh, verified data). An UNSCANNED keyword falls back to Semrush's uploaded
-// "SERP Features by Keyword" column — the source of truth for the part of the
-// footprint that hasn't been scanned. WHO is cited can only ever come from a
-// live scan (Semrush has no citation data), so `cited` is `null` — unknown, not
-// "not cited" — for anything never scanned (Const I.5, never guess a negative).
-interface FeaturePoolRow {
-  keyword:     string;
-  hasFeature:  boolean;
-  fromSemrush: boolean;        // true = classified from the Semrush upload column (unscanned); false = live scan detection
-  isScanned:   boolean;
-  cited:       boolean | null; // null = never scanned, citation status unknown
-  volume:      number;         // v7.333: real monthly search volume, for the card download
-}
-
-function buildFeaturePool(
-  uploadRows:     UploadKwRow[],
-  scannedKws:     SerpKw[],
-  bucketKey:      string,
-  scanHasFeature: (kw: SerpKw) => boolean,
-  citedFn:        (kw: SerpKw) => boolean,
-): FeaturePoolRow[] {
-  const scannedMap = new Map(scannedKws.map(k => [(k.keyword ?? '').trim().toLowerCase(), k]));
-  const seen = new Set<string>();
-  const out: FeaturePoolRow[] = [];
-
-  for (const r of uploadRows) {
-    const kwLow = (r.keyword ?? '').trim().toLowerCase();
-    if (!kwLow || seen.has(kwLow) || r.source === 'blocked') continue;
-    seen.add(kwLow);
-    const scannedKw = scannedMap.get(kwLow);
-    const hasFeature = scannedKw
-      ? scanHasFeature(scannedKw)
-      : (r.serpFeatures ? semrushFeaturesToBuckets(r.serpFeatures).has(bucketKey) : false);
-    out.push({
-      keyword:     r.keyword,
-      hasFeature,
-      fromSemrush: !scannedKw,
-      isScanned:   !!scannedKw,
-      cited:       scannedKw ? citedFn(scannedKw) : null,
-      volume:      Number(r.searchVolume) || 0,
-    });
-  }
-  // Scanned keywords with no matching upload row (e.g. an ad-hoc single-keyword
-  // scan outside the uploaded footprint) — no Semrush data exists for them, so
-  // fall back to the live scan's own detection; still real, never guessed.
-  // No uploaded row also means no stored search volume for these — 0, same
-  // "unknown numeric" convention topicExport/rankBucketExport already use.
-  for (const k of scannedKws) {
-    const kwLow = (k.keyword ?? '').trim().toLowerCase();
-    if (!kwLow || seen.has(kwLow)) continue;
-    seen.add(kwLow);
-    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k), volume: 0 });
-  }
-  return out;
-}
+// ── v7.103 upload mapping / v7.332 pools / v7.333 volume — MOVED to lib/serp/featurePool
+// (v7.337 B4-proper): semrushFeaturesToBuckets, countUploadFeatures, buildFeaturePool and
+// the UploadKwRow/FeaturePoolRow types now live in the shared lib (imported above) so the
+// exec roll-up computes the same numbers. Moved verbatim — no behavior change here.
 
 // v7.333: rows for the per-card Excel download (AI Overviews / People Also Ask /
 // Video Carousel summary cards). Filters to hasFeature — the same "available"
@@ -1143,12 +1027,19 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   // scans update these without a reload; analysis.aioAvailable goes stale).
   const aio = useAIOData(scannedKws, clientDomain, displayClientName, competitors, aioSummary?.clientCited ?? 0);
 
-  // AIO aggregate metrics — scan-side (live)
-  const aioAvailScan = aio.totalAios;
-  const aioAcq       = aio.clientStats?.aiosAcquired ?? 0;
-  // v7.103 hybrid availability: scanned SERPs + uploaded (unscanned) keywords
-  const aioAvail  = aioAvailScan + uploadFeat.aio;
-  const aioRate   = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
+  // ── Aggregate AIO/PAA/Video metrics — v7.337 (QC audit B4-proper, Const II.7): the
+  // roll-up math now comes from the shared computeSerpFeatureRollup (lib/serp/featurePool)
+  // — the SAME implementation the Executive Summary strip and the nav score read — over
+  // this panel's LIVE merged scanned set (scannedKws includes any in-session scan
+  // batches) + the uploaded Semrush feature cells. Identical numbers to the previous
+  // inline computation (verified byte-equal old-vs-new in the v7.337 harness).
+  const rollup = useMemo(
+    () => computeSerpFeatureRollup(uploadRows ?? [], scannedKws, clientDomain),
+    [uploadRows, scannedKws, clientDomain]
+  );
+  const aioAcq   = rollup.aioAcq;
+  const aioAvail = rollup.aioAvail;
+  const aioRate  = rollup.aioRate;
 
   // v7.332: full pools (Semrush source of truth for the unscanned majority,
   // live scan for the scanned few) — one pool per feature, shared by the
@@ -1169,17 +1060,13 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     [uploadRows, scannedKws]
   );
 
-  // PAA (live from scanned set — stored summaries go stale after in-panel scans)
-  const paaAvailScan = scannedKws.filter(k => (k.paaQuestions?.length ?? 0) > 0).length;
-  const paaAcq       = scannedKws.filter(k => k.paaClientCited).length;
-  const paaAvail = paaAvailScan + uploadFeat.paa;
-  const paaRate  = paaAvail > 0 ? Math.round((paaAcq / paaAvail) * 100) : 0;
-
-  // Video (live)
-  const videoAvailScan = scannedKws.filter(k => k.serpFeatures?.includes('video_carousel')).length;
-  const videoAcq       = scannedKws.filter(k => k.videoClientCited).length;
-  const videoAvail = videoAvailScan + uploadFeat.video;
-  const videoRate  = videoAvail > 0 ? Math.round((videoAcq / videoAvail) * 100) : 0;
+  // PAA + Video (live) — same shared roll-up (v7.337, see note above).
+  const paaAcq     = rollup.paaAcq;
+  const paaAvail   = rollup.paaAvail;
+  const paaRate    = rollup.paaRate;
+  const videoAcq   = rollup.videoAcq;
+  const videoAvail = rollup.videoAvail;
+  const videoRate  = rollup.videoRate;
 
   // v7.332: the AIO Keyword Drilldown now covers the full footprint too — scanned
   // rows keep their rich citation detail (aio.enrichedKws); Semrush-flagged

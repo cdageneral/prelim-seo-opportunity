@@ -9,6 +9,10 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot } from '@/lib/journey/contentPlan';
+// v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
+// shared builders the SERP Features panel (07) computes from, instead of the stored
+// analysis.aioAvailable/aioAcquired + serpFeatureSummary columns (stale after scans).
+import { computeSerpFeatureRollup, normDomain as serpNormDomain } from '@/lib/serp/featurePool';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -292,17 +296,30 @@ export default function ExecutiveSummarySection({
   const uncapturedMonthly = Math.max(totalMonthly - page1Monthly, 0);
   const captureRatePct    = (captureRate * 100).toFixed(1);
 
-  // ── SERP features ─────────────────────────────────────────────────────────
-  const aioAvail = analysis.aioAvailable ?? 0;
-  const aioAcq   = analysis.aioAcquired  ?? 0;
-  const aioRate  = aioAvail > 0 ? Math.round((aioAcq / aioAvail) * 100) : 0;
-  const featSum  = serpSnap.serpFeatureSummary ?? {};
-  const paaAvail = featSum.withPAA         ?? 0;
-  const paaAcq   = featSum.paaClientCited  ?? 0;
-  const vidAvail = featSum.withVideo       ?? 0;
-  const vidAcq   = featSum.videoClientCited ?? 0;
-  const totalAvail = aioAvail + paaAvail + vidAvail;
-  const totalAcq   = aioAcq  + paaAcq   + vidAcq;
+  // ── SERP features ─ v7.337 (QC audit B4-proper, Const II.6/II.7) ──────────
+  // Computed LIVE via the shared lib/serp/featurePool roll-up — the scanned SERP rows
+  // persisted on analysis.serpApiSnapshot plus the uploaded Semrush "SERP Features by
+  // Keyword" cells on the /keywords rows (dbKeywords, already fetched above) — the SAME
+  // inputs + implementation the SERP Features panel (07) shows. Replaces the stored
+  // analysis.aioAvailable/aioAcquired + serpSnap.serpFeatureSummary columns, which were
+  // frozen at analysis time and went stale as scans ran; the "(at analysis)" qualifier
+  // on the roll-up AIO token is dropped because the number is now current. (During an
+  // active in-session scan the panel is momentarily fresher — it merges the in-flight
+  // batch before it persists; outside that window the two read identical data.)
+  const serpRollup = computeSerpFeatureRollup(
+    (dbKeywords as any[]) ?? [],
+    (serpSnap.keywords ?? []) as any[],
+    serpNormDomain(serpSnap.domain ?? propClientDomain ?? analysis.domain ?? ''),
+  );
+  const aioAvail = serpRollup.aioAvail;
+  const aioAcq   = serpRollup.aioAcq;
+  const aioRate  = serpRollup.aioRate;
+  const paaAvail = serpRollup.paaAvail;
+  const paaAcq   = serpRollup.paaAcq;
+  const vidAvail = serpRollup.videoAvail;
+  const vidAcq   = serpRollup.videoAcq;
+  const totalAvail = serpRollup.totalAvail;
+  const totalAcq   = serpRollup.totalAcq;
   const combinedSerpRate = totalAvail > 0 ? Math.round((totalAcq / totalAvail) * 100) : 0;
 
   // ── Share of Voice (page-1 click capture) ─────────────────────────────────
@@ -1020,7 +1037,7 @@ export default function ExecutiveSummarySection({
           Snapshot · one frame in a continuous cycle — Sentinel + IQ.Impact monitoring keep this current.
         </span>
         <span className="text-[9px]" style={{ color: 'var(--c-8888aa)' }}>
-          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · AI {pfHasData ? `${aiVisPct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}% (at analysis)` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
+          Rolls up · Score {geoScore} · Ranks {dbLoaded ? `${page1Pct}%` : '—'} · AI {pfHasData ? `${aiVisPct}%` : '—'} · SOV {_sov.availableClicks > 0 ? `${Math.round(clientShare * 100)}%` : '—'} · Gaps {gapKwCount} · AIO {aioAvail > 0 ? `${aioRate}%` : '—'} · LLM {overallTotal > 0 ? `${overallLlmRate}%` : '—'} · Journeys {journeyStagesCovered}/4
         </span>
       </div>
 

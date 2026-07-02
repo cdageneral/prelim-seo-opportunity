@@ -6,6 +6,7 @@ import { buildScopeResolver } from '@/lib/category/scopeModel';   // v7.326: sco
 import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
+import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';   // v7.337 (QC audit B12): ONE shared path-tree builder (also consumed by lib/local/serviceLines)
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -2623,12 +2624,6 @@ function aggregateTree(node: CatNode): void {
   for (const c of node.children) aggregateTree(c);
   aggregateCatNode(node);
 }
-function collapseSingleChild(node: CatNode): CatNode {
-  node.children = node.children.map(collapseSingleChild);
-  // a node with exactly one child and no page-keywords of its own is a redundant level
-  while (node.children.length === 1 && node.own.length === 0) node = node.children[0];
-  return node;
-}
 function setTreeDepth(node: CatNode, d: number): void {
   node.depth = d;
   for (const c of node.children) setTreeDepth(c, d + 1);
@@ -2637,27 +2632,23 @@ function sortTree(nodes: CatNode[]): void {
   nodes.sort((a, b) => b.totVol - a.totVol);
   for (const n of nodes) sortTree(n.children);
 }
-function buildPathTree(rows: KeywordRow[], pathOf: Map<string, string[]>): CatNode[] {
-  const roots: CatNode[] = [];
-  const byKey = new Map<string, CatNode>();
-  const ensure = (path: string[]): CatNode => {
-    let key = '';
-    let parentChildren = roots;
-    let node: CatNode | null = null;
-    for (let d = 0; d < path.length; d++) {
-      key = key ? key + ' › ' + path[d] : path[d];
-      let n = byKey.get(key);
-      if (!n) { n = emptyCatNode('path:' + key, path[d], 'procedure', d, true); byKey.set(key, n); parentChildren.push(n); }
-      node = n; parentChildren = n.children;
-    }
-    return node!;
+// v7.337 (QC audit B12, Const II.7): the tree construction + single-child collapse now
+// come from the ONE shared builder in lib/category/pathTree — the same module
+// lib/local/serviceLines rolls the Local panel's product lines up with, so the two can
+// never drift again (the local module previously re-implemented this logic by hand).
+// Node ids keep the exact 'path:' + full-joined-path form (a collapsed survivor keeps
+// its own full-path key, as before); metrics/depth/sort are applied here exactly as
+// pre-v7.337. Output verified byte-equal old-vs-new at real scale in the v7.337
+// harness. Exported for that retained harness check (Const V.6) — no behavior change.
+export function buildPathTree(rows: KeywordRow[], pathOf: Map<string, string[]>): CatNode[] {
+  const forest = buildCollapsedPathForest<KeywordRow>(rows, (r: KeywordRow) => pathOf.get(r.keyword.toLowerCase().trim()));
+  const toCatNode = (n: PathTreeNode<KeywordRow>): CatNode => {
+    const node = emptyCatNode('path:' + n.key, n.name, 'procedure', 0, true);
+    node.own = n.own;
+    node.children = n.children.map(toCatNode);
+    return node;
   };
-  for (const r of rows) {
-    const path = pathOf.get(r.keyword.toLowerCase().trim());
-    const leaf = ensure(path && path.length ? path : ['Other']);
-    leaf.own.push(r);
-  }
-  const collapsed = roots.map(collapseSingleChild);
+  const collapsed = forest.map(toCatNode);
   for (const n of collapsed) aggregateTree(n);
   collapsed.forEach(n => setTreeDepth(n, 0));
   sortTree(collapsed);

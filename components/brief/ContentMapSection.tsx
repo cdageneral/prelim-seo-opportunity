@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
-import { planFromSnapshot, buildContentPlanFromTopics, briefTitleFromKeywords } from '@/lib/journey/contentPlan';
+import { planFromSnapshot, buildContentPlanFromTopics } from '@/lib/journey/contentPlan';   // v7.337: briefTitleFromKeywords import dropped with dead buildArticleTopics
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mirror): canonical pool for buildClusters (Const II.7)
@@ -245,28 +245,10 @@ function detectIntent(keyword: string): IntentType {
   return 'unmatched';
 }
 
-function matchKeywordToCategory(
-  keyword: string,
-  categories: Array<{ name: string; type: string }>,
-  clientDomain: string,
-  competitorDomains: string[],
-): string | null {
-  const kwLow = keyword.toLowerCase();
-  for (const cat of categories) {
-    if (cat.type === 'brand' && isBranded(keyword, clientDomain, competitorDomains)) return cat.name;
-    if (cat.type === 'location') {
-      const locSigs = ['near me','near ',' in ','location','clinic','center'];
-      if (isBranded(keyword, clientDomain, competitorDomains) && locSigs.some((s: string) => kwLow.includes(s))) return cat.name;
-    }
-  }
-  for (const cat of categories) {
-    if (cat.type !== 'procedure') continue;
-    const catWords = cat.name.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
-      .filter((w: string) => w.length >= 4 && !['with','from','that','this','body','area'].includes(w));
-    for (const w of catWords) { if (kwLow.includes(w)) return cat.name; }
-  }
-  return null;
-}
+// v7.337 (QC audit dead-code sweep, Const II.8): matchKeywordToCategory was DELETED.
+// v7.336 removed it from cluster membership (stored membership only); its one remaining
+// caller, assignPageToCluster, was itself never called (verified zero call sites), so
+// both are removed in this release.
 
 // ─── Solution-awareness classification (v7.154) ─────────────────────────────────
 // Mirrors JourneySection: the pre-product/product split is decided by SOLUTION
@@ -536,9 +518,8 @@ export function buildClusters(
     // other unassigned keyword (Const I.5). The `catMap.has(...)` check doubles as
     // the category guard on the storedMap read (a keyword stored under a dropped
     // competitor-brand category is not re-filed; buildKwPool has already excluded
-    // it from the pool). NOTE: assignPageToCluster below still uses the lexical
-    // matcher, but only to pick which EXISTING cluster a ranking page displays
-    // under — it never adds keywords or volume to a cluster.
+    // it from the pool). (v7.337: the lexical matcher and its last dead caller,
+    // assignPageToCluster, were deleted outright — see the dead-code sweep notes.)
     let cand: string | null = null;
     const stored = storedMap[key];
     if (stored && catMap.has(stored)) cand = stored;
@@ -706,150 +687,12 @@ function sourceLabel(s: TopicSource): { text: string; bg: string; color: string;
   }
 }
 
-// Build the per-theme article topics. One topic per occupied journey stage
-// (pre-product themes collapse to a single pre-product topic). Every number is
-// the exact sum of the real keywords behind it.
-function buildArticleTopics(clusters: ThemeCluster[], segments: AudienceSegment[]): ArticleTopic[] {
-  const topics: ArticleTopic[] = [];
-  for (const cluster of clusters) {
-    const stagesWithData = new Set(cluster.subClusters.map((sc: IntentCluster) => sc.stage));
-    const stagesToCheck: Array<{ stage: JourneyStage; journeyType: JourneyType }> =
-      cluster.journeyType === 'pre-product'
-        ? [{ stage: 'awareness', journeyType: 'pre-product' }]
-        : JOURNEY_STAGE_ORDER.filter((s: JourneyStage) => stagesWithData.has(s)).map((s: JourneyStage) => ({ stage: s, journeyType: 'product' as JourneyType }));
-
-    for (const { stage, journeyType } of stagesToCheck) {
-      const stageSubs = cluster.journeyType === 'pre-product'
-        ? cluster.subClusters
-        : cluster.subClusters.filter((sc: IntentCluster) => sc.stage === stage);
-      const kws       = stageSubs.flatMap((sc: IntentCluster) => sc.keywords);
-      if (kws.length === 0) continue;
-      const totalVol  = kws.reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
-      const clientVol = kws.filter((k: KwItem) => !k.isGap).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
-      const compVol   = kws.filter((k: KwItem) => k.isGap && k.competitor).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
-      const demandVol = kws.filter((k: KwItem) => k.isGap && !k.competitor).reduce((s: number, k: KwItem) => s + k.searchVolume, 0);
-      const clientPct = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
-
-      const ranks    = kws.some((k: KwItem) => k.position != null && k.position > 0);
-      const action: 'optimize' | 'net-new' = (clientVol > 0 || ranks) ? 'optimize' : 'net-new';
-      const source: TopicSource = action === 'optimize'
-        ? 'none'
-        : (compVol > 0 && demandVol > 0) ? 'both' : compVol > 0 ? 'competitor' : 'journey';
-
-      const compMap: Record<string, number> = {};
-      for (const k of kws) if (k.isGap && k.competitor) compMap[k.competitor] = (compMap[k.competitor] ?? 0) + k.searchVolume;
-      const topComp = Object.entries(compMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-
-      const seg = matchSegmentToTopic(kws, segments);
-      const sortedKws = [...kws].sort((a: KwItem, b: KwItem) => b.searchVolume - a.searchVolume);
-
-      topics.push({
-        id:            `${cluster.id}::${stage}`,
-        clusterId:     cluster.id,
-        clusterName:   cluster.name,
-        clusterType:   cluster.type,
-        journeyType,
-        stage,
-        // Const III.8 — title carries the highest-volume target keyword (sortedKws is
-        // sorted desc by real volume); deriveArticleTitle is the no-keyword fallback.
-        title:         sortedKws.length ? briefTitleFromKeywords(cluster.name, sortedKws) : deriveArticleTitle(cluster, stage, journeyType),
-        keywords:      sortedKws,
-        monthlyVolume: totalVol,
-        annualVolume:  totalVol * 12,
-        clientCovPct:  clientPct,
-        action,
-        source,
-        segment:       seg,
-        tonality:      seg?.messagingAndTone ?? '',
-        pov:           splitIntoPoints(seg?.creativeDirection ?? ''),
-        angle:         deriveContentAngle(cluster, stage, journeyType, seg?.whoTheyAre?.trigger || cluster.name),
-        format:        deriveContentFormat(stage, journeyType),
-        topCompetitor: topComp,
-      });
-    }
-  }
-  return topics;
-}
-
-// ─── Build content gaps ───────────────────────────────────────────────────────
-
-function buildContentGaps(
-  clusters: ThemeCluster[],
-  segments: AudienceSegment[],
-): ContentGap[] {
-  const gaps: ContentGap[] = [];
-
-  // For each cluster × stage × segment, check if there is a gap
-  for (const cluster of clusters) {
-    const stagesWithData = new Set(cluster.subClusters.map((sc: IntentCluster) => sc.stage));
-    // Also include pre-product as a virtual stage for pre-product clusters
-    const stagesToCheck: Array<{ stage: JourneyStage; journeyType: JourneyType }> =
-      cluster.journeyType === 'pre-product'
-        ? [{ stage: 'awareness', journeyType: 'pre-product' }]
-        : JOURNEY_STAGE_ORDER.filter((s: JourneyStage) => stagesWithData.has(s)).map((s: JourneyStage) => ({ stage: s, journeyType: 'product' }));
-
-    for (const { stage, journeyType } of stagesToCheck) {
-      const stageSubs = cluster.subClusters.filter((sc: IntentCluster) => sc.stage === stage);
-      const totalVol   = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.totalVolume, 0) || cluster.totalVolume;
-      const clientVol  = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.clientVolume, 0);
-      const compVol    = stageSubs.reduce((s: number, sc: IntentCluster) => s + sc.competitorVolume, 0);
-      const clientPct  = totalVol > 0 ? Math.round((clientVol / totalVol) * 100) : 0;
-
-      // Only flag as a gap if there is opportunity
-      let gapType: GapType | null = null;
-      if (clientVol === 0 && compVol > 0)          gapType = 'competitor-gap';
-      else if (clientVol === 0 && compVol === 0)    gapType = 'missing';
-      else if (clientPct < 50 && compVol > 0)       gapType = 'partial';
-
-      if (!gapType) continue;
-
-      // Find top competitor for this stage
-      const compMap: Record<string, number> = {};
-      for (const sc of stageSubs) {
-        for (const kw of sc.keywords.filter((k: KwItem) => k.isGap && k.competitor)) {
-          compMap[kw.competitor!] = (compMap[kw.competitor!] ?? 0) + kw.searchVolume;
-        }
-      }
-      const topComp = Object.entries(compMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-
-      // Priority score: higher volume + worse coverage = higher priority
-      const gapWeight = gapType === 'competitor-gap' ? 3 : gapType === 'partial' ? 2 : 1;
-      const priorityScore = Math.round((totalVol / 1000) * gapWeight * (1 - clientPct / 100));
-
-      // Representative keywords
-      const keywords = stageSubs.flatMap((sc: IntentCluster) => sc.keywords.map((k: KwItem) => k.keyword)).slice(0, 5);
-
-      // Generate one gap per segment (they each have slightly different angles)
-      const segsToUse = segments.length > 0 ? segments : [{ id: 'all', name: 'All Segments', tagline: '', volumePct: 100, whoTheyAre: { demographics: '', trigger: cluster.name }, preLLMPrompts: [], productPrompts: [] }];
-
-      for (const seg of segsToUse) {
-        const contentAngle = deriveContentAngle(cluster, stage, journeyType, seg.whoTheyAre.trigger || cluster.name);
-        gaps.push({
-          id:            `${cluster.id}-${stage}-${seg.id}`,
-          segmentId:     seg.id,
-          segmentName:   seg.name,
-          stage,
-          journeyType,
-          clusterName:   cluster.name,
-          clusterType:   cluster.type,
-          monthlyVolume: totalVol,
-          annualVolume:  totalVol * 12,
-          clientCovPct:  clientPct,
-          gapType,
-          priorityScore: Math.round(priorityScore * (seg.volumePct / 100)),
-          topCompetitor: topComp,
-          keywords,
-          contentAngle,
-          contentFormat: deriveContentFormat(stage, journeyType),
-        });
-      }
-    }
-  }
-
-  // Sort by priority descending
-  gaps.sort((a, b) => b.priorityScore - a.priorityScore);
-  return gaps;
-}
+// v7.337 (QC audit dead-code sweep): buildArticleTopics and buildContentGaps were
+// DELETED — never called (verified zero call sites; the panel renders the shared
+// content plan via buildCanonicalClusterTopics → buildContentPlanFromTopics /
+// planFromSnapshot instead, v7.176/v7.210). The ArticleTopic/ContentGap types and
+// their label/render helpers remain for the (currently unrendered) drawer/table
+// components below.
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
 
@@ -889,31 +732,9 @@ interface PageMap {
   builtAt: string;
 }
 
-// v7.166: assign a page to the cluster it most belongs to, by running the page's
-// real ranking keywords through the SAME category/problem matching used to build
-// the clusters and taking the majority (by keyword count). Returns a cluster name
-// that exists among the built clusters, or null if none match.
-function assignPageToCluster(
-  pageKeywords: string[],
-  categories: Array<{ name: string; type: string }>,
-  clusterNames: Set<string>,
-  clientDomain: string,
-  competitorDomains: string[],
-  vocab: ProblemVocab,
-): string | null {
-  const tally = new Map<string, number>();
-  for (const kw of pageKeywords) {
-    if (!kw) continue;
-    let name = matchKeywordToCategory(kw, categories, clientDomain, competitorDomains);
-    if (!name) name = deterministicProblemTheme(kw, vocab);
-    if (name) tally.set(name, (tally.get(name) ?? 0) + 1);
-  }
-  let best: string | null = null, bestN = 0;
-  for (const [name, n] of Array.from(tally.entries())) {
-    if (clusterNames.has(name) && n > bestN) { best = name; bestN = n; }
-  }
-  return best;
-}
+// v7.337 (QC audit dead-code sweep): assignPageToCluster (v7.166) was DELETED — never
+// called (verified zero call sites), and it was the last consumer of the lexical
+// matchKeywordToCategory matcher removed above (Const II.8: stored membership only).
 
 const pageMapCacheKey = (analysis: any): string => `orbitiq-pagemap-${analysis?.id ?? 'none'}`;
 
