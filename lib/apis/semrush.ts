@@ -422,7 +422,8 @@ export function buildSerpCompetitorPositions(
 // pulls getSemrushSnapshot makes), then intersects with the client's UPLOADED footprint
 // (topKeywords) to produce `serpCompetitorPositions`. The client footprint is NOT
 // re-pulled — only competitor footprints — so an upload project's own data is untouched.
-// Bounded to 5 competitor domains (same cap as the auto path). Usage is auto-recorded by
+// Uncapped competitor domains (v7.337 B14, Const I.6 — mirrors the auto path, which
+// dropped its 5-domain cap in the same release). Usage is auto-recorded by
 // semrushGet under the current usage-project context.
 export async function enrichSerpCompetitors(
   clientDomain:      string,
@@ -438,10 +439,11 @@ export async function enrichSerpCompetitors(
   const warnings: string[] = [];
   const autoCompetitors = await getCompetitors(clientDomain, database).catch(() => [] as SemrushCompetitor[]);
   const autoSet    = new Set(autoCompetitors.map(c => c.domain));
+  // v7.337 (B14): uncapped — every auto-discovered + manual competitor domain is pulled.
   const gapDomains = [
     ...autoCompetitors.map(c => c.domain),
     ...manualCompetitors.filter(d => !autoSet.has(d)),
-  ].filter(Boolean).slice(0, 5);
+  ].filter(Boolean);
 
   if (gapDomains.length === 0) {
     warnings.push(
@@ -489,10 +491,11 @@ export async function estimateSerpCompetitorPull(
 }> {
   const autoCompetitors = await getCompetitors(domain, database).catch(() => [] as SemrushCompetitor[]);
   const autoSet    = new Set(autoCompetitors.map(c => c.domain));
+  // v7.337 (B14): uncapped — the estimate mirrors enrichSerpCompetitors' uncapped plan.
   const gapDomains = [
     ...autoCompetitors.map(c => c.domain),
     ...manualCompetitors.filter(d => !autoSet.has(d)),
-  ].filter(Boolean).slice(0, 5);
+  ].filter(Boolean);
 
   const competitors: Array<{ domain: string; keywords: number }> = [];
   for (const d of gapDomains) {
@@ -665,7 +668,12 @@ export async function getSemrushSnapshot(
   // pull records its outcome; failures and empty pulls become snapshot warnings
   // so the UI can tell the user WHY Competitor Gap is empty instead of showing 0.
   const warnings: string[] = [];
-  const gapDomains = allCompetitorDomains.slice(0, 5);   // cap at 5 competitor DOMAINS (per-domain pulls are uncapped)
+  // v7.337 (QC audit B14, Const I.6 — no limits by default; Wayne: REMOVE): the
+  // 5-competitor-domain cap is gone. Gap keywords are pulled for EVERY configured +
+  // auto-discovered competitor domain (auto-discovery itself returns at most 10 —
+  // getCompetitors display_limit — and manual competitors are user-bounded). Per-domain
+  // pulls were already uncapped. Affects NEW analyses only; stored snapshots are untouched.
+  const gapDomains = allCompetitorDomains;
 
   const gapResults = await Promise.all(
     gapDomains.map(async comp => {
@@ -834,9 +842,10 @@ export async function getSemrushSnapshot(
 // ─── Pull cost estimate (v7.86) ──────────────────────────────────────────────
 // Estimates the Semrush API unit cost of a full uncapped analysis BEFORE it
 // runs, so the user can confirm. Mirrors getSemrushSnapshot's fetch plan:
-// client full footprint + full footprint of the first 5 competitor domains
-// (auto-discovered merged with manual). Semrush bills 10 units per row for
-// domain reports. The estimate itself costs a few rows (~16 lines ≈ 160 units).
+// client full footprint + full footprint of EVERY competitor domain (auto-discovered
+// merged with manual — uncapped since v7.337 B14, Const I.6; the estimate MUST mirror
+// the real pull or the confirmed cost would be a lie, Const I.5). Semrush bills 10
+// units per row for domain reports. The estimate itself costs a few rows.
 
 export interface SemrushPullEstimate {
   client:      { domain: string; keywords: number };
@@ -865,10 +874,11 @@ export async function estimateSemrushPull(
   ]);
 
   const autoSet = new Set(autoCompetitors.map(c => c.domain));
+  // v7.337 (B14): uncapped — mirrors the uncapped getSemrushSnapshot pull plan exactly.
   const gapDomains = [
     ...autoCompetitors.map(c => c.domain),
     ...manualCompetitors.filter(d => !autoSet.has(d)),
-  ].slice(0, 5);
+  ];
 
   // Keyword counts: reuse auto-discovery's organicKeywords where known,
   // otherwise fetch the domain overview (1 row each).
