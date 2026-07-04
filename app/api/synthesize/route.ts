@@ -112,6 +112,11 @@ export async function POST(req: NextRequest) {
   // hand its distinct canonical paths to the skeleton pass, so a re-analysis
   // (e.g. after adding a competitor CSV) keeps stable category names instead of
   // re-inventing and re-splitting the tree. First analysis → no anchor.
+  // v7.340: anchor ONLY to a tree the anchored engine itself built
+  // (`taxonomyEngine === 'anchored-v1'`). A pre-v7.339 taxonomy carries exactly
+  // the duplicate/split categories III.1e exists to eliminate — anchoring to it
+  // would drag the mess forward. So each project's FIRST anchored-engine run is
+  // a clean rebuild; name stability kicks in from the second run onward.
   let priorPaths: string[][] | null = null;
   try {
     const prior = await db.query.analyses.findMany({
@@ -121,7 +126,8 @@ export async function POST(req: NextRequest) {
     });
     const priorDone = prior.find((a: any) =>
       a.id !== analysisId && a.status === 'completed'
-      && (a.semrushSnapshot as any)?._categoryBreakdown?.keywordPaths);
+      && (a.semrushSnapshot as any)?._categoryBreakdown?.keywordPaths
+      && (a.semrushSnapshot as any)?._categoryBreakdown?.taxonomyEngine === 'anchored-v1');
     if (priorDone) {
       const kp: Record<string, any> = (priorDone.semrushSnapshot as any)._categoryBreakdown.keywordPaths ?? {};
       const seen = new Set<string>();
