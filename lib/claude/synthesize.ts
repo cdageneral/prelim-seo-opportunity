@@ -302,13 +302,17 @@ export async function generateCategoryBreakdown(
   // batch to 25 and raise max_tokens so the JSON does not truncate (the salvage parser still
   // backstops a clipped tail). Tested at real batch size per the harness-real-scale rule.
   const DISCOVERY_BATCH = 25;
-  const CONCURRENCY     = 6;
 
   const batches: Array<{ start: number; kws: MergedKeyword[] }> = [];
   for (let i = 0; i < merged.length; i += DISCOVERY_BATCH) {
     batches.push({ start: i, kws: merged.slice(i, i + DISCOVERY_BATCH) });
   }
-  console.log(`[OrbitIQ] Hierarchical discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
+  // v7.343: adaptive concurrency (Wayne-approved). Large uploads (8k kws ≈ 328
+  // batches) needed 3-4 Vercel 300s windows at 6 workers; 12 roughly halves the
+  // wall time. Same total calls — no extra spend; haiku rate limits absorb 12
+  // and per-batch failures already retry (v7.339). Small pools keep 6.
+  const CONCURRENCY = batches.length > 120 ? 12 : 6;
+  console.log(`[OrbitIQ] Hierarchical discovery: ${merged.length} keywords in ${batches.length} batch(es), concurrency ${CONCURRENCY}`);
 
   // ── Phase 0 (v7.339): TAXONOMY SKELETON — one shared tree before batching ──
   // The duplicate-category failure (Wills / Wills & Trusts / Estate Planning as
