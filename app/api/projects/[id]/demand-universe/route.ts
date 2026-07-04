@@ -26,6 +26,7 @@ import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { buildDemandUniverse, mergeDemandLanes } from '@/lib/apis/demandExpansion';
 import { assignProductExpansionPaths, isFunnelStageLabel } from '@/lib/category/productExpansion';
+import { assignPreProductPaths, isPreProductPath } from '@/lib/category/canonicalize';   // v7.339
 
 export const maxDuration = 300;
 
@@ -266,6 +267,22 @@ export async function POST(
           }
         }
 
+        // v7.339: PRE-PRODUCT lane gets stored membership too (Const II.8 / III.1e).
+        // Each problem-lane topic is filed deterministically under
+        // "Pre-Product Journey › <Problem Seed>" — labeled exactly as Wayne's
+        // pipeline requires, additive-only (base footprint paths always win), and
+        // reversible (the lane clear strips exactly this root). Before this, these
+        // keywords carried no path and every panel dumped them into "Other".
+        if (rebuiltLanes.includes('problem')) {
+          const prevPaths2: Record<string, string[]> = { ...((nextCb.keywordPaths as Record<string, string[]>) ?? {}) };
+          const prevCats2:  Record<string, string>   = { ...((nextCb.keywordCategories as Record<string, string>) ?? {}) };
+          const pre = assignPreProductPaths(mergedTopics as any, prevPaths2);
+          if (pre.assigned > 0) {
+            nextCb = { ...nextCb, keywordPaths: { ...prevPaths2, ...pre.paths }, keywordCategories: { ...prevCats2, ...pre.cats } };
+            console.log(`[OrbitIQ] Pre-product expansion: filed ${pre.assigned} keywords under "Pre-Product Journey" (stored membership).`);
+          }
+        }
+
         await db.update(analyses)
           .set({ semrushSnapshot: { ...snap, _demandUniverse: demandUniverse, _categoryBreakdown: nextCb } as any })
           .where(eq(analyses.id, analysis.id));
@@ -338,18 +355,20 @@ export async function DELETE(
     status: `${keptTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · cleared: ${mode}`,
   } : null;
 
-  // Strip the funnel-stage membership the product build authored (only entries whose
-  // deepest node is a funnel stage AND whose keyword was in the cleared lane).
+  // Strip the membership this lane's build authored — product: entries whose deepest
+  // node is a funnel stage; pre (v7.339): entries under the "Pre-Product Journey"
+  // root. Base-footprint paths (neither shape) are always left intact.
   let nextCb = snap._categoryBreakdown ?? {};
-  if (lane === 'product' && nextCb && nextCb.keywordPaths) {
+  if (nextCb && nextCb.keywordPaths) {
     const paths = { ...(nextCb.keywordPaths as Record<string, string[]>) };
     const cats  = { ...((nextCb.keywordCategories as Record<string, string>) ?? {}) };
     let removed = 0;
     for (const kw of Array.from(clearedKws)) {
       const p = paths[kw];
-      if (Array.isArray(p) && p.length > 0 && isFunnelStageLabel(p[p.length - 1])) {
-        delete paths[kw]; delete cats[kw]; removed++;
-      }
+      const authoredByLane = lane === 'product'
+        ? (Array.isArray(p) && p.length > 0 && isFunnelStageLabel(p[p.length - 1]))
+        : isPreProductPath(p);
+      if (authoredByLane) { delete paths[kw]; delete cats[kw]; removed++; }
     }
     if (removed > 0) nextCb = { ...nextCb, keywordPaths: paths, keywordCategories: cats };
   }
