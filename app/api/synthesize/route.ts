@@ -107,8 +107,45 @@ export async function POST(req: NextRequest) {
     }
   };
 
+  // ── v7.339 (Const III.1e): prior-taxonomy anchor ────────────────────────────
+  // Load the project's most recent COMPLETED analysis (excluding this one) and
+  // hand its distinct canonical paths to the skeleton pass, so a re-analysis
+  // (e.g. after adding a competitor CSV) keeps stable category names instead of
+  // re-inventing and re-splitting the tree. First analysis → no anchor.
+  let priorPaths: string[][] | null = null;
   try {
-    const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound, cached, persistCheckpoint)
+    const prior = await db.query.analyses.findMany({
+      where:   eq(analyses.projectId, analysis.projectId),
+      orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+      limit:   6,
+    });
+    const priorDone = prior.find((a: any) =>
+      a.id !== analysisId && a.status === 'completed'
+      && (a.semrushSnapshot as any)?._categoryBreakdown?.keywordPaths);
+    if (priorDone) {
+      const kp: Record<string, any> = (priorDone.semrushSnapshot as any)._categoryBreakdown.keywordPaths ?? {};
+      const seen = new Set<string>();
+      const out: string[][] = [];
+      for (const v of Object.values(kp)) {
+        if (!Array.isArray(v) || v.length === 0) continue;
+        const p = v.map(s => String(s ?? '').trim()).filter(Boolean);
+        const key = p.join(' › ');
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(p);
+        if (out.length >= 400) break;
+      }
+      if (out.length > 0) {
+        priorPaths = out;
+        console.log(`[OrbitIQ] Prior-taxonomy anchor: ${out.length} distinct paths from analysis ${priorDone.id}`);
+      }
+    }
+  } catch (err) {
+    console.error('[OrbitIQ] Prior-taxonomy load failed (running unanchored):', (err as any)?.message);
+  }
+
+  try {
+    const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound, cached, persistCheckpoint, priorPaths)
       .catch(err => {
         const msg = String((err as any)?.message ?? err);
         if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
