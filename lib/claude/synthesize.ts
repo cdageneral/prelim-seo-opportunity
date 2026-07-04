@@ -27,8 +27,16 @@ import {
   pptPromptGenerator,
   hierarchicalDiscoveryPrompt,
   pathCanonicalizationPrompt,
+  taxonomySkeletonPrompt,   // v7.339: shared skeleton every discovery batch anchors to (Const III.1e)
   type MergedKeyword,
 } from './prompts';
+import {
+  unifyLabels,
+  classifyMerge,
+  pathJoin,
+  MERGE_LOG_CAP,
+  type MergeLogEntry,
+} from '@/lib/category/canonicalize';   // v7.339: deterministic label unification + merge log
 
 // Lazy client — reads key at call time, not at module load.
 // This matches the pattern used by semrush.ts, serp.ts, and profound.ts,
@@ -206,6 +214,16 @@ export interface CategoryBreakdownResult {
   // the brand guard handles brand verticals). Absent on pre-v7.326 analyses → every umbrella is
   // treated as core (honest default, Const I.5). Keyed by exact umbrella name.
   umbrellaScope?:          Record<string, 'core' | 'adjacent'>;
+  // v7.339 (Const III.1e): every taxonomy merge auto-applied during this build —
+  // deterministic label unifications AND LLM re-parents — so the Keyword panel can
+  // show exactly what moved where (Wayne: auto-apply, log visibly). Capped at
+  // MERGE_LOG_CAP entries. Absent on pre-v7.339 analyses.
+  mergeLog?:               Array<{ from: string; to: string; kind: 'label' | 'reparent' }>;
+  // v7.339: the canonical umbrella → themes skeleton every discovery batch anchored
+  // to (labels only — structure reference for later passes and debugging).
+  taxonomySkeleton?:       Array<{ name: string; themes: string[] }>;
+  // v7.339: engine tag for observability ('anchored-v1' = skeleton-anchored discovery).
+  taxonomyEngine?:         string;
 }
 
 // v7.86: with uncapped Semrush pulls a footprint can be 30k+ keywords →
@@ -227,6 +245,11 @@ export async function generateCategoryBreakdown(
   semrush: SemrushSnapshot,
   progress?: CbDiscoveryProgress | null,
   onProgress?: (p: CbDiscoveryProgress) => Promise<void>,
+  // v7.339 (Const III.1e): distinct canonical paths from the project's PREVIOUS
+  // analysis. When present, the skeleton pass anchors to them so category names
+  // stay stable across re-analyses (adding a competitor CSV no longer renames
+  // or re-splits the tree). Absent on a first analysis.
+  priorPaths?: string[][] | null,
 ): Promise<CategoryBreakdownResult> {
   // ── Build merged keyword pool ──────────────────────────────────────────────
   // Step 1: ranked keywords the client appears for (have real position data)
@@ -283,6 +306,66 @@ export async function generateCategoryBreakdown(
   }
   console.log(`[OrbitIQ] Hierarchical discovery: ${merged.length} keywords in ${batches.length} batch(es)`);
 
+  // ── Phase 0 (v7.339): TAXONOMY SKELETON — one shared tree before batching ──
+  // The duplicate-category failure (Wills / Wills & Trusts / Estate Planning as
+  // three nodes) came from each 25-kw batch inventing umbrellas independently.
+  // One upfront call over a volume-ranked sample (plus the PRIOR analysis's
+  // taxonomy when re-analyzing) proposes the canonical umbrella → theme skeleton;
+  // every discovery batch then assigns INTO it (Const III.1e). On failure →
+  // skeleton = null and discovery runs unanchored exactly as before (honest
+  // fallback, Const I.5) — consolidation still catches duplicates downstream.
+  const SKELETON_SAMPLE = 200;
+  let skeleton: Array<{ name: string; themes: string[] }> | null = null;
+  let anchorTreeText = '';
+  try {
+    // Sample: top by volume + a stratified sweep of the tail so small themes
+    // are represented (every Nth keyword of the remainder up to the cap).
+    const byVol = merged.slice().sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0));
+    const head  = byVol.slice(0, Math.min(120, byVol.length));
+    const rest  = byVol.slice(head.length);
+    const step  = Math.max(1, Math.floor(rest.length / Math.max(1, SKELETON_SAMPLE - head.length)));
+    const sample = head.concat(rest.filter((_, i) => i % step === 0)).slice(0, SKELETON_SAMPLE)
+      .map(k => ({ keyword: k.keyword, searchVolume: k.searchVolume ?? 0 }));
+
+    // Prior-taxonomy anchor: distinct umbrella > theme lines from the previous
+    // analysis (bounded), so re-analyses keep stable names (Const III.1e).
+    let priorTree: string[] | undefined;
+    if (priorPaths && priorPaths.length > 0) {
+      const seen = new Set<string>();
+      const lines: string[] = [];
+      for (const p of priorPaths) {
+        const line = p.slice(0, 2).join(' > ');
+        if (line && !seen.has(line)) { seen.add(line); lines.push(line); }
+        if (lines.length >= 150) break;
+      }
+      priorTree = lines;
+    }
+
+    const sResponse = await getClient().messages.create({
+      model:      MODELS.fast,
+      max_tokens: 4000,
+      messages:   [{ role: 'user', content: taxonomySkeletonPrompt(domain, industry, sample, priorTree) }],
+    }, { timeout: 60_000 });
+    const sText   = sResponse.content[0].type === 'text' ? sResponse.content[0].text : '';
+    const sParsed = extractJSON<{ umbrellas: Array<{ name: string; themes: string[] }> }>(sText);
+    const umbrellas = (sParsed.umbrellas ?? [])
+      .map(u => ({
+        name:   String(u?.name ?? '').trim(),
+        themes: (Array.isArray(u?.themes) ? u.themes : []).map(t => String(t ?? '').trim()).filter(Boolean).slice(0, 15),
+      }))
+      .filter(u => u.name.length > 0)
+      .slice(0, 30);
+    if (umbrellas.length > 0) {
+      skeleton = umbrellas;
+      anchorTreeText = umbrellas
+        .map(u => u.themes.length > 0 ? `${u.name} › ${u.themes.join(' | ')}` : u.name)
+        .join('\n');
+      console.log(`[OrbitIQ] Taxonomy skeleton: ${umbrellas.length} umbrella(s)${priorTree ? ` (anchored to ${priorTree.length} prior nodes)` : ''}`);
+    }
+  } catch (err) {
+    console.error('[OrbitIQ] Taxonomy skeleton failed (discovery runs unanchored):', (err as any)?.message);
+  }
+
   type CatType = 'procedure' | 'brand' | 'location';
   // GLOBAL index into merged. v7.235: + separated modifier and intent/confidence/reasoning.
   interface RawAssign { index: number; path: string[]; type: CatType; modifier?: string; intent?: string; confidence?: number; reasoning?: string; }
@@ -311,7 +394,7 @@ export async function generateCategoryBreakdown(
 
   const runDiscovery = async (batch: { start: number; kws: MergedKeyword[] }) => {
     try {
-      const bPrompt   = hierarchicalDiscoveryPrompt(domain, industry, batch.kws);
+      const bPrompt   = hierarchicalDiscoveryPrompt(domain, industry, batch.kws, anchorTreeText);
       const bResponse = await getClient().messages.create({
         model:      MODELS.fast,
         max_tokens: 12000,  // v7.235: 25 keywords × (path + modifier + intent + confidence + reasoning), no truncation
@@ -353,43 +436,110 @@ export async function generateCategoryBreakdown(
     }
   }
 
+  // v7.339: RETRY failed batches once before letting anything fall into "Other".
+  // A transient timeout used to silently file 25 keywords under Other with no
+  // trace — a big slice of the catch-all node. Whatever still fails after the
+  // retry is flagged needsReview below (never silent, Const I.5).
+  const retryBatches = batches.filter(b => !doneStarts.has(b.start));
+  if (retryBatches.length > 0) {
+    console.log(`[OrbitIQ] Discovery retry: ${retryBatches.length} failed batch(es)`);
+    for (let i = 0; i < retryBatches.length; i += CONCURRENCY) {
+      await Promise.all(retryBatches.slice(i, i + CONCURRENCY).map(runDiscovery));
+    }
+    if (onProgress) await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts) });
+  }
+  const failedBatchStarts = new Set<number>();
+  for (const b of batches) if (!doneStarts.has(b.start)) failedBatchStarts.add(b.start);
+
   // Degenerate case: every discovery batch failed → keep the old empty-result contract.
   if (rawAssigns.length === 0) {
     return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: merged.length, page1CaptureRate: 0, keywordCategories: {}, keywordPaths: {} };
   }
 
-  // ── Phase 2 (v7.231): PATH CANONICALIZATION — align labels across batches ──
-  // Independent batches can label the same node differently ("30-yr fixed" vs "30 Year
-  // Fixed"). One call over the DISTINCT paths (bounded — far fewer than keywords) returns
-  // a canonical path for each, so equivalent nodes merge. On failure → identity (raw paths).
-  const pathKey = (p: string[]) => p.join(' › ');
-  const distinctMap = new Map<string, string[]>();
-  for (const r of rawAssigns) if (!distinctMap.has(pathKey(r.path))) distinctMap.set(pathKey(r.path), r.path);
-  const distinctPaths = Array.from(distinctMap.values());
-  const canonByRawKey = new Map<string, string[]>();
+  // ── Phase 2 (rewritten v7.339): CONSOLIDATION — deterministic + LLM re-parenting ──
+  // 2a: TypeScript label unification (case / & vs and / plural / word order) merges
+  //     trivial spelling variants for free — no model call, fully repeatable.
+  // 2b: LLM canonicalization in CHUNKS (the old single call silently SKIPPED any
+  //     taxonomy over 300 distinct paths — the worst offenders got no cleanup at
+  //     all). Each chunk carries the canonical nodes established by earlier chunks
+  //     so labels align across chunks; the rewritten prompt now RE-PARENTS subsumed
+  //     concepts ("Wills" → Estate Planning › Wills & Trusts) instead of being
+  //     forbidden from touching ancestors (Const III.1e).
+  // Every auto-applied change lands in mergeLog (Wayne: auto-apply + visible log).
+  const pathKey = (p: string[]) => pathJoin(p);
+  const distinctMap  = new Map<string, string[]>();
+  const weightByKey  = new Map<string, number>();   // keywords behind each raw path (label voting)
+  for (const r of rawAssigns) {
+    const k = pathKey(r.path);
+    if (!distinctMap.has(k)) distinctMap.set(k, r.path);
+    weightByKey.set(k, (weightByKey.get(k) ?? 0) + 1);
+  }
+  const rawDistinct = Array.from(distinctMap.values());
 
-  if (distinctPaths.length > 1 && distinctPaths.length <= 300) {
-    try {
-      const cPrompt   = pathCanonicalizationPrompt(domain, industry, distinctPaths);
-      const cResponse = await getClient().messages.create({
-        model:      MODELS.fast,
-        max_tokens: 8000,   // v7.232: up to 300 distinct paths → needs headroom
-        messages:   [{ role: 'user', content: cPrompt }],
-      }, { timeout: 60_000 });
-      const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
-      const cParsed = extractJSON<{ canonical: Array<{ index: number; path: string[] }> }>(cText);
-      for (const c of cParsed.canonical ?? []) {
-        const idx = c?.index;
-        if (!Number.isInteger(idx) || idx < 0 || idx >= distinctPaths.length) continue;
-        const cp = cleanPath(c?.path);
-        if (cp.length) canonByRawKey.set(pathKey(distinctPaths[idx]), cp);
+  // Phase 2a — deterministic label unification (lib/category/canonicalize.ts).
+  const det = unifyLabels(rawDistinct, p => weightByKey.get(pathKey(p)) ?? 1);
+  const mergeLog: MergeLogEntry[] = det.log.slice();
+  const detByRawKey = new Map<string, string[]>();
+  for (let i = 0; i < rawDistinct.length; i++) detByRawKey.set(pathKey(rawDistinct[i]), det.canonical[i]);
+  const postDetMap = new Map<string, string[]>();
+  for (const p of det.canonical) if (!postDetMap.has(pathKey(p))) postDetMap.set(pathKey(p), p);
+  const postDetPaths = Array.from(postDetMap.values());
+  if (det.log.length > 0) {
+    console.log(`[OrbitIQ] Deterministic canonicalization: ${rawDistinct.length} → ${postDetPaths.length} distinct paths (${det.log.length} label merges)`);
+  }
+
+  // Phase 2b — chunked LLM canonicalization (never skipped; alphabetical sort
+  // co-locates related paths in the same chunk; established nodes carry forward).
+  const CANON_CHUNK = 250;
+  const llmByDetKey = new Map<string, string[]>();
+  if (postDetPaths.length > 1) {
+    const sorted = postDetPaths.slice().sort((a, b) => (pathKey(a) < pathKey(b) ? -1 : 1));
+    const established: string[] = [];
+    const establishedSeen = new Set<string>();
+    const noteEstablished = (cp: string[]) => {
+      const line = cp.slice(0, 2).join(' > ');
+      if (line && !establishedSeen.has(line)) { establishedSeen.add(line); established.push(line); }
+    };
+    for (let c = 0; c < sorted.length; c += CANON_CHUNK) {
+      const chunk = sorted.slice(c, c + CANON_CHUNK);
+      try {
+        const cPrompt   = pathCanonicalizationPrompt(domain, industry, chunk, established.slice(0, 150));
+        const cResponse = await getClient().messages.create({
+          model:      MODELS.fast,
+          max_tokens: 8000,
+          messages:   [{ role: 'user', content: cPrompt }],
+        }, { timeout: 60_000 });
+        const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
+        const cParsed = extractJSON<{ canonical: Array<{ index: number; path: string[] }> }>(cText);
+        for (const cc of cParsed.canonical ?? []) {
+          const idx = cc?.index;
+          if (!Number.isInteger(idx) || idx < 0 || idx >= chunk.length) continue;
+          const cp = cleanPath(cc?.path);
+          if (cp.length) { llmByDetKey.set(pathKey(chunk[idx]), cp); noteEstablished(cp); }
+        }
+      } catch (err) {
+        // This chunk keeps its deterministic paths — never fatal (Const I.5).
+        console.error('[OrbitIQ] Canonicalization chunk failed (deterministic paths kept):', (err as any)?.message);
+        for (const p of chunk) noteEstablished(p);
       }
-      console.log(`[OrbitIQ] Path canonicalization: ${distinctPaths.length} distinct paths processed`);
-    } catch (err) {
-      console.error('[OrbitIQ] Path canonicalization failed (using raw paths):', (err as any)?.message);
+    }
+    console.log(`[OrbitIQ] Path canonicalization: ${postDetPaths.length} distinct paths in ${Math.ceil(sorted.length / CANON_CHUNK)} chunk(s)`);
+  }
+
+  // Compose raw → deterministic → LLM-canonical, logging each LLM change.
+  const canonByRawKey = new Map<string, string[]>();
+  const loggedKeys = new Set<string>();
+  for (const e of mergeLog) loggedKeys.add(e.from + '→' + e.to);
+  for (const [rawKey, rawPath] of Array.from(distinctMap.entries())) {
+    const detPath   = detByRawKey.get(rawKey) ?? rawPath;
+    const finalPath = llmByDetKey.get(pathKey(detPath)) ?? detPath;
+    canonByRawKey.set(rawKey, finalPath);
+    const fromKey = pathKey(detPath), toKey = pathKey(finalPath);
+    if (fromKey !== toKey && !loggedKeys.has(fromKey + '→' + toKey)) {
+      loggedKeys.add(fromKey + '→' + toKey);
+      mergeLog.push({ from: fromKey, to: toKey, kind: classifyMerge(detPath, finalPath) });
     }
   }
-  for (const [k, p] of Array.from(distinctMap.entries())) if (!canonByRawKey.has(k)) canonByRawKey.set(k, p);
 
   // ── Phase 3: per-keyword canonical PATH + derived flat category (back-compat) ──
   // keywordPaths is the new stored taxonomy. We ALSO derive the flat `keywordCategories`
@@ -406,7 +556,12 @@ export async function generateCategoryBreakdown(
     metaByIndex.set(r.index, { modifier: r.modifier, intent: r.intent, confidence: r.confidence, reasoning: r.reasoning });
   }
   for (let i = 0; i < merged.length; i++) {
-    if (!pathByIndex.has(i)) { pathByIndex.set(i, [OTHER_NAME]); typeByIndex.set(i, 'procedure'); }
+    if (!pathByIndex.has(i)) {
+      pathByIndex.set(i, [OTHER_NAME]); typeByIndex.set(i, 'procedure');
+      // v7.339: an unplaced keyword (batch failed twice, or the model skipped the
+      // index) is never silent — it lands in Other FLAGGED for review (Const I.5).
+      metaByIndex.set(i, { confidence: 0, reasoning: 'not placed by discovery — auto-filed to Other, needs review' });
+    }
   }
 
   const keywordPaths: Record<string, string[]> = {};
@@ -520,6 +675,15 @@ export async function generateCategoryBreakdown(
   // the full tree the Keyword panel renders. Brand/location stay navigational (no parent).
   result.keywordPaths = keywordPaths;
   result.keywordMeta  = keywordMeta;   // v7.235: separated modifier + intent/confidence/reasoning/needsReview
+  // v7.339 (Const III.1e): persist the merge log (bounded), the skeleton the batches
+  // anchored to, and the engine tag. The Keyword panel renders the log so every
+  // auto-applied merge is visible (Wayne: auto-apply, log it).
+  if (mergeLog.length > 0) result.mergeLog = mergeLog.slice(0, MERGE_LOG_CAP);
+  if (skeleton) result.taxonomySkeleton = skeleton;
+  result.taxonomyEngine = 'anchored-v1';
+  if (failedBatchStarts.size > 0) {
+    console.log(`[OrbitIQ] Discovery: ${failedBatchStarts.size} batch(es) failed after retry — their keywords are in Other, flagged needs-review`);
+  }
   for (const c of result.categories) {
     if (c.type !== 'procedure' || c.name === OTHER_NAME) continue;
     const umbrella = umbrellaByCat.get(c.name);
@@ -656,6 +820,10 @@ export async function runFullSynthesis(
   profound: any,
   cached: SynthesisCheckpoint = {},
   onCheckpoint?: (partial: SynthesisCheckpoint) => Promise<void>,
+  // v7.339 (Const III.1e): distinct canonical paths from the project's previous
+  // completed analysis — the skeleton anchors to them so category names stay
+  // stable across re-analyses. Null/absent on a first analysis.
+  priorPaths?: string[][] | null,
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}${Object.keys(cached).length > 0 ? ` (resuming — cached: ${Object.keys(cached).join(', ')})` : ''}`);
 
@@ -680,6 +848,7 @@ export async function runFullSynthesis(
           // v7.86: wave-level discovery progress is checkpointed so very large
           // (uncapped) footprints can resume mid-discovery after a 300s kill
           onCheckpoint ? async (p) => onCheckpoint({ cbProgress: p }) : undefined,
+          priorPaths ?? null,   // v7.339: prior-taxonomy anchor (Const III.1e)
         ).catch(err => {
           console.error('[OrbitIQ] Category breakdown failed (non-fatal):', err);
           return { categories: [], totalMonthlyDemand: 0, totalPage1Demand: 0, totalTop3Demand: 0, brandedPage1Demand: 0, nonBrandedPage1Demand: 0, totalKeywordsAnalyzed: 0, page1CaptureRate: 0, keywordCategories: {} } as CategoryBreakdownResult;

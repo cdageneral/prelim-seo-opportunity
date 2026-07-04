@@ -149,12 +149,58 @@ Return JSON ONLY — no markdown, no explanation:
 }`;
 }
 
+// ─── Pass 1.9 (v7.339): TAXONOMY SKELETON — shared tree before batching ───────
+//
+// Root cause of duplicate categories (Wills / Wills & Trusts / Estate Planning as
+// three separate nodes): the 25-keyword discovery batches each invented the tree
+// independently, with no shared vocabulary (Const III.1e). This ONE upfront call
+// looks at a volume-ranked sample of the footprint (plus, on a re-analysis, the
+// PRIOR stored taxonomy) and proposes the canonical umbrella → theme skeleton.
+// Every discovery batch then receives this skeleton and must assign INTO it.
+// Labels/structure only — no keyword membership and no volume math here (Const I.1).
+
+export function taxonomySkeletonPrompt(
+  domain: string,
+  industry: string,
+  sampleKeywords: Array<{ keyword: string; searchVolume: number }>,
+  priorTree?: string[],   // ' > ' joined umbrella>theme lines from the previous analysis
+): string {
+  const kwList = sampleKeywords
+    .map(k => `- ${k.keyword} (${(k.searchVolume ?? 0).toLocaleString()}/mo)`)
+    .join('\n');
+  const priorBlock = priorTree && priorTree.length > 0
+    ? `\nEXISTING TAXONOMY from this project's previous analysis — REUSE these exact labels and structure wherever they still fit; only add or retire nodes the keywords genuinely require (label stability matters more than novelty):\n${priorTree.map(l => `- ${l}`).join('\n')}\n`
+    : '';
+
+  return `You are designing the canonical SEO content taxonomy skeleton for a ${industry} website (${domain}) — the tree every keyword will be filed into.
+
+REPRESENTATIVE KEYWORDS (volume-ranked sample of the full footprint):
+${kwList}
+${priorBlock}
+RULES — follow exactly:
+1. Umbrellas are the broad product/service families; themes are the distinct offerings inside each. Group by MEANING, never by shared words.
+2. ONE concept = ONE node. Never emit two nodes that mean the same thing or where one contains the other as a sibling — "Wills" belongs INSIDE "Wills & Trusts" (a theme under "Estate Planning"), never as its own umbrella next to it. Fold subtypes into their parent theme.
+3. Keep it lean: only umbrellas/themes this sample actually supports. No filler, no speculative nodes, no generic buckets like "Services" or "Resources".
+4. Do NOT create nodes for brand or location searches (they are handled separately).
+5. Theme labels must not repeat their umbrella's name ("Wills & Trusts", not "Estate Planning Wills & Trusts").
+
+Return JSON ONLY — no markdown, no prose:
+{
+  "umbrellas": [
+    { "name": "Estate Planning", "themes": ["Wills & Trusts", "Power of Attorney", "Probate"] },
+    { "name": "Retirement Planning", "themes": ["401(k)", "IRAs", "Pension Plans"] }
+  ]
+}`;
+}
+
 // ─── Pass 2 (v7.231): HIERARCHICAL DISCOVERY — full path per keyword ──────────
 //
 // Replaces the flat category discovery: instead of one category name per keyword, the
 // model returns the FULL semantic path from a top umbrella down to the most specific
 // node (e.g. ["Mortgages","Mortgage Rates","Current rates","VA"]). Unlimited depth;
-// umbrellas are defined fresh from meaning. Every level is a real page target. Claude
+// v7.339: umbrellas are NO LONGER defined fresh per batch — every batch receives the
+// shared skeleton (taxonomySkeletonPrompt) and assigns INTO it (Const III.1e), only
+// proposing a new node when nothing fits. Every level is a real page target. Claude
 // only assigns labels + structure; all volume math is done in TypeScript (Const I.1).
 // Runs per batch (like the old discovery) so cost is unchanged; a later canonicalization
 // pass aligns synonym labels across batches.
@@ -162,7 +208,8 @@ Return JSON ONLY — no markdown, no explanation:
 export function hierarchicalDiscoveryPrompt(
   domain: string,
   industry: string,
-  keywords: MergedKeyword[]
+  keywords: MergedKeyword[],
+  anchorTree?: string,   // v7.339: rendered skeleton (umbrella › themes lines)
 ): string {
   const kwList = keywords
     .map((k, i) => {
@@ -171,13 +218,16 @@ export function hierarchicalDiscoveryPrompt(
     })
     .join('\n');
   const brandHint = domain.replace(/\.(com|net|org|io|co).*$/, '').replace(/[-_]/g, ' ');
+  const anchorBlock = anchorTree && anchorTree.trim().length > 0
+    ? `\nCANONICAL TAXONOMY — the tree already established for this website. You MUST file every keyword INTO this tree, reusing these labels EXACTLY as spelled (umbrella and theme levels):\n${anchorTree.trim()}\n\nOnly introduce a node that is NOT in this tree when the keyword names a genuinely new product/service no existing node covers — and NEVER introduce a node that means the same as an existing one or is a subtype of one ("Wills" must go inside the existing "Estate Planning > Wills & Trusts", never become a new umbrella). Sub-topics BELOW the theme level are yours to create as the keywords warrant.\n`
+    : '';
 
   return `You are organizing a website's organic search keywords into a clean, multi-level SEO content taxonomy — a tree of pages.
 
 WEBSITE: ${domain}
 INDUSTRY: ${industry}
 BRAND NAME HINT: "${brandHint}" (use to detect branded keywords)
-
+${anchorBlock}
 KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
 
@@ -208,39 +258,50 @@ Return JSON ONLY — no markdown, no prose:
 }`;
 }
 
-// ─── Pass 2.6 (v7.231): PATH CANONICALIZATION — align labels across batches ────
+// ─── Pass 2.6 (v7.231, rewritten v7.339): PATH CANONICALIZATION ────────────────
 //
 // Independent discovery batches can name the same node slightly differently
-// ("30-yr fixed" vs "30 Year Fixed", "Mortgages" vs "Mortgage"). This single call sees
-// the DISTINCT paths (bounded — far fewer than keywords) and returns a canonical label
-// for each raw path, so identical concepts merge into one node. Claude maps paths →
-// paths only; no keyword or volume is touched.
+// ("30-yr fixed" vs "30 Year Fixed") — or, worse, file the same CONCEPT at
+// different places in the tree ("Wills" as its own umbrella while "Estate
+// Planning > Wills & Trusts" exists). v7.339 removes the old "preserve the parent
+// chain" restriction that made the second failure unfixable (Const III.1e): this
+// pass now RE-PARENTS — a node that is the same concept as, or a strict subtype
+// of, an existing node is folded into that node's chain. Runs in CHUNKS with the
+// already-established canonical nodes carried forward, so large taxonomies
+// (previously skipped entirely past 300 paths) are fully processed. Claude maps
+// paths → paths only; no keyword or volume is touched (Const I.1).
 
 export function pathCanonicalizationPrompt(
   domain: string,
   industry: string,
-  paths: string[][]
+  paths: string[][],
+  establishedNodes?: string[],   // v7.339: canonical 'umbrella > theme' lines from earlier chunks
 ): string {
   const list = paths.map((p, i) => `${i}. ${p.join(' > ')}`).join('\n');
-  return `You are cleaning up a multi-level SEO taxonomy for a ${industry} website (${domain}). The paths below were produced by independent passes over different keyword slices, so the SAME node may appear under slightly different labels or depths.
+  const establishedBlock = establishedNodes && establishedNodes.length > 0
+    ? `\nESTABLISHED CANONICAL NODES (from already-processed slices of this same taxonomy — map equivalent concepts onto these EXACT labels and chains instead of inventing parallel ones):\n${establishedNodes.map(n => `- ${n}`).join('\n')}\n`
+    : '';
 
+  return `You are consolidating a multi-level SEO taxonomy for a ${industry} website (${domain}). The paths below were produced by independent passes over different keyword slices, so the SAME concept may appear under different labels, at different depths, or in different places in the tree.
+${establishedBlock}
 PATHS (index. umbrella > theme > …):
 ${list}
 
-For each path, return its CANONICAL form so equivalent nodes merge.
+For each path, return its CANONICAL form so every concept ends up in EXACTLY ONE place in the tree.
 
 RULES — follow exactly:
-1. Merge labels that mean the same thing to ONE spelling at each level ("30 Year Fixed" / "30-yr fixed" / "30 year fixed rate" → one). Keep the clearest, most natural label.
-2. AGGRESSIVELY merge near-duplicates that are the SAME concept differing only by: spacing/compounding ("Cash Back" = "Cashback"), plural/singular ("Card" = "Cards"), word order, OR a redundant trailing/leading category word ("Balance Transfer" = "Balance Transfer Credit Cards" = "Balance Transfer Cards" when the parent is already "Credit Cards"; "Secured" = "Secured Cards" = "Secured Credit Cards"). Pick ONE clean label (drop the redundant parent word, e.g. prefer "Balance Transfer" over "Balance Transfer Credit Cards"). These MUST collapse to one node — leaving them separate is the failure this pass exists to prevent.
-3. Do NOT append the parent's name into a child label. A child of "Credit Cards" is "No Annual Fee", NOT "No Annual Fee Credit Cards".
-4. Keep genuinely distinct nodes separate. Do NOT merge a specific topic into an unrelated sibling (e.g. "Secured" ≠ "Unsecured"; "Cash Back" ≠ "Cash Advances").
-5. Preserve the parent chain — a node keeps the same ancestors; only normalize labels (and, if a level is clearly redundant, you may shorten the path).
+1. ONE CONCEPT, ONE NODE. Merge labels that mean the same thing to ONE spelling at each level ("30 Year Fixed" / "30-yr fixed" / "30 year fixed rate" → one). Keep the clearest, most natural label.
+2. RE-PARENT SUBSUMED CONCEPTS. If one path's concept is the same as — or a strict subtype of — a concept that lives elsewhere in this list (or in the established nodes), move it INTO that node's chain. "Wills" alone → ["Estate Planning","Wills & Trusts"] when that node exists; "Living Trusts" → a child of ["Estate Planning","Wills & Trusts"], never a new umbrella. Two umbrellas must never remain where one contains the other or they mean the same thing.
+3. AGGRESSIVELY merge near-duplicates that are the SAME concept differing only by: spacing/compounding ("Cash Back" = "Cashback"), plural/singular ("Card" = "Cards"), word order, OR a redundant trailing/leading category word ("Balance Transfer" = "Balance Transfer Credit Cards" = "Balance Transfer Cards" when the parent is already "Credit Cards"). Pick ONE clean label (drop the redundant parent word). These MUST collapse to one node — leaving them separate is the failure this pass exists to prevent.
+4. Do NOT append the parent's name into a child label. A child of "Credit Cards" is "No Annual Fee", NOT "No Annual Fee Credit Cards".
+5. Keep genuinely distinct nodes separate. Do NOT merge a specific topic into an unrelated sibling (e.g. "Secured" ≠ "Unsecured"; "Cash Back" ≠ "Cash Advances") — subsumption (rule 2) requires a real subtype relationship, not surface similarity.
 6. Every input index must appear exactly once with a canonical path (return the same path if it needs no change).
 
 Return JSON ONLY — no markdown, no prose:
 {
   "canonical": [
-    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"] }
+    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"] },
+    { "index": 1, "path": ["Estate Planning","Wills & Trusts"] }
   ]
 }`;
 }
