@@ -16,6 +16,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { groupCategoriesByIntent } from '@/lib/claude/intentGroups';
 import { classifyUmbrellaScopes } from '@/lib/category/scopeModel';   // v7.326: scope gate (core vs adjacent vertical)
+import { funnelStageForFamily } from '@/lib/category/funnelMap';       // v7.347: intent-family → funnel stage (Const III.11)
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
 import { getLLMProbeSnapshotV2, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
@@ -204,7 +205,7 @@ export interface CategoryBreakdownResult {
   // a model estimate, never a measured data metric), a one-line REASONING, and the derived
   // needsReview flag (confidence < 80 → "Needs Review", Const III.7). Labels/structure only;
   // every VOLUME sum is still computed in TypeScript (Const I.1). Absent on pre-v7.235 runs.
-  keywordMeta?:            Record<string, { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean }>;
+  keywordMeta?:            Record<string, { modifier?: string; intent?: string; intentFamily?: string; funnelStage?: string; confidence?: number; reasoning?: string; needsReview?: boolean }>;
   // v7.199: AI search-intent grouping (synonyms merged, topical names) + brand terms
   // to drop. Populated inline for smaller analyses; large ones use the on-demand
   // "Refine with AI" button. Optional — absent → panel uses the heuristic grouping.
@@ -389,9 +390,9 @@ export async function generateCategoryBreakdown(
 
   type CatType = 'procedure' | 'brand' | 'location';
   // GLOBAL index into merged. v7.235: + separated modifier and intent/confidence/reasoning.
-  interface RawAssign { index: number; path: string[]; type: CatType; modifier?: string; intent?: string; confidence?: number; reasoning?: string; }
+  interface RawAssign { index: number; path: string[]; type: CatType; modifier?: string; intent?: string; intentFamily?: string; confidence?: number; reasoning?: string; }
 
-  const rawAssigns: RawAssign[] = (progress?.proposed ?? []).map(p => ({ index: p.index, path: [...p.path], type: p.type, modifier: p.modifier, intent: p.intent, confidence: p.confidence, reasoning: p.reasoning }));
+  const rawAssigns: RawAssign[] = (progress?.proposed ?? []).map(p => ({ index: p.index, path: [...p.path], type: p.type, modifier: p.modifier, intent: p.intent, intentFamily: (p as any).intentFamily, confidence: p.confidence, reasoning: p.reasoning }));
   const doneStarts = new Set<number>(progress?.doneStarts ?? []);
 
   const cleanPath = (p: any): string[] =>
@@ -400,7 +401,7 @@ export async function generateCategoryBreakdown(
   // v7.232: tolerant parse — if the whole-JSON parse fails (e.g. a truncated tail), salvage
   // every COMPLETE assignment object from the text so a partial response still contributes
   // its keywords instead of dropping the whole batch to "Other".
-  type ParsedAssign = { index: number; path: string[]; type?: string; modifier?: string; intent?: string; confidence?: number; reasoning?: string };
+  type ParsedAssign = { index: number; path: string[]; type?: string; modifier?: string; intent?: string; intentFamily?: string; confidence?: number; reasoning?: string };
   const parseAssignments = (text: string): ParsedAssign[] => {
     try {
       const parsed = extractJSON<{ assignments: ParsedAssign[] }>(text);
@@ -436,8 +437,9 @@ export async function generateCategoryBreakdown(
           : undefined;
         const modifier = typeof a?.modifier === 'string' ? a.modifier.trim().slice(0, 60) : undefined;
         const intent   = typeof a?.intent   === 'string' ? a.intent.trim().toLowerCase().slice(0, 20) : undefined;
+        const intentFamily = typeof a?.intentFamily === 'string' ? a.intentFamily.trim().toLowerCase().replace(/[_\s]+/g, '-').slice(0, 30) : undefined;
         const reasoning = typeof a?.reasoning === 'string' ? a.reasoning.trim().slice(0, 200) : undefined;
-        rawAssigns.push({ index: batch.start + li, path, type, modifier, intent, confidence: conf, reasoning });
+        rawAssigns.push({ index: batch.start + li, path, type, modifier, intent, intentFamily, confidence: conf, reasoning });
       }
       doneStarts.add(batch.start);
     } catch (err) {
@@ -689,12 +691,12 @@ export async function generateCategoryBreakdown(
   const pathByIndex = new Map<number, string[]>();
   const typeByIndex = new Map<number, CatType>();
   // v7.235: classification metadata per index (first assignment wins, same as the path).
-  const metaByIndex = new Map<number, { modifier?: string; intent?: string; confidence?: number; reasoning?: string }>();
+  const metaByIndex = new Map<number, { modifier?: string; intent?: string; intentFamily?: string; confidence?: number; reasoning?: string }>();
   for (const r of rawAssigns) {
     if (!merged[r.index] || pathByIndex.has(r.index)) continue;
     pathByIndex.set(r.index, canonByRawKey.get(pathKey(r.path)) ?? r.path);
     typeByIndex.set(r.index, r.type);
-    metaByIndex.set(r.index, { modifier: r.modifier, intent: r.intent, confidence: r.confidence, reasoning: r.reasoning });
+    metaByIndex.set(r.index, { modifier: r.modifier, intent: r.intent, intentFamily: r.intentFamily, confidence: r.confidence, reasoning: r.reasoning });
   }
   for (let i = 0; i < merged.length; i++) {
     if (!pathByIndex.has(i)) {
@@ -727,7 +729,7 @@ export async function generateCategoryBreakdown(
   }
 
   const keywordPaths: Record<string, string[]> = {};
-  const keywordMeta: Record<string, { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean }> = {};
+  const keywordMeta: Record<string, { modifier?: string; intent?: string; intentFamily?: string; funnelStage?: string; confidence?: number; reasoning?: string; needsReview?: boolean }> = {};
   const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
   const catTypeByName     = new Map<string, CatType>();
   const umbrellaByCat     = new Map<string, string>();             // category (theme) → umbrella (path[0])
@@ -745,10 +747,11 @@ export async function generateCategoryBreakdown(
     // from the confidence self-estimate (< 80 → review; Const III.7). Only set keys that
     // exist so pre-classified keywords stay clean.
     const m = metaByIndex.get(i);
-    if (m && (m.modifier || m.intent || m.confidence != null || m.reasoning)) {
-      const entry: { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean } = {};
+    if (m && (m.modifier || m.intent || m.intentFamily || m.confidence != null || m.reasoning)) {
+      const entry: { modifier?: string; intent?: string; intentFamily?: string; funnelStage?: string; confidence?: number; reasoning?: string; needsReview?: boolean } = {};
       if (m.modifier)        entry.modifier   = m.modifier;
       if (m.intent)          entry.intent     = m.intent;
+      if (m.intentFamily)  { entry.intentFamily = m.intentFamily; entry.funnelStage = funnelStageForFamily(m.intentFamily); }
       if (m.confidence != null) { entry.confidence = m.confidence; entry.needsReview = m.confidence < 80; }
       if (m.reasoning)       entry.reasoning  = m.reasoning;
       keywordMeta[kw.keyword.toLowerCase()] = entry;

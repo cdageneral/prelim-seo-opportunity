@@ -172,23 +172,24 @@ export function taxonomySkeletonPrompt(
     ? `\nEXISTING TAXONOMY from this project's previous analysis — REUSE these exact labels and structure wherever they still fit; only add or retire nodes the keywords genuinely require (label stability matters more than novelty):\n${priorTree.map(l => `- ${l}`).join('\n')}\n`
     : '';
 
-  return `You are designing the canonical SEO content taxonomy skeleton for a ${industry} website (${domain}) — the tree every keyword will be filed into.
+  return `You are designing the canonical INTENT-FIRST SEO taxonomy skeleton for a ${industry} website (${domain}) — the tree every keyword will be filed into. It models a WEBSITE (a tree of pages), organized by USER TASK, not a keyword list (Const III.10).
 
 REPRESENTATIVE KEYWORDS (volume-ranked sample of the full footprint):
 ${kwList}
 ${priorBlock}
 RULES — follow exactly:
-1. Umbrellas are the broad product/service families; themes are the distinct offerings inside each. Group by MEANING, never by shared words.
-2. ONE concept = ONE node. Never emit two nodes that mean the same thing or where one contains the other as a sibling — "Wills" belongs INSIDE "Wills & Trusts" (a theme under "Estate Planning"), never as its own umbrella next to it. Fold subtypes into their parent theme.
-3. Keep it lean: only umbrellas/themes this sample actually supports. No filler, no speculative nodes, no generic buckets like "Services" or "Resources".
-4. Do NOT create nodes for brand or location searches (they are handled separately).
-5. Theme labels must not repeat their umbrella's name ("Wills & Trusts", not "Estate Planning Wills & Trusts").
+1. LEVEL 1 = PRODUCT FAMILY (WHAT the search is about): the broad product/service families (e.g. "Credit Cards", "Mortgages", "Checking Accounts"). Group by MEANING, never by shared words.
+2. LEVEL 2 = INTENT GROUP (WHY the search exists — the user's TASK / a cluster of pages), NEVER a product sub-noun. Name the tasks the keywords actually express, e.g. "Getting a Credit Card", "Choosing a Credit Card", "Credit Card Types", "Education", "Using a Credit Card", "Support". Different user tasks are different intent groups because Google ranks different pages for them (Const III.11). Product variants (rewards, secured, student) live BELOW an intent group like "Credit Card Types", not as level-2 nodes themselves.
+3. ONE concept = ONE node. Never emit two nodes that mean the same thing or where one contains the other as a sibling. Fold subtypes into their intent group.
+4. Keep it lean: only families / intent-groups this sample actually supports. No filler, no speculative nodes, no generic buckets like "Services" or "Resources".
+5. Do NOT create nodes for brand or location searches (they are handled separately).
+6. Intent-group labels read as a user task or page cluster (e.g. "Getting a Credit Card", "Choosing a Credit Card"), not a bare repeat of the product family.
 
-Return JSON ONLY — no markdown, no prose:
+Return JSON ONLY — no markdown, no prose (the "themes" array now holds INTENT GROUPS):
 {
   "umbrellas": [
-    { "name": "Estate Planning", "themes": ["Wills & Trusts", "Power of Attorney", "Probate"] },
-    { "name": "Retirement Planning", "themes": ["401(k)", "IRAs", "Pension Plans"] }
+    { "name": "Credit Cards", "themes": ["Getting a Credit Card", "Choosing a Credit Card", "Credit Card Types", "Education", "Using a Credit Card"] },
+    { "name": "Mortgages", "themes": ["Getting a Mortgage", "Rates & Calculators", "Refinancing", "Education"] }
   ]
 }`;
 }
@@ -231,20 +232,26 @@ ${anchorBlock}
 KEYWORDS (index. keyword | client ranking | monthly search volume):
 ${kwList}
 
-For EACH keyword, return the full topic PATH it belongs to (broadest umbrella → most specific topic), the MODIFIER pulled out of it, its search INTENT, a CONFIDENCE score, and a one-line REASONING. Each path node is a page.
+For EACH keyword, return the full INTENT-FIRST topic PATH it belongs to, the INTENT FAMILY (the user's task), the MODIFIER pulled out of it, its search INTENT, a CONFIDENCE score, and a one-line REASONING. Each path node is a page.
+
+THE PATH IS INTENT-FIRST — [PRODUCT FAMILY, INTENT GROUP, LEAF] (Const III.9–III.11):
+   • Level 1 = PRODUCT FAMILY (WHAT it's about): "Credit Cards", "Mortgages", …
+   • Level 2 = INTENT GROUP (WHY — the user's TASK / page cluster): "Getting a Credit Card", "Choosing a Credit Card", "Credit Card Types", "Education", "Using a Credit Card", "Support". This is decided by INTENT, never by a shared product word.
+   • Level 3+ = LEAF (the specific same-page group): "Application", "Requirements", "Rewards", "APR", "Interest Calculator".
 
 RULES — follow exactly:
-1. Group by MEANING at every level, never by shared words. "30 year mortgage rates", "current mortgage rates", and "15 year fixed rates" are ALL under the same theme ("Mortgage Rates") — they are sub-topics of it, not separate themes. Do not split one theme into look-alikes like "Mortgage Year" vs "Rate Current".
-2. SEPARATE ONLY GENERIC QUALIFIERS — KEEP PRODUCT-DEFINING FACETS AS SUB-TOPICS. THE TEST: if two keywords differ ONLY by this term and would still belong on the SAME page, it is a MODIFIER → put it in "modifier", do NOT add it to the path. If the term names a DISTINCT product/sub-product (its own page), it is a SUB-TOPIC → it MUST be a path node, NEVER a modifier.
-   • Strip as modifiers (generic intent/format, same page): best, top, reviews, ratings, compare, vs, near me, online, how to, requirements, apply, cheap, easy.
-   • KEEP as sub-topics (distinct product pages): "no annual fee", "0 APR" / "intro APR", "balance transfer", "cash back", "rewards", "travel", "secured", "student", "business", "instant approval", "for bad credit", and rate/term facets like "30-year", "15-year", "VA", "current". A "<thing> calculator" or "<thing> rates" is its OWN page (a theme), not a modifier.
-   CRITICAL: never collapse an umbrella's distinct sub-products into modifiers — that flattens the tree. "no annual fee credit cards" → path ["Credit Cards","No Annual Fee"], modifier "" (distinct page). "best no annual fee credit cards" → path ["Credit Cards","No Annual Fee"], modifier "best". "balance transfer credit cards" → path ["Credit Cards","Balance Transfer"], modifier "". "best 30 year mortgage rates" → path ["Mortgages","Mortgage Rates","30-yr fixed"], modifier "best". If there is no generic qualifier, modifier is "".
-2b. THE LEAF IS A SAME-MEANING GROUP — SAME NEED = SAME LEAF, DIFFERENT NEED = SIBLING LEAF. Keywords one page would satisfy identically share ONE leaf: "apr", "what is an apr", "meaning of apr", "how do aprs work" all express the SAME definitional need → one leaf (e.g. ["Credit Cards","APR","What Is APR"]). "apr rates" and "best apr rates" express a DIFFERENT (rate-shopping) need → a SIBLING leaf ["Credit Cards","APR","APR Rates"] (with "best" as a modifier inside it). A definitional/educational need and a commercial/comparison/rate need are DIFFERENT pages even when they share the head term — NEVER mix them in one leaf, and never scatter same-meaning phrasings ("what is X" / "X meaning" / "X definition" / bare "X") across different nodes.
-3. Path shape: [umbrella, theme, sub-topic, …]. Go only as deep as the keyword's specificity warrants (a head term like "mortgage rates" stops at ["Mortgages","Mortgage Rates"]; "current va mortgage rates" goes deeper). Unlimited depth allowed; do NOT pad with filler levels. NEVER PARK a specific keyword at a broad node: if the keyword names anything more specific than the node itself (a product variant, a task, a definition, a rate, a calculator, a location need), it belongs in a sub-topic — create that sub-topic. A keyword sits AT a node only when it IS that node's own generic head term.
-4. The umbrella is the broad product/service family (e.g. "Mortgages", "Credit Cards", "Investing"). Sibling themes that belong together share an umbrella (e.g. "Mortgage Rates" and "Mortgage Calculator" both under "Mortgages").
-5. MOST-SPECIFIC, COMMERCIALLY-USEFUL placement. If a keyword could fit more than one place, pick the most specific category that is useful as a page. Parent/child is decided by MEANING, never overlap — a specific product is never nested under a different specific product. Routing examples: generic "construction loan" is NOT defaulted under Personal Loans; "home construction loan" → home/mortgage lending; "business construction loan" → business lending.
+1. INTENT decides architecture, never shared words. "apply for a credit card" and "credit card application" are the SAME page → same leaf under "Getting a Credit Card". "compare credit cards" is a DIFFERENT page → "Choosing a Credit Card". "what is apr" is a DIFFERENT page → "Education". They all share the word "credit card" but sit in different intent groups because Google ranks different pages for each task.
+2. A QUALIFIER THAT CHANGES THE USER'S TASK IS A NODE, NOT A MODIFIER (Const III.1c, revised). THE TEST: does this term change the page Google would rank? If YES it is a node (an intent group or leaf), NOT a modifier.
+   • KEEP as nodes (task-changing — each is its own page): apply / application, requirements, eligibility, pre-approval, compare, reviews, vs, alternatives, benefits, how it works, calculator, rates, redeem, cash advance, annual fee, and product-defining facets "no annual fee", "0 APR" / "intro APR", "balance transfer", "cash back", "rewards", "travel", "secured", "student", "business", "for bad credit", "30-year", "15-year", "VA".
+   • Strip as modifiers ONLY purely linguistic adjectives that do NOT change the page: best, top, cheap, good, easy, near me, online, a year like "2025". Even these stay in "modifier" (never dropped from the record) and never become a node.
+   CRITICAL — two-sided failure: over-stripping a task-changing qualifier flattens the tree (FAIL); minting a look-alike leaf for the SAME page over-splits it (FAIL, fixed by rule 2b). "apply for a credit card" → path ["Credit Cards","Getting a Credit Card","Application"], modifier "". "best travel credit cards" → path ["Credit Cards","Credit Card Types","Travel"], modifier "best". "credit card interest calculator" → path ["Credit Cards","Using a Credit Card","Interest Calculator"], modifier "". If there is no linguistic adjective, modifier is "".
+2b. THE LEAF IS A SAME-MEANING GROUP — SAME NEED = SAME LEAF, DIFFERENT NEED = SIBLING LEAF. Keywords one page would satisfy identically share ONE leaf: "apr", "what is an apr", "meaning of apr", "how do aprs work" all express the SAME definitional need → one leaf ["Credit Cards","Education","APR"]. "apr rates" and "best apr rates" express a DIFFERENT (rate-shopping) need → a SIBLING leaf ["Credit Cards","Education","APR Rates"] (with "best" as a modifier inside it). A definitional/educational need and a commercial/comparison/rate need are DIFFERENT pages even when they share the head term — NEVER mix them in one leaf, and never scatter same-meaning phrasings ("what is X" / "X meaning" / "X definition" / bare "X") across different nodes.
+3. Path shape: [product family, INTENT GROUP, leaf, …]. Go only as deep as the keyword's specificity warrants (a head term like "credit card application" stops at ["Credit Cards","Getting a Credit Card","Application"]; a bare product head like "credit cards" sits at ["Credit Cards"]). Unlimited depth allowed; do NOT pad with filler levels. NEVER PARK a specific keyword at a broad node: if the keyword names a specific task/variant/definition/rate/calculator, it belongs in a leaf under its intent group — create that leaf. A keyword sits AT a node only when it IS that node's own generic head term.
+4. Level 1 is the broad product/service family (e.g. "Mortgages", "Credit Cards", "Investing"). Level 2 sibling INTENT GROUPS share the family (e.g. "Getting a Credit Card", "Choosing a Credit Card", "Credit Card Types", "Education", "Using a Credit Card" all under "Credit Cards"). A product variant is a LEAF under an intent group ("Rewards" under "Credit Card Types"), never a level-2 sibling of the intent groups.
+5. MOST-SPECIFIC, COMMERCIALLY-USEFUL placement. If a keyword could fit more than one place, pick the most specific page-useful node. Parent/child is decided by MEANING, never overlap — a specific product is never nested under a different specific product. Routing: generic "construction loan" is NOT defaulted under Personal Loans; "home construction loan" → home/mortgage lending; "business construction loan" → business lending.
 6. type: "procedure" (a real service/product topic), "brand" (the keyword names a company/retailer/store/issuer brand), or "location" (brand/service + a place). ANY third-party brand — including a co-branded product like "nordstrom card", "amazon store card", "costco visa" — MUST be type "brand", NEVER "procedure", with path ["<Brand> Brand Searches"]. The client's OWN brand also uses "<Client> Brand Searches". Never put a third-party brand inside a product/procedure umbrella, and never name a procedure path after a non-client brand.
 7. intent: one of "informational", "commercial", "transactional", "navigational" — the searcher's intent.
+7b. intentFamily: the user's dominant TASK — EXACTLY ONE of: learn, definition, education, how-it-works, benefits, faqs, comparison, selection, reviews, alternatives, use-cases, qualification, application, purchase, requirements, eligibility, rates, calculator, management, optimization, support, troubleshooting, maintenance, redemption, merchant-acceptance. This sets the funnel stage (assigned deterministically in code — do NOT return a stage). It must be consistent with the level-2 intent group (e.g. "Getting a Credit Card" → application/requirements/eligibility; "Education" → definition/how-it-works; "Using a Credit Card" → management/redemption/support). For a brand/location keyword use "learn".
 8. confidence: an integer 0–100 = how sure you are of THIS placement. Be honest; a vague or cross-cutting keyword scores low. Below 80 means "needs human review" (still give your best path).
 9. reasoning: one short clause explaining the placement (≤ 12 words).
 10. Reuse identical label spellings across keywords so the same node merges. Every index appears exactly once.
@@ -252,9 +259,10 @@ RULES — follow exactly:
 Return JSON ONLY — no markdown, no prose:
 {
   "assignments": [
-    { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"], "modifier": "best", "type": "procedure", "intent": "commercial", "confidence": 95, "reasoning": "fixed-rate product term, 'best' is a modifier" },
-    { "index": 1, "path": ["Mortgages","Mortgage Rates","Current rates"], "modifier": "", "type": "procedure", "intent": "informational", "confidence": 90, "reasoning": "rate-watching query under mortgage rates" },
-    { "index": 2, "path": ["${brandHint} Brand Searches"], "modifier": "", "type": "brand", "intent": "navigational", "confidence": 98, "reasoning": "client brand term" }
+    { "index": 0, "path": ["Credit Cards","Getting a Credit Card","Application"], "modifier": "", "type": "procedure", "intent": "transactional", "intentFamily": "application", "confidence": 95, "reasoning": "'apply' names the getting task" },
+    { "index": 1, "path": ["Credit Cards","Credit Card Types","Travel"], "modifier": "best", "type": "procedure", "intent": "commercial", "intentFamily": "selection", "confidence": 92, "reasoning": "travel card type, 'best' is a modifier" },
+    { "index": 2, "path": ["Credit Cards","Education","APR"], "modifier": "", "type": "procedure", "intent": "informational", "intentFamily": "definition", "confidence": 90, "reasoning": "definitional APR query" },
+    { "index": 3, "path": ["${brandHint} Brand Searches"], "modifier": "", "type": "brand", "intent": "navigational", "intentFamily": "learn", "confidence": 98, "reasoning": "client brand term" }
   ]
 }`;
 }
