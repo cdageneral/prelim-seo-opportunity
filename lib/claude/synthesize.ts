@@ -241,6 +241,19 @@ export interface CbDiscoveryProgress {
   // so a resumed run keeps the classification fields (not just the path).
   proposed:   Array<{ index: number; path: string[]; type: 'procedure' | 'brand' | 'location'; modifier?: string; intent?: string; confidence?: number; reasoning?: string }>;
   doneStarts: number[];   // batch start offsets already discovered
+  // v7.345: consolidation (Phase 2b) checkpoint. Chunked LLM canonicalization
+  // used to restart from zero on every resume, so a large footprint's ~12–20
+  // sequential chunks could never all finish inside one 300s Lambda — the run
+  // timed out forever (live: repeated "Canonicalization chunk failed" then a
+  // 300s kill, with discovery frozen at 100% so the page declared it "failed").
+  // Persisting per-chunk progress lets each window advance a few chunks and the
+  // next resume skip the finished ones (Const IV.2 — determinate, resumable).
+  canon?: {
+    total:       number;                    // total canon chunks (stable: derived from COMPLETE discovery)
+    chunksDone:  number[];                  // canon chunk start-offsets finished (parsed OR permanently failed)
+    mappings:    Array<[string, string[]]>; // detKey → canonical path accumulated so far
+    established: string[];                  // carry-forward canonical nodes for cross-chunk label alignment
+  };
 }
 
 export async function generateCategoryBreakdown(
@@ -456,6 +469,15 @@ export async function generateCategoryBreakdown(
     }
     if (onProgress) await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts) });
   }
+  // v7.345: the wave loop skipped its FINAL wave's checkpoint (the guard was
+  // `i + CONCURRENCY < pendingBatches.length`), so the last ≤CONCURRENCY batches
+  // replayed on every resume and consolidation never got a clean start. Persist
+  // the COMPLETE discovery state once here so a resume enters Phase 2 with zero
+  // discovery work. Only fires when discovery actually ran a batch this window
+  // (a resume past discovery has 0 pending → canon state below is untouched).
+  if (onProgress && pendingBatches.length > 0) {
+    await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts), canon: progress?.canon });
+  }
   const failedBatchStarts = new Set<number>();
   for (const b of batches) if (!doneStarts.has(b.start)) failedBatchStarts.add(b.start);
 
@@ -498,42 +520,94 @@ export async function generateCategoryBreakdown(
 
   // Phase 2b — chunked LLM canonicalization (never skipped; alphabetical sort
   // co-locates related paths in the same chunk; established nodes carry forward).
-  const CANON_CHUNK = 250;
+  // v7.345: chunk cut 250 → 150 and max_tokens 8000 → 12000. At 250 paths the
+  // {index,path} array overran 8000 output tokens and the JSON truncated
+  // mid-array (live: "Expected ',' or ']' … position ~25000"), so the WHOLE
+  // chunk fell back to its deterministic paths. 150 paths fit comfortably inside
+  // 12000 tokens, and a salvage parser (mirrors discovery, Const I.5) recovers
+  // every complete object from any clipped tail instead of dropping the chunk.
+  const CANON_CHUNK = 150;
   const llmByDetKey = new Map<string, string[]>();
   if (postDetPaths.length > 1) {
     const sorted = postDetPaths.slice().sort((a, b) => (pathKey(a) < pathKey(b) ? -1 : 1));
-    const established: string[] = [];
-    const establishedSeen = new Set<string>();
+    const canonTotal = Math.ceil(sorted.length / CANON_CHUNK);
+
+    // v7.345: RESUME consolidation. Chunk offsets are stable — `sorted` is a pure
+    // function of the fully-checkpointed discovery — so a chunk start already in
+    // chunksDone is skipped and its saved mapping reused. Each 300s window
+    // advances a few chunks instead of restarting the whole phase (Const IV.2).
+    const canonState = progress?.canon;
+    const chunksDone = new Set<number>(canonState?.chunksDone ?? []);
+    for (const [k, v] of canonState?.mappings ?? []) llmByDetKey.set(k, [...v]);
+
+    const established: string[] = [...(canonState?.established ?? [])];
+    const establishedSeen = new Set<string>(established);
     const noteEstablished = (cp: string[]) => {
       const line = cp.slice(0, 2).join(' > ');
       if (line && !establishedSeen.has(line)) { establishedSeen.add(line); established.push(line); }
     };
+
+    // Tolerant parse — salvage every COMPLETE {index,path} object from a clipped
+    // response so a truncated tail still contributes (never drop the chunk).
+    const parseCanon = (text: string): Array<{ index: number; path: string[] }> => {
+      try {
+        const parsed = extractJSON<{ canonical: Array<{ index: number; path: string[] }> }>(text);
+        if (Array.isArray(parsed?.canonical) && parsed.canonical.length > 0) return parsed.canonical;
+      } catch { /* fall through to salvage */ }
+      const out: Array<{ index: number; path: string[] }> = [];
+      const re = /\{[^{}]*?"index"\s*:\s*\d+[^{}]*?"path"\s*:\s*\[[^\]]*\][^{}]*?\}/g;
+      for (const m of text.match(re) ?? []) { try { out.push(JSON.parse(m)); } catch { /* skip */ } }
+      return out;
+    };
+
+    // Persist canon progress via the discovery checkpoint channel (persistCheckpoint
+    // merges cumulatively, so this rides alongside proposed/doneStarts without
+    // clobbering completed passes). Called after every chunk → resumable + the
+    // analyzing screen / auto-resume see forward progress during consolidation.
+    const persistCanon = async () => {
+      if (!onProgress) return;
+      await onProgress({
+        proposed:   rawAssigns,
+        doneStarts: Array.from(doneStarts),
+        canon: {
+          total:       canonTotal,
+          chunksDone:  Array.from(chunksDone),
+          mappings:    Array.from(llmByDetKey.entries()),
+          established,
+        },
+      });
+    };
+
     for (let c = 0; c < sorted.length; c += CANON_CHUNK) {
+      if (chunksDone.has(c)) continue;   // finished in an earlier window — skip (no re-spend)
       const chunk = sorted.slice(c, c + CANON_CHUNK);
       try {
-        // v7.341: carry cap raised 150 → 250 (a 150-line window missed sibling
-        // duplicates across chunks on the first real-scale run)
+        // v7.341: carry cap 250 established nodes so cross-chunk siblings align.
         const cPrompt   = pathCanonicalizationPrompt(domain, industry, chunk, established.slice(0, 250));
         const cResponse = await getClient().messages.create({
           model:      MODELS.fast,
-          max_tokens: 8000,
+          max_tokens: 12000,
           messages:   [{ role: 'user', content: cPrompt }],
         }, { timeout: 60_000 });
-        const cText   = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
-        const cParsed = extractJSON<{ canonical: Array<{ index: number; path: string[] }> }>(cText);
-        for (const cc of cParsed.canonical ?? []) {
+        const cText = cResponse.content[0].type === 'text' ? cResponse.content[0].text : '';
+        for (const cc of parseCanon(cText)) {
           const idx = cc?.index;
           if (!Number.isInteger(idx) || idx < 0 || idx >= chunk.length) continue;
           const cp = cleanPath(cc?.path);
           if (cp.length) { llmByDetKey.set(pathKey(chunk[idx]), cp); noteEstablished(cp); }
         }
       } catch (err) {
-        // This chunk keeps its deterministic paths — never fatal (Const I.5).
-        console.error('[OrbitIQ] Canonicalization chunk failed (deterministic paths kept):', (err as any)?.message);
+        // v7.345: a chunk that STILL fails after salvage keeps its deterministic
+        // paths AND is marked done below — otherwise every resume retried it
+        // forever and the run could never finish (Const I.5: never silent, and
+        // never an infinite loop). The deterministic paths are always kept.
+        console.error('[OrbitIQ] Canonicalization chunk failed (deterministic paths kept, marked done):', (err as any)?.message);
         for (const p of chunk) noteEstablished(p);
       }
+      chunksDone.add(c);
+      await persistCanon();   // per-chunk checkpoint
     }
-    console.log(`[OrbitIQ] Path canonicalization: ${postDetPaths.length} distinct paths in ${Math.ceil(sorted.length / CANON_CHUNK)} chunk(s)`);
+    console.log(`[OrbitIQ] Path canonicalization: ${postDetPaths.length} distinct paths in ${canonTotal} chunk(s), ${chunksDone.size} done`);
   }
 
   // Compose raw → deterministic → LLM-canonical, logging each LLM change.
