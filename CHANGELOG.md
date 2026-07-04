@@ -1,3 +1,7 @@
+## v7.344 — 2026-07-04 · Already-loaded CSVs unlock the Run button
+
+Wayne re-uploaded a CSV on the pre-run data-source screen and hit a red error — “All keywords were already uploaded for this domain” — with the Run button locked. His data was fully loaded (the de-dupe correctly skipped identical rows after the interrupted run left them in place); the handler treated inserted === 0 as failure and never marked the domain satisfied, dead-ending a project whose data was 100% present. Now inserted === 0 counts as success: the domain is marked uploaded (Run unlocks) and the note reads “already loaded … you can run the analysis”, styled amber-informational. De-dupe untouched (Const I.3). (app/projects/[id]/page.tsx)
+
 ## v7.343 — 2026-07-04 · Honest progress, walk-away resume, faster batches, clear-uploads control (Const IV.2)
 
 Wayne watched an 8,177-keyword rebuild sit at “98% — Saving results” for 10+ minutes and asked if it was broken. It wasn’t — but the screen was lying (time-based fake percentage capped at 98%), and the page silently gave up after 3 auto-retries while the run was still advancing. Full detail in CHANGELOG_v7.343_ENTRY.md.
