@@ -58,6 +58,8 @@ export interface ModelMember {
 export interface KeywordMeta {
   modifier?:   string;
   intent?:     string;
+  intentFamily?: string;   // v7.346: fixed intent family (Const III.11)
+  funnelStage?:  string;   // v7.346: derived from intentFamily via funnelMap (deterministic)
   confidence?: number;
   reasoning?:  string;
   needsReview?: boolean;
@@ -147,6 +149,8 @@ export function buildCategoryModel(
         const entry: KeywordMeta = {};
         if (typeof (v as any).modifier  === 'string' && (v as any).modifier.trim())  entry.modifier  = (v as any).modifier.trim();
         if (typeof (v as any).intent    === 'string' && (v as any).intent.trim())    entry.intent    = (v as any).intent.trim();
+        if (typeof (v as any).intentFamily === 'string' && (v as any).intentFamily.trim()) entry.intentFamily = (v as any).intentFamily.trim();
+        if (typeof (v as any).funnelStage  === 'string' && (v as any).funnelStage.trim())  entry.funnelStage  = (v as any).funnelStage.trim();
         if (conf != null) { entry.confidence = conf; entry.needsReview = (v as any).needsReview === true || conf < 80; }
         if (typeof (v as any).reasoning === 'string' && (v as any).reasoning.trim()) entry.reasoning = (v as any).reasoning.trim();
         if (Object.keys(entry).length) keywordMeta.set(k.toLowerCase().trim(), entry);
