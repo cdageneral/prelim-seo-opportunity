@@ -989,6 +989,11 @@ export async function runFullSynthesis(
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}${Object.keys(cached).length > 0 ? ` (resuming — cached: ${Object.keys(cached).join(', ')})` : ''}`);
 
+  // v7.346 hotfix: wall-clock start so the LLM probe below can be time-boxed and never
+  // let this function hit Vercel's 300s hard kill mid-probe (which checkpointed nothing
+  // and looped forever — the "stuck at batch 0 of 58" incident).
+  const synthStartMs = Date.now();
+
   // Only trust cached results that actually contain data — an empty array /
   // empty breakdown means the pass failed last time and should be retried.
   const cachedPersonas = (cached.personas?.length ?? 0) > 0 ? cached.personas! : null;
@@ -1025,23 +1030,42 @@ export async function runFullSynthesis(
   // so the panel degrades gracefully instead of going blank.
   let llmProbe = cachedProbe;
   if (!llmProbe) {
-    // v7.274: cap probe input at the top 30 procedure categories by demand
-    // (was 12). The probe now sends 6 prompts/category (5 unbranded + 1 branded)
-    // × 2 platforms in one Lambda window; 30 fits comfortably (~150–180s) while
-    // 40+ risks the ~300s kill. This cap is a deliberate, Wayne-requested runtime
-    // exception (Const I.6) — not a silent default. Results shown are always
-    // actual probe responses for the categories listed.
+    // v7.274: cap probe input at the top 30 procedure categories by demand.
+    // The probe sends 6 prompts/category (5 unbranded + 1 branded) × 2 platforms.
+    // This cap is a deliberate, Wayne-requested runtime exception (Const I.6).
     const probeCategories = categoryBreakdown.categories
       .filter(c => c.type === 'procedure' && c.name !== 'Other')
       .sort((a, b) => b.monthlyDemand - a.monthlyDemand)
       .slice(0, 30)
       .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
 
-    llmProbe = await getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
-      .catch(err => {
-        console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err);
-        return profound ?? null;
-      });
+    // v7.346 hotfix: TIME-BOX the probe. On a large project the probe can exceed the
+    // remaining Lambda budget; before this fix the 300s hard kill fired mid-probe,
+    // nothing was checkpointed, and every resume restarted it — an infinite 504 loop
+    // (the "stuck at batch 0 of 58" incident). Now the probe races a wall-clock deadline
+    // that keeps a safety margin under maxDuration (300s). If it can't finish in time,
+    // the brief completes with the previous probe (or an honest empty gap, Const I.5) and
+    // a later run backfills — the function ALWAYS returns cleanly, so the run finishes and
+    // the brief renders instead of looping forever.
+    const PROBE_SAFETY_MS = 250_000;                       // return well under the 300s kill
+    const remainingMs = PROBE_SAFETY_MS - (Date.now() - synthStartMs);
+    if (remainingMs < 20_000) {
+      console.warn(`[OrbitIQ] LLM probe skipped this window — only ${Math.round(remainingMs / 1000)}s left; brief completes with prior/empty probe, backfills later (Const I.5)`);
+      llmProbe = profound ?? null;
+    } else {
+      const budget = new Promise<{ __timeout: true }>(res => setTimeout(() => res({ __timeout: true }), remainingMs));
+      const raced: any = await Promise.race([
+        getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
+          .catch(err => { console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err); return (profound ?? null) as any; }),
+        budget,
+      ]);
+      if (raced && raced.__timeout === true) {
+        console.warn(`[OrbitIQ] LLM probe exceeded its ${Math.round(remainingMs / 1000)}s budget — completing brief with prior/empty probe, backfills on a later run (Const I.5)`);
+        llmProbe = profound ?? null;
+      } else {
+        llmProbe = raced;
+      }
+    }
     if (llmProbe) await onCheckpoint?.({ llmProbe });
   }
 
