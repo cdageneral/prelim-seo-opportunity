@@ -150,6 +150,75 @@ export function classifyMerge(rawPath: string[], canonPath: string[]): 'label' |
   return 'label';
 }
 
+// ── Sibling audit (v7.341) ────────────────────────────────────────────────────
+//
+// Chunked canonicalization can leave two same-concept nodes as SIBLINGS when they
+// were processed in different chunks ("Loan Interest Rates" beside "Mortgage
+// Rates" — found live in the first v7.339 rebuild). These helpers build the
+// parent → children groups the sibling-audit LLM pass reviews, and apply its
+// merges deterministically (path prefix rewrite; volumes untouched, Const I.1).
+
+export interface SiblingGroup { parent: string; parentPath: string[]; children: string[] }
+export interface SiblingMerge { parentPath: string[]; from: string; to: string }
+
+/** Distinct parent → direct-children groups (only parents with ≥ 2 children). */
+export function buildSiblingGroups(paths: string[][]): SiblingGroup[] {
+  const byParent = new Map<string, { parentPath: string[]; children: Set<string> }>();
+  for (let i = 0; i < paths.length; i++) {
+    const p = paths[i];
+    for (let d = 1; d < p.length; d++) {
+      const parentPath = p.slice(0, d);
+      const key = parentPath.join(' › ');
+      let g = byParent.get(key);
+      if (!g) { g = { parentPath, children: new Set<string>() }; byParent.set(key, g); }
+      g.children.add(p[d]);
+    }
+  }
+  const out: SiblingGroup[] = [];
+  byParent.forEach((g, key) => {
+    if (g.children.size >= 2) out.push({ parent: key, parentPath: g.parentPath, children: Array.from(g.children) });
+  });
+  // Stable order: shallow parents first, then alphabetical (bounded prompt, deterministic)
+  out.sort((a, b) => a.parentPath.length - b.parentPath.length || (a.parent < b.parent ? -1 : 1));
+  return out;
+}
+
+/**
+ * Apply sibling merges to a set of canonical paths. A path whose label at the
+ * merge's level equals `from` (with the exact parent chain) is rewritten to
+ * `to`. Returns the new paths plus a merge log entry per CHANGED distinct path.
+ */
+export function applySiblingMerges(
+  paths: string[][],
+  merges: SiblingMerge[],
+): { paths: string[][]; log: MergeLogEntry[] } {
+  if (merges.length === 0) return { paths, log: [] };
+  const out: string[][] = [];
+  const log: MergeLogEntry[] = [];
+  const logged = new Set<string>();
+  for (let i = 0; i < paths.length; i++) {
+    let p = paths[i];
+    for (let m = 0; m < merges.length; m++) {
+      const mg = merges[m];
+      const d = mg.parentPath.length;
+      if (p.length <= d || p[d] !== mg.from) continue;
+      let match = true;
+      for (let j = 0; j < d; j++) if (p[j] !== mg.parentPath[j]) { match = false; break; }
+      if (!match) continue;
+      const next = p.slice();
+      next[d] = mg.to;
+      const fromKey = pathJoin(p), toKey = pathJoin(next);
+      if (!logged.has(fromKey + '→' + toKey)) {
+        logged.add(fromKey + '→' + toKey);
+        log.push({ from: fromKey, to: toKey, kind: 'reparent' });
+      }
+      p = next;
+    }
+    out.push(p);
+  }
+  return { paths: out, log };
+}
+
 // ── Pre-product stored membership (v7.339) ───────────────────────────────────
 //
 // Wayne's pipeline: pre-product keywords (problem statements / life triggers that
