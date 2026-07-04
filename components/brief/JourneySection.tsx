@@ -3168,7 +3168,14 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
     let cancelled = false;
     fetch(`/api/projects/${projectId}/journey-problem-clusters`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keywords: problemKwList, industry, domain: clientDomain }),
+      // v7.339: send the canonical product-category names so a pre-product theme is
+      // never named after (or near-identical to) an existing product category —
+      // problem themes and product categories stay separate namespaces (Const III.1e).
+      body: JSON.stringify({
+        keywords: problemKwList, industry, domain: clientDomain,
+        existingCategories: (((analysis?.semrushSnapshot as any)?._categoryBreakdown?.categories ?? []) as any[])
+          .map((c: any) => String(c?.name ?? '').trim()).filter(Boolean).slice(0, 60),
+      }),
     })
       .then((r: Response) => r.ok ? r.json() : null)
       .then((d: any) => {

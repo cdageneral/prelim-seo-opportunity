@@ -123,6 +123,9 @@ interface KwCategoryBreakdown {
   totalMonthlyDemand: number;
   totalPage1Demand:   number;
   keywordCategories:  Record<string, string>; // lowercase kw → category name
+  // v7.339 (Const III.1e): taxonomy merges auto-applied at synthesis — rendered as
+  // a visible log so every re-label / re-parent is inspectable. Absent pre-v7.339.
+  mergeLog?:          Array<{ from: string; to: string; kind: 'label' | 'reparent' }>;
 }
 
 // ─── Branded detection — delegated to shared utility ─────────────────────────
@@ -2890,6 +2893,9 @@ function KwCategorySection({
   // v7.271: delete affordance state — which node is awaiting confirm, and which id is mid-delete.
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busyId,    setBusyId]    = useState<string | null>(null);
+  // v7.339: merge-log disclosure (Const III.1e — auto-applied merges stay visible).
+  const [showMergeLog, setShowMergeLog] = useState(false);
+  const mergeLog = Array.isArray(cb?.mergeLog) ? cb.mergeLog : [];
   const runDelete = async (id: string, rowsToDelete: KeywordRow[]) => {
     if (!onDeleteRows || rowsToDelete.length === 0) { setConfirmId(null); return; }
     setBusyId(id);
@@ -3028,6 +3034,15 @@ function KwCategorySection({
               {needsReviewCount.toLocaleString()} needs review
             </span>
           )}
+          {mergeLog.length > 0 && (
+            <button
+              onClick={() => setShowMergeLog(v => !v)}
+              title="Category merges auto-applied during this build (duplicate labels unified, subsumed categories re-parented) — click to inspect. Const III.1e"
+              style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'var(--ca-108-99-255-0_1)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-8080c0)', cursor: 'pointer' }}
+            >
+              {mergeLog.length.toLocaleString()} merged {showMergeLog ? '▾' : '▸'}
+            </button>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {RANK_BUCKETS.map(b => (
@@ -3038,6 +3053,22 @@ function KwCategorySection({
           ))}
         </div>
       </div>
+
+      {/* v7.339: merge log — every auto-applied taxonomy merge, inspectable (Const III.1e) */}
+      {showMergeLog && mergeLog.length > 0 && (
+        <div style={{ margin: '2px 20px 6px', maxHeight: 170, overflowY: 'auto', border: '1px solid var(--c-111120)', borderRadius: 6, background: 'var(--c-07070f)' }}>
+          {mergeLog.map((m, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '3px 10px', borderBottom: i < mergeLog.length - 1 ? '1px solid var(--c-0e0e1e)' : 'none' }}>
+              <span style={{ fontSize: '8px', fontWeight: 600, flexShrink: 0, letterSpacing: '.05em', textTransform: 'uppercase' as const, color: m.kind === 'reparent' ? 'var(--amber)' : 'var(--c-55557a)' }}>
+                {m.kind === 'reparent' ? 'moved' : 'relabeled'}
+              </span>
+              <span style={{ fontSize: '10px', color: 'var(--c-55557a)', textDecoration: 'line-through' }}>{m.from}</span>
+              <span style={{ fontSize: '10px', color: 'var(--c-404060)' }}>→</span>
+              <span style={{ fontSize: '10px', color: 'var(--c-a0a0c8)' }}>{m.to}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Table header */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '4px 20px 4px', borderBottom: '1px solid var(--c-0e0e1e)' }}>
