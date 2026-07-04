@@ -10,12 +10,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
-import { eq }      from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
 import { generatePersonaImages } from '@/lib/apis/personaImage';
 import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
+
+// v7.342: this route both READS (projects.findFirst selects every schema column) and
+// WRITES the project-level taxonomy anchor, so the columns must exist before either
+// (v7.268/v7.327 lesson — runtime ADD COLUMN IF NOT EXISTS, idempotent).
+async function ensureAnchorColumns() {
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS taxonomy_anchor JSONB`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS taxonomy_anchor_updated_at TIMESTAMP`);
+  } catch { /* already exists */ }
+}
 
 function normalizeDomain(url: string): string {
   try {
@@ -56,6 +68,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ analysisId, status: 'completed' });
   }
 
+  await ensureAnchorColumns();   // v7.342: before findFirst (selects every schema column)
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, analysis.projectId),
   });
@@ -108,42 +121,51 @@ export async function POST(req: NextRequest) {
   };
 
   // ── v7.339 (Const III.1e): prior-taxonomy anchor ────────────────────────────
-  // Load the project's most recent COMPLETED analysis (excluding this one) and
-  // hand its distinct canonical paths to the skeleton pass, so a re-analysis
-  // (e.g. after adding a competitor CSV) keeps stable category names instead of
-  // re-inventing and re-splitting the tree. First analysis → no anchor.
-  // v7.340: anchor ONLY to a tree the anchored engine itself built
-  // (`taxonomyEngine === 'anchored-v1'`). A pre-v7.339 taxonomy carries exactly
-  // the duplicate/split categories III.1e exists to eliminate — anchoring to it
-  // would drag the mess forward. So each project's FIRST anchored-engine run is
-  // a clean rebuild; name stability kicks in from the second run onward.
+  // v7.342: the anchor now lives on the PROJECT row (`projects.taxonomy_anchor`),
+  // because Wayne's real upload workflow runs the FULL RESET first — which deletes
+  // every analyses row, so the v7.339 prior-analysis anchor never survived to the
+  // next run and every re-upload re-derived the tree from scratch with different
+  // names/numbers. The project row is deliberately preserved by the reset (like
+  // brand terms), so the anchor now survives it. Fallback: the newest completed
+  // anchored-v1 analysis (covers projects that predate the column). v7.340 rule
+  // unchanged: never anchor to a pre-v7.339 tree.
   let priorPaths: string[][] | null = null;
+  const cleanAnchorPaths = (arr: any): string[][] => {
+    const seen = new Set<string>();
+    const out: string[][] = [];
+    for (const v of (Array.isArray(arr) ? arr : [])) {
+      if (!Array.isArray(v) || v.length === 0) continue;
+      const p = v.map((s: any) => String(s ?? '').trim()).filter(Boolean);
+      const key = p.join(' › ');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(p);
+      if (out.length >= 400) break;
+    }
+    return out;
+  };
   try {
-    const prior = await db.query.analyses.findMany({
-      where:   eq(analyses.projectId, analysis.projectId),
-      orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-      limit:   6,
-    });
-    const priorDone = prior.find((a: any) =>
-      a.id !== analysisId && a.status === 'completed'
-      && (a.semrushSnapshot as any)?._categoryBreakdown?.keywordPaths
-      && (a.semrushSnapshot as any)?._categoryBreakdown?.taxonomyEngine === 'anchored-v1');
-    if (priorDone) {
-      const kp: Record<string, any> = (priorDone.semrushSnapshot as any)._categoryBreakdown.keywordPaths ?? {};
-      const seen = new Set<string>();
-      const out: string[][] = [];
-      for (const v of Object.values(kp)) {
-        if (!Array.isArray(v) || v.length === 0) continue;
-        const p = v.map(s => String(s ?? '').trim()).filter(Boolean);
-        const key = p.join(' › ');
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push(p);
-        if (out.length >= 400) break;
-      }
-      if (out.length > 0) {
-        priorPaths = out;
-        console.log(`[OrbitIQ] Prior-taxonomy anchor: ${out.length} distinct paths from analysis ${priorDone.id}`);
+    const projectAnchor = cleanAnchorPaths((project as any).taxonomyAnchor);
+    if (projectAnchor.length > 0) {
+      priorPaths = projectAnchor;
+      console.log(`[OrbitIQ] Taxonomy anchor: ${projectAnchor.length} distinct paths from the PROJECT anchor (survives resets)`);
+    } else {
+      const prior = await db.query.analyses.findMany({
+        where:   eq(analyses.projectId, analysis.projectId),
+        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
+        limit:   6,
+      });
+      const priorDone = prior.find((a: any) =>
+        a.id !== analysisId && a.status === 'completed'
+        && (a.semrushSnapshot as any)?._categoryBreakdown?.keywordPaths
+        && (a.semrushSnapshot as any)?._categoryBreakdown?.taxonomyEngine === 'anchored-v1');
+      if (priorDone) {
+        const kp: Record<string, any> = (priorDone.semrushSnapshot as any)._categoryBreakdown.keywordPaths ?? {};
+        const out = cleanAnchorPaths(Object.values(kp));
+        if (out.length > 0) {
+          priorPaths = out;
+          console.log(`[OrbitIQ] Prior-taxonomy anchor: ${out.length} distinct paths from analysis ${priorDone.id}`);
+        }
       }
     }
   } catch (err) {
@@ -224,6 +246,34 @@ export async function POST(req: NextRequest) {
         profoundSnapshot: (synthesis.llmProbe ?? profound) as any,
       })
       .where(eq(analyses.id, analysisId));
+
+    // ── v7.342 (Const III.1e): persist the taxonomy anchor on the PROJECT row ──
+    // Distinct canonical paths from this successful anchored-engine breakdown; the
+    // project row survives the full keyword reset, so the NEXT upload anchors to
+    // this tree and category names/numbers stay stable. Non-fatal on failure.
+    try {
+      const cbOut: any = synthesis.categoryBreakdown;
+      if (cbOut?.taxonomyEngine === 'anchored-v1' && cbOut?.keywordPaths && Object.keys(cbOut.keywordPaths).length > 0) {
+        const seen = new Set<string>();
+        const anchorOut: string[][] = [];
+        for (const v of Object.values(cbOut.keywordPaths as Record<string, string[]>)) {
+          if (!Array.isArray(v) || v.length === 0 || v[0] === 'Other') continue;
+          const key = v.join(' › ');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          anchorOut.push(v);
+          if (anchorOut.length >= 400) break;
+        }
+        if (anchorOut.length > 0) {
+          await db.update(projects)
+            .set({ taxonomyAnchor: anchorOut, taxonomyAnchorUpdatedAt: new Date() } as any)
+            .where(eq(projects.id, analysis.projectId));
+          console.log(`[OrbitIQ] Taxonomy anchor saved to project: ${anchorOut.length} distinct paths`);
+        }
+      }
+    } catch (err) {
+      console.error('[OrbitIQ] Taxonomy anchor save failed (non-fatal):', (err as any)?.message);
+    }
 
     console.log(`[OrbitIQ] Phase 2 complete for ${analysisId}`);
     return NextResponse.json({ analysisId, status: 'completed' });
