@@ -58,10 +58,11 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { keywords, industry, domain } = body as {
+  const { keywords, industry, domain, existingCategories } = body as {
     keywords: string[];
     industry: string;
     domain:   string;
+    existingCategories?: string[];   // v7.339: canonical product categories (namespace guard)
   };
 
   if (!Array.isArray(keywords) || keywords.length === 0) return NextResponse.json(EMPTY);
@@ -81,10 +82,19 @@ export async function POST(
 
   const kwList = kws.map((k, i) => `${i + 1}. ${k}`).join('\n');
 
+  // v7.339: pre-product themes must never collide with the product-category
+  // namespace (Const III.1e) — a theme named "Estate Planning" next to the
+  // "Estate Planning" product category would read as a duplicate category.
+  const catNames = (Array.isArray(existingCategories) ? existingCategories : [])
+    .map(c => String(c ?? '').trim()).filter(Boolean).slice(0, 60);
+  const catBlock = catNames.length > 0
+    ? `\nEXISTING PRODUCT CATEGORIES on this site (a theme name must NOT duplicate or nearly duplicate any of these — themes are problem statements, not offerings): ${catNames.join(', ')}\n`
+    : '';
+
   const prompt = `You are organizing PRE-PRODUCT search queries for a ${industry} website (${domain}).
 
 These searches all share one trait: the person has a LIFE PROBLEM, symptom, goal, or desire, but does NOT name any specific product, service, procedure, or brand. They do not yet know the solution exists. (Solution-named searches have already been removed — do not expect them here.)
-
+${catBlock}
 Group these queries into 3-7 THEMES named after the PROBLEM or GOAL in the searcher's own words, drawn ONLY from the language of THESE queries and this ${industry} domain — not from any other industry. NEVER name a theme after a product, service, procedure, or brand. Keep theme names short (2-5 words) and human. (For example, for a personal-finance site themes might be "Building An Emergency Fund" or "Where To Park Idle Cash"; for a fitness site, "Losing Belly Fat" — always mirror the actual queries, never a fixed list.)
 
 Assign EVERY query to exactly one theme.
