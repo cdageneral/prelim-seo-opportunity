@@ -82,6 +82,16 @@ export const projects = pgTable('projects', {
   // v7.268 lesson — the list query selects every schema column). No manual db:push.
   profoundData:              jsonb('profound_data'),
   profoundDataUpdatedAt:     timestamp('profound_data_updated_at'),
+  // v7.342: the project's CANONICAL TAXONOMY ANCHOR (distinct canonical paths from the
+  // last successful anchored-engine breakdown, capped). Lives on the PROJECT — like brand
+  // terms — so it SURVIVES the full keyword reset Wayne's upload workflow runs (the reset
+  // deletes every analyses row, which was silently destroying the prior-analysis anchor and
+  // making every re-upload a from-scratch re-derivation with different category names —
+  // Const III.1e). Written by the synthesize route after each successful breakdown; read as
+  // the skeleton anchor on the next run. Auto-migrated at runtime via ADD COLUMN IF NOT
+  // EXISTS (ensured in the projects-list route per the v7.268/v7.327 lesson). No db:push.
+  taxonomyAnchor:            jsonb('taxonomy_anchor').$type<string[][]>(),
+  taxonomyAnchorUpdatedAt:   timestamp('taxonomy_anchor_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
