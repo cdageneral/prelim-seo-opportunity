@@ -627,6 +627,27 @@ export async function generateCategoryBreakdown(
     }
   }
 
+  // v7.342: DETERMINISTIC domain-name → brand override. A keyword that IS a bare
+  // domain ("realtor.com", "zillow.com") is a navigational brand search by
+  // definition — found live filed inside a product category ("realtor.com" at 12M
+  // inside Mortgages, flagged 25% confidence). A TypeScript rule beats a model
+  // judgment here: exact, repeatable, no cost (Const III.1a-adjacent; labels only).
+  {
+    const DOMAIN_RE = /^[a-z0-9][a-z0-9-]*\.(com|net|org|io|co|us|ca)$/;
+    let overridden = 0;
+    for (let i = 0; i < merged.length; i++) {
+      const kwLow = (merged[i]?.keyword ?? '').toLowerCase().trim();
+      if (!DOMAIN_RE.test(kwLow)) continue;
+      const stem  = kwLow.replace(/\.(com|net|org|io|co|us|ca)$/, '');
+      const label = stem.charAt(0).toUpperCase() + stem.slice(1) + ' Brand Searches';
+      pathByIndex.set(i, [label]);
+      typeByIndex.set(i, 'brand');
+      metaByIndex.set(i, { intent: 'navigational', confidence: 100, reasoning: 'bare domain name — deterministic brand rule (v7.342)' });
+      overridden++;
+    }
+    if (overridden > 0) console.log(`[OrbitIQ] Domain-brand rule: ${overridden} bare-domain keyword(s) typed as brand searches`);
+  }
+
   const keywordPaths: Record<string, string[]> = {};
   const keywordMeta: Record<string, { modifier?: string; intent?: string; confidence?: number; reasoning?: string; needsReview?: boolean }> = {};
   const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
