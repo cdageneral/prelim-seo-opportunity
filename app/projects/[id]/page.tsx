@@ -231,6 +231,33 @@ export default function ProjectBriefPage() {
 
   // Refresh modal state
   const [showRefreshModal,  setShowRefreshModal]  = useState(false);
+  // v7.343: REAL synthesis progress (batch X of Y from the server checkpoint,
+  // Const IV.2) + user-requested cancel-and-clear from the analyzing screen.
+  const [synthProgress, setSynthProgress] = useState<{ done: number; total: number; stage: string } | null>(null);
+  const cancelRequestedRef = useRef(false);
+
+  // v7.343: "Cancel & clear uploaded files" on the analyzing screen — aborts the
+  // resume loop, then runs the existing FULL RESET (deletes uploaded keyword rows
+  // + analyses; preserves project config incl. brand terms and the taxonomy
+  // anchor). Same reset the Keyword workflow uses — one code path, no new deleter.
+  async function cancelAndClearUploads() {
+    cancelRequestedRef.current = true;
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords/reset`, { method: 'POST' });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setAnalysisError(d?.error ?? 'Could not clear the uploaded files. Try again from the Keywords panel.');
+      }
+    } catch {
+      setAnalysisError('Could not clear the uploaded files — network error.');
+    } finally {
+      cancelRequestedRef.current = false;
+      setTriggering(false);
+      setSynthProgress(null);
+      await fetchProject();
+      setKwVersion(v => v + 1);   // panels refetch the (now empty) keyword pool
+    }
+  }
   // Edit project modal
   const [showEditProject,   setShowEditProject]   = useState(false);
   const [showCompetitors,   setShowCompetitors]   = useState(false);   // v7.101: global Competitors manager
@@ -467,31 +494,63 @@ export default function ProjectBriefPage() {
         if (data1.warnings?.length) setAnalysisWarnings(data1.warnings);
       }
 
-      // ── Phase 2 with automatic resume-retry ────────────────────────────────
-      // Synthesis is checkpointed server-side after each pass; if the request
-      // dies (Vercel 300s limit, network blip) a retry resumes from the last
-      // checkpoint instead of re-running completed passes.
-      const MAX_ATTEMPTS = 3;
+      // ── Phase 2 with progress-aware auto-resume (v7.343, Const IV.2) ────────
+      // Synthesis is checkpointed server-side after every batch wave; each 300s
+      // Vercel kill is EXPECTED on large uploads (8k keywords ≈ 328 batches ≈
+      // 3-4 windows). The old loop gave up after a fixed 3 attempts even while
+      // the run was advancing — v7.343 keeps resuming AS LONG AS the checkpoint
+      // moved forward since the last attempt (real progress, no re-spend), and
+      // polls real batch counts for the analyzing screen. Stops only when the
+      // run stalls twice in a row or a hard cap is hit.
+      const MAX_ATTEMPTS = 15;    // absolute safety cap (~75 min of 300s windows)
       let   lastErr      = '';
       let   done         = false;
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !done; attempt++) {
+      let   lastDone     = -1;
+      let   stalls       = 0;
+
+      const pollProgress = async (): Promise<{ done: number; total: number; stage: string } | null> => {
         try {
-          const res2  = await fetch('/api/synthesize', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ analysisId }),
-          });
-          const data2 = await res2.json();
-          if (res2.ok) { done = true; break; }
-          lastErr = data2?.error ?? 'AI synthesis failed. Check your Anthropic API key and try again.';
-        } catch {
-          lastErr = 'Synthesis was interrupted (timeout or network drop).';
+          const r = await fetch(`/api/projects/${projectId}/synthesis-progress?analysisId=${analysisId}`, { cache: 'no-store' });
+          const d = await r.json().catch(() => null);
+          if (d && typeof d.done === 'number' && typeof d.total === 'number') {
+            setSynthProgress({ done: d.done, total: d.total, stage: d.stage ?? 'categorizing' });
+            return { done: d.done, total: d.total, stage: d.stage ?? 'categorizing' };
+          }
+        } catch { /* screen falls back to elapsed time (I.5) */ }
+        return null;
+      };
+      const progressTimer = setInterval(pollProgress, 10_000);
+
+      try {
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS && !done; attempt++) {
+          if (cancelRequestedRef.current) { lastErr = 'Cancelled.'; break; }
+          try {
+            const res2  = await fetch('/api/synthesize', {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ analysisId }),
+            });
+            const data2 = await res2.json().catch(() => null);
+            if (res2.ok) { done = true; break; }
+            lastErr = data2?.error ?? 'Synthesis was interrupted (timeout) — this is expected on large uploads.';
+          } catch {
+            lastErr = 'Synthesis was interrupted (timeout or network drop).';
+          }
+          if (done || cancelRequestedRef.current) break;
+          // Resume only while the checkpoint is ADVANCING (fresh read, not the timer's).
+          const p = await pollProgress();
+          const nowDone = p?.done ?? -1;
+          if (nowDone > lastDone) { stalls = 0; lastDone = nowDone; }
+          else stalls++;
+          if (stalls >= 2) break;   // two attempts with zero forward progress → real failure
+          console.log(`[OrbitIQ] Synthesis window ended at batch ${nowDone >= 0 ? nowDone : '?'} — auto-resuming (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+          await new Promise(r => setTimeout(r, 4000));
         }
-        if (!done && attempt < MAX_ATTEMPTS) {
-          console.log(`[OrbitIQ] Synthesis attempt ${attempt} failed — resuming from checkpoint (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
-          await new Promise(r => setTimeout(r, 5000));
-        }
+      } finally {
+        clearInterval(progressTimer);
+        setSynthProgress(null);
       }
+      if (cancelRequestedRef.current) { await fetchProject(); return; }
       if (!done) {
         setAnalysisError(`${lastErr} Progress is saved — click Refresh Analysis to resume from where it stopped (completed steps are not re-run and no API credits are re-spent).`);
         await fetchProject();   // pick up any checkpointed partial results
@@ -1386,6 +1445,8 @@ export default function ProjectBriefPage() {
                 clientName={project.clientName}
                 triggeredAt={triggeredAt}
                 hasError={!!analysisError}
+                progress={synthProgress}
+                onCancelAndClear={cancelAndClearUploads}
               />
             </div>
           )}
