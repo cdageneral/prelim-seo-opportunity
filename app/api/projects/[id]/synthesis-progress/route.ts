@@ -60,13 +60,28 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const rankedSet = new Set(ranked.map((k: any) => String(k?.keyword ?? '').toLowerCase()));
     let mergedCount = ranked.length;
     for (const g of gap) if (!rankedSet.has(String(g?.keyword ?? '').toLowerCase())) mergedCount++;
-    const total = Math.max(1, Math.ceil(mergedCount / DISCOVERY_BATCH));
+    const discTotal = Math.max(1, Math.ceil(mergedCount / DISCOVERY_BATCH));
 
     const ckpt: any = snap._synthCheckpoint ?? {};
-    const done = Array.isArray(ckpt?.cbProgress?.doneStarts) ? ckpt.cbProgress.doneStarts.length : 0;
+    const discDone = Array.isArray(ckpt?.cbProgress?.doneStarts) ? ckpt.cbProgress.doneStarts.length : 0;
 
-    // Stage from which checkpointed passes exist (categorization is the long one).
+    // v7.345: consolidation (chunked canonicalization) reports its own chunk
+    // progress so the analyzing screen keeps advancing after discovery hits 100%
+    // AND the page's progress-aware auto-resume keeps resuming through it. The
+    // page stops resuming when `done` stalls two windows in a row; during the
+    // long consolidation phase discovery is frozen at max, so WITHOUT folding
+    // canon chunks into `done` the run was declared "failed" mid-success.
+    const canon: any     = ckpt?.cbProgress?.canon ?? null;
+    const canonTotal     = Number.isInteger(canon?.total) ? canon.total : 0;
+    const canonDone      = Array.isArray(canon?.chunksDone) ? canon.chunksDone.length : 0;
+
+    const done  = discDone + canonDone;
+    const total = discTotal + canonTotal;
+
+    // Stage from which checkpointed passes exist (categorization is the long one;
+    // consolidation is the second long phase, still pre-categoryBreakdown).
     let stage: string = 'categorizing';
+    if (canonTotal > 0 && !ckpt?.categoryBreakdown) stage = 'consolidating';
     if (ckpt?.categoryBreakdown) stage = ckpt?.opportunities ? 'finalizing' : 'insights';
 
     return NextResponse.json({ status: analysis.status, done, total, stage });
