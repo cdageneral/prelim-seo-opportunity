@@ -219,7 +219,7 @@ export function hierarchicalDiscoveryPrompt(
     .join('\n');
   const brandHint = domain.replace(/\.(com|net|org|io|co).*$/, '').replace(/[-_]/g, ' ');
   const anchorBlock = anchorTree && anchorTree.trim().length > 0
-    ? `\nCANONICAL TAXONOMY — the tree already established for this website. You MUST file every keyword INTO this tree, reusing these labels EXACTLY as spelled (umbrella and theme levels):\n${anchorTree.trim()}\n\nOnly introduce a node that is NOT in this tree when the keyword names a genuinely new product/service no existing node covers — and NEVER introduce a node that means the same as an existing one or is a subtype of one ("Wills" must go inside the existing "Estate Planning > Wills & Trusts", never become a new umbrella). Sub-topics BELOW the theme level are yours to create as the keywords warrant.\n`
+    ? `\nCANONICAL TAXONOMY — the tree already established for this website. You MUST file every keyword INTO this tree, reusing these labels EXACTLY as spelled (umbrella and theme levels):\n${anchorTree.trim()}\n\nOnly introduce a node that is NOT in this tree when the keyword names a genuinely new product/service no existing node covers — and NEVER introduce a node that means the same as an existing one or is a subtype of one ("Wills" must go inside the existing "Estate Planning > Wills & Trusts", never become a new umbrella).\n\nCRITICAL — THE ANCHOR FIXES ONLY THE TOP TWO LEVELS. You MUST still go DEEPER: place every keyword in its MOST-SPECIFIC sub-topic BENEATH the anchored theme (rule 3 applies in full), creating sub-topic nodes as the keywords warrant. "mortgage calculator" → [..., "Mortgages & Refinancing", "Mortgage Calculators"]; "fha loan" → [..., "Mortgages & Refinancing", "FHA Loans"]; "refinance rates" → [..., "Mortgages & Refinancing", "Refinancing", "Refinance Rates"]. A path that STOPS at the theme is correct ONLY when the keyword IS the theme's own generic head term (e.g. "mortgage", "mortgages") — parking specific keywords at the theme level flattens the tree and is a failure (v7.341).\n`
     : '';
 
   return `You are organizing a website's organic search keywords into a clean, multi-level SEO content taxonomy — a tree of pages.
@@ -302,6 +302,45 @@ Return JSON ONLY — no markdown, no prose:
   "canonical": [
     { "index": 0, "path": ["Mortgages","Mortgage Rates","30-yr fixed"] },
     { "index": 1, "path": ["Estate Planning","Wills & Trusts"] }
+  ]
+}`;
+}
+
+// ─── Pass 2.7 (v7.341): SIBLING AUDIT — merge same-concept sibling sub-topics ──
+//
+// The chunked canonicalization can leave two nodes meaning the same thing as
+// SIBLINGS under one parent when they were processed in different chunks (found
+// live in v7.339's first rebuild: "Loan Interest Rates" beside "Mortgage Rates"
+// under Mortgages & Refinancing). This pass sees each parent WITH its full child
+// list — the exact context chunking loses — and returns the merges. One bounded
+// call over node names only (no keywords, no volumes); merges are applied and
+// logged in TypeScript (Const III.1e — one concept, one node).
+
+export function siblingAuditPrompt(
+  domain: string,
+  industry: string,
+  groups: Array<{ parent: string; children: string[] }>,
+): string {
+  const list = groups
+    .map((g, i) => `${i}. PARENT: ${g.parent}\n   CHILDREN: ${g.children.join(' | ')}`)
+    .join('\n');
+  return `You are auditing a ${industry} website's (${domain}) SEO taxonomy for duplicate SIBLING nodes. Each group below is one parent node and ALL of its direct children.
+
+GROUPS (index. parent, then its children):
+${list}
+
+Find children within the SAME group that are the SAME concept or where one is a strict subtype of another — those must merge into ONE node.
+
+RULES — follow exactly:
+1. Merge two siblings when they mean the same thing for this site's users ("Loan Interest Rates" = "Mortgage Rates" under a mortgage parent; "Cash Back" = "Cashback") — keep the clearer, more conventional label as "to".
+2. Merge a sibling INTO another when it is a strict subtype ("30 Year Fixed Rates" into "Mortgage Rates" only if "Mortgage Rates" has no better sub-structure — prefer keeping genuine subtypes as separate nodes; only merge REAL duplicates).
+3. Do NOT merge genuinely distinct siblings ("Secured" ≠ "Unsecured"; "Refinancing" ≠ "First-Time Buyer"; "FHA Loans" ≠ "VA Loans"). When in doubt, do not merge.
+4. Only report groups that need changes. "from" and "to" must both be children of that group's parent, spelled exactly as listed, and different from each other.
+
+Return JSON ONLY — no markdown, no prose:
+{
+  "merges": [
+    { "group": 0, "from": "Loan Interest Rates", "to": "Mortgage Rates" }
   ]
 }`;
 }

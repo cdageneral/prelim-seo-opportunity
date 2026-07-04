@@ -28,6 +28,7 @@ import {
   hierarchicalDiscoveryPrompt,
   pathCanonicalizationPrompt,
   taxonomySkeletonPrompt,   // v7.339: shared skeleton every discovery batch anchors to (Const III.1e)
+  siblingAuditPrompt,       // v7.341: merges same-concept sibling sub-topics chunking missed
   type MergedKeyword,
 } from './prompts';
 import {
@@ -35,8 +36,11 @@ import {
   classifyMerge,
   pathJoin,
   MERGE_LOG_CAP,
+  buildSiblingGroups,
+  applySiblingMerges,
   type MergeLogEntry,
-} from '@/lib/category/canonicalize';   // v7.339: deterministic label unification + merge log
+  type SiblingMerge,
+} from '@/lib/category/canonicalize';   // v7.339: deterministic label unification + merge log; v7.341: sibling audit
 
 // Lazy client — reads key at call time, not at module load.
 // This matches the pattern used by semrush.ts, serp.ts, and profound.ts,
@@ -503,7 +507,9 @@ export async function generateCategoryBreakdown(
     for (let c = 0; c < sorted.length; c += CANON_CHUNK) {
       const chunk = sorted.slice(c, c + CANON_CHUNK);
       try {
-        const cPrompt   = pathCanonicalizationPrompt(domain, industry, chunk, established.slice(0, 150));
+        // v7.341: carry cap raised 150 → 250 (a 150-line window missed sibling
+        // duplicates across chunks on the first real-scale run)
+        const cPrompt   = pathCanonicalizationPrompt(domain, industry, chunk, established.slice(0, 250));
         const cResponse = await getClient().messages.create({
           model:      MODELS.fast,
           max_tokens: 8000,
@@ -539,6 +545,63 @@ export async function generateCategoryBreakdown(
       loggedKeys.add(fromKey + '→' + toKey);
       mergeLog.push({ from: fromKey, to: toKey, kind: classifyMerge(detPath, finalPath) });
     }
+  }
+
+  // ── Phase 2c (v7.341): SIBLING AUDIT — merge same-concept sibling sub-topics ──
+  // Chunking sees paths in slices, so two nodes meaning the same thing can survive
+  // as SIBLINGS under one parent ("Loan Interest Rates" beside "Mortgage Rates" —
+  // found in the first v7.339 rebuild). This pass reviews each parent WITH its
+  // full child list — names only, one bounded call (chunked past 200 groups) —
+  // and the merges are applied + logged here in TypeScript (Const III.1e).
+  try {
+    const canonKeys = Array.from(canonByRawKey.keys());
+    const distinctCanon = new Map<string, string[]>();
+    for (const k of canonKeys) {
+      const p = canonByRawKey.get(k)!;
+      const pk = pathKey(p);
+      if (!distinctCanon.has(pk)) distinctCanon.set(pk, p);
+    }
+    const groups = buildSiblingGroups(Array.from(distinctCanon.values()))
+      .filter(g => g.parentPath[0] !== OTHER_NAME);
+    const GROUP_CHUNK = 200;
+    const merges: SiblingMerge[] = [];
+    for (let c = 0; c < groups.length; c += GROUP_CHUNK) {
+      const gChunk = groups.slice(c, c + GROUP_CHUNK);
+      const sPrompt   = siblingAuditPrompt(domain, industry, gChunk.map(g => ({ parent: g.parent, children: g.children })));
+      const sResponse = await getClient().messages.create({
+        model:      MODELS.fast,
+        max_tokens: 4000,
+        messages:   [{ role: 'user', content: sPrompt }],
+      }, { timeout: 60_000 });
+      const sText   = sResponse.content[0].type === 'text' ? sResponse.content[0].text : '';
+      const sParsed = extractJSON<{ merges: Array<{ group: number; from: string; to: string }> }>(sText);
+      for (const m of sParsed.merges ?? []) {
+        const gi = m?.group;
+        if (!Number.isInteger(gi) || gi < 0 || gi >= gChunk.length) continue;
+        const g = gChunk[gi];
+        const from = String(m?.from ?? '').trim();
+        const to   = String(m?.to ?? '').trim();
+        // Guard: both must be real children of that parent, and different nodes.
+        if (!from || !to || from === to) continue;
+        if (g.children.indexOf(from) < 0 || g.children.indexOf(to) < 0) continue;
+        merges.push({ parentPath: g.parentPath, from, to });
+      }
+    }
+    if (merges.length > 0) {
+      for (const [rawKey, p] of Array.from(canonByRawKey.entries())) {
+        const applied = applySiblingMerges([p], merges);
+        canonByRawKey.set(rawKey, applied.paths[0]);
+        for (const e of applied.log) {
+          if (!loggedKeys.has(e.from + '→' + e.to)) { loggedKeys.add(e.from + '→' + e.to); mergeLog.push(e); }
+        }
+      }
+      console.log(`[OrbitIQ] Sibling audit: ${merges.length} sibling merge(s) applied across ${groups.length} group(s)`);
+    } else {
+      console.log(`[OrbitIQ] Sibling audit: ${groups.length} group(s) reviewed, no duplicates found`);
+    }
+  } catch (err) {
+    // Never fatal — the tree simply keeps the chunked result (Const I.5).
+    console.error('[OrbitIQ] Sibling audit failed (skipped):', (err as any)?.message);
   }
 
   // ── Phase 3: per-keyword canonical PATH + derived flat category (back-compat) ──
