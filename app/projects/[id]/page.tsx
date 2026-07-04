@@ -663,8 +663,13 @@ export default function ProjectBriefPage() {
       }
 
       const { inserted } = await res.json();
+      // v7.344: inserted === 0 means every row ALREADY EXISTS for this domain —
+      // that is SUCCESS (the data is loaded), not an error. The old code showed a
+      // red error and never unlocked the Run button, dead-ending Wayne with fully
+      // loaded data (the de-dupe itself is correct — it protects counts, I.3).
       if (inserted === 0) {
-        setUploadError(`All keywords in ${file.name} were already uploaded for this domain.`);
+        setUploadError(`${file.name}: these ${keywords.length.toLocaleString()} keywords are already loaded for ${domain} — nothing re-imported (no duplicates). You can run the analysis.`);
+        setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
         return;
       }
 
@@ -1790,7 +1795,8 @@ function DataSourceCard({
             )}
           </div>
           {uploadError && (
-            <p style={{ fontSize: '11px', color: 'var(--c-f87171)', marginTop: '8px' }}>{uploadError}</p>
+            // v7.344: "already loaded" is informational (data present, run unlocked) — amber, not error-red
+            <p style={{ fontSize: '11px', color: uploadError.includes('already loaded') ? 'var(--amber)' : 'var(--c-f87171)', marginTop: '8px' }}>{uploadError}</p>
           )}
         </div>
       )}
