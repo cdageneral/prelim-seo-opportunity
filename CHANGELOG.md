@@ -1,3 +1,9 @@
+## v7.340 — 2026-07-03 · Anchor guard: never anchor to a pre-v7.339 taxonomy (Const III.1e)
+
+**One-condition patch (Wayne-approved).** The v7.339 prior-taxonomy anchor loads the previous completed analysis’s tree so re-analyses keep stable category names — but for a project whose last build predates v7.339, that “prior tree” is exactly the duplicate/split mess III.1e exists to eliminate. The synthesize route now anchors ONLY when the prior breakdown carries taxonomyEngine === ‘anchored-v1’ (i.e., was itself built by the anchored engine). Effect: every project’s FIRST v7.339-era rebuild is a clean, unanchored build; name stability kicks in from the second run onward. No other behavior changes. (app/api/synthesize/route.ts)
+
+**Verification (Art. V):** isolated tsc exit 0 (project tsconfig mirrored, V.1a); retained regression suite re-run — all v7.339 checks pass, zero delta on prior checks, + 2 new anchorguard invariants (V.6).
+
 ## v7.339 — 2026-07-03 · Anchored categorization: one concept, one node (Const III.1e, new)
 
 Wayne’s finding: duplicate/overlapping categories — “Wills & Trusts”, “Wills”, and “Estate Planning” as three separate nodes where one hierarchy should exist. Causes found in code: 25-kw discovery batches invented the taxonomy independently (no shared vocabulary); the canonicalization pass was forbidden from re-parenting (“Preserve the parent chain”) and silently skipped above 300 distinct paths; re-analyses rebuilt the tree from scratch; failed batches fell into “Other” silently. Constitution amended: Art. III.1e (v0.18). Full detail in CHANGELOG_v7.339_ENTRY.md.
