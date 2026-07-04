@@ -66,6 +66,12 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
     if (p.stage === 'categorizing') {
       pct = 5 + Math.round((p.done / p.total) * 80);
       progressLine = `Categorizing keywords — batch ${p.done.toLocaleString()} of ${p.total.toLocaleString()}`;
+    } else if (p.stage === 'consolidating') {
+      // v7.345: second long Phase-2 step — merging duplicate categories in
+      // resumable chunks. `done`/`total` already include the canon chunks, so
+      // the bar keeps climbing instead of freezing once categorization hits 100%.
+      pct = 5 + Math.round((p.done / p.total) * 80);
+      progressLine = `Merging duplicate categories — step ${p.done.toLocaleString()} of ${p.total.toLocaleString()}`;
     } else if (p.stage === 'insights') {
       pct = 88;
       progressLine = 'Categorization done — building AI visibility & opportunities';
@@ -92,7 +98,11 @@ export default function AnalysisRunningState({ clientName, triggeredAt, hasError
   const elSec        = elapsed % 60;
   const elapsedLabel = elMin > 0 ? `${elMin}m ${elSec}s` : `${elapsed}s`;
 
-  const activeKey = hasReal ? progress!.stage : (elapsed < 60 ? 'gathering' : 'categorizing');
+  // v7.345: 'consolidating' is part of the Phase-2 categorization step visually
+  // (no separate STEPS entry), so map it there — otherwise findIndex → -1 and the
+  // list would wrongly highlight step 0 (gathering).
+  const rawKey    = hasReal ? progress!.stage : (elapsed < 60 ? 'gathering' : 'categorizing');
+  const activeKey = rawKey === 'consolidating' ? 'categorizing' : rawKey;
   const activeIdx = Math.max(0, STEPS.findIndex(s => s.key === activeKey));
 
   const statusDot = hasError ? 'bg-red-500' : 'bg-emerald-400';
