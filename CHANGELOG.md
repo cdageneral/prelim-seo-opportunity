@@ -1,3 +1,17 @@
+## v7.343 — 2026-07-04 · Honest progress, walk-away resume, faster batches, clear-uploads control (Const IV.2)
+
+Wayne watched an 8,177-keyword rebuild sit at “98% — Saving results” for 10+ minutes and asked if it was broken. It wasn’t — but the screen was lying (time-based fake percentage capped at 98%), and the page silently gave up after 3 auto-retries while the run was still advancing. Full detail in CHANGELOG_v7.343_ENTRY.md.
+
+**Real progress (Const IV.2).** New GET /api/projects/[id]/synthesis-progress returns REAL checkpoint numbers (categorization batches done vs total + actual stage). The analyzing screen shows “Categorizing keywords — batch 210 of 328”, a percentage derived from real batch counts, an ETA from the observed batch rate, and — before the first checkpoint — an honest “Working…” with elapsed time only (I.5). The fake TOTAL_DURATION curve is deleted; copy sets real expectations (1–2 min small, 15–25 min for 5k+ keywords).
+
+**Walk-away auto-resume.** The Phase-2 loop keeps resuming across 300s windows AS LONG AS the checkpoint advanced since the last attempt (zero re-spend), stopping only after two consecutive stalls or a 15-window cap — no more silent give-up at 3 attempts mid-run.
+
+**Faster batches.** Adaptive discovery concurrency: 12 workers past 120 batches (~halves wall time on 8k-kw uploads), 6 otherwise. Same total calls; per-batch retry absorbs throttling.
+
+**“Cancel & clear uploaded files” on the analyzing screen (Wayne’s ask).** Two-step destructive confirm wired to the EXISTING full-reset route (one deletion code path). Project settings, brand terms, and the v7.342 taxonomy anchor are preserved, so the next upload still converges on the same tree.
+
+**Verification (Art. V):** isolated tsc clean on all changed files (one PRE-EXISTING type mismatch in the untouched ContentMapSection/page pair confirmed byte-identical to live main, which builds READY — authoritative check is the real Vercel build, V.1a); jsdom harness 13/13; retained suite zero delta + 8 new v343 invariants (V.6).
+
 ## v7.342 — 2026-07-04 · Project-level anchor + the same-meaning leaf rule (Const III.1c-i / III.1e, v0.19)
 
 Wayne’s second TD Bank rebuild surfaced the two remaining failures, both root-caused in stored data + code. Full detail in CHANGELOG_v7.342_ENTRY.md.
