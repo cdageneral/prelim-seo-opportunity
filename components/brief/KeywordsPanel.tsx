@@ -3006,7 +3006,7 @@ function KwCategorySection({
         maxVol={maxVol}
         dimmed={dimmed}
         metaOf={categoryModel.keywordMeta}
-        localPack={!!localPackKw && localPackKw.size > 0 && collectOwnKeywords(n).some(r => localPackKw.has(String(r.keyword || '').toLowerCase()))}
+        localPack={!!localPackKw && localPackKw.size > 0 && n.own.some(r => localPackKw.has(String(r.keyword || '').toLowerCase()))}   // v7.348: node-precise — badge only nodes whose OWN keyword carries the real Semrush Fl local-pack flag, not a subtree roll-up (Wayne 2026-07-04)
         canDelete={!!onDeleteRows}
         confirmId={confirmId}
         busyId={busyId}
