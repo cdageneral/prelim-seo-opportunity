@@ -728,6 +728,40 @@ export async function generateCategoryBreakdown(
     if (overridden > 0) console.log(`[OrbitIQ] Domain-brand rule: ${overridden} bare-domain keyword(s) typed as brand searches`);
   }
 
+  // v7.349 (Const III.1e / III.11): DETERMINISTIC same-label-within-umbrella collapse.
+  // The intent-first reshape (v7.347) can leave a generic intent group (e.g. "Education")
+  // as BOTH a direct child of its product AND nested one level deeper under a sub-product
+  // ("Credit Cards > Education" AND "Credit Cards > Using a Credit Card > Education") — two
+  // nodes for ONE concept (the duplicate "Education" Wayne flagged, an III.1e violation the
+  // LLM consolidation missed because the two paths are lexically distinct). Hoist every such
+  // label to its umbrella-canonical SHALLOWEST depth, merging the deeper copy into the shallow
+  // one. Labels/structure only — no keyword dropped, no volume changed (Const I.1). Verified
+  // against real data (TD Bank: 6 dupes -> 0, 1429 kw unchanged).
+  {
+    const shallow = new Map<string, Map<string, number>>();          // umbrella -> label -> min depth
+    for (const pa of Array.from(pathByIndex.values())) {
+      if (!Array.isArray(pa) || pa.length === 0) continue;
+      let lm = shallow.get(pa[0]);
+      if (!lm) { lm = new Map<string, number>(); shallow.set(pa[0], lm); }
+      for (let d = 1; d < pa.length; d++) {
+        const l = String(pa[d]); const cur = lm.get(l);
+        if (cur == null || d < cur) lm.set(l, d);
+      }
+    }
+    let collapsed = 0;
+    for (const [idx, pa] of Array.from(pathByIndex.entries())) {
+      if (!Array.isArray(pa) || pa.length === 0) continue;
+      const lm = shallow.get(pa[0]); if (!lm) continue;
+      let out = pa.slice(); let changed = false;
+      for (let d = out.length - 1; d >= 1; d--) {
+        const l = String(out[d]); const min = lm.get(l);
+        if (min != null && d > min) { out = [...out.slice(0, min), l, ...out.slice(d + 1)]; changed = true; }
+      }
+      if (changed) { pathByIndex.set(idx, out); collapsed++; }
+    }
+    if (collapsed > 0) console.log(`[OrbitIQ] Same-label collapse (III.1e): hoisted ${collapsed} path(s) so no label repeats at two depths within an umbrella`);
+  }
+
   const keywordPaths: Record<string, string[]> = {};
   const keywordMeta: Record<string, { modifier?: string; intent?: string; intentFamily?: string; funnelStage?: string; confidence?: number; reasoning?: string; needsReview?: boolean }> = {};
   const assignmentByIndex = new Map<number, string>();              // → derived category (theme)
