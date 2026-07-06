@@ -242,6 +242,10 @@ export interface CbDiscoveryProgress {
   // so a resumed run keeps the classification fields (not just the path).
   proposed:   Array<{ index: number; path: string[]; type: 'procedure' | 'brand' | 'location'; modifier?: string; intent?: string; confidence?: number; reasoning?: string }>;
   doneStarts: number[];   // batch start offsets already discovered
+  // v7.351: total discovery batches for this run. Persisted so the synthesis-progress
+  // poll can report an EXACT "X of N" without deserializing the multi-MB keyword pool
+  // (the heavy read that froze the analyzing screen at "batch 0 of 58"). Const IV.2.
+  batchTotal?: number;
   // v7.345: consolidation (Phase 2b) checkpoint. Chunked LLM canonicalization
   // used to restart from zero on every resume, so a large footprint's ~12–20
   // sequential chunks could never all finish inside one 300s Lambda — the run
@@ -455,7 +459,7 @@ export async function generateCategoryBreakdown(
   for (let i = 0; i < pendingBatches.length; i += CONCURRENCY) {
     await Promise.all(pendingBatches.slice(i, i + CONCURRENCY).map(runDiscovery));
     if (onProgress && i + CONCURRENCY < pendingBatches.length) {
-      await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts) });
+      await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts), batchTotal: batches.length });
     }
   }
 
@@ -469,7 +473,7 @@ export async function generateCategoryBreakdown(
     for (let i = 0; i < retryBatches.length; i += CONCURRENCY) {
       await Promise.all(retryBatches.slice(i, i + CONCURRENCY).map(runDiscovery));
     }
-    if (onProgress) await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts) });
+    if (onProgress) await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts), batchTotal: batches.length });
   }
   // v7.345: the wave loop skipped its FINAL wave's checkpoint (the guard was
   // `i + CONCURRENCY < pendingBatches.length`), so the last ≤CONCURRENCY batches
@@ -478,7 +482,7 @@ export async function generateCategoryBreakdown(
   // discovery work. Only fires when discovery actually ran a batch this window
   // (a resume past discovery has 0 pending → canon state below is untouched).
   if (onProgress && pendingBatches.length > 0) {
-    await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts), canon: progress?.canon });
+    await onProgress({ proposed: rawAssigns, doneStarts: Array.from(doneStarts), batchTotal: batches.length, canon: progress?.canon });
   }
   const failedBatchStarts = new Set<number>();
   for (const b of batches) if (!doneStarts.has(b.start)) failedBatchStarts.add(b.start);
@@ -571,6 +575,7 @@ export async function generateCategoryBreakdown(
       await onProgress({
         proposed:   rawAssigns,
         doneStarts: Array.from(doneStarts),
+        batchTotal: batches.length,
         canon: {
           total:       canonTotal,
           chunksDone:  Array.from(chunksDone),
