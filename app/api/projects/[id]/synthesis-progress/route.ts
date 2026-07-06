@@ -1,18 +1,31 @@
 /**
- * GET /api/projects/[id]/synthesis-progress?analysisId=…  — v7.343
+ * GET /api/projects/[id]/synthesis-progress?analysisId=…  — v7.343 · v7.351
  *
  * Tiny, cheap poll target for the analyzing screen (Const IV.2 — determinate
- * progress). The old screen showed a TIME-based fake percentage capped at 98%
- * ("Saving results" while the engine was actually mid-categorization) — Wayne
- * watched a 8,177-keyword run sit at "98%" for 10+ minutes. This returns the
- * REAL numbers from the server-side synthesis checkpoint:
+ * progress). Returns the REAL numbers from the server-side synthesis checkpoint:
  *
  *   { status, done, total, stage }
  *
- *   done / total — categorization batches completed vs total (from
- *                  `_synthCheckpoint.cbProgress.doneStarts` + the keyword pool;
- *                  real counts, nothing modeled — Const I.1)
- *   stage        — 'gathering' | 'categorizing' | 'insights' | 'finalizing' | 'completed' | 'failed'
+ *   done / total — categorization batches + consolidation chunks + insight
+ *                  milestones completed vs total (real counts, nothing modeled,
+ *                  Const I.1)
+ *   stage        — 'gathering' | 'categorizing' | 'consolidating' | 'insights'
+ *                  | 'finalizing' | 'completed' | 'failed'
+ *
+ * ── v7.351: this route is now ACTUALLY cheap ──────────────────────────────────
+ * The old handler called `db.query.analyses.findFirst`, which ships the ENTIRE
+ * `semrush_snapshot` to the Lambda and JSON-parses it on EVERY 10-second poll.
+ * On a large project that snapshot is several megabytes (1,400+ topKeywords +
+ * gapKeywords + `_synthCheckpoint.cbProgress.proposed` [one object per keyword] +
+ * `canon.mappings`), so the read ran for many seconds and the poll frequently
+ * TIMED OUT. When the poll times out the client keeps its last value, so the
+ * analyzing screen froze at its first reading ("batch 0 of 58") for the whole
+ * ~10-minute run even though the engine was advancing — the "just spinning"
+ * report (TD Bank, 2026-07-06). This query now extracts ONLY the small scalar
+ * counts with Postgres jsonb operators, so the big arrays never leave the
+ * database and the poll returns in milliseconds — the bar tracks real progress.
+ * The done/total/stage math lives in lib/synthesis/progressMath.ts so it is
+ * unit-tested without a DB (Const V.3/V.6).
  *
  * Read-only; never mutates. Any error → 200 with nulls (the screen falls back
  * to its elapsed-time display — honest fallback, Const I.5).
@@ -20,71 +33,41 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { analyses } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
+import { computeSynthProgress, type SynthProgressRow } from '@/lib/synthesis/progressMath';
 
 export const dynamic = 'force-dynamic';
 
-const DISCOVERY_BATCH = 25;   // mirrors lib/claude/synthesize.ts
+// SQL column list reused by both the by-id and latest-in-project queries. Each
+// expression pulls only a scalar out of the (possibly multi-MB) jsonb column —
+// Postgres resolves the path server-side and ships nothing but the small result.
+const cp  = sql`semrush_snapshot->'_synthCheckpoint'`;
+const cbp = sql`semrush_snapshot->'_synthCheckpoint'->'cbProgress'`;
+const SELECT_COLS = sql`
+  status AS status,
+  (${cbp}->>'batchTotal')::int                                                AS batch_total,
+  jsonb_array_length(COALESCE(${cbp}->'doneStarts','[]'::jsonb))              AS disc_done,
+  (${cbp}->'canon'->>'total')::int                                           AS canon_total,
+  jsonb_array_length(COALESCE(${cbp}->'canon'->'chunksDone','[]'::jsonb))     AS canon_done,
+  jsonb_array_length(COALESCE(semrush_snapshot->'topKeywords','[]'::jsonb))   AS ranked_n,
+  jsonb_array_length(COALESCE(semrush_snapshot->'gapKeywords','[]'::jsonb))   AS gap_n,
+  (${cp}->'categoryBreakdown') IS NOT NULL                                    AS cb_done,
+  (${cp}->'personas')          IS NOT NULL                                    AS personas_done,
+  (${cp}->'llmProbe')          IS NOT NULL                                    AS probe_done,
+  jsonb_array_length(COALESCE(${cp}->'opportunities','[]'::jsonb))            AS opps_done,
+  (semrush_snapshot IS NOT NULL)                                             AS has_snap
+`;
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const analysisId = req.nextUrl.searchParams.get('analysisId');
-    let analysis: any = null;
-    if (analysisId) {
-      analysis = await db.query.analyses.findFirst({ where: eq(analyses.id, analysisId) });
-    } else {
-      const recent = await db.query.analyses.findMany({
-        where:   eq(analyses.projectId, params.id),
-        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-        limit:   1,
-      });
-      analysis = recent[0] ?? null;
-    }
-    if (!analysis) return NextResponse.json({ status: null, done: null, total: null, stage: null });
 
-    const snap: any = analysis.semrushSnapshot ?? null;
-    if (analysis.status === 'completed') {
-      return NextResponse.json({ status: 'completed', done: null, total: null, stage: 'completed' });
-    }
-    if (analysis.status === 'failed') {
-      return NextResponse.json({ status: 'failed', done: null, total: null, stage: 'failed' });
-    }
-    if (!snap) {
-      return NextResponse.json({ status: analysis.status, done: null, total: null, stage: 'gathering' });
-    }
+    const res: any = analysisId
+      ? await db.execute(sql`SELECT ${SELECT_COLS} FROM analyses WHERE id = ${analysisId} LIMIT 1`)
+      : await db.execute(sql`SELECT ${SELECT_COLS} FROM analyses WHERE project_id = ${params.id} ORDER BY triggered_at DESC LIMIT 1`);
 
-    // Total categorization batches = merged keyword pool (ranked + deduped gap) / batch size.
-    const ranked: any[] = snap.topKeywords ?? [];
-    const gap: any[]    = snap.gapKeywords ?? [];
-    const rankedSet = new Set(ranked.map((k: any) => String(k?.keyword ?? '').toLowerCase()));
-    let mergedCount = ranked.length;
-    for (const g of gap) if (!rankedSet.has(String(g?.keyword ?? '').toLowerCase())) mergedCount++;
-    const discTotal = Math.max(1, Math.ceil(mergedCount / DISCOVERY_BATCH));
-
-    const ckpt: any = snap._synthCheckpoint ?? {};
-    const discDone = Array.isArray(ckpt?.cbProgress?.doneStarts) ? ckpt.cbProgress.doneStarts.length : 0;
-
-    // v7.345: consolidation (chunked canonicalization) reports its own chunk
-    // progress so the analyzing screen keeps advancing after discovery hits 100%
-    // AND the page's progress-aware auto-resume keeps resuming through it. The
-    // page stops resuming when `done` stalls two windows in a row; during the
-    // long consolidation phase discovery is frozen at max, so WITHOUT folding
-    // canon chunks into `done` the run was declared "failed" mid-success.
-    const canon: any     = ckpt?.cbProgress?.canon ?? null;
-    const canonTotal     = Number.isInteger(canon?.total) ? canon.total : 0;
-    const canonDone      = Array.isArray(canon?.chunksDone) ? canon.chunksDone.length : 0;
-
-    const done  = discDone + canonDone;
-    const total = discTotal + canonTotal;
-
-    // Stage from which checkpointed passes exist (categorization is the long one;
-    // consolidation is the second long phase, still pre-categoryBreakdown).
-    let stage: string = 'categorizing';
-    if (canonTotal > 0 && !ckpt?.categoryBreakdown) stage = 'consolidating';
-    if (ckpt?.categoryBreakdown) stage = ckpt?.opportunities ? 'finalizing' : 'insights';
-
-    return NextResponse.json({ status: analysis.status, done, total, stage });
+    const row: SynthProgressRow | null = res?.rows?.[0] ?? res?.[0] ?? null;
+    return NextResponse.json(computeSynthProgress(row));
   } catch (err) {
     // Honest fallback — the screen shows elapsed time instead (Const I.5).
     return NextResponse.json({ status: null, done: null, total: null, stage: null });
