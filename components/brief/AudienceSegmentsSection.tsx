@@ -35,6 +35,93 @@ export interface AudienceSegment {
 
 interface Props { analysis: any; }
 
+// ── v7.352: per-segment export (CSV download + copy to clipboard) ─────────────
+// Every field the panel renders for a segment is flattened into ordered
+// [field, value] rows — the single source both exports read, so the CSV and the
+// clipboard text can never drift from each other or from the UI (Const II.7 in
+// miniature). Pure functions, unit-tested in the harness.
+
+export function buildSegmentRows(segment: AudienceSegment, label: string): Array<[string, string]> {
+  const rows: Array<[string, string]> = [
+    ['Segment', label],
+    ['Name', segment.name ?? ''],
+    ['Tagline', segment.tagline ?? ''],
+    ['Share of Volume (%)', String(segment.volumePct ?? '')],
+  ];
+  if (segment.yoyGrowth) rows.push(['YoY Growth', segment.yoyGrowth]);
+  rows.push(['Demographics', segment.whoTheyAre?.demographics ?? '']);
+  rows.push(['Trigger', segment.whoTheyAre?.trigger ?? '']);
+  if (segment.whoTheyAre?.influencerRole) rows.push(['Influencer / Gatekeeper Role', segment.whoTheyAre.influencerRole]);
+  (segment.preLLMPrompts ?? []).forEach((p, i) => rows.push([`Pre-Product LLM Prompt ${i + 1}`, p]));
+  (segment.productPrompts ?? []).forEach((p, i) => rows.push([`Product-Stage Search Prompt ${i + 1}`, p]));
+  (segment.touchpoints ?? []).forEach((tp, i) => rows.push([`Touchpoint ${i + 1} — ${tp.stage}`, tp.description]));
+  rows.push(['Messaging & Tone', segment.messagingAndTone ?? '']);
+  rows.push(['Creative & Imagery Direction', segment.creativeDirection ?? '']);
+  rows.push(['Channel Approach', segment.channelApproach ?? '']);
+  return rows;
+}
+
+// RFC-4180 escaping: quote any field carrying a comma, quote, or newline; double
+// embedded quotes. Values pass through otherwise untouched (Const I.1 — export
+// exactly what the panel shows, no reformatting).
+export function csvEscape(v: string): string {
+  const s = String(v ?? '');
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function segmentToCsv(segment: AudienceSegment, label: string): string {
+  const lines = ['Field,Value'];
+  buildSegmentRows(segment, label).forEach(([f, v]) => lines.push(`${csvEscape(f)},${csvEscape(v)}`));
+  return lines.join('\r\n');
+}
+
+export function segmentToClipboardText(segment: AudienceSegment, label: string): string {
+  return buildSegmentRows(segment, label).map(([f, v]) => `${f}: ${v}`).join('\n');
+}
+
+export function segmentCsvFilename(segment: AudienceSegment, label: string): string {
+  const slug = `${label} ${segment.name ?? ''}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `audience-${slug || 'segment'}.csv`;
+}
+
+function downloadSegmentCsv(segment: AudienceSegment, label: string): void {
+  // \uFEFF BOM so Excel opens the UTF-8 CSV with accents/dashes intact.
+  const blob = new Blob(['\uFEFF' + segmentToCsv(segment, label)], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = segmentCsvFilename(segment, label);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Segment accent palette — A/B/C ────────────────────────────────────────────
 
 const SEGMENT_ACCENTS = [
@@ -140,6 +227,54 @@ function PromptChip({ text, accent }: { text: string; accent: typeof SEGMENT_ACC
       <span>{text}</span>
       <span className="opacity-50 shrink-0 mt-0.5">&rdquo;</span>
     </span>
+  );
+}
+
+// v7.352: per-card export actions — CSV download + copy to clipboard. Rendered as
+// a SIBLING of the card <button> (inside a shared relative wrapper), never nested
+// inside it: interactive elements inside a <button> are invalid HTML and break
+// hydration. The copy button flips to a ✓ for 1.6s as its success feedback.
+function SegmentExportActions({ segment, label }: {
+  segment: AudienceSegment;
+  label: string;
+}) {
+  const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  const handleCopy = async () => {
+    const ok = await copyTextToClipboard(segmentToClipboardText(segment, label));
+    setCopied(ok ? 'ok' : 'fail');
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied('idle'), 1600);
+  };
+
+  const btnCls = 'w-7 h-7 rounded-md border border-orbit-border bg-orbit-surface text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/50 flex items-center justify-center transition-colors cursor-pointer';
+
+  return (
+    <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); downloadSegmentCsv(segment, label); }}
+        className={btnCls}
+        title={`Download ${label} — ${segment.name} as CSV (all segment details)`}
+        aria-label={`Download ${segment.name} as CSV`}
+      >
+        <i className="ti ti-download text-[13px]" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); void handleCopy(); }}
+        className={btnCls}
+        title={copied === 'ok' ? 'Copied!' : copied === 'fail' ? 'Copy failed — clipboard unavailable' : `Copy ${label} — ${segment.name} to clipboard (all segment details)`}
+        aria-label={`Copy ${segment.name} to clipboard`}
+      >
+        <i
+          className={`text-[13px] ${copied === 'ok' ? 'ti ti-check text-green-400' : copied === 'fail' ? 'ti ti-alert-triangle text-amber-400' : 'ti ti-copy'}`}
+          aria-hidden="true"
+        />
+      </button>
+    </div>
   );
 }
 
@@ -502,12 +637,16 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
             {segments.map((seg, i) => {
               const acc   = SEGMENT_ACCENTS[i % SEGMENT_ACCENTS.length];
               const isAct = i === active;
+              // v7.352: relative wrapper so the export icons sit as a SIBLING of the
+              // card <button> (valid HTML — no interactive nesting). The button keeps
+              // the card geometry the neck connector measures; pb-12 reserves the
+              // bottom strip the icons occupy.
               return (
+                <div key={seg.id} className="relative">
                 <button
-                  key={seg.id}
                   ref={isAct ? activeCardRef : undefined}
                   onClick={() => setActive(i)}
-                  className={`orbit-card p-4 text-left flex flex-col gap-3 transition-all cursor-pointer relative ${
+                  className={`orbit-card p-4 pb-12 w-full h-full text-left flex flex-col gap-3 transition-all cursor-pointer relative ${
                     isAct ? '' : 'opacity-70 hover:opacity-100'
                   }`}
                   style={isAct
@@ -556,6 +695,10 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                     </p>
                   )}
                 </button>
+
+                {/* v7.352: per-segment export — CSV download + copy to clipboard */}
+                <SegmentExportActions segment={seg} label={segmentLabels[i]} />
+                </div>
               );
             })}
           </div>
