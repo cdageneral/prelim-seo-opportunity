@@ -7,6 +7,9 @@ import {
 } from '@/lib/journey/contentPlan';
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
+// v7.353: audience-segment lens — the SAME topic→segment attribution the Journey panel
+// uses, carried into the scope sheet as a filter + per-row segment tags (Const II.7).
+import { readSegments, buildTopicSegmentMap, buildSegTags, filterPlanBySegment, SegmentFilterBar } from '@/components/brief/SegmentLens';
 
 // palette — theme tokens only (Const IV.6 / V.5): every --c-* token has a light remap, so
 // reusing them keeps the panel legible in BOTH themes. No hex literals anywhere in this file.
@@ -186,17 +189,34 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
 
   // Const II.7: re-derive every topic from the canonical pool — never a stored copy of the
   // brief. The Scope panel is a view that filters that one plan to the scoped ids.
+  // v7.353: canonical topics kept in hand so the segment lens can reuse the Journey
+  // panel's topic→segment attribution over their real language.
+  const canonTopics = useMemo(
+    () => buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns),
+    [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
+  );
   const plan = useMemo<ContentPlan | null>(() => {
-    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns);
-    if (topics.length > 0) return buildContentPlanFromTopics(topics);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
     return planFromSnapshot(analysis, uploadedKeywords);
-  }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
+  }, [canonTopics, analysis, uploadedKeywords]);
 
   const scopedPlan = useMemo(
     () => (plan && scopeIds ? filterPlanByIds(plan, scopeIds) : null),
     [plan, scopeIds],
   );
   const contentCount = scopeIds ? scopeIds.size : 0;
+
+  // v7.353: audience-segment lens — same attribution as the Journey panel (Const II.7).
+  // Tags render on every scoped row; the chips narrow the sheet AND the multi-year
+  // roadmap to one segment's view (its exclusive topics + Shared, Wayne 2026-07-06).
+  const segments = useMemo(() => readSegments(analysis), [analysis]);
+  const topicBucket = useMemo(() => buildTopicSegmentMap(canonTopics, segments), [canonTopics, segments]);
+  const segTags = useMemo(() => buildSegTags(topicBucket, segments), [topicBucket, segments]);
+  const [activeSeg, setActiveSeg] = useState<string | null>(null);
+  const viewScopedPlan = useMemo(
+    () => (scopedPlan && activeSeg && topicBucket.size ? filterPlanBySegment(scopedPlan, topicBucket, activeSeg) : scopedPlan),
+    [scopedPlan, activeSeg, topicBucket],
+  );
 
   // per-workstream scoped counts. Content is real (scopeOf rollup); the others read the
   // length of their stored id namespace — 0 until their source panels ship.
@@ -279,6 +299,22 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
         })}
       </div>
 
+      {/* v7.353: segment lens — narrows the scoped sheet AND the multi-year roadmap to one
+          audience segment's view (same attribution as the Audience Journeys panel; Shared
+          shows under every segment). Chip counts are real row counts of the scoped plan. */}
+      {activeWs === 'content' && contentCount > 0 && segments.length > 0 && topicBucket.size > 0 && (
+        <SegmentFilterBar
+          segments={segments}
+          active={activeSeg}
+          onChange={setActiveSeg}
+          countOf={(id: string | null) => {
+            if (!scopedPlan) return 0;
+            if (id === null) return scopedPlan.topics.length;
+            return filterPlanBySegment(scopedPlan, topicBucket, id).topics.length;
+          }}
+        />
+      )}
+
       {/* sheet / roadmap toggle — content only (the other workstreams have no priority axis yet) */}
       {activeWs === 'content' && contentCount > 0 && (
         <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 9, background: COL.card, border: `1px solid ${COL.line}`, marginBottom: 4 }}>
@@ -317,12 +353,13 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
           </p>
         </div>
       ) : view === 'roadmap' ? (
-        <ContentRoadmap plan={scopedPlan!} />
+        <ContentRoadmap plan={viewScopedPlan!} />
       ) : (
-        <ContentExplorer plan={scopedPlan!} mode="plan"
+        <ContentExplorer plan={viewScopedPlan!} mode="plan"
           removable
           clientName={clientDomain || 'client'}
           savingIds={savingIds}
+          topicSeg={segTags}
           onRemove={removeFromScope} />
       )}
     </div>

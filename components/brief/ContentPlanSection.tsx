@@ -8,6 +8,12 @@ import {
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 import SegmentDownloadButton from '@/components/brief/SegmentDownloadButton';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
+// v7.353: audience-segment lens — the SAME topic→segment attribution the Journey panel
+// uses, carried into this panel as a filter + row tags (Const II.7, one partition).
+import {
+  readSegments, buildTopicSegmentMap, buildSegTags, filterPlanBySegment,
+  SegmentFilterBar, SegTagChip, type SegTag,
+} from '@/components/brief/SegmentLens';
 
 // ─── palette (matches the app's orbit-* dark theme) ─────────────────────────────
 const COL = {
@@ -157,10 +163,11 @@ function RemoveBtn({ saving, onRemove }: { saving: boolean; onRemove: () => void
   );
 }
 
-function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onRemove }: {
+function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onRemove, seg }: {
   t: ContentTopic; onOpen: (t: ContentTopic) => void;
   selectable?: boolean; selected?: boolean; saving?: boolean; onToggle?: (id: string) => void;
   removable?: boolean; onRemove?: (id: string) => void;
+  seg?: SegTag;   // v7.353: audience-segment tag (same attribution as the Journey panel)
 }) {
   const col = stateColor[t.state];
   const pri = priColor[t.priority];
@@ -188,7 +195,8 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
           {t.quickWin && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--c-08081a)', background: COL.amber, borderRadius: 5, padding: '2px 7px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><i className="ti ti-bolt" /> Quick win</span>}
           {t.refresh && <span style={{ fontSize: 9, fontWeight: 700, color: COL.amber, background: 'var(--ca-245-158-11-0_12)', borderRadius: 5, padding: '2px 7px' }}>Refresh</span>}
         </div>
-        <div style={{ fontSize: 10, color: COL.mut2, marginTop: 3, display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 10, color: COL.mut2, marginTop: 3, display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+          {seg && <SegTagChip tag={seg} />}{/* v7.353: segment tag — same attribution as Journeys */}
           <span>{laneLabel[t.lane]} · {kindLabel[t.kind]}</span>
           <span><i className="ti ti-message-2" /> {t.promptCount}</span>
           <span>{t.kwCount} kw</span>
@@ -336,7 +344,7 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, clientName }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, clientName, topicSeg, onBulkSelect }: {
   plan: ContentPlan; mode: 'content' | 'plan';
   clientName?: string;   // v7.328: filename stem for per-segment XLSX exports
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
@@ -345,6 +353,12 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   // v7.261: opt-in remove control (used only by the Content Plan destination). The × on a
   // row deselects that topic, removing it from the plan and freeing its Content Map checkbox.
   removable?: boolean; onRemove?: (id: string) => void;
+  // v7.353: topic.id → audience-segment tag (same attribution the Journey panel stores) —
+  // renders a small segment chip on every row so the association reads on each panel.
+  topicSeg?: Map<string, SegTag>;
+  // v7.353: bulk selection over the CURRENTLY SHOWN rows (Content Map only) — one
+  // full-set PUT, so "select all of segment A" is one click, not a row-by-row tick.
+  onBulkSelect?: (ids: string[], select: boolean) => void;
 }) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
   const [cFilter, setCFilter] = useState<'all' | 'existing' | 'build' | 'quickwin'>('all');
@@ -446,12 +460,29 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       {/* v7.264: selection instruction — sits right above the list, only where the
           checkboxes are (Content Map). */}
       {selectable && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0 0 12px', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0 0 12px', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', flexWrap: 'wrap' }}>
           <i className="ti ti-checkbox" style={{ fontSize: 15, color: COL.cyan, flexShrink: 0 }} />
-          <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45 }}>
+          <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45, flex: 1, minWidth: 220 }}>
             Check a box to select which topics to include in your <b style={{ color: COL.cyan }}>scope &amp; content plan</b>.
             {selectedIds && selectedIds.size > 0 && <span style={{ color: COL.mut }}>&nbsp; · &nbsp;{selectedIds.size} selected</span>}
           </span>
+          {/* v7.353: bulk select over the rows the active filters currently show — so
+              "all of segment A into the plan" is one click. Idempotent full-set save. */}
+          {onBulkSelect && rows.length > 0 && (() => {
+            const shownIds = rows.map((t: ContentTopic) => t.id);
+            const allShownSelected = !!selectedIds && shownIds.every((id: string) => selectedIds.has(id));
+            return (
+              <button type="button"
+                onClick={() => onBulkSelect(shownIds, !allShownSelected)}
+                title={allShownSelected ? 'Remove every topic shown by the current filters from the plan' : 'Add every topic shown by the current filters to the plan'}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0,
+                  background: 'transparent', border: `1px solid ${COL.cyan}`, color: COL.cyan,
+                  borderRadius: 7, padding: '5px 11px', fontSize: 11, fontWeight: 700 }}>
+                <i className={`ti ${allShownSelected ? 'ti-square-off' : 'ti-checks'}`} style={{ fontSize: 13 }} />
+                {allShownSelected ? `Unselect all shown (${shownIds.length})` : `Select all shown (${shownIds.length})`}
+              </button>
+            );
+          })()}
         </div>
       )}
 
@@ -487,7 +518,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
           saving={(selectable || removable) ? !!savingIds?.has(t.id) : false}
           onToggle={onToggleSelect}
           removable={removable}
-          onRemove={onRemove} />
+          onRemove={onRemove}
+          seg={topicSeg?.get(t.id)} />
       ))
         : <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>}
 
@@ -557,11 +589,23 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   // the cluster count (Const III.5). Falls back to the demand-universe plan only when
   // no clusters exist yet.
   const clientDomain = (analysis?.semrushSnapshot?.domain as string) ?? '';
+  // v7.353: keep the canonical topics in hand (not just the plan built from them) — the
+  // segment lens needs their real language (category path, product, keywords) to reuse
+  // the Journey panel's topic→segment attribution (Const II.7).
+  const canonTopics = useMemo(
+    () => buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns),
+    [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
+  );
   const plan = useMemo(() => {
-    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns);
-    if (topics.length > 0) return buildContentPlanFromTopics(topics);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
     return planFromSnapshot(analysis, uploadedKeywords);
-  }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
+  }, [canonTopics, analysis, uploadedKeywords]);
+
+  // v7.353: audience-segment lens — same attribution as the Journey panel.
+  const segments = useMemo(() => readSegments(analysis), [analysis]);
+  const topicBucket = useMemo(() => buildTopicSegmentMap(canonTopics, segments), [canonTopics, segments]);
+  const segTags = useMemo(() => buildSegTags(topicBucket, segments), [topicBucket, segments]);
+  const [activeSeg, setActiveSeg] = useState<string | null>(null);
 
   // v7.260: the Content Plan shows ONLY the hand-picked topics — filtered from the same
   // canonical plan (Const II.7 view; scope recomputed via the shared scopeOf, so the
@@ -571,6 +615,14 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     [plan, selectedIds],
   );
   const selCount = selectedIds ? selectedIds.size : 0;
+
+  // v7.353: the plan the panel RENDERS — the picked topics, narrowed to the active
+  // segment's view when a segment chip is on (its exclusive topics + Shared; cards are
+  // exact scopeOf rollups of the rows shown). Null segment = the whole picked plan.
+  const viewPlan = useMemo(
+    () => (selectedPlan && activeSeg && topicBucket.size ? filterPlanBySegment(selectedPlan, topicBucket, activeSeg) : selectedPlan),
+    [selectedPlan, activeSeg, topicBucket],
+  );
 
   // v7.261: remove a topic from the plan (deselect) + persist. Optimistic: the row leaves
   // the plan immediately; the same id un-checks on the Content Map (which re-reads the
@@ -595,10 +647,11 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
 
   // v7.267: every topic id currently resolved into the plan (existing + net-new, all
   // priorities — independent of the active filter cards). These are the assets "Add to
-  // Scope" pushes into the cart.
+  // Scope" pushes into the cart. v7.353: reads the segment-filtered VIEW — with a
+  // segment chip on, "Add to Scope" scopes exactly the slice you're looking at.
   const planTopicIds = useMemo(
-    () => (selectedPlan ? selectedPlan.topics.map((t: ContentTopic) => t.id) : []),
-    [selectedPlan],
+    () => (viewPlan ? viewPlan.topics.map((t: ContentTopic) => t.id) : []),
+    [viewPlan],
   );
   const scopedCount = scopeIds ? scopeIds.size : 0;
   const allPlanInScope = !!scopeIds && planTopicIds.length > 0 && planTopicIds.every((id) => scopeIds.has(id));
@@ -714,11 +767,29 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
           </p>
         </div>
       ) : (
-        <ContentExplorer plan={selectedPlan!} mode="plan"
-          removable
-          clientName={clientDomain || 'client'}
-          savingIds={savingIds}
-          onRemove={removeSelection} />
+        <>
+          {/* v7.353: segment lens — filter the picked plan to one audience segment's view
+              (same attribution as the Audience Journeys panel; Shared shows under every
+              segment). Chip counts are real row counts of the picked plan. */}
+          {segments.length > 0 && topicBucket.size > 0 && (
+            <SegmentFilterBar
+              segments={segments}
+              active={activeSeg}
+              onChange={setActiveSeg}
+              countOf={(id: string | null) => {
+                if (!selectedPlan) return 0;
+                if (id === null) return selectedPlan.topics.length;
+                return filterPlanBySegment(selectedPlan, topicBucket, id).topics.length;
+              }}
+            />
+          )}
+          <ContentExplorer plan={viewPlan!} mode="plan"
+            removable
+            clientName={clientDomain || 'client'}
+            savingIds={savingIds}
+            topicSeg={segTags}
+            onRemove={removeSelection} />
+        </>
       )}
     </div>
   );

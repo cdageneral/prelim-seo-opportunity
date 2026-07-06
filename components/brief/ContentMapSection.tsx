@@ -6,6 +6,9 @@ import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mirror): canonical pool for buildClusters (Const II.7)
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.336 (QC audit B1 mirror): guard on buildClusters category reads (Const III.1a)
+// v7.353: audience-segment lens — the SAME topic→segment attribution the Journey panel
+// uses, carried into this panel as a filter + row tags (Const II.7, one partition).
+import { buildTopicSegmentMap, buildSegTags, filterPlanBySegment, SegmentFilterBar } from '@/components/brief/SegmentLens';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1334,11 +1337,49 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   // — so the Content panel, Content Plan, Keyword and Cluster panels all reconcile.
   // v7.210: build the plan from the canonical cluster topics (one page per cluster,
   // Const III.5) so Content panel + Content Plan reconcile to the cluster count.
+  // v7.353: keep the canonical topics in hand (not just the plan) — the segment lens
+  // reuses the Journey panel's topic→segment attribution over their real language.
+  const canonTopics = useMemo(
+    () => buildCanonicalClusterTopics(analysis, clientDomain, competitors ?? [], uploadedKeywords, claudeAssigns),
+    [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
+  );
   const plan = useMemo(() => {
-    const topics = buildCanonicalClusterTopics(analysis, clientDomain, competitors ?? [], uploadedKeywords, claudeAssigns);
-    if (topics.length > 0) return buildContentPlanFromTopics(topics);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
     return planFromSnapshot(analysis, uploadedKeywords);
-  }, [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns]);
+  }, [canonTopics, analysis, uploadedKeywords]);
+
+  // v7.353: audience-segment lens — same attribution as the Journey panel (Const II.7).
+  const topicBucket = useMemo(() => buildTopicSegmentMap(canonTopics, segments), [canonTopics, segments]);
+  const segTags = useMemo(() => buildSegTags(topicBucket, segments), [topicBucket, segments]);
+  const [activeSeg, setActiveSeg] = useState<string | null>(null);
+  // The plan this panel renders: the active segment's view (its exclusive topics +
+  // Shared, Wayne 2026-07-06) or the whole plan. Cards recompute via scopeOf — exact
+  // rollups of the rows shown (Const I.1).
+  const viewPlan = useMemo(
+    () => (plan && activeSeg && topicBucket.size ? filterPlanBySegment(plan, topicBucket, activeSeg) : plan),
+    [plan, activeSeg, topicBucket],
+  );
+
+  // v7.353: bulk select/unselect the CURRENTLY SHOWN topics (one full-set PUT — same
+  // persistence contract as toggleSelect, so rapid follow-up toggles chain via selRef).
+  const bulkSelect = (ids: string[], select: boolean) => {
+    const prev = new Set(selRef.current);
+    const next = new Set(selRef.current);
+    ids.forEach((id: string) => { if (select) next.add(id); else next.delete(id); });
+    selRef.current = next;
+    setSelectedIds(next);   // optimistic
+    setSavingIds((s: Set<string>) => { const n = new Set(s); ids.forEach((id: string) => n.add(id)); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => {
+        // Revert the whole bulk change so the UI never claims a save that didn't happen.
+        selRef.current = prev;
+        setSelectedIds(prev);
+      })
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); ids.forEach((id: string) => n.delete(id)); return n; }));
+  };
 
   const totalPagesPulled = pageMap?.pages?.length ?? 0;
   const hasUrlData  = totalPagesPulled > 0 || Object.keys(urlByKeyword).length > 0;
@@ -1406,12 +1447,28 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* v7.176: the redesigned, journey-fed content experience leads the panel. */}
       {plan && (
         <div style={{ marginBottom: 26 }}>
-          <ContentExplorer plan={plan} mode="content"
+          {/* v7.353: segment lens — same attribution as the Audience Journeys panel;
+              Shared topics show under every segment. Chip counts are real row counts. */}
+          {segments.length > 0 && topicBucket.size > 0 && (
+            <SegmentFilterBar
+              segments={segments}
+              active={activeSeg}
+              onChange={setActiveSeg}
+              countOf={(id: string | null) => {
+                if (!plan) return 0;
+                if (id === null) return plan.topics.length;
+                return filterPlanBySegment(plan, topicBucket, id).topics.length;
+              }}
+            />
+          )}
+          <ContentExplorer plan={viewPlan ?? plan} mode="content"
             selectable
             clientName={clientDomain || 'client'}
             selectedIds={selectedIds}
             savingIds={savingIds}
-            onToggleSelect={toggleSelect} />
+            topicSeg={segTags}
+            onToggleSelect={toggleSelect}
+            onBulkSelect={bulkSelect} />
         </div>
       )}
       </>

@@ -1035,6 +1035,26 @@ export function bucketForText(text: string, segTok: Array<{ id: string; toks: Se
   return bestScore > 0 && bestIds.length === 1 ? bestIds[0] : SHARED_BUCKET;
 }
 
+// v7.353: the ONE canonical-topic → segment attribution, shared by every read site
+// (Const II.7). This panel's per-segment slice AND the Content Map / Content Plan /
+// Scope segment lens (SegmentLens.tsx) all call THIS function, so a topic lands in
+// the same bucket on every panel. The signal is the topic's own real language — its
+// category path name, its product label and its keyword text — scored against each
+// segment's own audience language via the v7.170 exclusive partition. Never a
+// modeled split; ties and no-matches go to SHARED_BUCKET.
+export function buildCanonTopicSegmentMap(
+  topics: Array<{ id: string; parentName: string; product: string; keywords: Array<{ keyword: string }> }>,
+  segTok: Array<{ id: string; toks: Set<string> }>,
+): Map<string, string> {
+  const m = new Map<string, string>();
+  if (!topics || !topics.length || segTok.length === 0) return m;
+  for (const t of topics) {
+    const text = [t.parentName, t.product, ...t.keywords.map(k => k.keyword)].join(' ');
+    m.set(t.id, bucketForText(text, segTok));
+  }
+  return m;
+}
+
 /** Map every demand seed (theme) → a single bucket id: a segment.id or SHARED_BUCKET. */
 export function assignSeedSegments(universe: DemandUniverse, segments: AudienceSegment[]): Map<string, string> {
   const segTok = buildSegTokens(segments);
@@ -2960,15 +2980,12 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // category, its product label, and its keyword text) — never a modeled split.
   const canonicalMode = (canonicalTopics?.length ?? 0) > 0;
   const segTok = useMemo(() => buildSegTokens(segments), [segments]);
-  const canonTopicBucket = useMemo(() => {
-    const m = new Map<string, string>();
-    if (!canonicalTopics || segTok.length === 0) return m;
-    for (const t of canonicalTopics) {
-      const text = [t.parentName, t.product, ...t.keywords.map(k => k.keyword)].join(' ');
-      m.set(t.id, bucketForText(text, segTok));
-    }
-    return m;
-  }, [canonicalTopics, segTok]);
+  // v7.353: routed through the exported buildCanonTopicSegmentMap so the Content
+  // Map / Content Plan / Scope segment lens reuses this EXACT attribution (Const II.7).
+  const canonTopicBucket = useMemo(
+    () => buildCanonTopicSegmentMap(canonicalTopics ?? [], segTok),
+    [canonicalTopics, segTok],
+  );
   // The topics passed to the canonical view: all topics for "All Segments" (null), or
   // just the active persona's slice. When segments exist but the active bucket has no
   // topics, the view renders honest zeros (Const I.5) rather than disappearing.
