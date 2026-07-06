@@ -546,7 +546,12 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   const [scopeIds, setScopeIds] = useState<Set<string> | null>(null);
   const [addingScope, setAddingScope] = useState(false);
   const [justAdded, setJustAdded] = useState(false);       // transient "Added ✓" confirmation
-  const [briefHint, setBriefHint] = useState(false);       // Push to Brief Agent (wired later)
+  // v7.354: Push to Brief Agent is LIVE — builds a Word brief per article, zipped per
+  // audience segment, and downloads the bundle. Real progress while it builds (IV.2).
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [briefProgress, setBriefProgress] = useState<{ done: number; total: number } | null>(null);
+  const [briefDone, setBriefDone] = useState(false);       // transient "Downloaded ✓" confirmation
+  const [briefErr, setBriefErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) { setKwLoaded(true); return; }
@@ -680,6 +685,40 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .finally(() => setAddingScope(false));
   };
 
+  // v7.354: Push to Brief Agent — one Word doc per article, zipped per audience
+  // segment, one bundle download. Exports the FULL picked plan (the bundle is already
+  // organised by segment inside, so the active chip doesn't narrow it). Segment
+  // membership = the same v7.353 lens attribution; Shared articles ride into every
+  // segment's zip (Wayne 2026-07-06). The docx/jszip code is dynamic-imported so it
+  // never weighs down the initial page bundle.
+  const pushToBriefAgent = async () => {
+    if (briefBusy || !selectedPlan || selectedPlan.topics.length === 0) return;
+    setBriefErr(null);
+    setBriefDone(false);
+    setBriefBusy(true);
+    setBriefProgress({ done: 0, total: selectedPlan.topics.length });
+    try {
+      const mod = await import('@/lib/export/briefExport');
+      const canonById = new Map(canonTopics.map((t) => [t.id, t]));
+      const res = await mod.buildBriefBundle({
+        clientName: clientDomain || 'client',
+        topics: selectedPlan.topics,
+        canonById,
+        topicBucket,
+        segments: segments.map((s: any) => ({ id: String(s.id), name: String(s.name ?? 'Segment') })),
+        onProgress: (done: number, total: number) => setBriefProgress({ done, total }),
+      });
+      mod.downloadBundle(res);
+      setBriefDone(true);
+      setTimeout(() => setBriefDone(false), 3200);
+    } catch (e) {
+      setBriefErr(String((e as any)?.message ?? e));
+    } finally {
+      setBriefBusy(false);
+      setBriefProgress(null);
+    }
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px' }}>
       <div style={{ marginBottom: 16 }}>
@@ -717,16 +756,20 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
 
             <button
               type="button"
-              onClick={() => { setBriefHint(true); setTimeout(() => setBriefHint(false), 3200); }}
-              title="Hand the scoped briefs to the Brief Agent (coming soon)"
+              onClick={pushToBriefAgent}
+              disabled={briefBusy}
+              title="Download every article in this plan as a Word brief — bundled into one zip per audience segment"
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 7, cursor: briefBusy ? 'default' : 'pointer',
                 background: COL.purple, color: 'var(--c-08080f)', border: 'none', borderRadius: 9,
                 padding: '9px 16px', fontSize: 12.5, fontWeight: 700, letterSpacing: '0.01em',
+                opacity: briefBusy ? 0.75 : 1, transition: 'opacity 0.12s',
               }}
             >
-              <i className="ti ti-robot" style={{ fontSize: 15 }} />
-              Push to Brief Agent
+              <i className={`ti ${briefBusy ? 'ti-loader-2' : briefDone ? 'ti-check' : 'ti-robot'}`} style={{ fontSize: 15 }} />
+              {briefBusy
+                ? (briefProgress && briefProgress.total > 0 ? `Building briefs… ${briefProgress.done} of ${briefProgress.total}` : 'Building briefs…')
+                : briefDone ? 'Briefs downloaded' : 'Push to Brief Agent'}
             </button>
 
             {/* live scope status — reads in both themes (muted text on the page surface) */}
@@ -739,10 +782,18 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
           </div>
         )}
 
-        {briefHint && (
-          <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--c-9a9ac0)', background: 'var(--ca-167-139-250-0_12)', border: '1px solid var(--ca-167-139-250-0_2)', borderRadius: 8, padding: '8px 12px' }}>
-            <i className="ti ti-plug-connected" style={{ color: COL.purple }} />
-            Brief Agent hand-off isn&rsquo;t connected yet &mdash; your scope is saved and ready for it.
+        {/* v7.354: what the bundle contains — and an honest error strip if the build fails.
+            Red trio tokens are the same both-theme pair the drawer's competitive strip uses. */}
+        {briefDone && (
+          <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--c-77cc99)', background: 'var(--ca-52-211-153-0_05)', border: '1px solid var(--ca-52-211-153-0_2)', borderRadius: 8, padding: '8px 12px' }}>
+            <i className="ti ti-file-zip" />
+            Bundle downloaded &mdash; one zip per audience segment, one Word brief per article inside.
+          </div>
+        )}
+        {briefErr && (
+          <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--c-f87171)', background: 'var(--ca-248-113-113-0_05)', border: '1px solid var(--ca-248-113-113-0_2)', borderRadius: 8, padding: '8px 12px' }}>
+            <i className="ti ti-alert-triangle" />
+            Brief build failed &mdash; {briefErr}
           </div>
         )}
       </div>
