@@ -63,6 +63,8 @@ interface Project {
   excludedBrandsUpdatedAt?: string | null;
   scopeOverrides?:          Record<string, 'core' | 'adjacent'> | null;   // v7.326: scope-gate promote/demote
   scopeOverridesUpdatedAt?: string | null;
+  priorityOverrides?:          Record<string, 'P0' | 'P1' | 'P2' | 'P3'> | null;   // v7.358: manual priority moves
+  priorityOverridesUpdatedAt?: string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -338,11 +340,19 @@ export default function ProjectBriefPage() {
     () => ((project as any)?.scopeOverrides && typeof (project as any).scopeOverrides === 'object' ? (project as any).scopeOverrides : {}),
     [project],
   );
+  // v7.358: per-project manual priority moves (ContentTopic.id → P0..P3). Injected onto the
+  // snapshot as `_priorityOverrides` the same way as `_scopeOverrides`, so every panel's plan
+  // build applies the same moves from one source (Const II.7) — a move takes effect on the next
+  // render with no re-analysis.
+  const priorityOverrides = useMemo<Record<string, 'P0' | 'P1' | 'P2' | 'P3'>>(
+    () => ((project as any)?.priorityOverrides && typeof (project as any).priorityOverrides === 'object' ? (project as any).priorityOverrides : {}),
+    [project],
+  );
   const analysisForPanels = useMemo(
     () => (analysis
-      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides } }
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides, _priorityOverrides: priorityOverrides } }
       : analysis),
-    [analysis, brandTerms, excludedBrands, scopeOverrides],
+    [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides],
   );
 
   // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
@@ -1549,6 +1559,7 @@ export default function ProjectBriefPage() {
               analysis={analysisForPanels}
               competitors={competitorDomains}
               claudeAssigns={pageClaudeAssigns}
+              onPriorityChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}  // v7.358: a manual move → refetch project (new _priorityOverrides) so every panel re-scores
             />
           )}
 
