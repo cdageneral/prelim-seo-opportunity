@@ -446,11 +446,14 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   const [posFilter, setPosFilter] = useState<'all' | PosKey>('all');   // v7.249: SERP page filter
   const [pStatus, setPStatus] = useState<'all' | 'existing' | 'build'>('all');
   const [pPriority, setPPriority] = useState<'all' | Priority>('all');
-  // v7.357: Content Map — priority-tier filter (Step 2) + a group-by lens (funnel stage
-  // or search-demand). Priority cards mirror the Content Plan's; the lens groups the rows.
+  // v7.360: Content Map filter (Option C) — a dimension TAB strip, each tab showing one
+  // contextual chip row. Each dimension keeps its own filter value; the list is a flat set
+  // filtered by all active dimensions (AND). cFilter/posFilter/cPriority are reused as the
+  // status/rank/priority dimensions; funnelPick/demandPick are new.
   const [cPriority, setCPriority] = useState<'all' | Priority>('all');
-  const [groupBy, setGroupBy]     = useState<'none' | 'funnel' | 'demand'>('none');
-  const [groupPick, setGroupPick] = useState<string>('all');   // v7.358: which stage/demand group is selected in the lens chip row
+  const [dimTab, setDimTab]       = useState<'priority' | 'funnel' | 'demand' | 'rank' | 'status'>('priority');
+  const [funnelPick, setFunnelPick] = useState<'all' | string>('all');
+  const [demandPick, setDemandPick] = useState<'all' | DemandBucket>('all');
 
   const sc = plan.scope;
   const T = plan.topics;
@@ -471,30 +474,28 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   });
   const dl = (arr: ContentTopic[], segment: string) => exportSegmentXLSX(arr.map(ctRow), { clientName: cn, segment });
 
-  // v7.249: rows passing the summary-card filter, BEFORE the SERP-page filter — the
-  // page-bucket counts are taken from this subset so the chips reflect the active view.
-  const cFiltered = useMemo(() => T.filter((t: ContentTopic) =>
-    cFilter === 'all' ? true : cFilter === 'quickwin' ? t.quickWin : cFilter === 'existing' ? t.state === 'existing' : t.state !== 'existing'
-  ), [T, cFilter]);
-
-  const posCounts = useMemo(() => {
-    const c: Record<PosKey, number> = { p1: 0, p2: 0, p3: 0, p4: 0, unranked: 0 };
-    for (let i = 0; i < cFiltered.length; i++) c[posBucketOf(cFiltered[i].bestPosition)]++;
-    return c;
-  }, [cFiltered]);
-
-  // v7.356: one priority order, shared by BOTH row sorts (moved above contentRows so the
-  // Content-Map sort can reference it — no temporal-dead-zone). P0 → P1 → P2.
+  // v7.356: one priority order, shared by all row sorts. P0 → P1 → P2 → P3.
   const order: Record<Priority, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
-  // v7.356: the Content Map (mode="content") now sorts within priority tier by funnel
-  // proximity (distance asc) then real volume (desc) — same tiebreaker as the Content
-  // Plan — so the strongest, closest-to-conversion opportunities surface at the top of
-  // each tier instead of a pure volume sort that ignored intent (Wayne 2026-07-07).
-  const contentRows = useMemo(() => cFiltered
-    .filter((t: ContentTopic) => cPriority === 'all' || t.priority === cPriority)   // v7.357: priority-tier filter
-    .filter((t: ContentTopic) => posFilter === 'all' ? true : posBucketOf(t.bestPosition) === posFilter)
-    .slice().sort((a, b) => (order[a.priority] - order[b.priority]) || (a.distance - b.distance) || (b.totalVol - a.totalVol)), [cFiltered, posFilter, cPriority, order]);
+  // v7.360: the five Content-Map filter dimensions as predicates. The row list passes ALL
+  // active dimensions (AND); a dimension's own chip counts are faceted over the OTHER active
+  // dimensions so each chip shows what picking it would yield in the current context.
+  const dimPreds = useMemo(() => ({
+    status:   (t: ContentTopic) => cFilter === 'all' ? true : cFilter === 'quickwin' ? t.quickWin : cFilter === 'existing' ? t.state === 'existing' : t.state !== 'existing',
+    priority: (t: ContentTopic) => cPriority === 'all' || t.priority === cPriority,
+    rank:     (t: ContentTopic) => posFilter === 'all' ? true : posBucketOf(t.bestPosition) === posFilter,
+    funnel:   (t: ContentTopic) => funnelPick === 'all' || t.stage === funnelPick,
+    demand:   (t: ContentTopic) => demandPick === 'all' || demandBucketOf(t.totalVol, dStats) === demandPick,
+  }), [cFilter, cPriority, posFilter, funnelPick, demandPick, dStats]);
+
+  // Topics passing every OTHER dimension except `except` — the base set a dimension's chips
+  // count over (faceted). Pass 'none' to apply all dimensions.
+  const facet = (except: string) => T.filter((t: ContentTopic) =>
+    (Object.keys(dimPreds) as Array<keyof typeof dimPreds>).every((k) => k === except || dimPreds[k](t)));
+
+  const contentRows = useMemo(() => facet('none')
+    .slice().sort((a, b) => (order[a.priority] - order[b.priority]) || (a.distance - b.distance) || (b.totalVol - a.totalVol)),
+    [T, dimPreds, order]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const planRows = useMemo(() => T.filter((t: ContentTopic) => {
     const s = pStatus === 'all' || (pStatus === 'existing' ? t.state === 'existing' : t.state !== 'existing');
@@ -503,33 +504,44 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   }).slice().sort((a, b) => (order[a.priority] - order[b.priority]) || (a.distance - b.distance) || (b.totalVol - a.totalVol)), [T, pStatus, pPriority]);
 
   const rows = mode === 'content' ? contentRows : planRows;
-
-  // v7.357: Content Map lens — group the SHOWN rows by funnel stage or by search-demand
-  // bucket. null = flat list (unchanged). Empty groups are dropped so headers only show
-  // where there is content. Row order within a group keeps the priority→distance→volume sort.
-  const groups = useMemo(() => {
-    if (mode !== 'content' || groupBy === 'none') return null;
-    if (groupBy === 'funnel') {
-      return STAGE_ORDER
-        .map((st) => ({ key: st, label: STAGE_LABEL[st] ?? st, color: stageColor[st] ?? COL.mut, rows: rows.filter((t) => t.stage === st) }))
-        .filter((g) => g.rows.length);
-    }
-    return (['high', 'med', 'low'] as DemandBucket[])
-      .map((b) => ({ key: b, label: DEMAND_LABEL[b], color: demandColor[b] ?? COL.mut, rows: rows.filter((t) => demandBucketOf(t.totalVol, dStats) === b) }))
-      .filter((g) => g.rows.length);
-  }, [mode, groupBy, rows, dStats]);
-
-  // v7.358: the rows actually VISIBLE — respects a picked lens chip so "N topics", the
-  // Select-all-shown and Clear-all controls all act on exactly what's on screen.
-  const shownRows = useMemo(
-    () => ((groups && groupPick !== 'all') ? (groups.find((g) => g.key === groupPick)?.rows ?? []) : rows),
-    [groups, groupPick, rows],
-  );
+  const shownRows = rows;   // v7.360: no grouping — the flat filtered list IS what's shown
 
   // v7.355: cancel a pending Clear-all confirm if the visible set changes underfoot.
   useEffect(() => { setConfirmClear(false); }, [mode, shownRows.length]);
-  // v7.358: reset the lens group pick whenever the lens itself changes.
-  useEffect(() => { setGroupPick('all'); }, [groupBy]);
+
+  // v7.360: build the chip row for the active dimension tab — All + each value, count and
+  // volume faceted over the other active filters, with an Excel download per chip.
+  const activeDimChips = useMemo(() => {
+    if (mode !== 'content') return null;
+    const base = facet(dimTab);   // topics passing the OTHER dimensions
+    const sum = (arr: ContentTopic[]) => arr.reduce((s, t) => s + t.totalVol, 0);
+    const chip = (key: string, label: string, color: string, sub: ContentTopic[]) => ({ key, label, color, count: sub.length, vol: sum(sub), rows: sub });
+    const cast = (f: (v: any) => void) => f as (v: string) => void;
+    const spec = dimTab === 'priority' ? { current: cPriority as string, set: cast(setCPriority), label: 'Priority',
+        items: (['P0', 'P1', 'P2', 'P3'] as Priority[]).map((p) => chip(p, `${p} · ${PRIORITY_LABEL[p]}`, priColor[p], base.filter((t) => t.priority === p))) }
+      : dimTab === 'status' ? { current: cFilter as string, set: cast(setCFilter), label: 'Status',
+        items: [chip('existing', 'Optimise', COL.green, base.filter((t) => t.state === 'existing')),
+                chip('build', 'Build net-new', COL.orange, base.filter((t) => t.state !== 'existing')),
+                chip('quickwin', 'Quick wins', COL.amber, base.filter((t) => t.quickWin))] }
+      : dimTab === 'rank' ? { current: posFilter as string, set: cast(setPosFilter), label: 'Where you rank',
+        items: (['p1', 'p2', 'p3', 'p4', 'unranked'] as PosKey[]).map((k) => chip(k, PAGE_META[k].label, PAGE_META[k].color, base.filter((t) => posBucketOf(t.bestPosition) === k))) }
+      : dimTab === 'funnel' ? { current: funnelPick as string, set: cast(setFunnelPick), label: 'Funnel stage',
+        items: STAGE_ORDER.map((st) => chip(st, STAGE_LABEL[st] ?? st, stageColor[st] ?? COL.mut, base.filter((t) => t.stage === st))) }
+      : { current: demandPick as string, set: cast(setDemandPick), label: 'Search demand',
+        items: (['high', 'med', 'low'] as DemandBucket[]).map((b) => chip(b, DEMAND_LABEL[b], demandColor[b] ?? COL.mut, base.filter((t) => demandBucketOf(t.totalVol, dStats) === b))) };
+    return { ...spec, allRows: base, allVol: sum(base) };
+  }, [mode, dimTab, cPriority, cFilter, posFilter, funnelPick, demandPick, dimPreds, dStats]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v7.360: active (non-"all") dimension filters, for the summary/clear row.
+  const activeFilters = mode === 'content' ? [
+    cPriority !== 'all' ? { d: 'priority', label: `${cPriority} · ${PRIORITY_LABEL[cPriority as Priority]}`, clear: () => setCPriority('all') } : null,
+    cFilter !== 'all' ? { d: 'status', label: cFilter === 'quickwin' ? 'Quick wins' : cFilter === 'existing' ? 'Optimise' : 'Build net-new', clear: () => setCFilter('all') } : null,
+    posFilter !== 'all' ? { d: 'rank', label: PAGE_META[posFilter as PosKey].label, clear: () => setPosFilter('all') } : null,
+    funnelPick !== 'all' ? { d: 'funnel', label: STAGE_LABEL[funnelPick] ?? funnelPick, clear: () => setFunnelPick('all') } : null,
+    demandPick !== 'all' ? { d: 'demand', label: DEMAND_LABEL[demandPick as DemandBucket], clear: () => setDemandPick('all') } : null,
+  ].filter(Boolean) as Array<{ d: string; label: string; clear: () => void }> : [];
+  const clearAllDims = () => { setCPriority('all'); setCFilter('all'); setPosFilter('all'); setFunnelPick('all'); setDemandPick('all'); };
+
   const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}`}</style>;
 
   return (
@@ -537,66 +549,39 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       {styleTag}
       {mode === 'content' ? (
         <>
-        <StepHeader n={2} title="Filter &amp; focus" hint="Narrow by status, priority tier, or where you rank — then group the list by funnel stage or search demand." />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, margin: '14px 0 16px' }}>
-          <FCard active={cFilter === 'all'} onClick={() => setCFilter('all')} label="All topics" icon="ti-stack-2" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo total demand`} color="var(--c-c8c8e8)" onDownload={() => dl(T, 'All topics')}>
-            <div style={{ height: 6, borderRadius: 3, background: COL.line, overflow: 'hidden', marginTop: 10, display: 'flex' }}>
-              <div style={{ width: `${sc.totalVol ? (sc.existingVol / sc.totalVol) * 100 : 0}%`, background: COL.green }} />
-              <div style={{ width: `${sc.totalVol ? (sc.buildVol / sc.totalVol) * 100 : 0}%`, background: COL.orange }} />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginTop: 5 }}>
-              <span style={{ color: COL.green }}>{sc.existing} existing</span><span style={{ color: COL.orange }}>{sc.build} net-new</span>
-            </div>
-          </FCard>
-          <FCard active={cFilter === 'existing'} onClick={() => setCFilter('existing')} label="Existing → optimise" icon="ti-refresh" val={sc.existing} sub={`${fmtVol(sc.existingVol)}/mo · pages you have`} color={COL.green} onDownload={() => dl(T.filter((t) => t.state === 'existing'), 'Existing optimise')} />
-          <FCard active={cFilter === 'build'} onClick={() => setCFilter('build')} label="Net-new → build" icon="ti-pencil-plus" val={sc.build} sub={`${fmtVol(sc.buildVol)}/mo · pages to create`} color={COL.orange} onDownload={() => dl(T.filter((t) => t.state !== 'existing'), 'Net-new build')} />
-          <FCard active={cFilter === 'quickwin'} onClick={() => setCFilter('quickwin')} label="Quick wins" icon="ti-bolt" val={sc.quickWins} sub={`${fmtVol(sc.quickWinVol)}/mo · fast ROI`} color={COL.amber} onDownload={() => dl(T.filter((t) => t.quickWin), 'Quick wins')} />
+        <StepHeader n={2} title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match." />
+        {/* v7.360 (Option C): dimension tabs → one contextual chip row. */}
+        <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', borderBottom: `1px solid ${COL.line}`, margin: '14px 0 0' }}>
+          {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
+            const on = dimTab === d;
+            const n = activeFilters.filter((f) => f.d === d).length;
+            return (
+              <button key={d} type="button" onClick={() => setDimTab(d)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: 'transparent', border: 'none', borderBottom: `2px solid ${on ? COL.cyan : 'transparent'}`, color: on ? COL.cyan : COL.mut, fontSize: 12, fontWeight: 700, padding: '8px 12px' }}>
+                <i className={`ti ${icon}`} style={{ fontSize: 14 }} />{label}
+                {n > 0 && <span style={{ width: 6, height: 6, borderRadius: '50%', background: COL.cyan }} />}
+              </button>
+            );
+          })}
         </div>
-        {/* v7.357: priority-tier filter cards (P0–P3). Counts are whole-plan rollups (sc.pN). */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, margin: '0 0 16px' }}>
-          <FCard active={cPriority === 'all'} onClick={() => setCPriority('all')} label="All priorities" icon="ti-list" val={sc.total} sub={`${fmtVol(sc.totalVol)}/mo`} color="var(--c-c8c8e8)" onDownload={() => dl(T, 'All priorities')} />
-          <FCard active={cPriority === 'P0'} onClick={() => setCPriority('P0')} label="P0 · Do first" val={sc.p0} sub={`${fmtVol(sc.p0Vol)}/mo`} color={priColor.P0} onDownload={() => dl(T.filter((t) => t.priority === 'P0'), 'P0 Do first')} />
-          <FCard active={cPriority === 'P1'} onClick={() => setCPriority('P1')} label="P1 · Next" val={sc.p1} sub={`${fmtVol(sc.p1Vol)}/mo`} color={priColor.P1} onDownload={() => dl(T.filter((t) => t.priority === 'P1'), 'P1 Next')} />
-          <FCard active={cPriority === 'P2'} onClick={() => setCPriority('P2')} label="P2 · Later" val={sc.p2} sub={`${fmtVol(sc.p2Vol)}/mo`} color={priColor.P2} onDownload={() => dl(T.filter((t) => t.priority === 'P2'), 'P2 Later')} />
-          <FCard active={cPriority === 'P3'} onClick={() => setCPriority('P3')} label="P3 · Backlog" val={sc.p3} sub={`${fmtVol(sc.p3Vol)}/mo`} color={priColor.P3} onDownload={() => dl(T.filter((t) => t.priority === 'P3'), 'P3 Backlog')} />
-        </div>
-        {/* v7.357: group-by lens — flat list, by funnel stage, or by search demand (High/Med/Low). */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
-          <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <i className="ti ti-layout-list" /> View
-          </span>
-          {(([['none', 'Flat list', 'ti-list'], ['funnel', 'By funnel stage', 'ti-filter-cog'], ['demand', 'By search demand', 'ti-chart-bar']]) as Array<['none' | 'funnel' | 'demand', string, string]>).map(([g, label, icon]) => (
-            <button key={g} type="button" onClick={() => setGroupBy(g)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 7, padding: '5px 11px', fontSize: 11, fontWeight: 700,
-              border: `1px solid ${groupBy === g ? COL.cyan : COL.line}`, background: groupBy === g ? 'var(--ca-34-211-238-0_1)' : 'transparent', color: groupBy === g ? COL.cyan : COL.mut }}>
-              <i className={`ti ${icon}`} style={{ fontSize: 13 }} />{label}
-            </button>
-          ))}
-        </div>
-        {/* v7.358: lens group chips — one per funnel stage / demand bucket, each with its topic
-            count, monthly volume, and an Excel download (like "Where you rank"). Selecting one
-            filters the list to that group (Wayne 2026-07-07). */}
-        {groupBy !== 'none' && groups && groups.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
-            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <i className={`ti ${groupBy === 'funnel' ? 'ti-filter-cog' : 'ti-chart-bar'}`} /> {groupBy === 'funnel' ? 'Funnel stage' : 'Search demand'}
-            </span>
-            <PChip active={groupPick === 'all'} onClick={() => setGroupPick('all')} label="All" count={rows.length} sub={fmtVol(rows.reduce((s, t) => s + t.totalVol, 0))} color="var(--c-c8c8e8)" onDownload={() => dl(rows, groupBy === 'funnel' ? 'All stages' : 'All demand')} />
-            {groups.map((g) => (
-              <PChip key={g.key} active={groupPick === g.key} onClick={() => setGroupPick(g.key)} label={g.label} count={g.rows.length} sub={fmtVol(g.rows.reduce((s, t) => s + t.totalVol, 0))} color={g.color} onDownload={() => dl(g.rows, g.label)} />
+        {activeDimChips && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '14px 0 12px' }}>
+            <PChip active={activeDimChips.current === 'all'} onClick={() => activeDimChips.set('all')} label="All" count={activeDimChips.allRows.length} sub={fmtVol(activeDimChips.allVol)} color="var(--c-c8c8e8)" onDownload={() => dl(activeDimChips.allRows, `All ${activeDimChips.label}`)} />
+            {activeDimChips.items.map((it) => (
+              <PChip key={it.key} active={activeDimChips.current === it.key} onClick={() => activeDimChips.set(activeDimChips.current === it.key ? 'all' : it.key)} label={it.label} count={it.count} sub={fmtVol(it.vol)} color={it.color} onDownload={() => dl(it.rows, `${activeDimChips.label} ${it.label}`)} />
             ))}
           </div>
         )}
-        {/* v7.249: SERP-page filter — bucket pages by the client's real best Semrush position */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
-          <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <i className="ti ti-trophy" /> Where you rank
-          </span>
-          <PChip active={posFilter === 'all'} onClick={() => setPosFilter('all')} label="All" count={cFiltered.length} color="var(--c-c8c8e8)" onDownload={() => dl(cFiltered, 'All ranks')} />
-          {(['p1', 'p2', 'p3', 'p4', 'unranked'] as PosKey[]).map((k) => (
-            <PChip key={k} active={posFilter === k} onClick={() => setPosFilter(k)} label={PAGE_META[k].label} count={posCounts[k]} color={PAGE_META[k].color}
-              onDownload={() => dl(cFiltered.filter((t) => posBucketOf(t.bestPosition) === k), `Where you rank ${PAGE_META[k].label}`)} />
-          ))}
-        </div>
+        {activeFilters.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 14px' }}>
+            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim }}>Filters</span>
+            {activeFilters.map((f) => (
+              <button key={f.d} type="button" onClick={f.clear} title="Remove this filter" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10.5, fontWeight: 700, color: COL.cyan, background: 'var(--ca-34-211-238-0_08)', border: `1px solid ${COL.cyan}55`, borderRadius: 999, padding: '3px 9px' }}>
+                {f.label}<i className="ti ti-x" style={{ fontSize: 12 }} />
+              </button>
+            ))}
+            <button type="button" onClick={clearAllDims} style={{ fontSize: 11, color: COL.mut, background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
+          </div>
+        )}
         </>
       ) : (
         <>
@@ -676,10 +661,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         {mode === 'plan' && (pStatus !== 'all' || pPriority !== 'all') && (
           <button onClick={() => { setPStatus('all'); setPPriority('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
-        {mode === 'content' && (cFilter !== 'all' || posFilter !== 'all' || cPriority !== 'all' || groupBy !== 'none') && (
-          <button onClick={() => { setCFilter('all'); setPosFilter('all'); setCPriority('all'); setGroupBy('none'); setGroupPick('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
-        )}
-        <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>Cards filter · click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
+        <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>{mode === 'plan' ? 'Cards filter · ' : 'Tabs filter · '}click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
       </div>
 
       {/* column header */}
@@ -706,18 +688,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             onMovePriority={onMovePriority} />
         );
         if (!rows.length) return <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>;
-        // v7.357: grouped by the Step-2 lens (funnel stage or search demand), else flat.
-        // v7.358: when a lens chip is picked, show only that group.
-        if (groups) return groups.filter((g) => groupPick === 'all' || g.key === groupPick).map((g) => (
-          <div key={g.key} style={{ marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 15px 6px' }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: g.color, flexShrink: 0 }} />
-              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase' as const, color: g.color }}>{g.label}</span>
-              <span style={{ fontSize: 10.5, color: COL.mut }}>{g.rows.length} · {fmtVol(g.rows.reduce((s: number, t: ContentTopic) => s + t.totalVol, 0))}/mo</span>
-            </div>
-            {g.rows.map(renderRow)}
-          </div>
-        ));
+        // v7.360: flat filtered list (Option C — dimension tabs replace grouping).
         return rows.map(renderRow);
       })()}
 
