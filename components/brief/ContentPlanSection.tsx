@@ -344,7 +344,7 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, clientName, topicSeg, onBulkSelect }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, onBulkRemove, clientName, topicSeg, onBulkSelect }: {
   plan: ContentPlan; mode: 'content' | 'plan';
   clientName?: string;   // v7.328: filename stem for per-segment XLSX exports
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
@@ -353,6 +353,10 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   // v7.261: opt-in remove control (used only by the Content Plan destination). The × on a
   // row deselects that topic, removing it from the plan and freeing its Content Map checkbox.
   removable?: boolean; onRemove?: (id: string) => void;
+  // v7.355: opt-in bulk clear (Content Plan only) — one button removes every SHOWN
+  // topic from the plan in a single full-set PUT (Wayne 2026-07-06). Same persistence
+  // path as the row ×, just applied to every row the current filters show at once.
+  onBulkRemove?: (ids: string[]) => void;
   // v7.353: topic.id → audience-segment tag (same attribution the Journey panel stores) —
   // renders a small segment chip on every row so the association reads on each panel.
   topicSeg?: Map<string, SegTag>;
@@ -361,6 +365,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   onBulkSelect?: (ids: string[], select: boolean) => void;
 }) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);   // v7.355: two-click guard on Clear all
   const [cFilter, setCFilter] = useState<'all' | 'existing' | 'build' | 'quickwin'>('all');
   const [posFilter, setPosFilter] = useState<'all' | PosKey>('all');   // v7.249: SERP page filter
   const [pStatus, setPStatus] = useState<'all' | 'existing' | 'build'>('all');
@@ -406,6 +411,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   }).slice().sort((a, b) => (order[a.priority] - order[b.priority]) || (a.distance - b.distance) || (b.totalVol - a.totalVol)), [T, pStatus, pPriority]);
 
   const rows = mode === 'content' ? contentRows : planRows;
+  // v7.355: cancel a pending Clear-all confirm if the visible set changes underfoot.
+  useEffect(() => { setConfirmClear(false); }, [mode, rows.length]);
   const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}`}</style>;
 
   return (
@@ -491,6 +498,27 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         <span style={{ fontSize: 11.5, color: COL.mut }}>
           <b style={{ color: COL.txt2 }}>{rows.length}</b> topics · <b style={{ color: COL.txt2 }}>{fmtVol(rows.reduce((s, t) => s + t.totalVol, 0))}/mo</b>
         </span>
+        {/* v7.355: Clear all — one click removes every SHOWN topic from the plan (bulk ×).
+            Two-click guard so a stray click can't wipe the plan; the red trio is the same
+            both-theme pair the drawer's competitor strip and the brief-error strip use
+            (legible light + dark, Const IV.6). Content Plan only (removable + onBulkRemove). */}
+        {removable && onBulkRemove && rows.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (confirmClear) { onBulkRemove(rows.map((t: ContentTopic) => t.id)); setConfirmClear(false); }
+              else { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3500); }
+            }}
+            title={confirmClear ? 'Click again to remove all shown topics from the plan' : 'Remove every topic shown here from the plan'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+              background: confirmClear ? 'var(--ca-248-113-113-0_2)' : 'var(--ca-248-113-113-0_05)',
+              border: '1px solid var(--ca-248-113-113-0_2)', color: COL.red,
+              borderRadius: 7, padding: '4px 10px', fontSize: 11, fontWeight: 700 }}
+          >
+            <i className={`ti ${confirmClear ? 'ti-alert-triangle' : 'ti-trash'}`} style={{ fontSize: 13 }} />
+            {confirmClear ? `Confirm — clear all (${rows.length})` : `Clear all (${rows.length})`}
+          </button>
+        )}
         {mode === 'plan' && (pStatus !== 'all' || pPriority !== 'all') && (
           <button onClick={() => { setPStatus('all'); setPPriority('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
@@ -648,6 +676,27 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
       .catch(() => setSelectedIds((c: Set<string> | null) => { const n = new Set(c ?? []); n.add(id); return n; }))
       .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); n.delete(id); return n; }));
+  };
+
+  // v7.355: Clear all — remove every SHOWN topic from the plan in ONE full-set PUT (the
+  // bulk sibling of removeSelection). Optimistic with revert; prunes the same ids from the
+  // Scope cart so "N in scope" stays honest (scope ⊆ plan, v7.269). Persists to the same
+  // /content-plan endpoint, so the Content Map re-reads the shrunk selection on its next mount.
+  const clearFromPlan = (ids: string[]) => {
+    const cur = selectedIds ?? new Set<string>();
+    const drop = ids.filter((id) => cur.has(id));
+    if (drop.length === 0) return;
+    const next = new Set(cur); drop.forEach((id) => next.delete(id));
+    setSelectedIds(next);   // optimistic
+    setScopeIds((sc: Set<string> | null) => { if (!sc) return sc; const n = new Set(sc); drop.forEach((id) => n.delete(id)); return n; });
+    const arr = Array.from(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); drop.forEach((id) => n.add(id)); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: arr }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => setSelectedIds((c: Set<string> | null) => { const n = new Set(c ?? []); drop.forEach((id) => n.add(id)); return n; }))
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); drop.forEach((id) => n.delete(id)); return n; }));
   };
 
   // v7.267: every topic id currently resolved into the plan (existing + net-new, all
@@ -839,7 +888,8 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
             clientName={clientDomain || 'client'}
             savingIds={savingIds}
             topicSeg={segTags}
-            onRemove={removeSelection} />
+            onRemove={removeSelection}
+            onBulkRemove={clearFromPlan} />
         </>
       )}
     </div>
