@@ -1382,6 +1382,28 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     return planFromSnapshot(analysis, uploadedKeywords, { brandTerms, priorityOverrides: priOverrides });
   }, [canonTopics, analysis, uploadedKeywords, clientDomain, priOverrides]);
 
+  // v7.362: heal orphaned selections. The saved content-plan selection is keyed by
+  // ContentTopic.id; after a re-analysis that regenerates the taxonomy, ids saved under the
+  // OLD taxonomy no longer match any current topic — they can't render a checked row, but
+  // they still counted toward "N selected" (Wayne saw "2 selected" with nothing checked).
+  // Once the canonical topics resolve, prune any selected id not in the current set and
+  // persist the healed selection so the count is honest here, in the Content Plan, and in
+  // Scope (scope ⊆ plan, pruned by the same PUT route). Never runs while canonTopics is
+  // still empty (would wipe a valid selection).
+  useEffect(() => {
+    if (!projectId || canonTopics.length === 0) return;
+    const valid = new Set<string>(canonTopics.map((t: any) => String(t.id)));
+    const cur = selRef.current;
+    if (cur.size === 0) return;
+    const pruned = new Set<string>(Array.from(cur).filter((id) => valid.has(id)));
+    if (pruned.size === cur.size) return;   // nothing orphaned
+    selRef.current = pruned;
+    setSelectedIds(pruned);
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(pruned) }),
+    }).catch(() => { /* best-effort heal — the UI is already corrected */ });
+  }, [projectId, canonTopics, selectedIds]);
+
   // v7.353: audience-segment lens — same attribution as the Journey panel (Const II.7).
   const topicBucket = useMemo(() => buildTopicSegmentMap(canonTopics, segments), [canonTopics, segments]);
   const segTags = useMemo(() => buildSegTags(topicBucket, segments), [topicBucket, segments]);
