@@ -185,11 +185,12 @@ function RemoveBtn({ saving, onRemove }: { saving: boolean; onRemove: () => void
   );
 }
 
-function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onRemove, seg }: {
+function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onRemove, seg, onMovePriority }: {
   t: ContentTopic; onOpen: (t: ContentTopic) => void;
   selectable?: boolean; selected?: boolean; saving?: boolean; onToggle?: (id: string) => void;
   removable?: boolean; onRemove?: (id: string) => void;
   seg?: SegTag;   // v7.353: audience-segment tag (same attribution as the Journey panel)
+  onMovePriority?: (id: string, pri: Priority | null) => void;   // v7.359: inline priority move (Content Map)
 }) {
   const col = stateColor[t.state];
   const pri = priColor[t.priority];
@@ -204,7 +205,8 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
         : removable
           ? <RemoveBtn saving={!!saving} onRemove={() => onRemove && onRemove(t.id)} />
           : null}
-      <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: COL.txt2, display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
           {t.kind === 'core' && <span style={{ color: COL.purple }}>★</span>}{t.name}
           {/* v7.250: open the mapped existing page inline (does not open the detail drawer) */}
@@ -228,6 +230,26 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
             </span>
           )}
         </div>
+        </div>
+        {/* v7.359: inline priority move — same action as the drawer, in the row's open space
+            (Wayne 2026-07-07). Clicking the current manual tier resets it to auto. */}
+        {onMovePriority && (
+          <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' as const, color: COL.dim, marginRight: 2 }}>Move</span>
+            {(['P0', 'P1', 'P2', 'P3'] as Priority[]).map((p) => {
+              const active = t.priority === p;
+              return (
+                <button key={p} type="button"
+                  title={active && t.manual ? `Reset ${p} to auto` : `Move to ${p} · ${PRIORITY_LABEL[p]}`}
+                  onClick={(e) => { e.stopPropagation(); onMovePriority(t.id, (active && t.manual) ? null : p); }}
+                  style={{ cursor: 'pointer', fontSize: 9, fontWeight: 800, borderRadius: 5, padding: '3px 7px', lineHeight: 1,
+                    border: `1px solid ${active ? priColor[p] : COL.line}`, background: active ? `${priColor[p]}22` : 'transparent', color: active ? priColor[p] : COL.mut }}>
+                  {p}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <div className="ovHide"><DistMeter d={t.distance} /></div>
       <div className="ovHide"><span title={t.manual ? 'Manually set priority (v7.358)' : undefined} style={{ fontSize: 9.5, fontWeight: 700, color: pri, background: `${pri}1a`, border: `1px solid ${pri}55`, borderRadius: 5, padding: '3px 0', textAlign: 'center', display: 'block' }}>{t.priority}{t.manual ? ' ✎' : ''}</span></div>
@@ -680,7 +702,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             onToggle={onToggleSelect}
             removable={removable}
             onRemove={onRemove}
-            seg={topicSeg?.get(t.id)} />
+            seg={topicSeg?.get(t.id)}
+            onMovePriority={onMovePriority} />
         );
         if (!rows.length) return <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>;
         // v7.357: grouped by the Step-2 lens (funnel stage or search demand), else flat.
