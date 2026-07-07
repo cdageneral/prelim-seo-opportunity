@@ -24,7 +24,7 @@ import type { JourneyGraph, GraphNode, GraphEdge, SupportType, NodeState } from 
 import { SUPPORT_LABEL, buildJourneyGraph } from './graph';
 import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';
 
-export type Priority = 'P0' | 'P1' | 'P2';
+export type Priority = 'P0' | 'P1' | 'P2' | 'P3';   // v7.357: P3 = Backlog (4th tier, Wayne 2026-07-07)
 
 export interface InternalLink { name: string; dir: 'from' | 'to'; why: string; }
 export interface Brief {
@@ -75,6 +75,7 @@ export interface ContentPlan {
     p0: number; p0Vol: number;
     p1: number; p1Vol: number;
     p2: number; p2Vol: number;
+    p3: number; p3Vol: number;   // v7.357: Backlog tier
   };
 }
 
@@ -90,6 +91,7 @@ export function scopeOf(topics: ContentTopic[]): ContentPlan['scope'] {
   const p0 = topics.filter((t) => t.priority === 'P0');
   const p1 = topics.filter((t) => t.priority === 'P1');
   const p2 = topics.filter((t) => t.priority === 'P2');
+  const p3 = topics.filter((t) => t.priority === 'P3');
   return {
     total: topics.length, totalVol: sum(topics),
     existing: existing.length, existingVol: sum(existing),
@@ -98,6 +100,7 @@ export function scopeOf(topics: ContentTopic[]): ContentPlan['scope'] {
     p0: p0.length, p0Vol: sum(p0),
     p1: p1.length, p1Vol: sum(p1),
     p2: p2.length, p2Vol: sum(p2),
+    p3: p3.length, p3Vol: sum(p3),
   };
 }
 
@@ -163,16 +166,19 @@ export function brandTermsOf(clientDomain: string, snapshot: any): string[] {
 export interface TopicScore { distance: number; priority: Priority; quickWin: boolean; }
 
 // ONE scoring definition, shared by BOTH plan builders so the graph path and the
-// canonical-topic path can never diverge (Const II.7). Rules:
-//  • pre-product            → distance 4 (awareness) / 3 (deeper); P1 only when a
-//                             researching-stage topic has high demand, else P2.
-//  • brand-related product  → distance 1; P0 with real demand, else P1 (easy-to-win,
-//                             low-effort — Wayne 2026-07-07).
-//  • decision (lower funnel)→ distance 1; P0 with real demand, else P1.
-//  • consideration/retention→ distance 2; P0 when high-demand, else P1.
-//  • awareness (product)    → distance 3; P1 when high-demand, else P2.
-// quick-win is unchanged in spirit: a competitor gap close to conversion (distance ≤ 2)
-// with high demand.
+// canonical-topic path can never diverge (Const II.7).
+//
+// v7.357 — FOUR priority tiers (Wayne 2026-07-07). Priority = funnel proximity × demand,
+// where "above median" (this project's own median topic volume) is the demand gate:
+//  • P0 Do first : brand OR decision with real demand; consideration/retention above median.
+//  • P1 Next     : brand/decision with zero demand; consideration/retention below median;
+//                  product-awareness above median.
+//  • P2 Later    : product-awareness below median; pre-product above median.
+//  • P3 Backlog  : pre-product below median (farthest from conversion + thin demand).
+// Distance (the 4-dot meter) stays a separate funnel-proximity ordinal: brand/decision = 1,
+// consideration/retention = 2, product-awareness = 3, pre-product = 4 (researching = 3).
+// quick-win = a competitor gap close to conversion (distance ≤ 2) that is above median.
+// Everything is an ordinal from stored stage + the exact volume rollup (Const I.1) — nothing modeled.
 export function scoreTopic(input: {
   lane: 'product' | 'pre-product';
   stage: FunnelStage;
@@ -181,29 +187,50 @@ export function scoreTopic(input: {
   state: NodeState;
   median: number;
 }): TopicScore {
-  const highDemand = input.totalVol >= input.median && input.totalVol > 0;
-  const hasDemand  = input.totalVol > 0;
+  const aboveMedian = input.totalVol > input.median && input.totalVol > 0;
+  const hasDemand   = input.totalVol > 0;
+  const lowerFunnel = input.brandRelated || input.stage === 'decision';   // brand + decision
+  // distance meter (funnel proximity)
   let distance: number;
+  if (input.lane === 'pre-product') distance = input.stage === 'awareness' ? 4 : 3;
+  else if (lowerFunnel) distance = 1;
+  else if (input.stage === 'consideration' || input.stage === 'retention') distance = 2;
+  else distance = 3;                                                       // product awareness
+  // priority tier (4)
   let priority: Priority;
   if (input.lane === 'pre-product') {
-    distance = input.stage === 'awareness' ? 4 : 3;
-    priority = (distance === 3 && highDemand) ? 'P1' : 'P2';
-  } else if (input.brandRelated) {
-    distance = 1;                     // brand = high-intent, low-effort win
-    priority = hasDemand ? 'P0' : 'P1';
-  } else if (input.stage === 'decision') {
-    distance = 1;                     // lower funnel, highest intent to convert
+    priority = aboveMedian ? 'P2' : 'P3';
+  } else if (lowerFunnel) {
     priority = hasDemand ? 'P0' : 'P1';
   } else if (input.stage === 'consideration' || input.stage === 'retention') {
-    distance = 2;
-    priority = highDemand ? 'P0' : 'P1';
-  } else {
-    distance = 3;                     // product awareness (top of funnel)
-    priority = highDemand ? 'P1' : 'P2';
+    priority = aboveMedian ? 'P0' : 'P1';
+  } else {                                                                 // product awareness
+    priority = aboveMedian ? 'P1' : 'P2';
   }
-  const quickWin = input.state === 'competitor' && distance <= 2 && highDemand;
+  const quickWin = input.state === 'competitor' && distance <= 2 && aboveMedian;
   return { distance, priority, quickWin };
 }
+
+// ─── v7.357: search-demand buckets (High / Med / Low) — median split + top-decile ───
+// Wayne's choice (2026-07-07): Low = at/below this project's median topic volume, Med =
+// above median, High = top ~10% (90th-percentile outliers). Pure ordinals over the exact
+// volume rollup (Const I.1) — nothing modeled. Used by the Content Map's demand view; the
+// priority tiers above use the same median gate so the two lenses stay consistent.
+export type DemandBucket = 'high' | 'med' | 'low';
+export interface DemandStats { median: number; p90: number; }
+export function demandStatsOf(vols: number[]): DemandStats {
+  const s = vols.filter((v) => v > 0).slice().sort((a, b) => a - b);
+  if (!s.length) return { median: 0, p90: 0 };
+  const median = s[Math.floor(s.length / 2)];
+  const p90    = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
+  return { median, p90 };
+}
+export function demandBucketOf(vol: number, stats: DemandStats): DemandBucket {
+  if (vol >= stats.p90 && stats.p90 > 0) return 'high';
+  if (vol > stats.median) return 'med';
+  return 'low';
+}
+export const DEMAND_LABEL: Record<DemandBucket, string> = { high: 'High volume', med: 'Med volume', low: 'Low volume' };
 
 // SERP-feature targets from the topic's keyword signals (transparent heuristics).
 function serpTargets(kws: { keyword: string }[], stage: string): string[] {
@@ -387,7 +414,7 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
   return { topics, scope: scopeOf(topics) };
 }
 
-export const PRIORITY_LABEL: Record<Priority, string> = { P0: 'Do first', P1: 'Next', P2: 'Later' };
+export const PRIORITY_LABEL: Record<Priority, string> = { P0: 'Do first', P1: 'Next', P2: 'Later', P3: 'Backlog' };
 export { SUPPORT_LABEL };
 
 // ─── v7.210: ONE PAGE PER CLUSTER (Const III.5 reconciliation) ──────────────────
