@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import {
-  buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, filterPlanByIds, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
+  buildContentPlan, planFromSnapshot, buildContentPlanFromTopics, brandTermsOf, filterPlanByIds, DISTANCE_LABEL, PRIORITY_LABEL, SUPPORT_LABEL,
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
@@ -399,11 +399,18 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
     return c;
   }, [cFiltered]);
 
+  // v7.356: one priority order, shared by BOTH row sorts (moved above contentRows so the
+  // Content-Map sort can reference it — no temporal-dead-zone). P0 → P1 → P2.
+  const order: Record<Priority, number> = { P0: 0, P1: 1, P2: 2 };
+
+  // v7.356: the Content Map (mode="content") now sorts within priority tier by funnel
+  // proximity (distance asc) then real volume (desc) — same tiebreaker as the Content
+  // Plan — so the strongest, closest-to-conversion opportunities surface at the top of
+  // each tier instead of a pure volume sort that ignored intent (Wayne 2026-07-07).
   const contentRows = useMemo(() => cFiltered.filter((t: ContentTopic) =>
     posFilter === 'all' ? true : posBucketOf(t.bestPosition) === posFilter
-  ).slice().sort((a, b) => b.totalVol - a.totalVol), [cFiltered, posFilter]);
+  ).slice().sort((a, b) => (order[a.priority] - order[b.priority]) || (a.distance - b.distance) || (b.totalVol - a.totalVol)), [cFiltered, posFilter]);
 
-  const order: Record<Priority, number> = { P0: 0, P1: 1, P2: 2 };
   const planRows = useMemo(() => T.filter((t: ContentTopic) => {
     const s = pStatus === 'all' || (pStatus === 'existing' ? t.state === 'existing' : t.state !== 'existing');
     const p = pPriority === 'all' || t.priority === pPriority;
@@ -630,9 +637,12 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
   );
   const plan = useMemo(() => {
-    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
-    return planFromSnapshot(analysis, uploadedKeywords);
-  }, [canonTopics, analysis, uploadedKeywords]);
+    // v7.356: same brand vocabulary as every other panel (Const II.7) so brand-related
+    // topics carry the identical priority across Content Map / Plan / Scope / Exec.
+    const brandTerms = brandTermsOf(clientDomain, analysis?.semrushSnapshot);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms });
+    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms });
+  }, [canonTopics, analysis, uploadedKeywords, clientDomain]);
 
   // v7.353: audience-segment lens — same attribution as the Journey panel.
   const segments = useMemo(() => readSegments(analysis), [analysis]);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
-import { planFromSnapshot, buildContentPlanFromTopics } from '@/lib/journey/contentPlan';   // v7.337: briefTitleFromKeywords import dropped with dead buildArticleTopics
+import { planFromSnapshot, buildContentPlanFromTopics, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.337: briefTitleFromKeywords import dropped with dead buildArticleTopics; v7.356: brandTermsOf
 import { ContentExplorer } from '@/components/brief/ContentPlanSection';
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mirror): canonical pool for buildClusters (Const II.7)
@@ -1344,9 +1344,13 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
     [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
   );
   const plan = useMemo(() => {
-    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
-    return planFromSnapshot(analysis, uploadedKeywords);
-  }, [canonTopics, analysis, uploadedKeywords]);
+    // v7.356: client brand vocabulary via the shared brandTermsOf helper so every panel
+    // derives the identical set and priorities reconcile (Const II.7). Brand-related
+    // topics get the low-effort priority bump (Wayne 2026-07-07).
+    const brandTerms = brandTermsOf(clientDomain, analysis?.semrushSnapshot);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms });
+    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms });
+  }, [canonTopics, analysis, uploadedKeywords, clientDomain]);
 
   // v7.353: audience-segment lens — same attribution as the Journey panel (Const II.7).
   const topicBucket = useMemo(() => buildTopicSegmentMap(canonTopics, segments), [canonTopics, segments]);

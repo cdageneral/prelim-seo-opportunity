@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import {
-  planFromSnapshot, buildContentPlanFromTopics, filterPlanByIds,
+  planFromSnapshot, buildContentPlanFromTopics, brandTermsOf, filterPlanByIds,
   type ContentPlan, type ContentTopic, type Priority,
 } from '@/lib/journey/contentPlan';
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
@@ -196,9 +196,11 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
     [analysis, clientDomain, competitors, uploadedKeywords, claudeAssigns],
   );
   const plan = useMemo<ContentPlan | null>(() => {
-    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics);
-    return planFromSnapshot(analysis, uploadedKeywords);
-  }, [canonTopics, analysis, uploadedKeywords]);
+    // v7.356: same brand vocabulary as every other panel (Const II.7).
+    const brandTerms = brandTermsOf(clientDomain, analysis?.semrushSnapshot);
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms });
+    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms });
+  }, [canonTopics, analysis, uploadedKeywords, clientDomain]);
 
   const scopedPlan = useMemo(
     () => (plan && scopeIds ? filterPlanByIds(plan, scopeIds) : null),

@@ -8,7 +8,7 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 // Map panel (05) renders — buildCanonicalClusterTopics → buildContentPlanFromTopics
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
-import { buildContentPlanFromTopics, planFromSnapshot } from '@/lib/journey/contentPlan';
+import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
 // analysis.aioAvailable/aioAcquired + serpFeatureSummary columns (stale after scans).
@@ -511,8 +511,15 @@ export default function ExecutiveSummarySection({
     [analysis, cmClientDomain, manualDomains, dbKeywords, claudeAssigns],
   );
   const contentPlan = useMemo(
-    () => canonicalTopics.length > 0 ? buildContentPlanFromTopics(canonicalTopics) : planFromSnapshot(analysis, dbKeywords),
-    [canonicalTopics, analysis, dbKeywords],
+    () => {
+      // v7.356: same brand vocabulary as every other panel (Const II.7) so exec-summary
+      // priorities reconcile with the Content Map/Plan.
+      const brandTerms = brandTermsOf(cmClientDomain, analysis?.semrushSnapshot);
+      return canonicalTopics.length > 0
+        ? buildContentPlanFromTopics(canonicalTopics, { brandTerms })
+        : planFromSnapshot(analysis, dbKeywords, { brandTerms });
+    },
+    [canonicalTopics, analysis, dbKeywords, cmClientDomain],
   );
   // v7.281: pull the product / pre-product split + coverage from the SAME source the
   // Journey panel renders — its canonical topics + journeyLaneSummary() (Const II.7) —
