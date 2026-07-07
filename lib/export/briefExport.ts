@@ -47,7 +47,7 @@ export function slugify(s: string): string {
 
 function n(v: number): string { return (v ?? 0).toLocaleString('en-US'); }
 
-const PRI_LABEL: Record<string, string> = { P0: 'P0 · Do first', P1: 'P1 · Next', P2: 'P2 · Later' };
+const PRI_LABEL: Record<string, string> = { P0: 'P0 · Do first', P1: 'P1 · Next', P2: 'P2 · Later', P3: 'P3 · Backlog' };
 const LANE_LABEL: Record<string, string> = { product: 'Product journey', 'pre-product': 'Pre-product journey' };
 
 function cap(s: string): string { const t = String(s ?? ''); return t.charAt(0).toUpperCase() + t.slice(1); }
