@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { planFromSnapshot, buildContentPlanFromTopics, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.337: briefTitleFromKeywords import dropped with dead buildArticleTopics; v7.356: brandTermsOf
-import { ContentExplorer } from '@/components/brief/ContentPlanSection';
+import { ContentExplorer, StepHeader } from '@/components/brief/ContentPlanSection';   // v7.357: StepHeader for the guided flow
 import { buildCanonicalClusterTopics } from '@/components/brief/ThemeClustersPanel';   // v7.210: one source of truth
 import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mirror): canonical pool for buildClusters (Const II.7)
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.336 (QC audit B1 mirror): guard on buildClusters category reads (Const III.1a)
@@ -1454,16 +1454,19 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
           {/* v7.353: segment lens — same attribution as the Audience Journeys panel;
               Shared topics show under every segment. Chip counts are real row counts. */}
           {segments.length > 0 && topicBucket.size > 0 && (
-            <SegmentFilterBar
-              segments={segments}
-              active={activeSeg}
-              onChange={setActiveSeg}
-              countOf={(id: string | null) => {
-                if (!plan) return 0;
-                if (id === null) return plan.topics.length;
-                return filterPlanBySegment(plan, topicBucket, id).topics.length;
-              }}
-            />
+            <>
+              <StepHeader n={1} title="Choose your audience" hint="Filter the whole map to one audience segment — or keep All Segments. Every step below respects this choice." />
+              <SegmentFilterBar
+                segments={segments}
+                active={activeSeg}
+                onChange={setActiveSeg}
+                countOf={(id: string | null) => {
+                  if (!plan) return 0;
+                  if (id === null) return plan.topics.length;
+                  return filterPlanBySegment(plan, topicBucket, id).topics.length;
+                }}
+              />
+            </>
           )}
           <ContentExplorer plan={viewPlan ?? plan} mode="content"
             selectable

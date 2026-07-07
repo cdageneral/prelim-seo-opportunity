@@ -51,8 +51,9 @@ const YEARS: { pri: Priority; year: string; sub: string }[] = [
   { pri: 'P0', year: 'Year 1', sub: 'P0 · Do first' },
   { pri: 'P1', year: 'Year 2', sub: 'P1 · Next' },
   { pri: 'P2', year: 'Year 3+', sub: 'P2 · Later' },
+  { pri: 'P3', year: 'Year 4+', sub: 'P3 · Backlog' },   // v7.357: 4th tier
 ];
-const priColor: Record<Priority, string> = { P0: 'var(--c-f87171)', P1: COL.amber, P2: COL.cyan };
+const priColor: Record<Priority, string> = { P0: 'var(--c-f87171)', P1: COL.amber, P2: COL.cyan, P3: 'var(--c-9090b8)' };
 
 // Sequence a year's topics into four quarters. Order is a transparent, deterministic rule —
 // existing pages (quick ROI) first, then closest-to-conversion, then highest demand — and the
