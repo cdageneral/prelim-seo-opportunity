@@ -115,15 +115,94 @@ export const DISTANCE_LABEL: Record<number, string> = {
   1: 'At decision', 2: 'Evaluating', 3: 'Researching', 4: 'Just aware',
 };
 
-// Distance to conversion: closest (1) = product decision/support; farthest (4) =
-// pre-product awareness. Pure ordinal from lane + kind + stage.
-function distanceOf(n: GraphNode): number {
-  if (n.lane === 'product') {
-    if (n.kind === 'support') return n.supportType === 'comparison' ? 2 : 1;
-    return 2; // core
+// ─── v7.356: funnel-stage-driven distance + priority (Wayne 2026-07-07) ─────────
+// The product journey is no longer flattened to one distance. Each product topic
+// already carries its constitutionally-fixed funnel-stage tag (III.11: intent group →
+// Awareness/Consideration/Decision/Retention); we read that stored stage to place the
+// topic on the distance-to-conversion axis AND to set priority, so lower-funnel (higher
+// intent-to-convert) work rises to the top. Brand-related topics — the client's own
+// brand and brand-modifier terms — are treated as high-intent, low-effort wins and
+// prioritized on demand (Wayne's call 2026-07-07), never de-prioritized. Distance stays
+// an ORDINAL derived from the stored stage (not a metric, per this file's header);
+// volume stays the exact TS rollup (Const I.1) — nothing is modeled.
+type FunnelStage = GraphNode['stage'];
+
+// A topic is brand-related when it lives under a brand category (parentType 'brand') OR
+// its own text carries the client's brand token(s). Only tokens ≥4 chars drive the
+// substring test — short 2–3 char brands (e.g. "td") are already captured by the brand
+// category, and a short token could otherwise false-match ("td" inside "study").
+export function topicIsBrandRelated(parentType: string, text: string, brandTerms: string[]): boolean {
+  if (parentType === 'brand') return true;
+  if (!brandTerms || !brandTerms.length) return false;
+  const hay = (text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!hay) return false;
+  for (let i = 0; i < brandTerms.length; i++) {
+    const t = String(brandTerms[i] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (t.length >= 4 && hay.indexOf(t) >= 0) return true;
   }
-  // pre-product
-  return n.stage === 'awareness' ? 4 : 3;
+  return false;
+}
+
+// v7.356: the client brand vocabulary used for the brand-related priority bump —
+// domain root + the snapshot's stored `_brandTerms`. ONE definition so every panel
+// (Content Map / Content Plan / Scope / Executive Summary) derives the IDENTICAL brand
+// set and their priorities reconcile (Const II.7, no cross-panel drift). Client brand
+// only — competitor brands are never bumped.
+export function brandTermsOf(clientDomain: string, snapshot: any): string[] {
+  const root = String(clientDomain || '')
+    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
+    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
+    .split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  const stored: string[] = Array.isArray(snapshot && snapshot._brandTerms) ? snapshot._brandTerms : [];
+  const out: string[] = [];
+  if (root) out.push(root);
+  for (let i = 0; i < stored.length; i++) { const t = String(stored[i] || '').trim(); if (t) out.push(t); }
+  return out;
+}
+
+export interface TopicScore { distance: number; priority: Priority; quickWin: boolean; }
+
+// ONE scoring definition, shared by BOTH plan builders so the graph path and the
+// canonical-topic path can never diverge (Const II.7). Rules:
+//  • pre-product            → distance 4 (awareness) / 3 (deeper); P1 only when a
+//                             researching-stage topic has high demand, else P2.
+//  • brand-related product  → distance 1; P0 with real demand, else P1 (easy-to-win,
+//                             low-effort — Wayne 2026-07-07).
+//  • decision (lower funnel)→ distance 1; P0 with real demand, else P1.
+//  • consideration/retention→ distance 2; P0 when high-demand, else P1.
+//  • awareness (product)    → distance 3; P1 when high-demand, else P2.
+// quick-win is unchanged in spirit: a competitor gap close to conversion (distance ≤ 2)
+// with high demand.
+export function scoreTopic(input: {
+  lane: 'product' | 'pre-product';
+  stage: FunnelStage;
+  brandRelated: boolean;
+  totalVol: number;
+  state: NodeState;
+  median: number;
+}): TopicScore {
+  const highDemand = input.totalVol >= input.median && input.totalVol > 0;
+  const hasDemand  = input.totalVol > 0;
+  let distance: number;
+  let priority: Priority;
+  if (input.lane === 'pre-product') {
+    distance = input.stage === 'awareness' ? 4 : 3;
+    priority = (distance === 3 && highDemand) ? 'P1' : 'P2';
+  } else if (input.brandRelated) {
+    distance = 1;                     // brand = high-intent, low-effort win
+    priority = hasDemand ? 'P0' : 'P1';
+  } else if (input.stage === 'decision') {
+    distance = 1;                     // lower funnel, highest intent to convert
+    priority = hasDemand ? 'P0' : 'P1';
+  } else if (input.stage === 'consideration' || input.stage === 'retention') {
+    distance = 2;
+    priority = highDemand ? 'P0' : 'P1';
+  } else {
+    distance = 3;                     // product awareness (top of funnel)
+    priority = highDemand ? 'P1' : 'P2';
+  }
+  const quickWin = input.state === 'competitor' && distance <= 2 && highDemand;
+  return { distance, priority, quickWin };
 }
 
 // SERP-feature targets from the topic's keyword signals (transparent heuristics).
@@ -257,23 +336,24 @@ function promptCoverage(node: GraphNode, prompts: string[]): number {
   return count;
 }
 
-export interface PlanOpts { audiencePrompts?: string[]; }
+export interface PlanOpts { audiencePrompts?: string[]; brandTerms?: string[]; }
 
 export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): ContentPlan {
   const prompts = opts.audiencePrompts ?? [];
+  const brandTerms = opts.brandTerms ?? [];
   const vols = graph.nodes.map((n) => n.totalVol).slice().sort((a, b) => a - b);
   const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
 
   const topics: ContentTopic[] = [];
   for (let i = 0; i < graph.nodes.length; i++) {
     const n = graph.nodes[i];
-    const distance = distanceOf(n);
-    const highDemand = n.totalVol >= median && n.totalVol > 0;
-    const quickWin = n.state === 'competitor' && distance <= 2 && highDemand;
-    let priority: Priority;
-    if (distance <= 2 && (highDemand || quickWin)) priority = 'P0';
-    else if (distance <= 2 || (distance === 3 && highDemand)) priority = 'P1';
-    else priority = 'P2';
+    // v7.356: graph nodes carry no parentType, so brand-category membership is detected
+    // by the client brand token on the node's own label/seed (Const II.7 shared scorer).
+    const brandRelated = topicIsBrandRelated('', n.name + ' ' + n.seed, brandTerms);
+    const sc = scoreTopic({ lane: n.lane, stage: n.stage, brandRelated, totalVol: n.totalVol, state: n.state, median });
+    const distance = sc.distance;
+    const quickWin = sc.quickWin;
+    const priority = sc.priority;
     const refresh = n.state === 'existing' && n.clientCovPct < 60;
     const promptCount = promptCoverage(n, prompts);
     // v7.249: best (lowest) real client SERP position across this node's ranked keywords
@@ -340,7 +420,8 @@ function topicOutline(lane: GraphNode['lane'], kind: GraphNode['kind']): string[
   return ['What it is & who it’s for', 'Key options / details compared', 'Cost & considerations', 'How to decide your next step'];
 }
 
-export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): ContentPlan {
+export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: PlanOpts = {}): ContentPlan {
+  const brandTerms = opts.brandTerms ?? [];
   const vols = topics.map(t => t.totalVolume).slice().sort((a, b) => a - b);
   const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
 
@@ -367,13 +448,17 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
     const clientCovPct = t.totalVolume > 0 ? Math.round((clientVol / t.totalVolume) * 100) : 0;
     const competitor = gaps.find(k => k.competitor)?.competitor ?? null;
 
-    const distance = lane === 'product' ? 2 : (t.stage === 'awareness' ? 4 : 3);
-    const highDemand = t.totalVolume >= median && t.totalVolume > 0;
-    const quickWin = state === 'competitor' && distance <= 2 && highDemand;
-    let priority: Priority;
-    if (distance <= 2 && (highDemand || quickWin)) priority = 'P0';
-    else if (distance <= 2 || (distance === 3 && highDemand)) priority = 'P1';
-    else priority = 'P2';
+    // v7.356: funnel-stage-driven distance + priority via the shared scorer (Const II.7).
+    // Brand text = product label + its top real keywords (parentType 'brand' short-circuits).
+    const brandRelated = topicIsBrandRelated(
+      t.parentType,
+      t.product + ' ' + t.keywords.slice(0, 8).map(k => k.keyword).join(' '),
+      brandTerms,
+    );
+    const sc = scoreTopic({ lane, stage: t.stage, brandRelated, totalVol: t.totalVolume, state, median });
+    const distance = sc.distance;
+    const quickWin = sc.quickWin;
+    const priority = sc.priority;
     const refresh = state === 'existing' && clientCovPct < 60;
 
     const briefKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 12).map(k => ({
@@ -417,7 +502,7 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[]): Conte
 // Both the Content panel and the Content Plan sub-nav call this so they share the
 // EXACT same topic→keyword pool, footprint overlay, and competitor mapping — which
 // is what makes the volumes reconcile with the Keyword and Cluster panels.
-export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = []): ContentPlan | null {
+export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = [], opts: PlanOpts = {}): ContentPlan | null {
   const snap = (analysis && analysis.semrushSnapshot) ? analysis.semrushSnapshot : {};
   // v7.208: honour the user competitor-brand blocklist on the demand lens too, so
   // Content plan + Content map never surface a blocklisted brand (e.g. "Schwab").
@@ -466,6 +551,12 @@ export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = []): C
     if (s.whoTheyAre && s.whoTheyAre.trigger) audiencePrompts.push(String(s.whoTheyAre.trigger));
   }
 
+  // v7.356: brand vocabulary for the brand-related priority bump — explicit option
+  // first, else the snapshot's own client brand terms (`_brandTerms`).
+  const brandTerms = (opts.brandTerms && opts.brandTerms.length)
+    ? opts.brandTerms
+    : (Array.isArray(snap._brandTerms) ? snap._brandTerms : []);
+
   const graph = buildJourneyGraph(universe, { clientRanked: client, competitorRanked: competitor, urlByKeyword, competitorByKeyword });
-  return buildContentPlan(graph, { audiencePrompts });
+  return buildContentPlan(graph, { audiencePrompts, brandTerms });
 }
