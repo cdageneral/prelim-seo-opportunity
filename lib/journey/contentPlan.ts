@@ -60,6 +60,7 @@ export interface ContentTopic {
   distanceLabel: string;
   promptCount:  number;
   priority:     Priority;
+  manual:       boolean;         // v7.358: true when priority came from a stored manual override, not the auto scorer
   quickWin:     boolean;
   refresh:      boolean;
   brief:        Brief;
@@ -363,11 +364,12 @@ function promptCoverage(node: GraphNode, prompts: string[]): number {
   return count;
 }
 
-export interface PlanOpts { audiencePrompts?: string[]; brandTerms?: string[]; }
+export interface PlanOpts { audiencePrompts?: string[]; brandTerms?: string[]; priorityOverrides?: Record<string, Priority>; }   // v7.358: manual priority moves
 
 export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): ContentPlan {
   const prompts = opts.audiencePrompts ?? [];
   const brandTerms = opts.brandTerms ?? [];
+  const overrides = opts.priorityOverrides ?? {};   // v7.358: manual priority moves
   const vols = graph.nodes.map((n) => n.totalVol).slice().sort((a, b) => a - b);
   const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
 
@@ -380,7 +382,10 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
     const sc = scoreTopic({ lane: n.lane, stage: n.stage, brandRelated, totalVol: n.totalVol, state: n.state, median });
     const distance = sc.distance;
     const quickWin = sc.quickWin;
-    const priority = sc.priority;
+    // v7.358: a stored manual move wins over the auto tier; `manual` flags it for the UI.
+    const ov = overrides[n.id];
+    const priority = ov ?? sc.priority;
+    const manual = !!ov;
     const refresh = n.state === 'existing' && n.clientCovPct < 60;
     const promptCount = promptCoverage(n, prompts);
     // v7.249: best (lowest) real client SERP position across this node's ranked keywords
@@ -406,7 +411,7 @@ export function buildContentPlan(graph: JourneyGraph, opts: PlanOpts = {}): Cont
       totalVol: n.totalVol, clientVol: n.clientVol, clientCovPct: n.clientCovPct, kwCount: n.kwCount,
       competitor: n.competitor,
       bestPosition,
-      distance, distanceLabel: DISTANCE_LABEL[distance], promptCount, priority, quickWin, refresh, brief,
+      distance, distanceLabel: DISTANCE_LABEL[distance], promptCount, priority, manual, quickWin, refresh, brief,
     });
   }
 
@@ -449,6 +454,7 @@ function topicOutline(lane: GraphNode['lane'], kind: GraphNode['kind']): string[
 
 export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: PlanOpts = {}): ContentPlan {
   const brandTerms = opts.brandTerms ?? [];
+  const overrides = opts.priorityOverrides ?? {};   // v7.358: manual priority moves
   const vols = topics.map(t => t.totalVolume).slice().sort((a, b) => a - b);
   const median = vols.length ? vols[Math.floor(vols.length / 2)] : 0;
 
@@ -485,7 +491,10 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: 
     const sc = scoreTopic({ lane, stage: t.stage, brandRelated, totalVol: t.totalVolume, state, median });
     const distance = sc.distance;
     const quickWin = sc.quickWin;
-    const priority = sc.priority;
+    // v7.358: a stored manual move (by ContentTopic.id) wins over the auto tier.
+    const ov = overrides[t.id];
+    const priority = ov ?? sc.priority;
+    const manual = !!ov;
     const refresh = state === 'existing' && clientCovPct < 60;
 
     const briefKws = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume).slice(0, 12).map(k => ({
@@ -499,7 +508,7 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: 
       stage: t.stage, state, action, url,
       totalVol: t.totalVolume, clientVol, clientCovPct, kwCount: t.keywords.length, competitor,
       bestPosition,
-      distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, quickWin, refresh,
+      distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, manual, quickWin, refresh,
       brief: {
         // Const III.8 — anchor on the highest-volume real target keyword, not the
         // cluster-name paraphrase (briefKws is already sorted desc by real volume).
@@ -583,7 +592,11 @@ export function planFromSnapshot(analysis: any, uploadedKeywords: any[] = [], op
   const brandTerms = (opts.brandTerms && opts.brandTerms.length)
     ? opts.brandTerms
     : (Array.isArray(snap._brandTerms) ? snap._brandTerms : []);
+  // v7.358: manual priority moves — explicit option first, else the snapshot's `_priorityOverrides`.
+  const priorityOverrides = (opts.priorityOverrides && Object.keys(opts.priorityOverrides).length)
+    ? opts.priorityOverrides
+    : ((snap._priorityOverrides && typeof snap._priorityOverrides === 'object') ? snap._priorityOverrides : {});
 
   const graph = buildJourneyGraph(universe, { clientRanked: client, competitorRanked: competitor, urlByKeyword, competitorByKeyword });
-  return buildContentPlan(graph, { audiencePrompts, brandTerms });
+  return buildContentPlan(graph, { audiencePrompts, brandTerms, priorityOverrides });
 }
