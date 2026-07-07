@@ -73,6 +73,14 @@ export const projects = pgTable('projects', {
   // migrated at runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
   scopeOverrides:            jsonb('scope_overrides').$type<Record<string, 'core' | 'adjacent'>>(),
   scopeOverridesUpdatedAt:   timestamp('scope_overrides_updated_at'),
+  // v7.358: per-project manual priority moves — ContentTopic.id → 'P0'|'P1'|'P2'|'P3'. The
+  // user moves a topic to a different priority bucket on the Content Map; this override is
+  // applied at READ time (injected onto the snapshot as `_priorityOverrides`, applied in
+  // scoreTopic's consumers) so it takes effect WITHOUT re-analysis and reconciles across
+  // every panel that reads priority (Const II.7). Empty = pure auto scoring. Survives
+  // reloads, devices, and re-analysis. Auto-migrated via ADD COLUMN IF NOT EXISTS.
+  priorityOverrides:          jsonb('priority_overrides').$type<Record<string, 'P0' | 'P1' | 'P2' | 'P3'>>(),
+  priorityOverridesUpdatedAt: timestamp('priority_overrides_updated_at'),
   // v7.318: Profound AI Visibility computed metrics — SERVER-SIDE persistence so the
   // uploaded-export analysis survives refreshes, new browsers/devices, and is visible to ANY
   // user opening the project URL (replaces the old browser-only IndexedDB store). Holds ONLY
