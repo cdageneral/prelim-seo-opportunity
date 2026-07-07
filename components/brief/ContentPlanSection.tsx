@@ -45,6 +45,17 @@ export function StepHeader({ n, title, hint }: { n: number; title: string; hint?
     </div>
   );
 }
+// v7.361: each guided step sits in its own card so the three blocks read as distinct
+// sections instead of one flat wall (Wayne 2026-07-07). Raised panel + hairline + radius,
+// theme-token styled (IV.6). The step header renders at the top of the card.
+export function StepCard({ n, title, hint, children }: { n: number; title: string; hint?: string; children?: any }) {
+  return (
+    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1f1f3a)', borderRadius: 12, padding: '4px 18px 18px', marginBottom: 16 }}>
+      <StepHeader n={n} title={title} hint={hint} />
+      {children}
+    </div>
+  );
+}
 const laneLabel: Record<string, string> = { 'pre-product': 'Pre-product', product: 'Product' };
 const kindLabel: Record<string, string> = { problem: 'Problem', core: 'Core', support: 'Support' };
 
@@ -548,10 +559,9 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
     <div>
       {styleTag}
       {mode === 'content' ? (
-        <>
-        <StepHeader n={2} title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match." />
-        {/* v7.360 (Option C): dimension tabs → one contextual chip row. */}
-        <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', borderBottom: `1px solid ${COL.line}`, margin: '14px 0 0' }}>
+        <StepCard n={2} title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match.">
+        {/* v7.360 (Option C): dimension tabs → one contextual chip row. v7.361: chips sit in a tab-panel inset. */}
+        <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', borderBottom: `1px solid ${COL.line}`, margin: '12px 0 0' }}>
           {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
             const on = dimTab === d;
             const n = activeFilters.filter((f) => f.d === d).length;
@@ -563,26 +573,28 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             );
           })}
         </div>
-        {activeDimChips && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '14px 0 12px' }}>
-            <PChip active={activeDimChips.current === 'all'} onClick={() => activeDimChips.set('all')} label="All" count={activeDimChips.allRows.length} sub={fmtVol(activeDimChips.allVol)} color="var(--c-c8c8e8)" onDownload={() => dl(activeDimChips.allRows, `All ${activeDimChips.label}`)} />
-            {activeDimChips.items.map((it) => (
-              <PChip key={it.key} active={activeDimChips.current === it.key} onClick={() => activeDimChips.set(activeDimChips.current === it.key ? 'all' : it.key)} label={it.label} count={it.count} sub={fmtVol(it.vol)} color={it.color} onDownload={() => dl(it.rows, `${activeDimChips.label} ${it.label}`)} />
-            ))}
-          </div>
-        )}
-        {activeFilters.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', margin: '0 0 14px' }}>
-            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim }}>Filters</span>
-            {activeFilters.map((f) => (
-              <button key={f.d} type="button" onClick={f.clear} title="Remove this filter" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10.5, fontWeight: 700, color: COL.cyan, background: 'var(--ca-34-211-238-0_08)', border: `1px solid ${COL.cyan}55`, borderRadius: 999, padding: '3px 9px' }}>
-                {f.label}<i className="ti ti-x" style={{ fontSize: 12 }} />
-              </button>
-            ))}
-            <button type="button" onClick={clearAllDims} style={{ fontSize: 11, color: COL.mut, background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
-          </div>
-        )}
-        </>
+        <div style={{ background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '14px' }}>
+          {activeDimChips && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <PChip active={activeDimChips.current === 'all'} onClick={() => activeDimChips.set('all')} label="All" count={activeDimChips.allRows.length} sub={fmtVol(activeDimChips.allVol)} color="var(--c-c8c8e8)" onDownload={() => dl(activeDimChips.allRows, `All ${activeDimChips.label}`)} />
+              {activeDimChips.items.map((it) => (
+                <PChip key={it.key} active={activeDimChips.current === it.key} onClick={() => activeDimChips.set(activeDimChips.current === it.key ? 'all' : it.key)} label={it.label} count={it.count} sub={fmtVol(it.vol)} color={it.color} onDownload={() => dl(it.rows, `${activeDimChips.label} ${it.label}`)} />
+              ))}
+            </div>
+          )}
+          {activeFilters.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COL.line}` }}>
+              <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim }}>Filters</span>
+              {activeFilters.map((f) => (
+                <button key={f.d} type="button" onClick={f.clear} title="Remove this filter" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10.5, fontWeight: 700, color: COL.cyan, background: 'var(--ca-34-211-238-0_08)', border: `1px solid ${COL.cyan}55`, borderRadius: 999, padding: '3px 9px' }}>
+                  {f.label}<i className="ti ti-x" style={{ fontSize: 12 }} />
+                </button>
+              ))}
+              <button type="button" onClick={clearAllDims} style={{ fontSize: 11, color: COL.mut, background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
+            </div>
+          )}
+        </div>
+        </StepCard>
       ) : (
         <>
           {/* scope row: total / existing / net-new (all carry volume) */}
@@ -601,12 +613,10 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         </>
       )}
 
-      {/* v7.357: Step 3 — topic selection (Content Map only, where the checkboxes live). */}
-      {selectable && <StepHeader n={3} title="Select your topics" hint="Check the topics to include in your scope &amp; content plan — or use “Select all shown” to add a whole filtered view at once." />}
-      {/* v7.264: selection instruction — sits right above the list, only where the
-          checkboxes are (Content Map). */}
+      {/* v7.361: Step 3 — topic selection, in its own card (Content Map only). */}
       {selectable && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0 0 12px', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', flexWrap: 'wrap' }}>
+        <StepCard n={3} title="Select your topics" hint="Check the topics to include in your scope &amp; content plan — or use “Select all shown” to add a whole filtered view at once.">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', flexWrap: 'wrap' }}>
           <i className="ti ti-checkbox" style={{ fontSize: 15, color: COL.cyan, flexShrink: 0 }} />
           <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45, flex: 1, minWidth: 220 }}>
             Check a box to select which topics to include in your <b style={{ color: COL.cyan }}>scope &amp; content plan</b>.
@@ -630,6 +640,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             );
           })()}
         </div>
+        </StepCard>
       )}
 
       {/* toolbar */}
