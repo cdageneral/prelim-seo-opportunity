@@ -515,9 +515,10 @@ export default function ExecutiveSummarySection({
       // v7.356: same brand vocabulary as every other panel (Const II.7) so exec-summary
       // priorities reconcile with the Content Map/Plan.
       const brandTerms = brandTermsOf(cmClientDomain, analysis?.semrushSnapshot);
+      const priorityOverrides = (analysis?.semrushSnapshot?._priorityOverrides as Record<string, 'P0' | 'P1' | 'P2' | 'P3'>) ?? {};   // v7.358
       return canonicalTopics.length > 0
-        ? buildContentPlanFromTopics(canonicalTopics, { brandTerms })
-        : planFromSnapshot(analysis, dbKeywords, { brandTerms });
+        ? buildContentPlanFromTopics(canonicalTopics, { brandTerms, priorityOverrides })
+        : planFromSnapshot(analysis, dbKeywords, { brandTerms, priorityOverrides });
     },
     [canonicalTopics, analysis, dbKeywords, cmClientDomain],
   );

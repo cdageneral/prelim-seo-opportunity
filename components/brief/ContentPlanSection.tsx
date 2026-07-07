@@ -114,8 +114,9 @@ function FCard({ active, onClick, label, icon, val, sub, color, children, onDown
 }
 
 // ─── v7.249: SERP-page filter chip ───────────────────────────────────────────────
-function PChip({ active, onClick, label, count, color, onDownload }: {
+function PChip({ active, onClick, label, count, sub, color, onDownload }: {
   active: boolean; onClick: () => void; label: string; count: number; color: string;
+  sub?: string;              // v7.358: optional secondary metric after the count (e.g. "· 52K")
   onDownload?: () => void;   // v7.328: inline green Excel-download control after the count
 }) {
   return (
@@ -127,7 +128,7 @@ function PChip({ active, onClick, label, count, color, onDownload }: {
       color: active ? color : COL.mut, transition: 'border-color 0.12s, color 0.12s',
     }}>
       {label}
-      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 10.5, color: active ? color : COL.mut2 }}>{count}</span>
+      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 10.5, color: active ? color : COL.mut2 }}>{count}{sub ? ` · ${sub}` : ''}</span>
       {onDownload && <SegmentDownloadButton onDownload={onDownload} title="Download as Excel" />}
     </button>
   );
@@ -229,7 +230,7 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
         </div>
       </div>
       <div className="ovHide"><DistMeter d={t.distance} /></div>
-      <div className="ovHide"><span style={{ fontSize: 9.5, fontWeight: 700, color: pri, background: `${pri}1a`, border: `1px solid ${pri}55`, borderRadius: 5, padding: '3px 0', textAlign: 'center', display: 'block' }}>{t.priority}</span></div>
+      <div className="ovHide"><span title={t.manual ? 'Manually set priority (v7.358)' : undefined} style={{ fontSize: 9.5, fontWeight: 700, color: pri, background: `${pri}1a`, border: `1px solid ${pri}55`, borderRadius: 5, padding: '3px 0', textAlign: 'center', display: 'block' }}>{t.priority}{t.manual ? ' ✎' : ''}</span></div>
       <div><span style={{ fontSize: 9.5, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 5, padding: '3px 0', textAlign: 'center', display: 'block' }}>{actionLabel(t)}</span></div>
       <div><div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, textAlign: 'right', color: col }}>{fmtVol(t.totalVol)}</div><div style={{ fontSize: 9, color: COL.mut2, textAlign: 'right', fontFamily: 'monospace' }}>/mo</div></div>
       <div className="ovHide" style={{ textAlign: 'right' }}>
@@ -242,7 +243,7 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
 }
 
 // ─── drawer (full brief) ─────────────────────────────────────────────────────────
-function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () => void }) {
+function Drawer({ topic, onClose, onMovePriority }: { topic: ContentTopic | null; onClose: () => void; onMovePriority?: (id: string, pri: Priority | null) => void }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -268,7 +269,36 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
                 <span style={{ fontSize: 9.5, fontWeight: 700, color: col, background: `${col}1a`, border: `1px solid ${col}55`, borderRadius: 5, padding: '3px 8px' }}>{actionLabel(t)}</span>
                 <span style={{ fontSize: 9.5, fontWeight: 700, color: priColor[t.priority], background: `${priColor[t.priority]}1a`, border: `1px solid ${priColor[t.priority]}55`, borderRadius: 5, padding: '3px 8px' }}>{t.priority} · {PRIORITY_LABEL[t.priority]}</span>
                 {t.quickWin && <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--c-08081a)', background: COL.amber, borderRadius: 5, padding: '3px 8px' }}><i className="ti ti-bolt" /> Quick win</span>}
+                {t.manual && <span style={{ fontSize: 9, fontWeight: 700, color: COL.mut, background: 'var(--ca-120-120-160-0_12)', border: `1px solid ${COL.mut}55`, borderRadius: 5, padding: '3px 8px' }}><i className="ti ti-hand-move" /> Manual</span>}
               </div>
+              {/* v7.358: manual priority move — reassign this topic to a bucket, or reset to auto. */}
+              {onMovePriority && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--c-13132a)' }}>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim, marginBottom: 7 }}>Move to priority</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {(['P0', 'P1', 'P2', 'P3'] as Priority[]).map((p) => {
+                      const active = t.priority === p;
+                      return (
+                        <button key={p} type="button" onClick={() => onMovePriority(t.id, p)}
+                          title={`${p} · ${PRIORITY_LABEL[p]}`}
+                          style={{ cursor: 'pointer', fontSize: 10.5, fontWeight: 700, borderRadius: 6, padding: '5px 10px',
+                            border: `1px solid ${active ? priColor[p] : COL.line}`,
+                            background: active ? `${priColor[p]}22` : 'transparent',
+                            color: active ? priColor[p] : COL.mut }}>
+                          {p} · {PRIORITY_LABEL[p]}
+                        </button>
+                      );
+                    })}
+                    {t.manual && (
+                      <button type="button" onClick={() => onMovePriority(t.id, null)} title="Clear the manual move — revert to the auto priority"
+                        style={{ cursor: 'pointer', fontSize: 10.5, fontWeight: 700, borderRadius: 6, padding: '5px 10px', border: `1px solid ${COL.line}`, background: 'transparent', color: COL.cyan }}>
+                        <i className="ti ti-rotate" /> Reset to auto
+                      </button>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 10, color: COL.dim, margin: '7px 0 0' }}>Sticky — survives re-analysis and applies across every panel.</p>
+                </div>
+              )}
             </div>
             <div style={{ padding: '16px 20px 40px' }}>
               {/* v7.250: mapped existing-page URL (full, clickable) — shown for existing pages */}
@@ -365,7 +395,7 @@ function Drawer({ topic, onClose }: { topic: ContentTopic | null; onClose: () =>
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, onBulkRemove, clientName, topicSeg, onBulkSelect }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, onBulkRemove, clientName, topicSeg, onBulkSelect, onMovePriority }: {
   plan: ContentPlan; mode: 'content' | 'plan';
   clientName?: string;   // v7.328: filename stem for per-segment XLSX exports
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
@@ -384,6 +414,9 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   // v7.353: bulk selection over the CURRENTLY SHOWN rows (Content Map only) — one
   // full-set PUT, so "select all of segment A" is one click, not a row-by-row tick.
   onBulkSelect?: (ids: string[], select: boolean) => void;
+  // v7.358: manual priority move (Content Map only). Reassigns a topic to a bucket, or
+  // resets it to auto with null. Persisted per project + reconciled across panels.
+  onMovePriority?: (id: string, pri: Priority | null) => void;
 }) {
   const [sel, setSel] = useState<ContentTopic | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);   // v7.355: two-click guard on Clear all
@@ -395,6 +428,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   // or search-demand). Priority cards mirror the Content Plan's; the lens groups the rows.
   const [cPriority, setCPriority] = useState<'all' | Priority>('all');
   const [groupBy, setGroupBy]     = useState<'none' | 'funnel' | 'demand'>('none');
+  const [groupPick, setGroupPick] = useState<string>('all');   // v7.358: which stage/demand group is selected in the lens chip row
 
   const sc = plan.scope;
   const T = plan.topics;
@@ -463,8 +497,17 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       .filter((g) => g.rows.length);
   }, [mode, groupBy, rows, dStats]);
 
+  // v7.358: the rows actually VISIBLE — respects a picked lens chip so "N topics", the
+  // Select-all-shown and Clear-all controls all act on exactly what's on screen.
+  const shownRows = useMemo(
+    () => ((groups && groupPick !== 'all') ? (groups.find((g) => g.key === groupPick)?.rows ?? []) : rows),
+    [groups, groupPick, rows],
+  );
+
   // v7.355: cancel a pending Clear-all confirm if the visible set changes underfoot.
-  useEffect(() => { setConfirmClear(false); }, [mode, rows.length]);
+  useEffect(() => { setConfirmClear(false); }, [mode, shownRows.length]);
+  // v7.358: reset the lens group pick whenever the lens itself changes.
+  useEffect(() => { setGroupPick('all'); }, [groupBy]);
   const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}`}</style>;
 
   return (
@@ -507,6 +550,20 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             </button>
           ))}
         </div>
+        {/* v7.358: lens group chips — one per funnel stage / demand bucket, each with its topic
+            count, monthly volume, and an Excel download (like "Where you rank"). Selecting one
+            filters the list to that group (Wayne 2026-07-07). */}
+        {groupBy !== 'none' && groups && groups.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
+            <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <i className={`ti ${groupBy === 'funnel' ? 'ti-filter-cog' : 'ti-chart-bar'}`} /> {groupBy === 'funnel' ? 'Funnel stage' : 'Search demand'}
+            </span>
+            <PChip active={groupPick === 'all'} onClick={() => setGroupPick('all')} label="All" count={rows.length} sub={fmtVol(rows.reduce((s, t) => s + t.totalVol, 0))} color="var(--c-c8c8e8)" onDownload={() => dl(rows, groupBy === 'funnel' ? 'All stages' : 'All demand')} />
+            {groups.map((g) => (
+              <PChip key={g.key} active={groupPick === g.key} onClick={() => setGroupPick(g.key)} label={g.label} count={g.rows.length} sub={fmtVol(g.rows.reduce((s, t) => s + t.totalVol, 0))} color={g.color} onDownload={() => dl(g.rows, g.label)} />
+            ))}
+          </div>
+        )}
         {/* v7.249: SERP-page filter — bucket pages by the client's real best Semrush position */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '0 0 16px' }}>
           <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: COL.dim, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -550,8 +607,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
           </span>
           {/* v7.353: bulk select over the rows the active filters currently show — so
               "all of segment A into the plan" is one click. Idempotent full-set save. */}
-          {onBulkSelect && rows.length > 0 && (() => {
-            const shownIds = rows.map((t: ContentTopic) => t.id);
+          {onBulkSelect && shownRows.length > 0 && (() => {
+            const shownIds = shownRows.map((t: ContentTopic) => t.id);
             const allShownSelected = !!selectedIds && shownIds.every((id: string) => selectedIds.has(id));
             return (
               <button type="button"
@@ -571,17 +628,17 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11.5, color: COL.mut }}>
-          <b style={{ color: COL.txt2 }}>{rows.length}</b> topics · <b style={{ color: COL.txt2 }}>{fmtVol(rows.reduce((s, t) => s + t.totalVol, 0))}/mo</b>
+          <b style={{ color: COL.txt2 }}>{shownRows.length}</b> topics · <b style={{ color: COL.txt2 }}>{fmtVol(shownRows.reduce((s, t) => s + t.totalVol, 0))}/mo</b>
         </span>
         {/* v7.355: Clear all — one click removes every SHOWN topic from the plan (bulk ×).
             Two-click guard so a stray click can't wipe the plan; the red trio is the same
             both-theme pair the drawer's competitor strip and the brief-error strip use
             (legible light + dark, Const IV.6). Content Plan only (removable + onBulkRemove). */}
-        {removable && onBulkRemove && rows.length > 0 && (
+        {removable && onBulkRemove && shownRows.length > 0 && (
           <button
             type="button"
             onClick={() => {
-              if (confirmClear) { onBulkRemove(rows.map((t: ContentTopic) => t.id)); setConfirmClear(false); }
+              if (confirmClear) { onBulkRemove(shownRows.map((t: ContentTopic) => t.id)); setConfirmClear(false); }
               else { setConfirmClear(true); setTimeout(() => setConfirmClear(false), 3500); }
             }}
             title={confirmClear ? 'Click again to remove all shown topics from the plan' : 'Remove every topic shown here from the plan'}
@@ -591,14 +648,14 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
               borderRadius: 7, padding: '4px 10px', fontSize: 11, fontWeight: 700 }}
           >
             <i className={`ti ${confirmClear ? 'ti-alert-triangle' : 'ti-trash'}`} style={{ fontSize: 13 }} />
-            {confirmClear ? `Confirm — clear all (${rows.length})` : `Clear all (${rows.length})`}
+            {confirmClear ? `Confirm — clear all (${shownRows.length})` : `Clear all (${shownRows.length})`}
           </button>
         )}
         {mode === 'plan' && (pStatus !== 'all' || pPriority !== 'all') && (
           <button onClick={() => { setPStatus('all'); setPPriority('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
         {mode === 'content' && (cFilter !== 'all' || posFilter !== 'all' || cPriority !== 'all' || groupBy !== 'none') && (
-          <button onClick={() => { setCFilter('all'); setPosFilter('all'); setCPriority('all'); setGroupBy('none'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
+          <button onClick={() => { setCFilter('all'); setPosFilter('all'); setCPriority('all'); setGroupBy('none'); setGroupPick('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
         <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>Cards filter · click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
       </div>
@@ -627,7 +684,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         );
         if (!rows.length) return <p style={{ color: COL.dim, fontSize: 12, padding: 16 }}>No topics match this filter.</p>;
         // v7.357: grouped by the Step-2 lens (funnel stage or search demand), else flat.
-        if (groups) return groups.map((g) => (
+        // v7.358: when a lens chip is picked, show only that group.
+        if (groups) return groups.filter((g) => groupPick === 'all' || g.key === groupPick).map((g) => (
           <div key={g.key} style={{ marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 15px 6px' }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: g.color, flexShrink: 0 }} />
@@ -640,7 +698,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         return rows.map(renderRow);
       })()}
 
-      <Drawer topic={sel} onClose={() => setSel(null)} />
+      <Drawer topic={sel} onClose={() => setSel(null)} onMovePriority={onMovePriority} />
     </div>
   );
 }
@@ -722,8 +780,10 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     // v7.356: same brand vocabulary as every other panel (Const II.7) so brand-related
     // topics carry the identical priority across Content Map / Plan / Scope / Exec.
     const brandTerms = brandTermsOf(clientDomain, analysis?.semrushSnapshot);
-    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms });
-    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms });
+    // v7.358: same manual priority moves as every panel (from the shared snapshot injection).
+    const priorityOverrides = (analysis?.semrushSnapshot?._priorityOverrides as Record<string, Priority>) ?? {};
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms, priorityOverrides });
+    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms, priorityOverrides });
   }, [canonTopics, analysis, uploadedKeywords, clientDomain]);
 
   // v7.353: audience-segment lens — same attribution as the Journey panel.

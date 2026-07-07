@@ -199,8 +199,10 @@ export default function ScopeSection({ projectId, kwVersion, analysis, competito
   const plan = useMemo<ContentPlan | null>(() => {
     // v7.356: same brand vocabulary as every other panel (Const II.7).
     const brandTerms = brandTermsOf(clientDomain, analysis?.semrushSnapshot);
-    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms });
-    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms });
+    // v7.358: same manual priority moves as every panel.
+    const priorityOverrides = (analysis?.semrushSnapshot?._priorityOverrides as Record<string, Priority>) ?? {};
+    if (canonTopics.length > 0) return buildContentPlanFromTopics(canonTopics, { brandTerms, priorityOverrides });
+    return planFromSnapshot(analysis, uploadedKeywords, { brandTerms, priorityOverrides });
   }, [canonTopics, analysis, uploadedKeywords, clientDomain]);
 
   const scopedPlan = useMemo(
