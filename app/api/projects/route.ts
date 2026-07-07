@@ -82,6 +82,15 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS taxonomy_anchor_updated_at TIMESTAMP`);    // v7.342
   } catch { /* already exists */ }
+  // v7.358: manual priority moves (ContentTopic.id → P0..P3). Ensured on the dashboard-list
+  // load path too, so a SELECT * over projects never 500s on a DB that hasn't yet hit the
+  // priority-overrides route (the projects-list ensureColumns lesson, v7.327).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS priority_overrides JSONB`);                 // v7.358
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS priority_overrides_updated_at TIMESTAMP`);  // v7.358
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
