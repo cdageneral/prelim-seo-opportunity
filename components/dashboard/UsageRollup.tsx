@@ -18,6 +18,13 @@ interface Line { provider: string; unit: string; usage: number; baseline: number
 interface ProjectRollup { projectId: string | null; projectName: string; lines: Line[]; lastActivity: string | null; }
 interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRollup[]; note?: string; }
 
+// Cost rollup (v7.363) — USD computed at published list rates (Const I.5a).
+interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; }
+interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; unpriced: UnpricedLine[]; }
+interface RateCardModel { label: string; inputPerM: number; outputPerM: number; }
+interface RateCard { asOf: string; models: RateCardModel[]; sources: string[]; }
+interface CostPayload { grandTotalUSD: number; pricingAsOf: string; basis: string; rateCard: RateCard; projects: ProjectCost[]; }
+
 const PROVIDER_LABEL: Record<string, string> = {
   semrush: 'Semrush', serpapi: 'SerpAPI', profound: 'Profound',
   anthropic: 'Anthropic (Claude)', openai: 'OpenAI',
@@ -31,6 +38,12 @@ const PROVIDER_ICON: Record<string, string> = {
 };
 
 function fmt(n: number): string { return (n ?? 0).toLocaleString(); }
+function fmtUSD(n: number): string {
+  const v = n ?? 0;
+  // Show cents; for sub-cent amounts show enough precision to not read as $0.00.
+  const frac = v > 0 && v < 0.01 ? 4 : 2;
+  return `$${v.toLocaleString(undefined, { minimumFractionDigits: frac, maximumFractionDigits: frac })}`;
+}
 function fmtTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -39,16 +52,23 @@ function lineKey(l: Line) { return `${l.provider}|${l.unit}`; }
 
 export default function UsageRollup() {
   const [data, setData]       = useState<RollupPayload | null>(null);
+  const [cost, setCost]       = useState<CostPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res  = await fetch('/api/usage', { cache: 'no-store' });
+      const [res, costRes] = await Promise.all([
+        fetch('/api/usage', { cache: 'no-store' }),
+        fetch('/api/usage/cost', { cache: 'no-store' }),
+      ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
       setData(json);
+      // Cost is additive provenance — never let its failure block the usage view.
+      if (costRes.ok) { try { setCost(await costRes.json()); } catch { setCost(null); } }
+      else setCost(null);
     } catch (e) {
       setError((e as any)?.message ?? 'Failed to load usage');
     } finally {
@@ -63,6 +83,9 @@ export default function UsageRollup() {
   // Stable column order for the per-project table = the grand-total lines present.
   const columns = grand.map(lineKey);
   const hasAny = grand.length > 0;
+  // Per-project USD, keyed to match the usage rollup's project ids.
+  const costByProject = new Map<string, number>();
+  (cost?.projects ?? []).forEach(p => costByProject.set(p.projectId ?? 'unattributed', p.costUSD));
 
   return (
     <div>
@@ -145,6 +168,10 @@ export default function UsageRollup() {
                         <span className="block text-[10px] text-orbit-tertiary font-normal">{UNIT_LABEL[l.unit] ?? l.unit}</span>
                       </th>
                     ))}
+                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                      Est. cost
+                      <span className="block text-[10px] text-orbit-tertiary font-normal">USD · list price</span>
+                    </th>
                     <th className="py-2 pl-3 font-medium text-right whitespace-nowrap">Last activity</th>
                   </tr>
                 </thead>
@@ -165,6 +192,9 @@ export default function UsageRollup() {
                             </td>
                           );
                         })}
+                        <td className="py-2 px-3 text-right tabular-nums text-orbit-primary font-medium">
+                          {cost ? fmtUSD(costByProject.get(proj.projectId ?? 'unattributed') ?? 0) : <span className="text-orbit-tertiary">—</span>}
+                        </td>
                         <td className="py-2 pl-3 text-right text-orbit-tertiary whitespace-nowrap">{fmtTime(proj.lastActivity)}</td>
                       </tr>
                     );
@@ -175,6 +205,7 @@ export default function UsageRollup() {
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
                     ))}
+                    <td className="py-2 px-3 text-right tabular-nums text-orbit-accent">{cost ? fmtUSD(cost.grandTotalUSD) : '—'}</td>
                     <td className="py-2 pl-3" />
                   </tr>
                 </tbody>
@@ -188,6 +219,25 @@ export default function UsageRollup() {
             Anthropic/OpenAI = tokens (OpenAI portraits = images). Counting began when v7.225 deployed; set per-project
             baselines (inside a project’s API Usage panel) to reflect earlier spend.
           </p>
+
+          {cost && (
+            <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+              <strong className="text-orbit-secondary">Est. cost</strong> multiplies the real recorded input/output token
+              counts by published list rates{cost.rateCard?.asOf ? ` (as of ${cost.rateCard.asOf})` : ''}:{' '}
+              {(cost.rateCard?.models ?? []).map((m, i) => (
+                <span key={m.label}>
+                  {i > 0 ? ' · ' : ''}{m.label} ${m.inputPerM}/${m.outputPerM} per M in/out
+                </span>
+              ))}. It is a <em>computed estimate at list price</em>, not the actual invoice — caching, batch, and negotiated
+              discounts are not reflected, and Semrush units, SerpAPI searches &amp; image generations are plan-dependent or
+              count-only, so they are left unpriced. Provider dashboards remain the billing source of truth.{' '}
+              {(cost.rateCard?.sources ?? []).map((s, i) => (
+                <a key={s} href={s} target="_blank" rel="noreferrer" className="text-orbit-accent hover:underline">
+                  {i > 0 ? ' · ' : ''}source{i + 1}
+                </a>
+              ))}
+            </p>
+          )}
         </>
       )}
     </div>
