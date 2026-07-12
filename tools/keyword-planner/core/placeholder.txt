@@ -1,0 +1,1 @@
+temporary placeholder to create the keyword-planner package path. replaced by real files in the next commits of v7.365.
