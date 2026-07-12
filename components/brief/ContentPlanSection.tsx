@@ -726,10 +726,12 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
   const [scopeIds, setScopeIds] = useState<Set<string> | null>(null);
   const [addingScope, setAddingScope] = useState(false);
   const [justAdded, setJustAdded] = useState(false);       // transient "Added ✓" confirmation
-  // v7.354: Push to Brief Agent is LIVE — builds a Word brief per article, zipped per
+  // v7.364: Push to Brief Agent — builds an Excel brief per article (Briefing Agent format), zipped per
   // audience segment, and downloads the bundle. Real progress while it builds (IV.2).
   const [briefBusy, setBriefBusy] = useState(false);
   const [briefProgress, setBriefProgress] = useState<{ done: number; total: number } | null>(null);
+  const [briefPhase, setBriefPhase] = useState<'enrich' | 'build'>('build');   // v7.364: enrich (live SERP + H1) then build
+  const [briefEta, setBriefEta] = useState<string>('');                        // v7.364: determinate-wait ETA (Const IV.2)
   const [briefDone, setBriefDone] = useState(false);       // transient "Downloaded ✓" confirmation
   const [briefErr, setBriefErr] = useState<string | null>(null);
 
@@ -891,27 +893,89 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
       .finally(() => setAddingScope(false));
   };
 
-  // v7.354: Push to Brief Agent — one Word doc per article, zipped per audience
+  // v7.364: Push to Brief Agent — one Excel workbook per article, zipped per audience
   // segment, one bundle download. Exports the FULL picked plan (the bundle is already
   // organised by segment inside, so the active chip doesn't narrow it). Segment
   // membership = the same v7.353 lens attribution; Shared articles ride into every
-  // segment's zip (Wayne 2026-07-06). The docx/jszip code is dynamic-imported so it
+  // segment's zip (Wayne 2026-07-06). The xlsx/jszip code is dynamic-imported so it
   // never weighs down the initial page bundle.
+  // v7.364: the export is now Excel per article, matching Wayne's Briefing Agent
+  // template. Two phases with determinate progress (Const IV.2): (1) ENRICH — a
+  // chunked server call per few articles resolves the three SERP-derived column
+  // groups the browser can't build (Top-Ranked + Direct competitors with real
+  // fetched H1, and PAA), live-scanning only uncached keywords; (2) BUILD — the
+  // xlsx workbooks are assembled into the same segment-zip bundle. Everything else
+  // on the sheet (keywords + MSV, internal links, audience, GEO prompts) is filled
+  // client-side from data already in hand.
   const pushToBriefAgent = async () => {
     if (briefBusy || !selectedPlan || selectedPlan.topics.length === 0) return;
     setBriefErr(null);
     setBriefDone(false);
     setBriefBusy(true);
-    setBriefProgress({ done: 0, total: selectedPlan.topics.length });
+    setBriefEta('');
+    const topicsAll = selectedPlan.topics;
+    setBriefPhase('enrich');
+    setBriefProgress({ done: 0, total: topicsAll.length });
     try {
       const mod = await import('@/lib/export/briefExport');
       const canonById = new Map(canonTopics.map((t) => [t.id, t]));
+
+      // Segment profiles carry the audience + GEO-prompt columns (one source of truth).
+      const SECONDARY_PAA_MAX = 10;   // cap the secondary keywords sent for PAA scanning (credit safety); all secondaries are still LISTED in the sheet
+      const segProfiles = (segments as any[]).map((s: any) => ({
+        id: String(s.id), name: String(s.name ?? 'Segment'),
+        tagline: typeof s.tagline === 'string' ? s.tagline : undefined,
+        who: (s.whoTheyAre && typeof s.whoTheyAre.trigger === 'string') ? s.whoTheyAre.trigger : undefined,
+        geoPrompts: [...(Array.isArray(s.preLLMPrompts) ? s.preLLMPrompts : []), ...(Array.isArray(s.productPrompts) ? s.productPrompts : [])].map((p: any) => String(p ?? '')).filter(Boolean),
+      }));
+
+      // ── Phase 1: enrich (chunked, determinate progress + ETA) ──
+      const enrichById = new Map<string, any>();
+      const CHUNK = 4;
+      const started = Date.now();
+      let enrichedCount = 0;
+      for (let i = 0; i < topicsAll.length; i += CHUNK) {
+        const chunk = topicsAll.slice(i, i + CHUNK);
+        const reqTopics = chunk.map((t) => {
+          const canon = canonById.get(t.id);
+          const primary = mod.pickPrimary(canon, t);
+          const primaryKw = primary ? primary.keyword : '';
+          const kws = (canon?.keywords?.length ? canon.keywords : (t.brief.keywords ?? []).map((k: any) => ({ keyword: k.keyword, searchVolume: k.searchVolume })))
+            .filter((k: any) => k.keyword && k.keyword.toLowerCase() !== primaryKw.toLowerCase())
+            .slice()
+            .sort((a: any, b: any) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0))
+            .slice(0, SECONDARY_PAA_MAX)
+            .map((k: any) => k.keyword);
+          return { id: t.id, primaryKeyword: primaryKw, secondaryKeywords: kws };
+        });
+        try {
+          const r = await fetch(`/api/projects/${projectId}/brief-enrich`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topics: reqTopics }),
+          });
+          if (r.ok) {
+            const d = await r.json();
+            for (const e of (Array.isArray(d?.enrich) ? d.enrich : [])) enrichById.set(String(e.id), e);
+          }
+          // A failed chunk is non-fatal — those articles get blank SERP columns (honest gap, Const I.5).
+        } catch { /* keep going with blanks */ }
+        enrichedCount = Math.min(i + chunk.length, topicsAll.length);
+        setBriefProgress({ done: enrichedCount, total: topicsAll.length });
+        const per = (Date.now() - started) / Math.max(enrichedCount, 1);
+        const remain = Math.round((per * (topicsAll.length - enrichedCount)) / 1000);
+        setBriefEta(enrichedCount < topicsAll.length && remain > 0 ? `~${remain}s left` : '');
+      }
+
+      // ── Phase 2: build workbooks ──
+      setBriefPhase('build');
+      setBriefEta('');
+      setBriefProgress({ done: 0, total: topicsAll.length });
       const res = await mod.buildBriefBundle({
         clientName: clientDomain || 'client',
-        topics: selectedPlan.topics,
+        topics: topicsAll,
         canonById,
+        enrichById,
         topicBucket,
-        segments: segments.map((s: any) => ({ id: String(s.id), name: String(s.name ?? 'Segment') })),
+        segments: segProfiles,
         onProgress: (done: number, total: number) => setBriefProgress({ done, total }),
       });
       mod.downloadBundle(res);
@@ -922,6 +986,7 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
     } finally {
       setBriefBusy(false);
       setBriefProgress(null);
+      setBriefEta('');
     }
   };
 
@@ -964,7 +1029,7 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
               type="button"
               onClick={pushToBriefAgent}
               disabled={briefBusy}
-              title="Download every article in this plan as a Word brief — bundled into one zip per audience segment"
+              title="Download every article in this plan as an Excel brief (Briefing Agent format) — bundled into one zip per audience segment"
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 7, cursor: briefBusy ? 'default' : 'pointer',
                 background: COL.purple, color: 'var(--c-08080f)', border: 'none', borderRadius: 9,
@@ -974,7 +1039,9 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
             >
               <i className={`ti ${briefBusy ? 'ti-loader-2' : briefDone ? 'ti-check' : 'ti-robot'}`} style={{ fontSize: 15 }} />
               {briefBusy
-                ? (briefProgress && briefProgress.total > 0 ? `Building briefs… ${briefProgress.done} of ${briefProgress.total}` : 'Building briefs…')
+                ? (briefProgress && briefProgress.total > 0
+                    ? `${briefPhase === 'enrich' ? 'Enriching' : 'Building'} briefs… ${briefProgress.done} of ${briefProgress.total}${briefEta ? ` · ${briefEta}` : ''}`
+                    : (briefPhase === 'enrich' ? 'Enriching briefs…' : 'Building briefs…'))
                 : briefDone ? 'Briefs downloaded' : 'Push to Brief Agent'}
             </button>
 
@@ -993,7 +1060,7 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
         {briefDone && (
           <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--c-77cc99)', background: 'var(--ca-52-211-153-0_05)', border: '1px solid var(--ca-52-211-153-0_2)', borderRadius: 8, padding: '8px 12px' }}>
             <i className="ti ti-file-zip" />
-            Bundle downloaded &mdash; one zip per audience segment, one Word brief per article inside.
+            Bundle downloaded &mdash; one zip per audience segment, one Excel brief (Briefing Agent format) per article inside.
           </div>
         )}
         {briefErr && (
