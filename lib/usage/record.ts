@@ -82,6 +82,14 @@ export const SEMRUSH_RATES: Record<string, number> = {
   domain_organic_organic: 40,  // Competitor discovery (NOT 10 — higher-cost report)
   phrase_questions:       40,  // Demand-side question keywords
   phrase_related:         40,  // Demand-side related keywords
+  // v7.367 — backlinks reports (verified at developer.semrush.com/api/seo/backlinks/, 2026-07-14):
+  backlinks_overview:        45,  // 45 per REQUEST — the report returns exactly 1 line, so rows×rate = 45 ✓
+  backlinks_anchors:         40,  // 40 per line
+  backlinks_ascore_profile:   1,  // 1 per line
+  // backlinks_categories_profile is NOT priced on the current docs page — deliberately left
+  // out of this table so it records at the assumed default WITH the rate_assumed_default
+  // meta note (an assumed rate is never passed off as verified).
+  phrase_this:            10,  // Keyword Overview (one database) — verified same date
 };
 // Conservative fallback for any report type not in the table — recorded with a
 // meta note so an assumed rate is never passed off as a verified one.
