@@ -100,6 +100,17 @@ export const projects = pgTable('projects', {
   // EXISTS (ensured in the projects-list route per the v7.268/v7.327 lesson). No db:push.
   taxonomyAnchor:            jsonb('taxonomy_anchor').$type<string[][]>(),
   taxonomyAnchorUpdatedAt:   timestamp('taxonomy_anchor_updated_at'),
+  // v7.366: Google Rank Authority scan snapshot — REAL Semrush backlink-authority signals
+  // (backlinks_overview / ascore profile / anchors / referring-domain categories / brand
+  // phrase volume) for the client + each competitor, pulled on demand from the Authority
+  // panel (Const I.1 — every count is a crawled Semrush row, dated; the Authority Score
+  // inside is Semrush's modeled composite and is labeled as such at render, I.5a). Lives
+  // on the PROJECT row — like brandTerms/taxonomyAnchor — so it survives the full keyword
+  // reset (which deletes analyses rows). Feeds the Authority Calculator panel (v7.367).
+  // Auto-migrated at runtime via ADD COLUMN IF NOT EXISTS (ensured in the projects-list +
+  // [id] + authority-scan routes per the v7.268/v7.327 column lesson). No manual db:push.
+  authoritySnapshot:          jsonb('authority_snapshot'),
+  authoritySnapshotUpdatedAt: timestamp('authority_snapshot_updated_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
