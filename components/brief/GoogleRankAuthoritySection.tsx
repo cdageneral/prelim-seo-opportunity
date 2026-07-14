@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * GoogleRankAuthoritySection (v7.367) — the Google Rank Authority panel.
+ * GoogleRankAuthoritySection (v7.368) — the Google Rank Authority panel.
  *
  * Shows the REAL Semrush backlink-authority profile of the client vs every
  * configured competitor (Const I.1 — every count on screen is a crawled
@@ -241,6 +241,14 @@ export default function GoogleRankAuthoritySection({
               Cancel
             </button>
           </div>
+          {/* v7.368: plain-language explanation of the two row limits (Wayne's ask). */}
+          <p className="text-[11px] text-orbit-tertiary mt-3">
+            <span className="font-medium text-orbit-secondary">Anchor rows</span> — the top anchor texts (the clickable
+            words other sites use when linking to each domain), ranked by how many different sites use them. This powers
+            the brand-vs-keyword anchor read; it&apos;s the expensive report at 40 units per row.{' '}
+            <span className="font-medium text-orbit-secondary">Category rows</span> — the topics Semrush files each
+            linking site under (e.g. Finance, Real Estate), which measures how on-topic a domain&apos;s link profile is.
+          </p>
           <p className="text-[11px] text-orbit-tertiary mt-2">{plan.note}</p>
         </div>
       )}
@@ -277,6 +285,16 @@ export default function GoogleRankAuthoritySection({
             Run the scan to pull the real backlink-authority profile for {domain} and each competitor from
             Semrush — you&apos;ll see the estimated API cost and confirm before anything is spent.
           </p>
+          {/* v7.368: primary CTA inside the empty state — the header button blended into the
+              background and Wayne could not find it (Const IV.4: the action lives where the data lives). */}
+          <button
+            onClick={requestPlan}
+            disabled={planning || scanning}
+            className="mt-4 inline-flex items-center gap-1.5 text-xs font-semibold px-5 py-2.5 rounded-lg bg-orbit-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            <i className={`ti ${planning ? 'ti-loader animate-spin' : 'ti-radar-2'}`} aria-hidden="true" />
+            Run authority scan
+          </button>
         </div>
       )}
 
