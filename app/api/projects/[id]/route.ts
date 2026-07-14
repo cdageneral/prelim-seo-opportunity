@@ -58,6 +58,13 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS taxonomy_anchor_updated_at TIMESTAMP`);         // v7.342
   } catch { /* already exists */ }
+  // v7.367: Google Rank Authority scan snapshot — project-level, survives keyword reset.
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS authority_snapshot JSONB`);                // v7.367
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS authority_snapshot_updated_at TIMESTAMP`); // v7.367
+  } catch { /* already exists */ }
   // v7.358: manual priority moves (ContentTopic.id → P0..P3). Ensured on the project-page load
   // path so the [id] GET's SELECT * never 500s before the priority-overrides route is hit.
   try {
