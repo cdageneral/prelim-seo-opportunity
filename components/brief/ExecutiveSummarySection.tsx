@@ -9,6 +9,8 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
+import { InsightStack } from '@/components/brief/InsightBanner';   // v7.366: insight-sentence layer
+import { probeAnchorInsight, aiWhitespaceInsight } from '@/lib/insights';   // v7.366 (A6 · A8)
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
 // analysis.aioAvailable/aioAcquired + serpFeatureSummary columns (stale after scans).
@@ -838,6 +840,26 @@ export default function ExecutiveSummarySection({
           ))}
         </div>
       </div>
+
+      {/* v7.366: exec insight sentences (A6 known-but-never-recommended · A8 AI
+          whitespace) — pure rules over the SAME probe figures the AI pillar and
+          the LLM panel show (Const II.6); real classified probe responses only
+          (I.1); null → nothing rendered (I.5). */}
+      <InsightStack insights={[
+        probeAnchorInsight({
+          brandedScore: brandedPct,
+          unbrandedScore: nonBrandedPct,
+          unbrandedTotal: isLlmProbeV2 ? (llmSnap.unbranded?.total ?? 0) : 0,
+        }),
+        aiWhitespaceInsight({
+          cats: (isLlmProbeV2 ? (llmSnap.categories ?? []) : []).map((c: any) => ({
+            category: String(c.category ?? ''),
+            monthlyDemand: c.monthlyDemand ?? 0,
+            mentions: (c.claudeMentions ?? 0) + (c.chatgptMentions ?? 0),
+            total: (c.claudeTotal ?? 0) + (c.chatgptTotal ?? 0),
+          })),
+        }),
+      ]} />
 
       {/* ═══ v7.312: AI ANSWER ENGINES — CMO VIEW (rolls up from nav 09) ═══ */}
       {pfHasData ? (

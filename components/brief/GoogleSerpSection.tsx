@@ -4,6 +4,8 @@ import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExclude
 import { computeSov, PAGE1_CTR_SUM, normSovDomain, type SovRawEntry } from '@/lib/sov/model';   // v7.335: shared SoV model (QC audit B2)
 import SegmentDownloadButton from './SegmentDownloadButton';
 import { exportRankBucketXLSX } from '@/lib/export/rankBucketExport';
+import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
+import { landGrabInsight } from '@/lib/insights';   // v7.366 (G2)
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -934,6 +936,27 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           </p>
         </div>
       </div>
+
+      {/* v7.366: G2 land-grab insight — the SAME computeSov() numbers the donut
+          above renders (Const II.6); click figures stay labeled with the curve
+          source (Const I.5a via ctrSource). One implementation — this panel is
+          rendered on Google Ranks AND the Executive Summary. */}
+      {(() => {
+        const openEntry  = rawEntries.find(e => e.type === 'open');
+        const rivals     = rawEntries.filter(e => e.type === 'competitor' || e.type === 'serp')
+          .slice().sort((a, b) => b.traffic - a.traffic);
+        return (
+          <InsightBanner insight={landGrabInsight({
+            clientPct: sovPct,
+            openPct: total > 0 && openEntry ? openEntry.traffic / total : 0,
+            availableClicks,
+            topRival: rivals.length > 0 && total > 0
+              ? { label: rivals[0].domain.replace(/^www\./, ''), pct: rivals[0].traffic / total }
+              : null,
+            ctrLabel: ctrSource,
+          })} />
+        );
+      })()}
 
       {/* v7.246: competitors on file with no usable page-1 ranking on shared
           keywords — shown as an honest gap (Const I.5), never a modeled/zero slice. */}

@@ -50,6 +50,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
+import { shadowCompetitorInsight, earnedFastPathInsight } from '@/lib/insights';   // v7.366 (A3 · A4)
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand' | 'citations';
@@ -885,8 +887,32 @@ function Analysis({ m }: { m: Metrics }) {
   const maxThemeAbs = Math.max(1, ...m.clientThemes.map((t) => Math.abs(netPct(t.pos, t.neg))));
   const maxBrandAbs = Math.max(1, ...m.sentBrands.map((t) => Math.abs(netPct(t.pos, t.neg))));
 
+  // v7.366: insight sentences (A3 shadow competitor · A4 earned-media fast path) —
+  // pure rules over the SAME uploaded-Profound tallies the cards below render
+  // (Const II.6); every count is a direct row tally (I.1); null → nothing (I.5).
+  const _updated = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString() : undefined;
+  const _earned  = m.citeCatMix.find((c) => c.category.toLowerCase().includes('earned'));
+  const _insights = [
+    shadowCompetitorInsight({
+      rival: topRival ? { brand: disp(topRival.brand), count: topRival.count, pct: topRival.pct } : null,
+      client: clientCov ? { count: clientCov.count, pct: clientCov.pct } : null,
+      promptN: m.promptN,
+      updatedAt: _updated,
+    }),
+    earnedFastPathInsight({
+      citeTotal: m.citeTotal || 0,
+      citeOwned: m.citeOwned || 0,
+      citeOwnedShare: m.citeOwnedShare || 0,
+      earnedShare: _earned ? _earned.pct : 0,
+      mentionHosts: (m.citeMentionSources || []).filter((h) => !h.isClient),
+      citeMentions: m.citeMentions || 0,
+      updatedAt: _updated,
+    }),
+  ];
+
   return (
     <div className="mt-6 space-y-6">
+      <InsightStack insights={_insights} />
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => (

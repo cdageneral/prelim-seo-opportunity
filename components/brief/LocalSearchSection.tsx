@@ -24,6 +24,8 @@ import { buildCategoryModel } from '@/lib/category/categoryModel';
 import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: mirror the Keyword panel's local-pack product lines
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298: competitor-brand guard (Const III.1a)
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
+import InsightBanner, { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
+import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
   buildLocalOpportunities, buildLocalIndex,
@@ -666,6 +668,36 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <TabBtn id="opp"  cur={tab} set={setTab} icon="🎯" label="Opportunities" cnt={roll ? roll.opps.opportunities.length : undefined} />
             </div>
 
+            {/* v7.366: insight sentences (L1 presence-vs-quality diagnosis · L2 pack
+                usurper · L3 review deficit) — pure rules over the SAME scan rollups
+                the tabs below render (Const II.6); real SerpAPI rows only (I.1);
+                nothing renders until a scan exists (I.5). */}
+            {scan && roll && (() => {
+              const miss = scan.keywords
+                .filter(k => k.packPresent && k.clientBestRank == null && k.packLeader)
+                .slice().sort((a, b) => (b.searchVolume || 0) - (a.searchVolume || 0))[0];
+              return (
+                <InsightStack style={{ marginTop: 8 }} insights={[
+                  localDiagnosisInsight({
+                    withPack: roll.pack.withPack,
+                    present: roll.pack.inPack,
+                    avgRank: roll.pack.avgRank > 0 ? roll.pack.avgRank : null,
+                    scanDate: scanDate ?? undefined,
+                  }),
+                  miss ? localUsurperInsight({
+                    top: { keyword: miss.keyword, searchVolume: miss.searchVolume || 0, leader: String(miss.packLeader) },
+                    clientLocations: clientLocations.length,
+                    scanDate: scanDate ?? undefined,
+                  }) : null,
+                  reviewDeficitInsight({
+                    avgRating: roll.reviews.avgRating > 0 ? roll.reviews.avgRating : null,
+                    totalReviews: roll.reviews.totalReviews,
+                    scanDate: scanDate ?? undefined,
+                  }),
+                ]} />
+              );
+            })()}
+
             {/* ===== SERVICE CATEGORIES (the local-pack keyword scan set — no scan needed) ===== */}
             {tab === 'kw' && (
               <div className="orbit-card p-5">
@@ -700,7 +732,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             )}
 
             {/* ===== other tabs require a scan ===== */}
-            {tab !== 'kw' && !scan && <EmptyScan onRun={() => (plan ? runScan() : requestPlan())} scanning={scanning} />}
+            {tab !== 'kw' && !scan && (
+              <EmptyScan
+                onRun={() => (plan ? runScan() : requestPlan())}
+                scanning={scanning}
+                teaser={localTeaserInsight({ packKwCount: scanKeywords.length, annualVol: 0 })}
+              />
+            )}
 
             {/* ===== LOCATIONS ===== */}
             {tab === 'loc' && scan && (
@@ -1022,9 +1060,17 @@ function MiniCard({ k, v, d, color, bar }: { k: string; v: string; d?: string; c
   );
 }
 
-function EmptyScan({ onRun, scanning }: { onRun: () => void; scanning: boolean }) {
+function EmptyScan({ onRun, scanning, teaser }: { onRun: () => void; scanning: boolean; teaser?: Insight | null }) {
   return (
     <div className="orbit-card p-5" style={{ textAlign: 'center', padding: '40px 20px' }}>
+      {/* v7.366: L4 stakes teaser — sized from the real Semrush local-pack flags,
+          so the empty state states what's at stake, not just a button (fires only
+          when ≥20 pack-triggering keywords exist; honest no-signal otherwise). */}
+      {teaser && (
+        <div style={{ textAlign: 'left', marginBottom: 16 }}>
+          <InsightBanner insight={teaser} />
+        </div>
+      )}
       <div style={{ fontSize: 28, marginBottom: 8 }}>🗺️</div>
       <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--c-f0f0ff)' }}>Run a local scan to populate this view</div>
       <div style={{ fontSize: 12, color: 'var(--c-8888aa)', margin: '6px 0 14px' }}>Discovers your Google Business listings and checks your map-pack rank for the top local keywords — all real SerpAPI data.</div>

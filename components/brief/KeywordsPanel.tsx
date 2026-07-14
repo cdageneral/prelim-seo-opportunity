@@ -8,6 +8,8 @@ import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: 
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';   // v7.337 (QC audit B12): ONE shared path-tree builder (also consumed by lib/local/serviceLines)
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
+import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
+import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2990,6 +2992,19 @@ function KwCategorySection({
   const overallShare = tVol > 0 ? (tP1 / tVol) * 100 : 0;
   const balanced     = selIdx === null && tKw === expectedCount;
 
+  // v7.366: G9 insight — big-category underperformance, computed over the SAME
+  // guarded top-level category nodes this table renders (Const III.1a via the
+  // model; II.6 — no forked math). Uses UNFILTERED totals (rank filter never
+  // changes the stated finding) and excludes the "Other" gap bucket so "your
+  // biggest categories" means real product categories. page-1 volume = rank
+  // bands 1–3 + 4–10, the same tP1 convention as the header chip.
+  const catInsight = bigCategoryInsight({
+    cats: allTop
+      .filter(c => c.name !== 'Other' && c.type === 'procedure')
+      .map(c => ({ name: c.name, monthlyDemand: c.totVol, page1Demand: c.vol[0] + c.vol[1] })),
+    overallShare: overallShare / 100,
+  });
+
   const renderTree = (nodes: CatNode[], dimmed: boolean) => {
     const flat: CatNode[] = [];
     flattenVisible(nodes, expanded, flat);
@@ -3019,6 +3034,12 @@ function KwCategorySection({
 
   return (
     <div style={{ borderBottom: '1px solid var(--c-111120)', background: 'var(--c-07070f)' }}>
+      {/* v7.366: G9 insight sentence above the category table */}
+      {catInsight && (
+        <div style={{ padding: '10px 20px 0' }}>
+          <InsightBanner insight={catInsight} />
+        </div>
+      )}
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 20px 6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

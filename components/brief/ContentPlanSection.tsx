@@ -15,6 +15,8 @@ import {
   readSegments, buildTopicSegmentMap, buildSegTags, filterPlanBySegment,
   SegmentFilterBar, SegTagChip, type SegTag,
 } from '@/components/brief/SegmentLens';
+import InsightBanner from '@/components/brief/InsightBanner';   // v7.366: insight-sentence layer
+import { executionGapInsight } from '@/lib/insights';   // v7.366 (E3)
 
 // ─── palette (matches the app's orbit-* dark theme) ─────────────────────────────
 const COL = {
@@ -1084,6 +1086,17 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
         </div>
       ) : selCount === 0 ? (
         <div style={{ padding: '48px 24px', textAlign: 'center', maxWidth: 520, margin: '0 auto' }}>
+          {/* v7.366: E3 execution-gap sentence — exact counts off the SAME canonical
+              plan the Content Map prioritizes (Const II.6/II.7). */}
+          <div style={{ textAlign: 'left', marginBottom: 14 }}>
+            <InsightBanner insight={executionGapInsight({
+              totalTopics: plan.topics.length,
+              p0Count: plan.topics.filter((t) => t.priority === 'P0').length,
+              p0MonthlyVol: plan.topics.filter((t) => t.priority === 'P0').reduce((s, t) => s + t.totalVol, 0),
+              quickWins: plan.topics.filter((t) => t.quickWin).length,
+              planCount: selCount,
+            })} />
+          </div>
           <div style={{ fontSize: 34, marginBottom: 12 }}>🗂️</div>
           <p style={{ color: COL.txt2, fontSize: 14, fontWeight: 600, margin: '0 0 6px' }}>Your content plan is empty</p>
           <p style={{ color: COL.mut, fontSize: 13, lineHeight: 1.6 }}>
@@ -1092,6 +1105,17 @@ export default function ContentPlanSection({ projectId, kwVersion, analysis, com
         </div>
       ) : (
         <>
+          {/* v7.366: E3 execution-gap sentence (plan populated — flips to the
+              "plan in motion" variant once the plan covers the P0 set). */}
+          <div style={{ margin: '0 0 10px' }}>
+            <InsightBanner insight={executionGapInsight({
+              totalTopics: plan.topics.length,
+              p0Count: plan.topics.filter((t) => t.priority === 'P0').length,
+              p0MonthlyVol: plan.topics.filter((t) => t.priority === 'P0').reduce((s, t) => s + t.totalVol, 0),
+              quickWins: plan.topics.filter((t) => t.quickWin).length,
+              planCount: selCount,
+            })} />
+          </div>
           {/* v7.353: segment lens — filter the picked plan to one audience segment's view
               (same attribution as the Audience Journeys panel; Shared shows under every
               segment). Chip counts are real row counts of the picked plan. */}

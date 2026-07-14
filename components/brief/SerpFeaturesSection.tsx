@@ -10,6 +10,8 @@ import {
   normDomain, domainsMatch, semrushFeaturesToBuckets, countUploadFeatures, buildFeaturePool,
   computeSerpFeatureRollup, type UploadKwRow, type FeaturePoolRow,
 } from '@/lib/serp/featurePool';
+import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
+import { aioTollBoothInsight } from '@/lib/insights';   // v7.366 (A2)
 
 /**
  * SerpFeaturesSection — v7.40
@@ -1394,6 +1396,19 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       {/* ═══ AIO TAB ═══ */}
       {activeTab === 'aio' && (
         <div className="orbit-card p-5 flex flex-col gap-5">
+
+          {/* v7.366: A2 insight sentence — the SAME scanned/AIO/citation rows the
+              KPI strip below renders (Const II.6); "missing" uses the v7.332
+              scan-verified definition, never Semrush-flagged-only rows (I.5). */}
+          <InsightBanner insight={aioTollBoothInsight({
+            scanned,
+            withAIO: aio.totalAios,
+            missing: aio.enrichedKws.filter(k => k.hasAIO && k.scanStatus !== 'unscanned' && !k.isClientCited).length,
+            clientCited: aio.clientStats?.aiosAcquired ?? 0,
+            topRival: aio.topCompetitor
+              ? { name: aio.topCompetitor.name, cited: aio.topCompetitor.aiosAcquired }
+              : null,
+          })} />
 
           {/* AIO KPI strip */}
           <div>

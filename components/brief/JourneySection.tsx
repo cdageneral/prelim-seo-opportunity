@@ -15,6 +15,8 @@ import { buildKwPool, filterUniverseExcludedBrands, buildCompetitorBrandDropTest
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.335 (QC audit B1): guard on buildClusters/classifier category reads (Const III.1a)
 import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
+import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
+import { mandateInsight, preProductZeroInsight } from '@/lib/insights';   // v7.366 (G6 + pre-product zero)
 
 // SSR-safe layout effect (avoids the useLayoutEffect-on-server warning).
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
@@ -1381,8 +1383,25 @@ function CombinedSummary({ preNodes, prodNodes }: { preNodes: JourneyNode[]; pro
     );
   };
 
+  // v7.366: insight sentences (G6 build-vs-optimize mandate + pre-product silent
+  // zero) — computed from the SAME node set the coverage cards below count
+  // (Const II.6). "Coverage" is never shown alone again: the mandate sentence
+  // states what coverage does and doesn't mean. Exact volume rollups (I.1).
+  const _allNodes   = preNodes.concat(prodNodes);
+  const _buildNodes = _allNodes.filter((n: JourneyNode) => n.state !== 'existing');
+  const _buildAnnualVol = _buildNodes.reduce((s: number, n: JourneyNode) => s + n.totalVol, 0) * 12;
+
   return (
     <div style={{ marginTop: 16 }}>
+      <InsightStack style={{ marginBottom: 10 }} insights={[
+        mandateInsight({
+          coveragePct: pct,
+          existingCount: preEx + prodEx,
+          buildCount: _buildNodes.length,
+          buildAnnualVol: _buildAnnualVol,
+        }),
+        preProductZeroInsight({ preTopics: preTot, prodTopics: prodTot }),
+      ]} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--c-6a6a90)' }}>Journey coverage — combined</span>
         <span style={{ fontSize: 10.5, color: 'var(--c-8080a0)' }}><span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: PRE_COLOR, marginRight: 4, verticalAlign: 'middle' }} />Pre-product</span>

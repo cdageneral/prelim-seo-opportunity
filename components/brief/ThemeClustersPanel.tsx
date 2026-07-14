@@ -7,6 +7,8 @@ import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTre
 import { buildJourneyClassifier } from './JourneySection';   // v7.203: single-source product/pre-product split
 import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
+import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
+import { demandInversionInsight, funnelBlindSpotInsight } from '@/lib/insights';   // v7.366 (G1 · G8)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2134,6 +2136,19 @@ function ClustersTab({
 
       {/* v7.241: "Refine clusters with AI" button removed (Wayne). The cluster pane is */}
       {/* display-only; the build/expansion lives on the Keyword panel's workflow bar.   */}
+
+      {/* v7.366: insight sentences (G1 demand inversion · G8 funnel blind spot) — pure
+          rules over the SAME leading/trailing + stage rollups the cards below render
+          (Const II.6); render nothing when a rule doesn't fire (Const I.5). */}
+      <InsightStack style={{ marginBottom: 12 }} insights={[
+        demandInversionInsight({
+          leadingCount: leadingStats.length,  leadingAnnualVol: ann(leadingStats),
+          trailingCount: trailingStats.length, trailingAnnualVol: ann(trailingStats),
+        }),
+        funnelBlindSpotInsight({
+          stages: stageRollups.map(r => ({ label: STAGE_META[r.stage].label, topics: r.total, annualVol: r.annualVol })),
+        }),
+      ]} />
 
       {/* ── Top cards: total hero (left) · group cards (middle) · funnel (right) ── */}
       {/* v7.148: 3-col layout — clickable total hero filters to 'all'; the three  */}
