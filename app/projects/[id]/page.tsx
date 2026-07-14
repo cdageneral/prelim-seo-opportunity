@@ -25,6 +25,7 @@ import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection'
 import ScopeSection          from '@/components/brief/ScopeSection';
 import LocalSearchSection     from '@/components/brief/LocalSearchSection';
 import ApiUsageSection        from '@/components/brief/ApiUsageSection';
+import GoogleRankAuthoritySection from '@/components/brief/GoogleRankAuthoritySection';   // v7.367
 import { getMarket } from '@/lib/utils/markets';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
@@ -1660,8 +1661,21 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Google Rank Authority (v7.367) — independent of analysis: domain-level Semrush
+                 backlink signals exist without a keyword run. Scroll root per Const IV.1. ── */}
+          {activeSection === 'authority' && project && (
+            <div className="overflow-y-auto flex-1 min-h-0 p-3 animate-fade-in">
+              <GoogleRankAuthoritySection
+                projectId={projectId}
+                projectName={project.clientName}
+                domain={domainDisplay}
+                competitors={project.competitors}
+              />
+            </div>
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && activeSection !== 'authority' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
