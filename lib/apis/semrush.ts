@@ -904,3 +904,115 @@ export async function estimateSemrushPull(
     isCeiling:   clientVolMin > 0 || competitorVolMin > 0,
   };
 }
+
+// ─── v7.367: Backlink authority signals (Google Rank Authority panel) ─────────
+//
+// Backlinks reports live on the analytics/v1 endpoint (NOT the classic base):
+//   https://api.semrush.com/analytics/v1/?type=backlinks_overview&target=…&target_type=…
+// Docs + verified unit rates: https://developer.semrush.com/api/seo/backlinks/
+// (overview 45/request, anchors 40/line, ascore profile 1/line — rates recorded
+// in lib/usage/record.ts SEMRUSH_RATES, checked 2026-07-14).
+// Every function returns REAL crawled counts from Semrush's index (Const I.1);
+// an ERROR/empty response yields null — an honest gap (I.5), never a zero.
+
+const SEMRUSH_BACKLINKS_BASE = 'https://api.semrush.com/analytics/v1/';
+
+export type BacklinksTargetType = 'root_domain' | 'domain' | 'url';
+
+async function semrushBacklinksGet(params: Record<string, string>): Promise<string> {
+  const API_KEY = process.env.SEMRUSH_API_KEY;
+  if (!API_KEY) throw new Error('SEMRUSH_API_KEY is not set — skipping Semrush');
+  const qs = new URLSearchParams({ ...params, key: API_KEY });
+  const res = await fetch(`${SEMRUSH_BACKLINKS_BASE}?${qs.toString()}`, { signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`Semrush backlinks API error ${res.status}: ${await res.text()}`);
+  const body = await res.text();
+  await recordSemrush(params.type, body, API_KEY);   // real unit consumption → ledger (v7.225)
+  return body;
+}
+
+export interface BacklinksOverview {
+  ascore:     number;   // Semrush Authority Score — a MODELED composite (Const I.5a: shorthand only, labeled on-panel)
+  total:      number;   // total backlinks in Semrush's index
+  refDomains: number;   // unique referring domains
+  follows:    number;
+  nofollows:  number;
+}
+
+export async function getBacklinksOverview(target: string, targetType: BacklinksTargetType): Promise<BacklinksOverview | null> {
+  const raw = await semrushBacklinksGet({
+    type: 'backlinks_overview', target, target_type: targetType,
+    export_columns: 'ascore,total,domains_num,follows_num,nofollows_num',
+  });
+  const row = parseSemrushCSV(raw)[0];
+  if (!row) return null;
+  return {
+    ascore:     parseInt(row['ascore'] ?? '0'),
+    total:      parseInt(row['total'] ?? '0'),
+    refDomains: parseInt(row['domains_num'] ?? '0'),
+    follows:    parseInt(row['follows_num'] ?? '0'),
+    nofollows:  parseInt(row['nofollows_num'] ?? '0'),
+  };
+}
+
+/** Referring-domain count per Authority Score value (0–100). Raw distribution, 1 unit/line. */
+export async function getBacklinksAscoreProfile(target: string, targetType: BacklinksTargetType): Promise<Record<string, number> | null> {
+  const raw = await semrushBacklinksGet({ type: 'backlinks_ascore_profile', target, target_type: targetType });
+  const rows = parseSemrushCSV(raw);
+  if (!rows.length) return null;
+  const out: Record<string, number> = {};
+  rows.forEach(r => {
+    const score = r['ascore']; const n = parseInt(r['domains_num'] ?? '0');
+    if (score !== undefined && !isNaN(n)) out[score] = n;
+  });
+  return out;
+}
+
+export interface BacklinksAnchor { anchor: string; domains: number; backlinks: number; }
+
+/** Top anchors by referring-domain count. 40 units/line — the caller shows the row limit + cost before running. */
+export async function getBacklinksAnchors(target: string, targetType: BacklinksTargetType, limit = 50): Promise<BacklinksAnchor[] | null> {
+  const raw = await semrushBacklinksGet({
+    type: 'backlinks_anchors', target, target_type: targetType,
+    display_limit: String(limit), display_sort: 'domains_num_desc',
+    export_columns: 'anchor,domains_num,backlinks_num',
+  });
+  const rows = parseSemrushCSV(raw);
+  if (!rows.length) return null;
+  return rows.map(r => ({
+    anchor:    r['anchor'] ?? '',
+    domains:   parseInt(r['domains_num'] ?? '0'),
+    backlinks: parseInt(r['backlinks_num'] ?? '0'),
+  }));
+}
+
+export interface BacklinksCategory { name: string; rating: number; }
+
+/** Topical categories of the referring domains (Semrush's MODELED classifier — labeled on-panel). */
+export async function getBacklinksCategoriesProfile(target: string, targetType: BacklinksTargetType, limit = 25): Promise<BacklinksCategory[] | null> {
+  const raw = await semrushBacklinksGet({
+    type: 'backlinks_categories_profile', target, target_type: targetType,
+    display_limit: String(limit),
+  });
+  const rows = parseSemrushCSV(raw);
+  if (!rows.length) return null;
+  return rows.map(r => ({
+    name:   r['category_name'] ?? '',
+    rating: parseInt(r['rating'] ?? '0'),
+  }));
+}
+
+/** Real US-database monthly volume for one phrase (phrase_this, 10 units/line) — the entity-demand signal. */
+export async function getPhraseVolume(phrase: string, database = 'us'): Promise<number | null> {
+  try {
+    const raw = await semrushGet({
+      type: 'phrase_this', phrase, database,
+      export_columns: 'Ph,Nq',
+    });
+    const row = parseSemrushCSV(raw)[0];
+    if (!row) return null;
+    const v = parseInt(row['Search Volume'] ?? row['Nq'] ?? '');
+    return isNaN(v) ? null : v;
+  } catch {
+    return null;   // phrase not in the database — honest gap, never a fabricated zero
+  }
+}
