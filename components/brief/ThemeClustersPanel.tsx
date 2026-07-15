@@ -1685,44 +1685,47 @@ const TH_BASE: React.CSSProperties = {
   background: 'var(--c-0b0b15)',
 };
 
-// v7.371: Content-Plan "add to cart" for the theme cluster panel. Same mechanic the Journey
-// list and Content Map already use — a topic (or a whole theme / umbrella) checked here pushes
-// its topic id(s) into the SAME shared plan selection the Content Plan sub-nav reads & writes
-// (Const II.7, one source of truth, no parallel copy). The taxonomy topic id (`Topic.id`, e.g.
-// `tax:<node>` / `<cluster>::<intent>`) IS the ContentTopic.id the plan is keyed by, so a check
-// here and a check on the Journey/Content-Map row toggle the exact same entry. selRef mirrors the
-// live set so rapid sequential toggles chain correctly (each PUT replaces the full set). Optimistic
-// with revert-on-failure so the UI never claims a save that didn't happen (honest gap, I.5).
+// v7.371: Content-Plan "add to cart" for the theme cluster panel. Same shared selection the
+// Journey list and Content Map write — a topic (or a whole theme / umbrella) checked here pushes
+// its topic id(s) into the ONE content-plan selection the Content Plan sub-nav reads (Const II.7).
+// The taxonomy topic id (`Topic.id`, e.g. `tax:<node>` / `<cluster>::<intent>`) IS the
+// ContentTopic.id the plan is keyed by, so a check here and a check on the Journey/Content-Map row
+// toggle the exact same entry.
+//
+// v7.372 FIX: the write is a serialized READ-MODIFY-WRITE against fresh server state — not a
+// full-set-replace from a local copy. The v7.371 version PUT this panel's own `planIds` as the
+// whole selection; if that copy was stale (another panel had added topics, or a rapid earlier
+// click raced), the PUT overwrote the real selection and dropped everything it didn't know about,
+// and an "uncheck" whose local state was wrong would re-add instead of remove. Now each toggle
+// re-reads the current selection, applies ONLY its own add/remove delta, writes, and resyncs local
+// from the server's returned set — so cross-panel selections are never clobbered (Const I.1).
 function useContentPlanSelection(projectId: string, kwVersion: number) {
   const [planIds,   setPlanIds]   = useState<Set<string>>(new Set());
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
   const selRef = useRef<Set<string>>(new Set());
+  // Serialize writes so overlapping GET→PUT cycles (rapid clicks) can't race the full-replace route.
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => { selRef.current = planIds; }, [planIds]);
 
+  // Load / resync the authoritative selection. On mount, on kwVersion change, and on window focus —
+  // so the checkboxes reflect selections made in OTHER panels rather than a stale local copy.
+  const loadFromServer = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const r = await fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' });   // always fresh (v7.262)
+      const d = r.ok ? await r.json() : { selections: [] };
+      const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
+      selRef.current = s; setPlanIds(s);
+    } catch { /* honest gap: leave selection as-is on failure (I.5) */ }
+  }, [projectId]);
+
+  useEffect(() => { void loadFromServer(); }, [loadFromServer, kwVersion]);
   useEffect(() => {
     if (!projectId) return;
-    let cancelled = false;
-    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })   // always fresh (v7.262)
-      .then((r: Response) => r.ok ? r.json() : { selections: [] })
-      .then((d: any) => {
-        if (cancelled) return;
-        const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
-        selRef.current = s; setPlanIds(s);
-      })
-      .catch(() => { /* honest gap: leave selection empty on failure (I.5) */ });
-    return () => { cancelled = true; };
-  }, [projectId, kwVersion]);
-
-  const persistPlan = (prev: Set<string>, next: Set<string>, affected: string[]) => {
-    selRef.current = next; setPlanIds(next);
-    setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.add(id)); return n; });
-    fetch(`/api/projects/${projectId}/content-plan`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
-    })
-      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
-      .catch(() => { selRef.current = prev; setPlanIds(prev); })
-      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.delete(id)); return n; }));
-  };
+    const onFocus = () => { void loadFromServer(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [projectId, loadFromServer]);
 
   // 'none' | 'some' | 'all' over an id list (a topic = [id]; a theme/umbrella = every topic id
   // under it). Drives the checkbox + the indeterminate dash on a partially-added header.
@@ -1732,15 +1735,44 @@ function useContentPlanSelection(projectId: string, kwVersion: number) {
     return inn === 0 ? 'none' : inn === ids.length ? 'all' : 'some';
   };
   const savingForIds = (ids: string[]): boolean => ids.some(k => savingIds.has(k));
-  // A fully-added set clears its ids; otherwise it adds them all (a 'some' header fills to 'all'
-  // on first click, then clears on the next).
+
+  // Toggle the given ids. The add-vs-remove decision comes from what the user sees (selRef, updated
+  // synchronously so a rapid follow-up click chains correctly); the change is then applied to the
+  // CURRENT server set so other panels' selections are preserved. Optimistic; resynced from the
+  // PUT response, reverted to true server state on failure.
   const toggleIds = (ids: string[]) => {
     if (!projectId || ids.length === 0) return;
-    const prev = new Set(selRef.current);
-    const next = new Set(prev);
-    if (planStateForIds(ids) === 'all') for (const k of ids) next.delete(k);
-    else                                for (const k of ids) next.add(k);
-    persistPlan(prev, next, ids);
+    const inn = ids.reduce((n, id) => n + (selRef.current.has(id) ? 1 : 0), 0);
+    const action: 'add' | 'remove' = inn === ids.length ? 'remove' : 'add';
+
+    setSavingIds((s: Set<string>) => { const n = new Set(s); ids.forEach(id => n.add(id)); return n; });
+    setPlanIds((prev: Set<string>) => {                                   // optimistic
+      const n = new Set(prev);
+      if (action === 'remove') ids.forEach(id => n.delete(id));
+      else                     ids.forEach(id => n.add(id));
+      selRef.current = n; return n;
+    });
+
+    chainRef.current = chainRef.current.then(async () => {
+      try {
+        const gr = await fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' });   // fresh read
+        const gd = gr.ok ? await gr.json() : { selections: [] };
+        const server = new Set<string>(Array.isArray(gd.selections) ? gd.selections : []);
+        if (action === 'remove') ids.forEach(id => server.delete(id));    // apply ONLY this delta
+        else                     ids.forEach(id => server.add(id));
+        const pr = await fetch(`/api/projects/${projectId}/content-plan`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(server) }),
+        });
+        if (!pr.ok) throw new Error('save failed');
+        const pd = await pr.json();
+        const saved = new Set<string>(Array.isArray(pd.selections) ? pd.selections : Array.from(server));
+        selRef.current = saved; setPlanIds(saved);                        // resync to server truth
+      } catch {
+        await loadFromServer();                                          // revert optimistic to real state (I.5)
+      } finally {
+        setSavingIds((s: Set<string>) => { const n = new Set(s); ids.forEach(id => n.delete(id)); return n; });
+      }
+    }).catch(() => { /* chain never rejects — each op self-heals above */ });
   };
   return { planIds, savingIds, planStateForIds, savingForIds, toggleIds };
 }
