@@ -13,6 +13,10 @@ import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { MARKETS } from '@/lib/utils/markets';
+// v7.373: per-project access wall + audit. No-ops while AUTH_ENFORCED is off.
+import { checkProjectAccess } from '@/lib/auth/access';
+import { authEnforced, canWrite, seesAllProjects } from '@/lib/auth/config';
+import { recordEvent } from '@/lib/auth/audit';
 
 async function ensureColumns() {
   try {
@@ -94,8 +98,12 @@ const UpdateSchema = z.object({
   excludedBrands:           z.array(z.string().max(120)).max(1000).optional(),
 }).strict();
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureColumns();
+  // v7.373: block users without access to this project (open when flag off).
+  const gate = await checkProjectAccess(params.id);
+  if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
+
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, params.id),
     with: {
@@ -112,11 +120,19 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   });
 
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  // v7.373: record that this user opened the project (real audit event, Const I.1).
+  await recordEvent(req, { action: 'project.open', projectId: project.id, projectName: project.clientName });
   return NextResponse.json({ project });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureColumns();
+  // v7.373: require access + write permission (viewers are read-only).
+  const gate = await checkProjectAccess(params.id);
+  if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
+  if (authEnforced() && gate.user && !canWrite(gate.user.role)) {
+    return NextResponse.json({ error: 'Viewers cannot edit projects' }, { status: 403 });
+  }
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -150,10 +166,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .returning();
 
   if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  // v7.373: record the edit (real audit event, Const I.1).
+  await recordEvent(req, { action: 'project.edit', projectId: updated.id, projectName: updated.clientName });
   return NextResponse.json({ project: updated });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  // v7.373: deleting a project requires access; when enforced, owner/admin only.
+  const gate = await checkProjectAccess(params.id);
+  if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
+  if (authEnforced() && gate.user && !seesAllProjects(gate.user.role)) {
+    return NextResponse.json({ error: 'Only owners and admins can delete a project' }, { status: 403 });
+  }
+  const existing = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
   await db.delete(projects).where(eq(projects.id, params.id));
+  if (existing) {
+    await recordEvent(req, { action: 'project.delete', projectId: params.id, projectName: existing.clientName });
+  }
   return NextResponse.json({ success: true });
 }
