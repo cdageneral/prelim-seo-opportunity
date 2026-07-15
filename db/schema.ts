@@ -300,3 +300,71 @@ export type ProjectKeyword    = typeof projectKeywords.$inferSelect;
 export type NewProjectKeyword = typeof projectKeywords.$inferInsert;
 export type ApiUsage          = typeof apiUsage.$inferSelect;
 export type NewApiUsage       = typeof apiUsage.$inferInsert;
+
+// ─── Auth & Access (v7.373) ─────────────────────────────────────────────────
+// The app shipped with no authentication (middleware was a no-op; the projects
+// table carried unused clerk_* columns). v7.373 adds a real login + admin layer:
+// role tiers (owner/admin/editor/viewer) + per-project grants + an audit trail.
+// Enforcement is gated behind the AUTH_ENFORCED env flag (see lib/auth/config.ts)
+// so the app behaves exactly as before until the flag is turned on.
+// These tables are created at runtime via ensureAuthTables() (CREATE TABLE IF
+// NOT EXISTS) — the build is `next build` only, never drizzle-kit push, so the
+// schema below documents shape while the runtime ensure creates the tables.
+
+export const userRoleEnum   = pgEnum('user_role',   ['owner', 'admin', 'editor', 'viewer']);
+export const userStatusEnum = pgEnum('user_status', ['active', 'pending', 'suspended']);
+
+export const appUsers = pgTable('app_users', {
+  id:           uuid('id').defaultRandom().primaryKey(),
+  email:        text('email').notNull().unique(),
+  name:         text('name').notNull(),
+  // null while a user is invited-but-has-not-set-a-password (status 'pending')
+  passwordHash: text('password_hash'),
+  role:         userRoleEnum('role').notNull().default('viewer'),
+  status:       userStatusEnum('status').notNull().default('active'),
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  lastLoginAt:  timestamp('last_login_at'),
+});
+
+// Per-project grant: which projects a user may open. Owner/Admin bypass this
+// (they see all projects); Editor/Viewer see only granted rows.
+export const projectAccess = pgTable('project_access', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  userId:    uuid('user_id').notNull().references(() => appUsers.id, { onDelete: 'cascade' }),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const authSessions = pgTable('auth_sessions', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  userId:    uuid('user_id').notNull().references(() => appUsers.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  revokedAt: timestamp('revoked_at'),
+  ip:        text('ip'),
+  userAgent: text('user_agent'),
+});
+
+// The activity log. Every row is a REAL event (Const I.1) — logins, project
+// opens, creates, edits, user-management actions. actor_* are denormalized so
+// the log stays stable if a user is later removed (no FK on actor_user_id).
+export const auditEvents = pgTable('audit_events', {
+  id:          uuid('id').defaultRandom().primaryKey(),
+  actorUserId: uuid('actor_user_id'),
+  actorEmail:  text('actor_email'),
+  actorName:   text('actor_name'),
+  action:      text('action').notNull(),
+  projectId:   uuid('project_id'),
+  projectName: text('project_name'),
+  meta:        jsonb('meta').$type<Record<string, unknown>>(),
+  ip:          text('ip'),
+  userAgent:   text('user_agent'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+});
+
+export type AppUser       = typeof appUsers.$inferSelect;
+export type NewAppUser    = typeof appUsers.$inferInsert;
+export type ProjectAccess = typeof projectAccess.$inferSelect;
+export type AuthSession   = typeof authSessions.$inferSelect;
+export type AuditEvent    = typeof auditEvents.$inferSelect;
+export type NewAuditEvent = typeof auditEvents.$inferInsert;
