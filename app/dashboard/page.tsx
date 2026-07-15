@@ -15,10 +15,16 @@ interface Project {
   updatedAt:  string;
 }
 
+interface Me { name: string; role: string }
+
 export default function DashboardPage() {
   const [projects, setProjects]         = useState<Project[]>([]);
   const [loading, setLoading]           = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
+  // v7.373: auth-aware header (Admin link + sign-out). All optional — the app
+  // works signed-out while AUTH_ENFORCED is off.
+  const [me, setMe]           = useState<Me | null>(null);
+  const [enforced, setEnforced] = useState(false);
 
   async function fetchProjects() {
     const res  = await fetch('/api/projects');
@@ -27,7 +33,24 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
-  useEffect(() => { fetchProjects(); }, []);
+  async function fetchMe() {
+    try {
+      const res = await fetch('/api/auth/me', { cache: 'no-store' });
+      const data = await res.json();
+      setMe(data.user ?? null);
+      setEnforced(Boolean(data.enforced));
+    } catch { /* auth optional */ }
+  }
+
+  async function signOut() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    window.location.href = '/sign-in';
+  }
+
+  useEffect(() => { fetchProjects(); fetchMe(); }, []);
+
+  const isAdmin = me?.role === 'owner' || me?.role === 'admin';
+  const showAdmin = isAdmin || !enforced;
 
   async function handleDelete(id: string) {
     await fetch(`/api/projects/${id}`, { method: 'DELETE' });
@@ -52,6 +75,17 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             {/* v7.185: global dark/light theme toggle */}
             <ThemeToggle />
+          {/* v7.373: admin panel (users, roles, activity) — owner/admin, or during
+              the pre-enforcement setup window */}
+          {showAdmin && (
+            <Link
+              href="/admin"
+              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors"
+            >
+              <i className="ti ti-users-group" aria-hidden="true" />
+              Admin
+            </Link>
+          )}
           {/* v7.225: global Dashboard button — opens the cross-project API usage dashboard */}
           <Link
             href="/usage"
@@ -60,6 +94,18 @@ export default function DashboardPage() {
             <i className="ti ti-gauge" aria-hidden="true" />
             Dashboard
           </Link>
+          {me && (
+            <button
+              onClick={signOut}
+              title={`${me.name} · sign out`}
+              className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary transition-colors"
+            >
+              <span className="w-6 h-6 rounded-full bg-orbit-accent/20 text-orbit-accent-light text-[10px] font-mono font-bold flex items-center justify-center">
+                {me.name.split(' ').map(s => s[0]).slice(0, 2).join('')}
+              </span>
+              Sign out
+            </button>
+          )}
           <button
             onClick={() => setShowNewModal(true)}
             className="flex items-center gap-2 bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
