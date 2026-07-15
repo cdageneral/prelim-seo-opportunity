@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useCallback, Fragment } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback, Fragment } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, buildCompetitorBrandTokens, textHasCompetitorBrand, buildExcludedBrandTokens } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a)
 import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTree';   // v7.239: ONE shared tree builder — same source as the Keyword panel (Const II.7)
@@ -1685,9 +1685,97 @@ const TH_BASE: React.CSSProperties = {
   background: 'var(--c-0b0b15)',
 };
 
+// v7.371: Content-Plan "add to cart" for the theme cluster panel. Same mechanic the Journey
+// list and Content Map already use — a topic (or a whole theme / umbrella) checked here pushes
+// its topic id(s) into the SAME shared plan selection the Content Plan sub-nav reads & writes
+// (Const II.7, one source of truth, no parallel copy). The taxonomy topic id (`Topic.id`, e.g.
+// `tax:<node>` / `<cluster>::<intent>`) IS the ContentTopic.id the plan is keyed by, so a check
+// here and a check on the Journey/Content-Map row toggle the exact same entry. selRef mirrors the
+// live set so rapid sequential toggles chain correctly (each PUT replaces the full set). Optimistic
+// with revert-on-failure so the UI never claims a save that didn't happen (honest gap, I.5).
+function useContentPlanSelection(projectId: string, kwVersion: number) {
+  const [planIds,   setPlanIds]   = useState<Set<string>>(new Set());
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const selRef = useRef<Set<string>>(new Set());
+  useEffect(() => { selRef.current = planIds; }, [planIds]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' })   // always fresh (v7.262)
+      .then((r: Response) => r.ok ? r.json() : { selections: [] })
+      .then((d: any) => {
+        if (cancelled) return;
+        const s = new Set<string>(Array.isArray(d.selections) ? d.selections : []);
+        selRef.current = s; setPlanIds(s);
+      })
+      .catch(() => { /* honest gap: leave selection empty on failure (I.5) */ });
+    return () => { cancelled = true; };
+  }, [projectId, kwVersion]);
+
+  const persistPlan = (prev: Set<string>, next: Set<string>, affected: string[]) => {
+    selRef.current = next; setPlanIds(next);
+    setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.add(id)); return n; });
+    fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(next) }),
+    })
+      .then((r: Response) => { if (!r.ok) throw new Error('save failed'); })
+      .catch(() => { selRef.current = prev; setPlanIds(prev); })
+      .finally(() => setSavingIds((s: Set<string>) => { const n = new Set(s); affected.forEach(id => n.delete(id)); return n; }));
+  };
+
+  // 'none' | 'some' | 'all' over an id list (a topic = [id]; a theme/umbrella = every topic id
+  // under it). Drives the checkbox + the indeterminate dash on a partially-added header.
+  const planStateForIds = (ids: string[]): 'none' | 'some' | 'all' => {
+    if (ids.length === 0) return 'none';
+    let inn = 0; for (const k of ids) if (planIds.has(k)) inn++;
+    return inn === 0 ? 'none' : inn === ids.length ? 'all' : 'some';
+  };
+  const savingForIds = (ids: string[]): boolean => ids.some(k => savingIds.has(k));
+  // A fully-added set clears its ids; otherwise it adds them all (a 'some' header fills to 'all'
+  // on first click, then clears on the next).
+  const toggleIds = (ids: string[]) => {
+    if (!projectId || ids.length === 0) return;
+    const prev = new Set(selRef.current);
+    const next = new Set(prev);
+    if (planStateForIds(ids) === 'all') for (const k of ids) next.delete(k);
+    else                                for (const k of ids) next.add(k);
+    persistPlan(prev, next, ids);
+  };
+  return { planIds, savingIds, planStateForIds, savingForIds, toggleIds };
+}
+
+// v7.371: the "add to cart" box — mirrors the Journey list's PlanCheckbox exactly.
+// none → empty, all → green check, some → indeterminate dash. Stops propagation so a row's own
+// click (expand / collapse) doesn't also fire. Theme-token colors only (Const IV.6 / V.5).
+function PlanCheckbox({ state, saving, onToggle, label, size = 15 }: {
+  state: 'none' | 'some' | 'all'; saving: boolean; onToggle: () => void; label: string; size?: number;
+}) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={state === 'some' ? 'mixed' : state === 'all'}
+      aria-label={label}
+      title={state === 'all' ? 'Remove from Content Plan' : 'Add to Content Plan'}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        width: size, height: size, borderRadius: 4, cursor: 'pointer', boxSizing: 'border-box',
+        background: state === 'all' ? 'var(--c-34d399)' : state === 'some' ? 'var(--ca-52-211-153-0_1)' : 'var(--c-0d0d1e)',
+        border: `1.4px solid ${state === 'none' ? 'var(--c-4a4a6a)' : 'var(--c-34d399)'}`,
+        opacity: saving ? 0.55 : 1, transition: 'all 0.12s',
+      }}
+    >
+      {state === 'all'  && <i className="ti ti-check" style={{ fontSize: size - 5, fontWeight: 700, color: 'var(--c-08080f)' }} aria-hidden="true" />}
+      {state === 'some' && <span style={{ width: size - 8, height: 2, borderRadius: 1, background: 'var(--c-34d399)' }} />}
+    </span>
+  );
+}
+
 function TopicTable({
   rows, sortKey, sortDir, onSort, expanded, onToggle, expandedParents, onToggleParent,
   expandedUmbrellas, onToggleUmbrella,
+  planEnabled, planStateForIds, savingForIds, toggleIds,
 }: {
   rows: TopicRow[]; sortKey: SortKey; sortDir: 1 | -1; onSort: (k: SortKey) => void;
   expanded: Set<string>; onToggle: (id: string) => void;
@@ -1696,6 +1784,11 @@ function TopicTable({
   expandedParents: Set<string>; onToggleParent: (name: string) => void;
   // v7.236: umbrella-collapse — the level above theme (mirrors the Keyword tree).
   expandedUmbrellas: Set<string>; onToggleUmbrella: (name: string) => void;
+  // v7.371: Content-Plan add-to-cart wiring (from the shared useContentPlanSelection hook).
+  planEnabled: boolean;
+  planStateForIds: (ids: string[]) => 'none' | 'some' | 'all';
+  savingForIds: (ids: string[]) => boolean;
+  toggleIds: (ids: string[]) => void;
 }) {
   const cols: Array<{ k: SortKey; label: string; align: 'left' | 'right' }> = [
     { k: 'group',    label: 'Theme · product', align: 'left'  },
@@ -1731,11 +1824,17 @@ function TopicTable({
             // taxonomy parent (path[0]) — the same top level the Keyword tree shows.
             const agg = new Map<string, { n: number; vol: number }>();
             const umbAgg = new Map<string, { n: number; vol: number }>();
+            // v7.371: topic ids under each theme / umbrella, so the header checkbox can toggle
+            // the whole group into the Content Plan in one click (keyed exactly like `agg`/`umbAgg`).
+            const themeIds = new Map<string, string[]>();
+            const umbIds = new Map<string, string[]>();
             for (const r of rows) {
               const a = agg.get(r.t.parentName) ?? { n: 0, vol: 0 };
               a.n += 1; a.vol += r.t.totalVolume; agg.set(r.t.parentName, a);
               const u = umbAgg.get(r.t.umbrella) ?? { n: 0, vol: 0 };
               u.n += 1; u.vol += r.t.totalVolume; umbAgg.set(r.t.umbrella, u);
+              (themeIds.get(r.t.parentName) ?? themeIds.set(r.t.parentName, []).get(r.t.parentName)!).push(r.t.id);
+              (umbIds.get(r.t.umbrella) ?? umbIds.set(r.t.umbrella, []).get(r.t.umbrella)!).push(r.t.id);
             }
             const out: React.ReactNode[] = [];
             let lastUmbrella: string | null = null;
@@ -1758,6 +1857,9 @@ function TopicTable({
                     <td colSpan={7} style={{ padding: '10px 12px', background: 'var(--c-0b0b15)', borderLeft: '3px solid var(--c-6c63ff)', borderTop: '1px solid var(--c-1a1a30)', borderBottom: '1px solid var(--c-23233a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          {planEnabled && (() => { const ids = umbIds.get(t.umbrella) ?? []; return (
+                            <PlanCheckbox state={planStateForIds(ids)} saving={savingForIds(ids)} onToggle={() => toggleIds(ids)} label={`Add ${t.umbrella} to Content Plan`} size={16} />
+                          ); })()}
                           <i className={`ti ti-chevron-${uOpen ? 'down' : 'right'}`} style={{ fontSize: 13, color: 'var(--c-8b85ff)', flexShrink: 0 }} aria-hidden="true" />
                           <span style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-ececff)', letterSpacing: '.01em' }}>{t.umbrella}</span>
                           {!selfUmb && <span style={{ fontSize: 9, color: 'var(--c-585878)', textTransform: 'uppercase', letterSpacing: '.06em' }}>umbrella</span>}
@@ -1789,6 +1891,9 @@ function TopicTable({
                     <td colSpan={7} style={{ padding: '8px 12px 8px 30px', background: ptm.headBg, borderLeft: `3px solid ${ptm.color}`, borderBottom: '1px solid var(--c-23233a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          {planEnabled && (() => { const ids = themeIds.get(t.parentName) ?? []; return (
+                            <PlanCheckbox state={planStateForIds(ids)} saving={savingForIds(ids)} onToggle={() => toggleIds(ids)} label={`Add ${t.parentName} to Content Plan`} size={15} />
+                          ); })()}
                           <i className={`ti ti-chevron-${isOpen ? 'down' : 'right'}`} style={{ fontSize: 13, color: ptm.color, flexShrink: 0 }} aria-hidden="true" />
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
                         </span>
@@ -1820,6 +1925,9 @@ function TopicTable({
                   >
                     <td style={{ padding: '8px 10px', paddingLeft: childPad, borderBottom: '1px solid var(--c-15152a)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {planEnabled && (
+                          <PlanCheckbox state={planStateForIds([t.id])} saving={savingForIds([t.id])} onToggle={() => toggleIds([t.id])} label={`Add ${t.product} to Content Plan`} size={15} />
+                        )}
                         <i className={`ti ti-chevron-${open ? 'down' : 'right'}`} style={{ fontSize: 12, color: 'var(--c-4a4a6a)', flexShrink: 0 }} aria-hidden="true" />
                         <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--c-d8d8f8)' }}>{t.product}</span>
                         {t.pageUrl && (
@@ -1887,6 +1995,8 @@ function ClustersTab({
   refineError = null,
   aiRefined = false,
   keywordPaths,
+  projectId,
+  kwVersion = 0,
 }: {
   clusters:      ThemeCluster[];
   clientDomain:  string;
@@ -1897,8 +2007,14 @@ function ClustersTab({
   refineProgress?:  { done: number; total: number; label: string; startedAt: number } | null;
   refineError?:     string | null;
   aiRefined?:       boolean;
+  projectId?:       string;   // v7.371: needed for the Content-Plan add-to-cart wiring
+  kwVersion?:       number;   // v7.371: refetch the plan selection when keywords change
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
+  // v7.371: shared Content-Plan selection — checking a topic / theme / umbrella here pushes it
+  // into the SAME plan set the Journey list, Content Map and Content Plan sub-nav read (Const II.7).
+  const { planStateForIds, savingForIds, toggleIds } = useContentPlanSelection(projectId ?? '', kwVersion);
+  const planEnabled = !!projectId;
   // v7.203: journey scope — All / Product / Pre-product. Slices `clusters` BEFORE the
   // cards/funnel/pills/grid are computed, so the whole panel adjusts to the selection.
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
@@ -2615,6 +2731,10 @@ function ClustersTab({
           onToggleParent={toggleParent}
           expandedUmbrellas={expandedUmbrellas}
           onToggleUmbrella={toggleUmbrella}
+          planEnabled={planEnabled}
+          planStateForIds={planStateForIds}
+          savingForIds={savingForIds}
+          toggleIds={toggleIds}
         />
       )}
 
@@ -2905,6 +3025,8 @@ export default function ThemeClustersPanel({
           refineError={refineError}
           aiRefined={!!aiRefined}
           keywordPaths={keywordPathsMap}
+          projectId={projectId}
+          kwVersion={kwVersion}
         />
       )}
     </div>
