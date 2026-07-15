@@ -26,6 +26,7 @@ import ScopeSection          from '@/components/brief/ScopeSection';
 import LocalSearchSection     from '@/components/brief/LocalSearchSection';
 import ApiUsageSection        from '@/components/brief/ApiUsageSection';
 import GoogleRankAuthoritySection from '@/components/brief/GoogleRankAuthoritySection';   // v7.367
+import AuthorityCalculatorSection from '@/components/brief/AuthorityCalculatorSection';    // v7.370
 import { getMarket } from '@/lib/utils/markets';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
@@ -77,7 +78,7 @@ type NavSection =
   | 'serp' | 'serpFeatures'
   | 'llm' | 'aiEngines'
   | 'local'
-  | 'authority' | 'entity'
+  | 'authority' | 'authorityCalc' | 'entity'
   | 'urlTax' | 'techHygiene'
   | 'usage';
 
@@ -1256,6 +1257,31 @@ export default function ProjectBriefPage() {
                           </div>
                         )}
 
+                        {/* ── Authority sub-nav (v7.370): Authority signals + Authority Calculator.
+                               Not gated on hasResults — authority data is analysis-independent. ── */}
+                        {item.id === 'authority' && (
+                          <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
+                            {([['authority', 'Authority signals', 'ti-shield'], ['authorityCalc', 'Authority Calculator', 'ti-calculator']] as const).map(([sid, label, icon]) => {
+                              const subActive = activeSection === sid;
+                              return (
+                                <button
+                                  key={sid}
+                                  onClick={e => { e.stopPropagation(); setActiveSection(sid as NavSection); }}
+                                  className="w-full flex items-center gap-1.5 text-left"
+                                  style={{
+                                    padding: '6px 12px 6px 32px',
+                                    borderLeft: subActive ? '2px solid var(--ca-108-99-255-0_6)' : '2px solid transparent',
+                                    background: subActive ? 'var(--c-0f0f1c)' : 'transparent',
+                                  }}
+                                >
+                                  <i className={`ti ${icon}`} style={{ fontSize: '12px', color: subActive ? 'var(--c-6c63ff)' : 'var(--c-545490)', width: '14px', flexShrink: 0 }} aria-hidden="true" />
+                                  <span style={{ fontSize: '12px', color: subActive ? 'var(--c-a0a0d8)' : 'var(--c-6868a8)' }}>{label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
                         {/* ── Keywords sub-nav (v7.172: always expanded, not gated on active) ── */}
                         {item.id === 'keywords' && hasResults && (
                           <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
@@ -1674,8 +1700,21 @@ export default function ProjectBriefPage() {
             </div>
           )}
 
+          {/* ── Authority Calculator (v7.370) — reads the stored authority scan; analysis-independent.
+                 Scroll root per Const IV.1. ── */}
+          {activeSection === 'authorityCalc' && project && (
+            <div className="overflow-y-auto flex-1 min-h-0 p-3 animate-fade-in">
+              <AuthorityCalculatorSection
+                projectId={projectId}
+                projectName={project.clientName}
+                competitors={project.competitors}
+                onOpenAuthority={() => setActiveSection('authority')}
+              />
+            </div>
+          )}
+
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && activeSection !== 'authority' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && activeSection !== 'authority' && activeSection !== 'authorityCalc' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
