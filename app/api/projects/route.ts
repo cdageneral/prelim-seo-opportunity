@@ -13,6 +13,11 @@ import { db }     from '@/db';
 import { projects } from '@/db/schema';
 import { desc, eq, sql } from 'drizzle-orm';
 import { MARKETS } from '@/lib/utils/markets';
+// v7.373: audit + per-project access. No-ops while AUTH_ENFORCED is off.
+import { authEnforced, seesAllProjects } from '@/lib/auth/config';
+import { getActiveUser } from '@/lib/auth/session';
+import { getGrantedProjectIds, ensureAuthTables } from '@/lib/auth/store';
+import { recordEvent } from '@/lib/auth/audit';
 
 async function ensureColumns() {
   try {
@@ -119,7 +124,21 @@ export async function GET() {
   const rows = await db.select().from(projects)
     .where(eq(projects.status, 'active'))
     .orderBy(desc(projects.createdAt));
-  return NextResponse.json({ projects: rows });
+
+  // v7.373: when enforcement is on, editors/viewers see only granted projects;
+  // owners/admins see all. Flag off → unchanged (every project returned).
+  let visible = rows;
+  if (authEnforced()) {
+    const user = await getActiveUser();
+    if (!user) {
+      visible = [];
+    } else if (!seesAllProjects(user.role)) {
+      await ensureAuthTables();
+      const granted = new Set(await getGrantedProjectIds(user.sub));
+      visible = rows.filter(r => granted.has(r.id));
+    }
+  }
+  return NextResponse.json({ projects: visible });
 }
 
 export async function POST(req: NextRequest) {
@@ -145,6 +164,9 @@ export async function POST(req: NextRequest) {
     clerkOrgId:  'default',
     clerkUserId: 'default',
   }).returning();
+
+  // v7.373: record who created the project (real audit event, Const I.1).
+  await recordEvent(req, { action: 'project.create', projectId: project.id, projectName: project.clientName });
 
   return NextResponse.json({ project }, { status: 201 });
 }
