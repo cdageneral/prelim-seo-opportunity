@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * GoogleRankAuthoritySection (v7.368) — the Google Rank Authority panel.
+ * GoogleRankAuthoritySection (v7.369) — the Google Rank Authority panel.
  *
  * Shows the REAL Semrush backlink-authority profile of the client vs every
  * configured competitor (Const I.1 — every count on screen is a crawled
@@ -88,6 +88,39 @@ const MODELED_CHIP = (
     modeled
   </span>
 );
+
+/** v7.369: hover-help "?" bubble for table headers (Wayne's ask). Pure CSS (group-hover)
+ *  with a native title fallback; popup uses orbit-card so it holds both themes (IV.6). */
+function HelpTip({ text, align = 'right' }: { text: string; align?: 'left' | 'right' }) {
+  return (
+    <span className="relative inline-block group align-middle ml-1" title={text}>
+      <span
+        aria-label={text}
+        className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-orbit-border text-orbit-tertiary text-[9px] font-semibold leading-none cursor-help select-none"
+      >
+        ?
+      </span>
+      <span
+        className={`orbit-card pointer-events-none absolute z-20 hidden group-hover:block top-5 ${align === 'right' ? 'right-0' : 'left-0'} w-60 p-2.5 text-left text-[11px] font-normal normal-case tracking-normal leading-relaxed text-orbit-secondary shadow-lg whitespace-normal`}
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+/** Column definitions shown in the header help bubbles — plain language, honest about
+ *  what is measured vs modeled and what is whole-domain vs sampled. */
+const COL_HELP = {
+  domain:     'The root domain that was scanned. The client row is highlighted; every metric on the row covers the ENTIRE domain from Semrush’s index — not a sample.',
+  ascore:     'Semrush’s Authority Score — a 0–100 modeled composite of a domain’s overall backlink strength. Useful shorthand for comparing domains, but it is an estimate, never measured data.',
+  refDomains: 'Unique websites that link to this domain — the whole-domain total from Semrush’s index. One site counts once no matter how many links it places (one domain, one vote).',
+  ge10:       'How many of the referring domains themselves have Authority Score 10 or higher — computed from the full authority distribution (every referring domain, not a sample). Filters out the junk tier of near-zero-authority sites.',
+  ge30:       'Referring domains with Authority Score 30 or higher — the mid-tier-and-up slice of the full distribution. A useful "real websites" quality bar.',
+  ge50:       'Referring domains with Authority Score 50 or higher — the strongest slice of the link profile. These are the hardest links to earn and the ones campaigns typically target.',
+  follow:     'Share of the domain’s backlinks that are follow links (which pass ranking equity) versus nofollow. Computed from the whole-domain backlink totals.',
+  brand:      'Real monthly Google searches for the brand phrase (e.g. "td bank") in the project’s market — an entity-strength signal. How much demand exists for the brand itself.',
+} as const;
 
 export default function GoogleRankAuthoritySection({
   projectId, projectName, domain, competitors,
@@ -307,14 +340,14 @@ export default function GoogleRankAuthoritySection({
             <table className="w-full text-xs min-w-[640px]">
               <thead>
                 <tr className="text-orbit-tertiary text-left border-b border-orbit-border">
-                  <th className="py-1.5 pr-2 font-medium">Domain</th>
-                  <th className="py-1.5 px-2 font-medium text-right">Authority Score {MODELED_CHIP}</th>
-                  <th className="py-1.5 px-2 font-medium text-right">Ref. domains</th>
-                  <th className="py-1.5 px-2 font-medium text-right">RDs AS≥10</th>
-                  <th className="py-1.5 px-2 font-medium text-right">RDs AS≥30</th>
-                  <th className="py-1.5 px-2 font-medium text-right">RDs AS≥50</th>
-                  <th className="py-1.5 px-2 font-medium text-right">Follow share</th>
-                  <th className="py-1.5 pl-2 font-medium text-right">Brand demand /mo</th>
+                  <th className="py-1.5 pr-2 font-medium whitespace-nowrap">Domain<HelpTip text={COL_HELP.domain} align="left" /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">Authority Score {MODELED_CHIP}<HelpTip text={COL_HELP.ascore} /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">Ref. domains<HelpTip text={COL_HELP.refDomains} /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">RDs AS≥10<HelpTip text={COL_HELP.ge10} /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">RDs AS≥30<HelpTip text={COL_HELP.ge30} /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">RDs AS≥50<HelpTip text={COL_HELP.ge50} /></th>
+                  <th className="py-1.5 px-2 font-medium text-right whitespace-nowrap">Follow share<HelpTip text={COL_HELP.follow} /></th>
+                  <th className="py-1.5 pl-2 font-medium text-right whitespace-nowrap">Brand demand /mo<HelpTip text={COL_HELP.brand} /></th>
                 </tr>
               </thead>
               <tbody>
