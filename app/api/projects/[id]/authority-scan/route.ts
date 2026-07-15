@@ -74,6 +74,21 @@ export interface AuthorityScanSnapshot {
   database:  string;    // Semrush regional database used for brand volume
   config:    { anchorsLimit: number; categoriesLimit: number };
   domains:   AuthorityDomainSignals[];
+  // v7.370: URL-level pulls for the Authority Calculator's targeted-pages bridge.
+  // Merged additively by URL (a re-pull replaces that URL's entry); never wiped by
+  // a domain re-scan. Each entry is REAL backlinks_overview + ascore_profile data
+  // for the exact URL (target_type=url), date-stamped per page (Const I.1/IV.5).
+  pages?:    AuthorityPageSignals[];
+}
+
+export interface AuthorityPageSignals {
+  url:          string;
+  owner:        string;   // matching scanned domain (client/competitor) or 'other'
+  ownerRole:    'client' | 'competitor' | 'other';
+  overview:     BacklinksOverview | null;
+  qualityTiers: { lt10: number; ge10: number; ge30: number; ge50: number } | null;
+  fetchedAt:    string;
+  errors:       string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -168,6 +183,83 @@ export async function POST(
     })),
   ].filter((t, i, arr) => t.domain && arr.findIndex(x => x.domain === t.domain) === i);
 
+  // ── v7.370: pages mode — URL-level pulls for the targeted-pages bridge ──
+  if (body?.pagesMode) {
+    const urls: string[] = Array.isArray(body?.urls)
+      ? body.urls.map((u: any) => String(u ?? '').trim()).filter((u: string) => /^https?:\/\//i.test(u)).slice(0, 40)
+      : [];
+    if (!urls.length) return NextResponse.json({ error: 'No valid page URLs (must start with http/https).' }, { status: 400 });
+    // Per page: backlinks_overview 45/request (verified) + ascore profile ≤101 × 1 (upper bound).
+    const PER_PAGE = 45 + 101;
+    if (body?.dryRun) {
+      return NextResponse.json({
+        plan: {
+          urls: urls.length,
+          estimatedUnitsPerPage: PER_PAGE,
+          estimatedUnitsTotal: PER_PAGE * urls.length,
+          note: 'Estimate from published Semrush rates (overview 45/request; ascore profile 1/line, ≤101 lines — upper bound). Actual consumption is recorded in API Usage.',
+        },
+      });
+    }
+    const encoder2 = new TextEncoder();
+    const stream2 = new ReadableStream({
+      async start(controller) {
+        const send = (obj: unknown) => controller.enqueue(encoder2.encode(JSON.stringify(obj) + '\n'));
+        const total = urls.length * 2;
+        let done = 0;
+        const startedAt = Date.now();
+        const tick = (label: string) => {
+          done += 1;
+          const perStep = (Date.now() - startedAt) / done;
+          send({ type: 'progress', done, total, label, etaSec: Math.round(((total - done) * perStep) / 1000) });
+        };
+        try {
+          send({ type: 'start', total });
+          const results: AuthorityPageSignals[] = [];
+          for (const u of urls) {
+            const host = normalizeDomain(u);
+            const ownerTarget = targets.find(t => host === t.domain || host.endsWith('.' + t.domain));
+            const sig: AuthorityPageSignals = {
+              url: u,
+              owner: ownerTarget ? ownerTarget.domain : 'other',
+              ownerRole: ownerTarget ? ownerTarget.role : 'other',
+              overview: null, qualityTiers: null,
+              fetchedAt: new Date().toISOString(), errors: [],
+            };
+            try { sig.overview = await getBacklinksOverview(u, 'url'); }
+            catch (e) { sig.errors.push(`overview: ${String((e as any)?.message ?? e)}`); }
+            tick(`${host} — page backlink overview`);
+            try {
+              const prof = await getBacklinksAscoreProfile(u, 'url');
+              if (prof) sig.qualityTiers = rollupQualityTiers(prof);
+            } catch (e) { sig.errors.push(`ascore_profile: ${String((e as any)?.message ?? e)}`); }
+            tick(`${host} — page authority distribution`);
+            results.push(sig);
+          }
+          // Merge additively by URL into the existing snapshot (never wipe domain data).
+          const existing = (project.authoritySnapshot ?? null) as AuthorityScanSnapshot | null;
+          const base: AuthorityScanSnapshot = existing ?? {
+            version: 1, fetchedAt: new Date().toISOString(), database,
+            config: { anchorsLimit: 0, categoriesLimit: 0 }, domains: [],
+          };
+          const kept = (base.pages ?? []).filter(p => !urls.some(u => u === p.url));
+          const snapshot: AuthorityScanSnapshot = { ...base, pages: kept.concat(results) };
+          await db.update(projects)
+            .set({ authoritySnapshot: snapshot as any, authoritySnapshotUpdatedAt: new Date() } as any)
+            .where(eq(projects.id, projectId));
+          send({ type: 'done', snapshot });
+        } catch (e) {
+          send({ type: 'error', error: String((e as any)?.message ?? e) });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new NextResponse(stream2, {
+      headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+
   // ── Dry run: the plan + estimated units, zero spend ──
   if (body?.dryRun) {
     // Estimates use the VERIFIED published rates (lib/usage/record.ts). The ascore
@@ -243,12 +335,15 @@ export async function POST(
           results.push(sig);
         }
 
+        // v7.370: a domain re-scan preserves any stored page-level pulls (merged additively).
+        const prior = (project.authoritySnapshot ?? null) as AuthorityScanSnapshot | null;
         const snapshot: AuthorityScanSnapshot = {
           version: 1,
           fetchedAt: new Date().toISOString(),
           database,
           config: { anchorsLimit, categoriesLimit },
           domains: results,
+          ...(prior?.pages?.length ? { pages: prior.pages } : {}),
         };
 
         await db.update(projects)
