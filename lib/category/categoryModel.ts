@@ -17,11 +17,13 @@
  * memoize (this re-runs the canonical cluster build).
  */
 
+// v7.376: the canonical builder moved to lib/clusters/canonical.ts (server-safe);
+// importing the lib directly keeps this module usable from server code too.
 import {
   buildCanonicalClusterTopics,
   type Topic,
   type IntentType,
-} from '@/components/brief/ThemeClustersPanel';
+} from '@/lib/clusters/canonical';
 
 type JourneyStage = Topic['stage'];                 // 'awareness' | 'consideration' | 'decision' | 'retention'
 export type CategoryType = Topic['parentType'];     // 'procedure' | 'brand' | 'location' | 'demand' | 'problem'
