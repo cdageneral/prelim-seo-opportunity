@@ -1017,7 +1017,7 @@ export default function ProjectBriefPage() {
               <button
                 onClick={generatePDF}
                 disabled={pdfLoading}
-                title="Export PDF Brief"
+                title="Generate Assessment Report (PDF)"
                 className="text-xs text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/50 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
