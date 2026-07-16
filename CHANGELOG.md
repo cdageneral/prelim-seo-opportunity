@@ -1,3 +1,17 @@
+## v7.376 · assessment report — Audience Segments + Audience Journeys — 2026-07-16
+
+Implements the approved v5 mockup: two new conditional pages, **PART IV · WHO IT AFFECTS** (the opportunity block shifts to PART V when they render).
+
+**Audience Segments** — renders ONLY when the analysis snapshot holds \`_audienceSegments\`. Buyer cards from the stored segment research: share of volume (labeled modeled), tagline, demographics, trigger, real example prompts, and each segment's slice of the journey map (topics · optimize/build · biggest category). READ ties the top segment to the AI answer layer.
+
+**Audience Journeys** — renders ONLY when the canonical topic build yields topics. Same canonical topics the panels count (one source of truth): topics-in-journey + groups, coverage (optimize vs net-new build), demand by funnel stage (real monthly volumes), the four-stage discovery path stored with the top segment's research, top journey groups, and the pre-product note when that lane hasn't been built.
+
+**The engineering underneath (Const II.6/II.7 — one math, no forks):** the canonical cluster-topic chain (buildThemeClusters → buildPreProductClusters → buildTopicsFromTaxonomy/flattenTopics → buildCanonicalClusterTopics) moved VERBATIM from ThemeClustersPanel to **lib/clusters/canonical.ts**; the journey classifier closure moved from JourneySection to **lib/journey/classifier.ts**; the segment attribution (v7.170 exclusive word-overlap) + canonTopicState + the lane rule moved to **lib/journey/segments.ts**. Both panels import everything back and re-export their public names, so every existing consumer is untouched (retained check: the re-exports ARE the lib functions, by identity).
+
+**Intent-assignment map persisted (v7.220 under-count guard):** the Layer-2 Claude pass moved to **lib/clusters/intentAssign.ts** (shared by the clusters route and the PDF route) and its result is now stored at \`analyses.semrushSnapshot._clusterAssigns\`. The clusters route persists what it computes and exposes a PUT write-through; the project page prefers the stored map, else writes its localStorage cache through once; the PDF route reads the stored map and computes+persists it when absent — the report can never build canonical topics on a silently-empty map.
+
+Files: lib/clusters/canonical.ts + lib/clusters/intentAssign.ts + lib/journey/classifier.ts + lib/journey/segments.ts (new), lib/pdf/assessmentTemplate.ts, app/api/reports/pdf/route.ts, app/api/projects/[id]/clusters/route.ts, app/projects/[id]/page.tsx, components/brief/ThemeClustersPanel.tsx, components/brief/JourneySection.tsx, lib/category/categoryModel.ts, package.json/package-lock.json (7.376.0). Verified: project tsc clean; 13 new v376 retained checks; A/B zero delta vs pristine v7.375 base; local render with real-shaped TD fixtures eyeballed.
+
 ## v7.375 · assessment report v4 — no dates, Authority Signals + Local Search sections — 2026-07-16
 
 Implements the approved v4 mockup (GEO/orbitiq-assessment-report-mockup-v4-2026-07-16.html) into the live report.
