@@ -16,6 +16,16 @@ import { buildAssessmentHTML, type ProfoundMetrics } from '@/lib/pdf/assessmentT
 import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot';
 import { buildKwPool, computeVolumeMetrics }  from '@/lib/utils/kwVolume';
 import { computeSov }                          from '@/lib/sov/model';
+// v7.376: the report's audience-segment + journey sections run the SAME canonical
+// topic build and attribution the panels do — the chain moved to lib/ this release
+// (Const II.6/II.7). The Claude intent-assignment map is read from its new stored
+// home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
+// the report can never run on a silently-empty map (the v7.220 under-count class).
+import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
+import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
+import { setUsageProject }                     from '@/lib/usage/context';
+import { instrumentAnthropic }                 from '@/lib/usage/record';
+import Anthropic                               from '@anthropic-ai/sdk';
 
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 60;
@@ -79,6 +89,36 @@ export async function POST(req: NextRequest) {
   // their source data exists (honest gaps, Const I.5); the shared rollup math
   // lives in lib/local/build.ts and the template (Const II.6/II.7).
   const profound = ((project as any).profoundData ?? null) as ProfoundMetrics | null;
+
+  // ── v7.376: canonical journey topics + audience segments (same build as the panels) ──
+  // Intent-assignment map: stored copy first; if absent, run the shared Layer-2 pass
+  // once and persist it (never build canonical topics on a silently-empty map).
+  setUsageProject((analysis as any).projectId);
+  let claudeAssigns: AssignMap = ((snap as any)?._clusterAssigns ?? {}) as AssignMap;
+  if (Object.keys(claudeAssigns).length === 0) {
+    const intentPool = buildIntentPool(snap);
+    if (intentPool.length > 0 && process.env.ANTHROPIC_API_KEY) {
+      try {
+        const client = instrumentAnthropic(new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }));
+        claudeAssigns = await classifyIntents(client, intentPool, (project.industry ?? 'General'), clientDomain);
+        await persistClusterAssigns(parsed.data.analysisId, claudeAssigns);
+      } catch (err) {
+        console.error('[PDF v7.376] intent-assignment pass failed — journey build proceeds with signal-matched intents only:', err);
+      }
+    }
+  }
+  // Same call signature the page uses (thresholds default 0 there too). A build
+  // failure omits the journey sections honestly (mirrors the page's v7.337 rule).
+  let journeyTopics: ReturnType<typeof buildCanonicalClusterTopics> | null = null;
+  try {
+    journeyTopics = buildCanonicalClusterTopics(
+      { ...(analysis as any), semrushSnapshot: snap },
+      clientDomain, competitorDomains, kwRows, claudeAssigns,
+    );
+  } catch (err) {
+    console.error('[PDF v7.376] canonical topic build FAILED — journey sections omitted:', err);
+  }
+
   const html = buildAssessmentHTML({
     clientName:   project.clientName ?? 'Client',
     websiteUrl:   project.websiteUrl ?? '',
@@ -89,6 +129,9 @@ export async function POST(req: NextRequest) {
     profound,
     authority:    ((project as any).authoritySnapshot ?? null),
     localScan:    (((snap as any)?._localScan) ?? null),
+    segments:     (((snap as any)?._audienceSegments) ?? null),
+    journeyTopics,
+    problemSeeds: (((snap as any)?._demandUniverse?.problemSeeds) ?? []) as string[],
   });
   let pdfBuffer: Buffer;
 
