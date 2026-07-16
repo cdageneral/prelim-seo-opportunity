@@ -3,16 +3,28 @@
  *
  * Layer 2 of ThemeClusters intent classification.
  * Called only for keywords that signal-matching (Layer 1) could not classify.
- * Uses Claude haiku — fast + cheap. Results are cached client-side in localStorage.
+ * Uses Claude haiku — fast + cheap.
  *
- * Body:  { keywords: string[], industry: string, domain: string }
+ * Body:  { keywords: string[], industry: string, domain: string, analysisId?: string }
  * Returns: { assignments: Record<string, 'informational'|'commercial'|'transactional'|'navigational'> }
+ *
+ * v7.376: the classification core moved to lib/clusters/intentAssign.ts (shared
+ * with the assessment-report route, Const II.7), and the resulting map is now
+ * PERSISTED at analyses.semrushSnapshot._clusterAssigns — before this it lived
+ * only in the browser's localStorage, so server-side canonical builds ran with
+ * an empty map (the v7.220 under-count bug class). A PUT handler lets the page
+ * write through an already-cached localStorage map so existing projects
+ * converge on the stored copy without re-running the pass.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
+import { classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
+import { db } from '@/db';
+import { analyses } from '@/db/schema';
+import { eq, desc } from 'drizzle-orm';
 
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -20,19 +32,18 @@ function getClient(): Anthropic {
   return instrumentAnthropic(new Anthropic({ apiKey }));   // v7.225: auto-record token usage
 }
 
-function extractJSON<T>(text: string): T {
-  const cleaned = text
-    .replace(/^```(?:json)?\n?/m, '')
-    .replace(/\n?```$/m, '')
-    .trim();
-  try { return JSON.parse(cleaned) as T; } catch {
-    const match = cleaned.match(/(\{[\s\S]*\})/);
-    if (match) return JSON.parse(match[0]) as T;
-    throw new Error('Non-JSON response');
-  }
+/** Resolve the analysis row to persist onto: the caller's analysisId when
+ *  given, else the project's most recent analysis with a snapshot. */
+async function resolveAnalysisId(projectId: string, analysisId?: string): Promise<string | null> {
+  if (analysisId) return analysisId;
+  const recent = await db.query.analyses.findMany({
+    where:   eq(analyses.projectId, projectId),
+    orderBy: [desc(analyses.triggeredAt)],
+    limit:   5,
+  });
+  const hit = recent.find((a: any) => a.semrushSnapshot != null);
+  return hit ? (hit as any).id : null;
 }
-
-type IntentType = 'informational' | 'commercial' | 'transactional' | 'navigational';
 
 export async function POST(
   req: NextRequest,
@@ -44,56 +55,27 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const { keywords, industry, domain } = body as {
+  const { keywords, industry, domain, analysisId } = body as {
     keywords: string[];
     industry: string;
     domain:   string;
+    analysisId?: string;
   };
 
   if (!keywords?.length) {
     return NextResponse.json({ assignments: {} });
   }
 
-  const capped = keywords.slice(0, 200);
-
-  const kwList = capped.map((kw, i) => `${i}. ${kw}`).join('\n');
-
-  const prompt = `You are classifying search keywords by search intent for a ${industry} website (${domain}).
-
-For each keyword assign exactly one intent type:
-- "informational"  — learning/research queries (what is, how does, guide, recovery time, risks, types of)
-- "commercial"     — evaluation/comparison queries (reviews, best, cost, worth it, compare, before after, results)
-- "transactional"  — action-ready queries (near me, schedule, book, appointment, price, financing, locations)
-- "navigational"   — direct brand navigation queries (contains the brand name or specific product name with no research intent)
-
-KEYWORDS:
-${kwList}
-
-Return JSON only — no markdown, no explanation:
-{
-  "assignments": {
-    "keyword text exactly as given": "informational",
-    "another keyword": "transactional"
-  }
-}`;
-
   try {
-    const response = await getClient().messages.create({
-      model:      'claude-haiku-4-5-20251001',
-      max_tokens: 1200,
-      messages:   [{ role: 'user', content: prompt }],
-    }, { timeout: 30_000 });
+    const assignments = await classifyIntents(getClient(), keywords, industry, domain);
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '{}';
-    const parsed = extractJSON<{ assignments: Record<string, string> }>(text);
-
-    // Validate and normalise — only accept known intent values
-    const VALID_INTENTS = new Set<string>(['informational', 'commercial', 'transactional', 'navigational']);
-    const assignments: Record<string, IntentType> = {};
-    for (const [kw, intent] of Object.entries(parsed.assignments ?? {})) {
-      if (VALID_INTENTS.has(intent)) {
-        assignments[kw.toLowerCase()] = intent as IntentType;
-      }
+    // v7.376: persist so server-side canonical builds read the SAME map.
+    // Best-effort — a persistence failure must not break the panel's response.
+    try {
+      const aid = await resolveAnalysisId(params.id, analysisId);
+      if (aid) await persistClusterAssigns(aid, assignments);
+    } catch (persistErr) {
+      console.error('[OrbitIQ v7.376] _clusterAssigns persist failed (panel unaffected):', persistErr);
     }
 
     return NextResponse.json({ assignments });
@@ -102,5 +84,42 @@ Return JSON only — no markdown, no explanation:
     console.error('[OrbitIQ] Cluster classification failed:', err);
     // Return empty — the panel will show unmatched keywords under informational as fallback
     return NextResponse.json({ assignments: {} });
+  }
+}
+
+/**
+ * PUT — write-through persistence for an assignment map the browser already
+ * holds (its localStorage cache predates v7.376's server persistence). The
+ * page calls this once when it finds a local map but no stored `_clusterAssigns`,
+ * so the assessment report and every future server read use the EXACT map the
+ * user's panels have been rendering. Validated with the same intent whitelist.
+ */
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  let body: unknown;
+  try { body = await req.json(); } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  const { assignments, analysisId } = body as { assignments: Record<string, string>; analysisId?: string };
+  if (!assignments || typeof assignments !== 'object') {
+    return NextResponse.json({ error: 'assignments object required' }, { status: 400 });
+  }
+  const VALID = new Set(['informational', 'commercial', 'transactional', 'navigational']);
+  const clean: AssignMap = {};
+  for (const [kw, intent] of Object.entries(assignments)) {
+    if (typeof kw === 'string' && VALID.has(intent)) clean[kw.toLowerCase()] = intent as any;
+  }
+  if (Object.keys(clean).length === 0) return NextResponse.json({ stored: 0 });
+
+  try {
+    const aid = await resolveAnalysisId(params.id, analysisId);
+    if (!aid) return NextResponse.json({ error: 'No analysis to persist onto' }, { status: 404 });
+    await persistClusterAssigns(aid, clean);
+    return NextResponse.json({ stored: Object.keys(clean).length });
+  } catch (err) {
+    console.error('[OrbitIQ v7.376] _clusterAssigns PUT failed:', err);
+    return NextResponse.json({ error: 'Persist failed' }, { status: 500 });
   }
 }
