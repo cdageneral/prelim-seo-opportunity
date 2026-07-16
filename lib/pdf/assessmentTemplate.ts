@@ -36,6 +36,13 @@ import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice, buildLocalIndex,
   type LocalScan,
 } from '@/lib/local/build';
+// v7.376: the SAME segment attribution + journey lane/state rules the panels run
+// (moved to lib/ this release precisely so this report can reuse them — Const II.7).
+import {
+  buildSegTokens, buildCanonTopicSegmentMap, canonTopicState, isPreProductTopic,
+  SHARED_BUCKET, type SegmentLike,
+} from '@/lib/journey/segments';
+import { JOURNEY_ORDER, JOURNEY_LABELS, type JourneyStage as CanonStage } from '@/lib/clusters/canonical';
 
 // ── Profound panel metrics (shape persisted verbatim by /api/projects/[id]/profound;
 //    declared locally so this server module never imports from a client component) ──
@@ -89,6 +96,19 @@ export interface AuthoritySnapshot {
   domains: ADomainSignals[];
 }
 
+// v7.376: structural slice of the canonical Topic the journey sections read —
+// the route passes the exact objects buildCanonicalClusterTopics returns.
+export interface JourneyTopicLike {
+  id:          string;
+  parentName:  string;
+  parentType:  string;
+  product:     string;
+  pageUrl?:    string;
+  stage:       CanonStage;
+  totalVolume: number;
+  keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }>;
+}
+
 export interface AssessmentData {
   clientName: string;
   websiteUrl: string;
@@ -99,6 +119,9 @@ export interface AssessmentData {
   profound: ProfoundMetrics | null;
   authority?: AuthoritySnapshot | null;
   localScan?: LocalScan | null;
+  segments?: SegmentLike[] | null;          // v7.376: stored _audienceSegments rows
+  journeyTopics?: JourneyTopicLike[] | null; // v7.376: canonical topics (same build the panels run)
+  problemSeeds?: string[];                   // v7.376: deep-journey problem seeds (lane rule)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -156,6 +179,52 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     index:   buildLocalIndex(buildPackRollup(scan.keywords ?? []), buildReviewRollup(scan.locations ?? []), scan.locations ?? []),
     clientLocs: (scan.locations ?? []).filter(l => l.isClient),
   } : null;
+
+  // ── v7.376: audience segments + journey (conditional — same rules as the panels) ──
+  const segs = (d.segments ?? []).filter(s => s && s.id && s.name);
+  const hasSeg = segs.length > 0;
+  const jt = (d.journeyTopics ?? []) as JourneyTopicLike[];
+  const problemSet = new Set((d.problemSeeds ?? []).map(s => s.toLowerCase().trim()));
+  // rows mirror CanonicalJourneyView exactly: state via canonTopicState, lane via the
+  // shared pre-product predicate, action = existing→optimize else build.
+  const jRows = jt.map(t => {
+    const state = canonTopicState(t);
+    return { t, state, lane: isPreProductTopic(t, problemSet) ? 'pre' : 'product', action: state === 'existing' ? 'optimize' : 'build' };
+  });
+  const jTotal = jRows.length;
+  const hasJourney = jTotal > 0;
+  const jOpt = jRows.filter(r => r.action === 'optimize').length;
+  const jBuild = jTotal - jOpt;
+  const jPreN = jRows.filter(r => r.lane === 'pre').length;
+  const jPreBuild = jRows.filter(r => r.action === 'build' && r.lane === 'pre').length;
+  const jCoverage = jTotal ? Math.round((jOpt / jTotal) * 100) : 0;
+  const jStageAgg = JOURNEY_ORDER.map(st => {
+    const rows = jRows.filter(r => r.t.stage === st);
+    return { stage: st, n: rows.length, vol: rows.reduce((s, r) => s + (r.t.totalVolume || 0), 0), builds: rows.filter(r => r.action === 'build').length };
+  });
+  const jTopStage = jStageAgg.slice().sort((a, b) => b.builds - a.builds)[0] ?? null;
+  const jGroupMap = new Map<string, { n: number; vol: number }>();
+  for (const r of jRows) {
+    const key = r.t.parentName || '(uncategorized)';
+    const g = jGroupMap.get(key) ?? { n: 0, vol: 0 };
+    g.n += 1; g.vol += r.t.totalVolume || 0;
+    jGroupMap.set(key, g);
+  }
+  const jGroupCount = jGroupMap.size;
+  const jTopGroups = Array.from(jGroupMap.entries()).map(([g, v]) => ({ group: g, ...v })).sort((a, b) => b.vol - a.vol).slice(0, 5);
+  // segment attribution — the panels' exclusive word-overlap partition (v7.170 rule)
+  const segTok = hasSeg ? buildSegTokens(segs) : [];
+  const segMap = hasSeg && hasJourney ? buildCanonTopicSegmentMap(jt, segTok) : new Map<string, string>();
+  const segAgg = segs.map(s => {
+    const rows = jRows.filter(r => segMap.get(r.t.id) === s.id);
+    const gm = new Map<string, number>();
+    for (const r of rows) gm.set(r.t.parentName || '(uncategorized)', (gm.get(r.t.parentName || '(uncategorized)') ?? 0) + (r.t.totalVolume || 0));
+    const top = Array.from(gm.entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
+    return { s, topics: rows.length, optimize: rows.filter(r => r.action === 'optimize').length, build: rows.filter(r => r.action === 'build').length, topGroup: top ? { name: top[0], vol: top[1] } : null };
+  }).sort((a, b) => (b.s.volumePct ?? 0) - (a.s.volumePct ?? 0));
+  const segSharedN = hasSeg && hasJourney ? jRows.filter(r => segMap.get(r.t.id) === SHARED_BUCKET).length : 0;
+  const segAttributedN = hasSeg && hasJourney ? jTotal - segSharedN : 0;
+  const topSeg = segAgg[0] ?? null;
 
   const footLeft = `OrbitIQ Assessment · Provided by the iQuanti &amp; McKinsey Partnership · ${name}`;
 
@@ -234,7 +303,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <div class="cfoot">
       <div class="cgrid">
         <div><div class="ckk">PROVIDED BY</div><div class="cvv" style="white-space:nowrap;">iQuanti &amp; McKinsey Partnership</div></div>
-        <div><div class="ckk">INTELLIGENCE LAYERS</div><div class="cvv">Demand &amp; rankings · Live answer-surface scans · AI visibility tracking${auth ? ' · Authority signals' : ''}${lp ? ' · Local map-pack scans' : ''}</div></div>
+        <div><div class="ckk">INTELLIGENCE LAYERS</div><div class="cvv">Demand &amp; rankings · Live answer-surface scans · AI visibility tracking${auth ? ' · Authority signals' : ''}${lp ? ' · Local map-pack scans' : ''}${hasSeg || hasJourney ? ' · Audience &amp; journey modeling' : ''}</div></div>
       </div>
       <div class="cnote">Every figure in this report traces to a real scanned source row, regenerated from the current data at the moment this report is produced. Nothing is modeled or estimated unless explicitly labeled.</div>
     </div>
@@ -248,6 +317,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   if (pf && pfRivalCov) execTiles.push(tile('Your real AI rival', esc(pfRivalCov.brand), `Appears in ${p0(pfRivalCov.pct)} of ${n0(pf.promptN)} tracked AI prompts vs your ${pfClientCov ? p0(pfClientCov.pct) : '0%'}.`));
   if (pf && pfBridgeSum > 0) execTiles.push(tile('The shortcut already exists', `${n0(pfBridgeSum)} <small>of ${n0(pf.citeMentions)}</small>`, `Brand mentions already sitting on ${pfBridge.map(h => h.hostname).join(', ')} — hosts AI engines already cite. Converting mentions to citations is outreach, not content.`));
   if (pf && pf.totalRuns > 0) execTiles.push(tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pf.totalRuns)} scanned AI answers across ${pf.engines.length} engines.`, pfVisPct < 5 ? 'bad' : ''));
+  if (execTiles.length < 6 && topSeg && (topSeg.s.volumePct ?? 0) > 0) execTiles.push(tile('Your biggest audience', p0(topSeg.s.volumePct ?? 0), `${esc(topSeg.s.name ?? '')} — a modeled share of real demand${pf && pf.totalRuns > 0 ? `; their journey runs through the AI answer layer, where you appear in ${p1(pfVisPct)} of answers` : ''}.`));
   if (execTiles.length < 6 && lp) execTiles.push(tile('Map-pack presence', `${p0(lp.pack.presenceRate)}`, `In ${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)} scanned local packs — at average rank ${lp.pack.avgRank} when present.`, lp.pack.presenceRate < 50 ? 'bad' : ''));
   pages.push(pageWrap('EXECUTIVE SUMMARY', 'EXECUTIVE SUMMARY', `
     <h1 class="pg">Where the demand is — and who's capturing it.</h1>
@@ -267,6 +337,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <tr><td><b>AI visibility tracking</b></td><td>How often AI answer engines (ChatGPT, Perplexity, Gemini, AI Overviews) mention and cite you across tracked buyer prompts — resolved down to every cited source URL.</td></tr>
       ${auth ? '<tr><td><b>Authority signals</b></td><td>Crawled backlink-index rows for your domain and tracked rivals: referring domains, authority distribution, follow share, and brand demand.</td></tr>' : ''}
       ${lp ? '<tr><td><b>Local map-pack scans</b></td><td>Live Google map-pack checks across your local-intent keywords, plus real listing and review data for every location.</td></tr>' : ''}
+      ${hasSeg || hasJourney ? '<tr><td><b>Audience &amp; journey modeling</b></td><td>Who the demand belongs to and how they move: research-backed buyer segments over your real query footprint, plus every topic cluster mapped to a funnel stage. Volumes are real scanned rows; segment shares and topic attributions are modeled partitions and labeled as such.</td></tr>' : ''}
     </table>
     <div class="two">
       <div class="panelbox"><div class="figtitle">How the analysis is assembled</div>
@@ -544,6 +615,98 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${gapBlock('AI visibility tracking', 'Load the AI visibility exports on the AI Answer Engines panel, then regenerate this report — the assessment expands with five sections: market position, engine-by-engine behavior, prompt demand and the winnable set, the citation supply chain, and sentiment.')}`));
   }
 
+  // ── v7.376: PART IV · WHO IT AFFECTS — audience segments + journeys ─────────
+  // Both conditional: rendered ONLY when the panel data exists (Const I.5 —
+  // absent entirely otherwise, per the client's rule for these sections).
+  const partWho = 'PART IV · WHO IT AFFECTS';
+  const partOpp = (hasSeg || hasJourney) ? 'PART V · THE OPPORTUNITY' : 'PART IV · THE OPPORTUNITY';
+
+  if (hasSeg) {
+    const SEG_ACCENTS = ['var(--blue)', 'var(--good)', 'var(--violet)', 'var(--aqua)'];
+    const segCards = segAgg.slice(0, 3).map((a, i) => {
+      const s = a.s;
+      const accent = SEG_ACCENTS[i % SEG_ACCENTS.length];
+      const chips = [...(s.preLLMPrompts ?? []).slice(0, 2), ...(s.productPrompts ?? []).slice(0, 1)]
+        .map(p => `<span style="display:inline-block; font-size:7.5px; color:var(--ink2); background:#f4f3ef; border:1px solid #e0dfd8; border-radius:3px; padding:1px 5px; margin:0 3px 3px 0;">&ldquo;${esc(p)}&rdquo;</span>`).join('');
+      const pctN = Math.max(0, Math.min(100, s.volumePct ?? 0));
+      const foot = a.topics > 0
+        ? `<b style="color:var(--ink);">${n0(a.topics)} journey topics</b> (${n0(a.optimize)} optimize &middot; ${n0(a.build)} build)${a.topGroup ? ` &middot; biggest: ${esc(a.topGroup.name)} &middot; ${vol(a.topGroup.vol)}/mo` : ''}`
+        : `<span style="color:var(--muted);">No journey topics attributed yet.</span>`;
+      return `<div class="panelbox" style="border-top:3px solid ${accent}; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:baseline; gap:8px;"><span style="font-size:22px; font-weight:800; color:${accent};">${p0(pctN)}</span><span style="font-size:8px; font-weight:700; letter-spacing:.08em; color:var(--muted);">OF VOLUME <span style="font-weight:400; text-transform:none;">(modeled share)</span></span></div>
+        <div style="font-size:11.5px; font-weight:800; color:var(--ink); margin:2px 0 6px;">${esc(s.name)}</div>
+        <div class="track" style="height:5px; margin-bottom:8px;"><div class="fill" style="width:${clampW(pctN).toFixed(1)}%; background:${accent};"></div></div>
+        ${s.tagline ? `<p style="font-size:8.8px; font-style:italic; color:var(--ink2); margin:0 0 7px;">&ldquo;${esc(s.tagline)}&rdquo;</p>` : ''}
+        ${s.whoTheyAre?.demographics ? `<p style="font-size:8.5px; color:var(--ink2); margin:0 0 3px;"><b style="color:var(--ink);">WHO</b> &nbsp;${esc(s.whoTheyAre.demographics)}</p>` : ''}
+        ${s.whoTheyAre?.trigger ? `<p style="font-size:8.5px; color:var(--ink2); margin:0 0 7px;"><b style="color:var(--ink);">TRIGGER</b> &nbsp;${esc(s.whoTheyAre.trigger)}</p>` : ''}
+        ${chips ? `<div style="margin-bottom:7px;">${chips}</div>` : ''}
+        <div style="margin-top:auto; border-top:1px solid #e6e5de; padding-top:6px; font-size:8.5px; color:var(--ink2);">${foot}</div>
+      </div>`;
+    }).join('');
+    const segRead = topSeg
+      ? `<b>${p0(topSeg.s.volumePct ?? 0)} of your demand belongs to ${esc(topSeg.s.name)}</b>${topSeg.s.whoTheyAre?.trigger ? ` — ${esc(topSeg.s.whoTheyAre.trigger)}` : '.'}${pf && pf.totalRuns > 0 ? ` Their journey runs through the AI answer layer, where you appear in ${p1(pfVisPct)} of scanned answers.` : ''} Each segment is won in a different section of this report.`
+      : '';
+    pages.push(pageWrap('AUDIENCE SEGMENTS', partWho, `
+      <h1 class="pg">${segs.length === 1 ? 'The buyer behind your demand.' : `${segs.length === 2 ? 'Two' : segs.length === 3 ? 'Three' : n0(segs.length)} buyers own your demand.`}${topSeg && (topSeg.s.volumePct ?? 0) >= 40 ? ' The biggest one is won early.' : ''}</h1>
+      <div class="lede">The audience intelligence distills your search footprint into <b>${n0(segs.length)} research-backed buyer segment${segs.length === 1 ? '' : 's'}</b> — who they are, what triggers them, and the exact prompts they type. Every quoted prompt is a real query from the scanned footprint; the volume shares are a modeled partition of that real demand, labeled per the governance rules.</div>
+      <div style="display:grid; grid-template-columns:repeat(${Math.min(3, Math.max(1, segAgg.slice(0, 3).length))},1fr); gap:10px; margin-bottom:13px;">${segCards}</div>
+      ${segs.length > 3 ? `<div class="figsub" style="margin-bottom:10px;">Showing the top 3 of ${n0(segs.length)} segments by share — the full set is in the Audience Segments panel.</div>` : ''}
+      ${segRead ? `<div class="callout"><div class="t">READ</div><p>${segRead}</p></div>` : ''}
+      <div class="src">Source: stored audience-segment research over the project's real query footprint. Quoted prompts are real scanned queries; segment volume shares${hasJourney ? ` and topic attributions (${n0(segAttributedN)} topics attributed + ${n0(segSharedN)} shared across all segments)` : ''} are modeled partitions of real volumes, labeled per Constitution I.5a.</div>`));
+  }
+
+  if (hasJourney) {
+    const jStageBars = jStageAgg.map(sa => {
+      const maxVol = Math.max(1, ...jStageAgg.map(x => x.vol));
+      return barRow(JOURNEY_LABELS[sa.stage], (sa.vol / maxVol) * 100, `${n0(sa.n)} · ${vol(sa.vol)}/mo`, 'var(--blue)', '1.05in', '1.15in');
+    }).join('');
+    const jGroupBars = jTopGroups.map(g => {
+      const maxVol = Math.max(1, jTopGroups[0]?.vol ?? 1);
+      return barRow(g.group, (g.vol / maxVol) * 100, `${vol(g.vol)}/mo`, 'var(--blue)', '1.9in', '.8in');
+    }).join('');
+    const awStage = jStageAgg.find(x => x.stage === 'awareness');
+    const awShare = jTotal > 0 && awStage ? Math.round((awStage.n / jTotal) * 100) : 0;
+    const volTotal = jStageAgg.reduce((s, x) => s + x.vol, 0);
+    const awVolShare = volTotal > 0 && awStage ? Math.round((awStage.vol / volTotal) * 100) : 0;
+    // the four-stage discovery path stored with the top segment's journey research
+    const tps = (topSeg?.s as any)?.touchpoints as Array<{ stage: string; description: string }> | undefined;
+    const pathSteps = (tps ?? []).slice(0, 4).map((tp, i) =>
+      `<p style="font-size:9.3px; color:var(--ink2); margin:${i === 0 ? '6px' : '0'} 0 4px;"><b style="color:var(--ink);">${n0(i + 1)} &middot; ${esc(tp.stage.replace(/^Stage \d+\s*[—-]?\s*/i, '') || tp.stage)}</b> — ${esc(tp.description.length > 170 ? tp.description.slice(0, 167) + '…' : tp.description)}</p>`).join('');
+    const jRead = jTopGroups[0]
+      ? `The single biggest journey group — <b>${esc(jTopGroups[0].group)}, ${vol(jTopGroups[0].vol)} searches/mo</b> — leads a map of ${n0(jGroupCount)} groups. ${jBuild > 0 && jTopStage ? `Of the ${n0(jBuild)} net-new build targets, ${n0(jTopStage.builds)} sit at the ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()} stage — the tier that feeds every later decision.` : `All ${n0(jTotal)} topics already have content to optimize.`}`
+      : '';
+    pages.push(pageWrap('AUDIENCE JOURNEYS', partWho, `
+      <h1 class="pg">${jCoverage >= 80 ? 'The journey is mapped. The gaps cluster at the front door.' : 'The journey is mapped — and much of it is uncovered.'}</h1>
+      <div class="lede">Every topic cluster is placed on the buyer journey by funnel stage — the same canonical topics the app's panels count, one source of truth. <b>${n0(jOpt)} of ${n0(jTotal)} topics already have ${name} content to optimize</b>; ${n0(jBuild)} must be built new${jBuild > 0 && jTopStage && jTopStage.builds > 0 ? ` — ${n0(jTopStage.builds)} of those at the ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()} stage` : ''}.</div>
+      <div class="tiles c3" style="margin-bottom:13px;">
+        ${tile('Topics in journey', `${n0(jTotal)} <small>${n0(jGroupCount)} groups</small>`, 'Every cluster mapped to a funnel stage; volumes are real scanned roll-ups.')}
+        ${tile('Journey coverage', p0(jCoverage), `${n0(jOpt)} topics to optimize on existing pages · ${n0(jBuild)} net-new builds.`)}
+        ${jBuild > 0 && jTopStage ? tile('Where the gaps sit', `${n0(jTopStage.builds)} <small>of ${n0(jBuild)}</small>`, `Net-new build targets at the ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()} stage.`, 'bad') : tile('Net-new builds', n0(jBuild), 'Topics with no client page or ranking yet.')}
+      </div>
+      <div class="two" style="margin-bottom:13px;">
+        <div class="panelbox">
+          <div class="figtitle">Demand by funnel stage</div>
+          <div class="figsub">Topics and real monthly volume per stage &middot; stage placement is rule-based over stored categories</div>
+          ${jStageBars}
+          ${awStage ? `<p style="font-size:9px; color:var(--muted); margin-top:8px;">${p0(awShare)} of topics and ~${p0(awVolShare)} of journey volume sit at awareness — whoever owns the education tier inherits the later stages.</p>` : ''}
+        </div>
+        <div class="panelbox"${pathSteps ? ' style="border-top:3px solid var(--blue);"' : ''}>
+          ${pathSteps ? `<div class="figtitle">How your buyers actually move</div>
+          <div class="figsub">The discovery path stored with ${esc(topSeg!.s.name ?? 'the top segment')}'s journey research</div>
+          ${pathSteps}
+          ${pf && pf.totalRuns > 0 ? `<p style="font-size:9px; color:var(--muted); margin:0;">Step 1 is why the AI answer layer leads the recommended program: the journey starts in a surface where you appear in ${p1(pfVisPct)} of answers.</p>` : ''}`
+          : `<div class="figtitle">Journey lanes</div>
+          <div class="figsub">Product vs pre-product topics on this map</div>
+          <p style="font-size:9.3px; color:var(--ink2); margin-top:6px;">Product journey: <b>${n0(jTotal - jPreN)}</b> topics &middot; Pre-product (life-events) journey: <b>${n0(jPreN)}</b> topics${jPreN > 0 ? ` (${n0(jPreBuild)} to build)` : ''}.</p>`}
+        </div>
+      </div>
+      <div class="figtitle">Where the journey volume concentrates — top topic groups</div>
+      <div class="figsub">Real monthly search volume per journey group &middot; top ${n0(jTopGroups.length)} of ${n0(jGroupCount)} groups mapped</div>
+      ${jGroupBars}
+      ${jRead ? `<div class="callout" style="margin-top:10px;"><div class="t">READ</div><p>${jRead}</p></div>` : ''}
+      <div class="src">Source: journey map over canonical topic clusters — counts and volumes are real rows; stage and segment links are model-inferred, labeled.${jPreN === 0 ? ' The pre-product (life-events) lane joins this map once that journey build runs.' : ''}</div>`));
+  }
+
   // Program
   const steps: string[] = [];
   if (pf && pfBridgeSum > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--good);"><div class="stepk" style="color:var(--good);">STEP 1</div><div class="figtitle">Convert mentions → citations</div><p>Outreach to the ${n0(pfBridgeSum)} existing brand mentions on ${pfBridge.map(h => esc(h.hostname)).join(', ')} — hosts the engines already cite at scale. No new content required.</p></div>`);
@@ -555,8 +718,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     const running: string[] = [];
     if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating}&#9733; reputation gate` : ''}.`);
     if (auth) running.push(`<b>Authority compounding</b> — every earned placement also lands a high-authority referring domain, the tier of the link profile where gains matter most.`);
+    if (hasJourney && jBuild > 0 && jTopStage) running.push(`<b>The journey map</b> — ${n0(jTotal)} topics tracked by funnel stage; the ${n0(jBuild)} net-new builds (${n0(jTopStage.builds)} at ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()}) feed the build queue in priority order.`);
     running.push(`<b>Engine steer &amp; sentiment guard</b> — visibility and tone tracked on every refresh, so a souring theme is caught at the source level.`);
-    pages.push(pageWrap('THE RECOMMENDED PROGRAM', 'PART IV · THE OPPORTUNITY', `
+    pages.push(pageWrap('THE RECOMMENDED PROGRAM', partOpp, `
       <h1 class="pg">Sequenced by cost of entry, not by habit.</h1>
       <div class="lede">The work is ordered by what each win costs: conversions of existing assets come before optimization, and optimization comes before net-new builds. Every step below is backed by the counts on the preceding pages.</div>
       <div style="display:grid; grid-template-columns:repeat(${Math.min(3, steps.length)},1fr); gap:14px; margin-bottom:16px;">${steps.join('')}</div>
@@ -580,9 +744,11 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     scoreRows.push(`<tr><td><b>Map-pack presence</b></td><td class="n">${p0(lp.pack.presenceRate)} (${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)})</td><td>Listing coverage across ${n0(lp.clientLocs.length)} locations lifts presence first</td></tr>`);
     if (lp.reviews.avgRating > 0) scoreRows.push(`<tr><td><b>Review reputation</b></td><td class="n">${lp.reviews.avgRating}&#9733; (${n0(lp.reviews.totalReviews)} reviews)</td><td>${lp.reviews.avgRating < 4 ? 'Crossing the ~4.0 gate unlocks pack rank the listings already earn' : 'Held above the ~4.0 pack-rank gate'}</td></tr>`);
   }
+  if (hasJourney) scoreRows.push(`<tr><td><b>Journey coverage</b></td><td class="n">${p0(jCoverage)} (${n0(jOpt)} of ${n0(jTotal)})</td><td>Topics with existing content to optimize; ${n0(jBuild)} net-new builds remain</td></tr>`);
+  if (hasSeg && hasJourney) scoreRows.push(`<tr><td><b>Audience segments</b></td><td class="n">${n0(segs.length)}</td><td>${n0(segAttributedN)} journey topics attributed + ${n0(segSharedN)} shared across all (modeled attribution)</td></tr>`);
   const cms2 = pf ? (pf.mentionSent || []).find(x => x.isClient) : null;
   if (cms2 && cms2.total > 0) scoreRows.push(`<tr><td><b>Mention tone</b></td><td class="n">${n0(cms2.pos)} pos · ${n0(cms2.neutral)} neu · ${n0(cms2.neg)} neg</td><td>Held healthy while visibility scales — the guard metric</td></tr>`);
-  pages.push(pageWrap('THE BASELINE SCORECARD', 'PART IV · THE OPPORTUNITY', `
+  pages.push(pageWrap('THE BASELINE SCORECARD', partOpp, `
     <h1 class="pg">Today's numbers, on the record.</h1>
     <div class="lede">Every metric below is re-computed on the same methodology at each refresh, so progress is measured against this baseline — not a moving target. This is the page you hold us to.</div>
     <table class="dt"><tr><th>Metric</th><th style="width:1.7in;">Baseline</th><th>What it measures</th></tr>${scoreRows.join('')}</table>
@@ -605,6 +771,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <tr><td><b>Winnable prompt</b></td><td>A tracked prompt where at least one rival appears in the answer and the client does not. Direct tally of per-prompt mention rows.</td></tr>
       <tr><td><b>Earned share (per engine)</b></td><td>Share of an engine's citations classified as earned media — the measure of how much PR moves that engine.</td></tr>
       ${auth ? `<tr><td><b>Authority Score / referring domains</b></td><td>Referring-domain, follow and tier counts are crawled backlink-index rows; Authority Score is that index's modeled composite, always labeled as modeled.</td></tr>` : ''}
+      ${hasSeg || hasJourney ? `<tr><td><b>Segment share / journey attribution</b></td><td>Buyer-segment volume shares and topic&rarr;segment links are modeled partitions of real scanned volumes (an exclusive word-overlap against each segment's own stored language) — always labeled. Topic counts, volumes and funnel-stage placements are real rows and rule-based categories.</td></tr>` : ''}
       ${lp ? `<tr><td><b>Map-pack presence / Local Visibility Index</b></td><td>Presence, rank and ratings are real scanned pack and listing rows; the index is a fixed, documented blend of those four real ratios (40/25/20/15) — an editorial weighting, not a hidden model.</td></tr>` : ''}
     </table>
     <div class="endbrand">
