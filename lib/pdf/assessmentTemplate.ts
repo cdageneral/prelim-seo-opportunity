@@ -1,33 +1,41 @@
 /**
  * lib/pdf/assessmentTemplate.ts — v7.374: the client ASSESSMENT REPORT.
- *
- * Builds the multi-page "Search & AI Visibility Assessment" the top-header PDF
- * button now generates (design spec: GEO/orbitiq-assessment-report-mockup-v3-
- * 2026-07-16.html, approved by Wayne 2026-07-16). Rendered server-side by the
- * existing /api/reports/pdf puppeteer pipeline into a downloadable PDF.
+ * v7.375: dates removed report-wide (Wayne 2026-07-16); NEW conditional
+ * Authority Signals section (projects.authority_snapshot) and Local Search
+ * section (semrushSnapshot._localScan) — each renders ONLY when its panel
+ * holds scan data, and is omitted entirely (not gap-blocked) otherwise.
+ * Section numbers are now assigned dynamically at assembly. Design spec:
+ * GEO/orbitiq-assessment-report-mockup-v4-2026-07-16.html (approved).
  *
  * Constitution:
- *  - I.1  Every number interpolated here arrives from a real computed source:
- *         the shared canonical pool (buildKwPool/computeVolumeMetrics), the
- *         shared SoV model (computeSov), and the stored Profound panel metrics
- *         (projects.profound_data — the panel's own aggregate of real CSV rows).
- *         Nothing is modeled except the SoV click estimate, which carries its
- *         named-curve label at every appearance (I.5a).
- *  - I.5  A section whose data source is absent renders an explicit honest-gap
- *         block (or is omitted with a coverage note) — never a placeholder value.
- *  - II.6/II.7 No forked math: pool metrics + SoV come from the same shared
- *         functions the panels call; Profound figures are the panel's OWN stored
- *         aggregates; insight sentences reuse lib/insights.ts verbatim.
- *  - Wayne's report rules (2026-07-16): data-vendor names never appear in the
- *         client-facing report (generic intelligence-layer names only); every
- *         page carries "Provided by the iQuanti & McKinsey Partnership".
+ *  - I.1  Every number arrives from a real computed source: the shared pool
+ *         (buildKwPool/computeVolumeMetrics), the shared SoV model (computeSov),
+ *         the stored Profound panel metrics (projects.profound_data), the stored
+ *         authority snapshot (crawled backlinks-index rows; Authority Score is
+ *         the index's modeled composite and is labeled as such, I.5a), and the
+ *         stored local scan (real pack/listing/rating rows).
+ *  - I.5  A section whose data source is absent is omitted (local/authority,
+ *         per Wayne) or renders an explicit honest-gap block (AI layer) —
+ *         never a placeholder value.
+ *  - II.6/II.7 No forked math: pool metrics + SoV come from the shared
+ *         functions the panels call; local rollups reuse lib/local/build.ts
+ *         (buildPackRollup / buildReviewRollup / buildShareOfLocalVoice /
+ *         buildLocalIndex — the exact functions LocalSearchSection renders);
+ *         insight sentences reuse lib/insights.ts verbatim.
+ *  - Wayne's report rules: no data-vendor names; no dates anywhere; every page
+ *         carries "Provided by the iQuanti & McKinsey Partnership".
  */
 
 import type { SovComputed } from '@/lib/sov/model';
 import {
   landGrabInsight, shadowCompetitorInsight, earnedFastPathInsight,
+  localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight,
   fmtInsightVol, type Insight,
 } from '@/lib/insights';
+import {
+  buildPackRollup, buildReviewRollup, buildShareOfLocalVoice, buildLocalIndex,
+  type LocalScan,
+} from '@/lib/local/build';
 
 // ── Profound panel metrics (shape persisted verbatim by /api/projects/[id]/profound;
 //    declared locally so this server module never imports from a client component) ──
@@ -65,17 +73,32 @@ export interface ProfoundMetrics {
   updatedAt?: string;
 }
 
+// ── Authority snapshot (shape persisted by /api/projects/[id]/authority-scan on
+//    projects.authority_snapshot — mirrors GoogleRankAuthoritySection's Snapshot) ──
+interface ADomainSignals {
+  domain: string;
+  role: 'client' | 'competitor';
+  brandPhrase?: string;
+  overview: { ascore: number; total: number; refDomains: number; follows: number; nofollows: number } | null;
+  qualityTiers: { lt10: number; ge10: number; ge30: number; ge50: number } | null;
+  brandVolume: number | null;
+  errors?: string[];
+}
+export interface AuthoritySnapshot {
+  version?: number; fetchedAt?: string; database?: string;
+  domains: ADomainSignals[];
+}
+
 export interface AssessmentData {
   clientName: string;
   websiteUrl: string;
   industry?: string | null;
-  preparedDate: string;              // e.g. "July 16, 2026"
-  scanDate?: string | null;          // last analysis/scan date (real timestamp off the row)
-  aiDataDate?: string | null;        // profound_data_updated_at
   poolCount: number;
   metrics: { totalMonthly: number; totalAnnual: number; page1Monthly: number; page1Annual: number; captureRate: number };
   sov: SovComputed | null;
   profound: ProfoundMetrics | null;
+  authority?: AuthoritySnapshot | null;
+  localScan?: LocalScan | null;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -84,12 +107,15 @@ const n0  = (v: number) => Math.round(v).toLocaleString('en-US');
 const p0  = (v: number) => `${Math.round(v)}%`;
 const p1  = (v: number) => `${v.toFixed(1)}%`;
 const vol = (v: number) => fmtInsightVol(v);
+const mult = (v: number) => `${(Math.round(v * 100) / 100).toFixed(v >= 10 ? 0 : 2).replace(/\.?0+$/, '')}×`;
 const clampW = (v: number) => Math.max(1.2, Math.min(100, v));
 
-function insightHTML(ins: Insight | null, title: string): string {
+function insightHTML(ins: Insight | null, title: string, tone: 'blue' | 'red' = 'blue'): string {
   if (!ins) return '';
   const body = ins.parts.map(s => (s.em ? `<b>${esc(s.t)}</b>` : esc(s.t))).join('');
-  return `<div class="callout"><div class="t">${esc(title)}</div><p>${body}</p></div>`;
+  const style = tone === 'red' ? ' style="border-left-color:var(--critical); background:#fdf0ef;"' : '';
+  const tstyle = tone === 'red' ? ' style="color:#9c2b2b;"' : '';
+  return `<div class="callout"${style}><div class="t"${tstyle}>${esc(title)}</div><p>${body}</p></div>`;
 }
 
 function barRow(label: string, widthPct: number, valText: string, color = 'var(--blue)', labCols = '1.35in', valCols = '1in'): string {
@@ -115,8 +141,23 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const sov = d.sov && d.sov.basis === 'capture' ? d.sov : null;
   const pf  = d.profound && (d.profound.totalRuns > 0 || (d.profound.citeTotal || 0) > 0) ? d.profound : null;
 
-  const scanLine = d.scanDate ? `Scan ${esc(d.scanDate)}` : 'Scan date on file';
-  const footLeft = `OrbitIQ Assessment · Provided by the iQuanti &amp; McKinsey Partnership · ${name} · ${scanLine}`;
+  // authority: render only when the snapshot holds a client row with real overview counts
+  const authDomains = (d.authority?.domains ?? []).filter(x => x && x.overview && x.overview.refDomains > 0);
+  const authClient = authDomains.find(x => x.role === 'client') ?? null;
+  const authComps = authDomains.filter(x => x.role !== 'client').slice().sort((a, b) => (b.overview!.refDomains) - (a.overview!.refDomains));
+  const auth = authClient && authComps.length > 0 ? { client: authClient, comps: authComps } : null;
+
+  // local: render only when the scan holds real pack rows or listings
+  const scan = d.localScan && ((d.localScan.keywords?.length ?? 0) > 0 || (d.localScan.locations?.length ?? 0) > 0) ? d.localScan : null;
+  const lp = scan ? {
+    pack:    buildPackRollup(scan.keywords ?? []),
+    reviews: buildReviewRollup(scan.locations ?? []),
+    solv:    buildShareOfLocalVoice(scan.keywords ?? []),
+    index:   buildLocalIndex(buildPackRollup(scan.keywords ?? []), buildReviewRollup(scan.locations ?? []), scan.locations ?? []),
+    clientLocs: (scan.locations ?? []).filter(l => l.isClient),
+  } : null;
+
+  const footLeft = `OrbitIQ Assessment · Provided by the iQuanti &amp; McKinsey Partnership · ${name}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
   const offPage1Monthly = Math.max(0, m.totalMonthly - m.page1Monthly);
@@ -155,19 +196,34 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     rival: pfRivalCov ? { brand: pfRivalCov.brand, count: pfRivalCov.count, pct: pfRivalCov.pct } : null,
     client: pfClientCov ? { count: pfClientCov.count, pct: pfClientCov.pct } : null,
     promptN: pf.promptN,
-    updatedAt: d.aiDataDate ?? undefined,
   }) : null;
   const a4 = pf ? earnedFastPathInsight({
     citeTotal: pf.citeTotal || 0, citeOwned: pf.citeOwned || 0, citeOwnedShare: pf.citeOwnedShare || 0,
     earnedShare: pfEarned ? pfEarned.pct : 0,
     mentionHosts: pfMentionHosts, citeMentions: pf.citeMentions || 0,
-    updatedAt: d.aiDataDate ?? undefined,
   }) : null;
 
-  // ── pages (built conditionally; numbered after assembly) ───────────────────
+  // local insight inputs mirror LocalSearchSection exactly (same rollups, same miss rule)
+  const lpMiss = scan ? (scan.keywords ?? [])
+    .filter(k => k.packPresent && k.clientBestRank == null && (k as any).packLeader)
+    .slice().sort((a, b) => ((b as any).searchVolume || 0) - ((a as any).searchVolume || 0))[0] ?? null : null;
+  const l1 = lp ? localDiagnosisInsight({
+    withPack: lp.pack.withPack, present: lp.pack.inPack,
+    avgRank: lp.pack.avgRank > 0 ? lp.pack.avgRank : null,
+  }) : null;
+  const l2 = lp && lpMiss ? localUsurperInsight({
+    top: { keyword: (lpMiss as any).keyword, searchVolume: (lpMiss as any).searchVolume || 0, leader: String((lpMiss as any).packLeader) },
+    clientLocations: lp.clientLocs.length,
+  }) : null;
+  const l3 = lp ? reviewDeficitInsight({
+    avgRating: lp.reviews.avgRating > 0 ? lp.reviews.avgRating : null,
+    totalReviews: lp.reviews.totalReviews,
+  }) : null;
+
+  // ── pages (built conditionally; section numbers + footers assigned at assembly) ──
   const pages: string[] = [];
 
-  // 1 · Cover
+  // Cover
   pages.push(`<div class="page cover">
     <div class="cbrand">ORBITIQ&nbsp;&nbsp;·&nbsp;&nbsp;GROWTH INTELLIGENCE</div>
     <div class="cmid">
@@ -178,15 +234,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <div class="cfoot">
       <div class="cgrid">
         <div><div class="ckk">PROVIDED BY</div><div class="cvv" style="white-space:nowrap;">iQuanti &amp; McKinsey Partnership</div></div>
-        <div><div class="ckk">PREPARED</div><div class="cvv" style="white-space:nowrap;">${esc(d.preparedDate)}</div></div>
-        <div><div class="ckk">DATA AS OF</div><div class="cvv">${esc(d.scanDate ?? '—')}${d.aiDataDate ? ` · AI dataset ${esc(d.aiDataDate)}` : ''}</div></div>
-        <div><div class="ckk">INTELLIGENCE LAYERS</div><div class="cvv">Demand &amp; rankings · Live answer-surface scans · AI visibility tracking</div></div>
+        <div><div class="ckk">INTELLIGENCE LAYERS</div><div class="cvv">Demand &amp; rankings · Live answer-surface scans · AI visibility tracking${auth ? ' · Authority signals' : ''}${lp ? ' · Local map-pack scans' : ''}</div></div>
       </div>
-      <div class="cnote">Every figure in this report traces to a real scanned source row. Nothing is modeled or estimated unless explicitly labeled.</div>
+      <div class="cnote">Every figure in this report traces to a real scanned source row, regenerated from the current data at the moment this report is produced. Nothing is modeled or estimated unless explicitly labeled.</div>
     </div>
   </div>`);
 
-  // 2 · Executive summary
+  // Executive summary
   const execTiles: string[] = [];
   execTiles.push(tile('Page-1 capture', p1(m.captureRate * 100), `Of ${vol(m.totalMonthly)} monthly searches on your footprint, ${vol(m.page1Monthly)} land where you hold a page-1 position.`, 'accent'));
   if (sov) execTiles.push(tile('Unclaimed page-1 clicks', p0(openPct * 100), `Of ~${vol(sov.availableClicks)} modeled page-1 clicks/mo (${esc(sov.ctrSource)}), no tracked competitor captures them either.`, 'accent'));
@@ -194,22 +248,25 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   if (pf && pfRivalCov) execTiles.push(tile('Your real AI rival', esc(pfRivalCov.brand), `Appears in ${p0(pfRivalCov.pct)} of ${n0(pf.promptN)} tracked AI prompts vs your ${pfClientCov ? p0(pfClientCov.pct) : '0%'}.`));
   if (pf && pfBridgeSum > 0) execTiles.push(tile('The shortcut already exists', `${n0(pfBridgeSum)} <small>of ${n0(pf.citeMentions)}</small>`, `Brand mentions already sitting on ${pfBridge.map(h => h.hostname).join(', ')} — hosts AI engines already cite. Converting mentions to citations is outreach, not content.`));
   if (pf && pf.totalRuns > 0) execTiles.push(tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pf.totalRuns)} scanned AI answers across ${pf.engines.length} engines.`, pfVisPct < 5 ? 'bad' : ''));
-  pages.push(pageWrap('01 · EXECUTIVE SUMMARY', 'EXECUTIVE SUMMARY', `
+  if (execTiles.length < 6 && lp) execTiles.push(tile('Map-pack presence', `${p0(lp.pack.presenceRate)}`, `In ${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)} scanned local packs — at average rank ${lp.pack.avgRank} when present.`, lp.pack.presenceRate < 50 ? 'bad' : ''));
+  pages.push(pageWrap('EXECUTIVE SUMMARY', 'EXECUTIVE SUMMARY', `
     <h1 class="pg">Where the demand is — and who's capturing it.</h1>
     <div class="lede">This assessment maps ${name}'s full search footprint across Google and the AI answer engines, from live scans of real queries, rankings and AI answers. The headline findings below each trace to a scanned source; the sections that follow show the work.</div>
     <div class="tiles c3">${execTiles.slice(0, 6).join('')}</div>
     ${insightHTML(g2, 'WHAT THIS MEANS')}
     ${!pf ? gapBlock('AI visibility data', 'Upload the AI visibility exports on the AI Answer Engines panel and regenerate this report to add the full AI answer-layer assessment.') : ''}`));
 
-  // 3 · Governance
-  pages.push(pageWrap('02 · GOVERNANCE &amp; INTELLIGENCE', 'HOW THIS WAS BUILT', `
+  // Governance
+  pages.push(pageWrap('GOVERNANCE &amp; INTELLIGENCE', 'HOW THIS WAS BUILT', `
     <h1 class="pg">Every number traces to a verified source.</h1>
-    <div class="lede">This assessment is generated from live intelligence on your actual search footprint — not industry benchmarks, not estimates. The specific data partnerships and processing pipeline behind it are proprietary to the iQuanti &amp; McKinsey partnership. What we publish instead is the governance: how the numbers are sourced, what rules they obey, and why you can defend every one of them in a board meeting.</div>
+    <div class="lede">This assessment is generated from live intelligence on your actual search footprint — not industry benchmarks, not estimates. The specific data partnerships and processing pipeline behind it are proprietary to the iQuanti &amp; McKinsey partnership. Every figure is regenerated from the current data at the moment this report is produced. What we publish is the governance: how the numbers are sourced, what rules they obey, and why you can defend every one of them in a board meeting.</div>
     <table class="dt" style="margin-bottom:18px;">
-      <tr><th style="width:1.7in;">Intelligence layer</th><th>What it tells us</th><th style="width:1.3in;">Data as of</th></tr>
-      <tr><td><b>Demand &amp; rankings intelligence</b></td><td>Enterprise-grade search market data: real query volumes, your actual rankings, and the competitive gaps — the demand backbone of the assessment.</td><td class="n">${esc(d.scanDate ?? '—')}</td></tr>
-      <tr><td><b>Live answer-surface scans</b></td><td>What actually appears on the results page today: page-1 results, AI Overviews, People-Also-Ask boxes, video shelves, local packs.</td><td class="n">${esc(d.scanDate ?? '—')}</td></tr>
-      <tr><td><b>AI visibility tracking</b></td><td>How often AI answer engines (ChatGPT, Perplexity, Gemini, AI Overviews) mention and cite you across tracked buyer prompts — resolved down to every cited source URL.</td><td class="n">${esc(d.aiDataDate ?? 'not yet loaded')}</td></tr>
+      <tr><th style="width:1.7in;">Intelligence layer</th><th>What it tells us</th></tr>
+      <tr><td><b>Demand &amp; rankings intelligence</b></td><td>Enterprise-grade search market data: real query volumes, your actual rankings, and the competitive gaps — the demand backbone of the assessment.</td></tr>
+      <tr><td><b>Live answer-surface scans</b></td><td>What actually appears on the results page today: page-1 results, AI Overviews, People-Also-Ask boxes, video shelves, local packs.</td></tr>
+      <tr><td><b>AI visibility tracking</b></td><td>How often AI answer engines (ChatGPT, Perplexity, Gemini, AI Overviews) mention and cite you across tracked buyer prompts — resolved down to every cited source URL.</td></tr>
+      ${auth ? '<tr><td><b>Authority signals</b></td><td>Crawled backlink-index rows for your domain and tracked rivals: referring domains, authority distribution, follow share, and brand demand.</td></tr>' : ''}
+      ${lp ? '<tr><td><b>Local map-pack scans</b></td><td>Live Google map-pack checks across your local-intent keywords, plus real listing and review data for every location.</td></tr>' : ''}
     </table>
     <div class="two">
       <div class="panelbox"><div class="figtitle">How the analysis is assembled</div>
@@ -218,8 +275,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         <p><b>No modeled numbers as fact.</b> The only derived metric — Share of Voice — uses a named, industry-published click-through curve over your real volumes and positions, and is labeled as an estimate wherever it appears. <b>No hidden caps:</b> the full footprint is analyzed. Missing data reads as an honest gap, never a zero.</p></div>
     </div>`));
 
-  // 4 · Demand & capture
-  pages.push(pageWrap('03 · DEMAND VS. CAPTURE', 'PART I · THE MARKET', `
+  // Demand & capture
+  pages.push(pageWrap('DEMAND VS. CAPTURE', 'PART I · THE MARKET', `
     <h1 class="pg">The size of the market — and your share of it.</h1>
     <div class="lede">Your footprint spans <b>${n0(d.poolCount)} tracked keywords</b> carrying <b>${vol(m.totalMonthly)} searches every month</b> (${vol(m.totalAnnual)}/yr). You hold a page-1 position on ${p1(m.captureRate * 100)} of that demand — the rest is being answered by someone else.</div>
     <div class="tiles c3" style="margin-bottom:18px;">
@@ -234,11 +291,11 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <div class="src">Source: demand + ranking scans — per-keyword volumes and positions are real rows; page-1 = position ≤ 10.</div>
     <div class="callout"><div class="t">READ</div><p>Capture rate is the single most honest summary of a search program: it weighs every ranking by the real demand behind it. The pages that follow break the uncaptured share down — who holds it on Google, and who answers it inside AI engines.</p></div>`));
 
-  // 5 · Share of Voice
+  // Share of Voice
   if (sov) {
     const rivalBars = rivals.slice(0, 3).map(r =>
       barRow(r.domain, sov.availableClicks > 0 ? (r.capturedClicks / sov.availableClicks) * 100 : 0, p0(r.pct * 100), 'var(--violet)', '1.6in', '.7in')).join('');
-    pages.push(pageWrap('04 · SHARE OF VOICE', 'PART I · THE MARKET', `
+    pages.push(pageWrap('SHARE OF VOICE', 'PART I · THE MARKET', `
       <h1 class="pg">${p0(openPct * 100)} of the clicks belong to no one yet.</h1>
       <div class="lede">Of the ~${vol(sov.availableClicks)} page-1 clicks available each month on your footprint, you capture an estimated ${p0(sov.sovPct * 100)}. Your tracked competitors barely capture more — <b>${p0(openPct * 100)} of the clicks are open</b>, held by aggregators, publishers and nobody in particular.</div>
       <div class="figtitle">Estimated page-1 click capture</div>
@@ -254,15 +311,106 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       </div>`));
   }
 
-  // 6-10 · AI answer layer
+  // Authority signals (conditional — omitted entirely when no snapshot)
+  if (auth) {
+    const c = auth.client, co = c.overview!;
+    const followShare = (o: { follows: number; nofollows: number }) => o.follows + o.nofollows > 0 ? (o.follows / (o.follows + o.nofollows)) * 100 : 0;
+    const rowFor = (x: ADomainSignals, isClient: boolean) => {
+      const o = x.overview!;
+      const b = (v: string) => isClient ? `<b>${v}</b>` : v;
+      return `<tr><td>${b(esc(x.domain))}${isClient ? ' <span class="chip climb" style="font-size:7.5px;">CLIENT</span>' : ''}</td>
+        <td class="n">${b(n0(o.ascore))}</td><td class="n">${b(n0(o.refDomains))}</td>
+        <td class="n">${b(x.qualityTiers ? n0(x.qualityTiers.ge50) : '—')}</td>
+        <td class="n">${b(p0(followShare(o)))}</td>
+        <td class="n">${b(x.brandVolume != null ? vol(x.brandVolume) : '—')}</td></tr>`;
+    };
+    const tableRows = [rowFor(c, true)].concat(auth.comps.map(x => rowFor(x, false))).join('');
+    const topComp = auth.comps[0];
+    const rdRatio = topComp ? topComp.overview!.refDomains / Math.max(1, co.refDomains) : 0;
+    const tierRatio = topComp && topComp.qualityTiers && c.qualityTiers && c.qualityTiers.ge50 > 0
+      ? topComp.qualityTiers.ge50 / c.qualityTiers.ge50 : 0;
+    const brandRatio = topComp && topComp.brandVolume && c.brandVolume ? topComp.brandVolume / c.brandVolume : 0;
+    const nearest = auth.comps.slice().sort((a, b) =>
+      Math.abs(a.overview!.refDomains / Math.max(1, co.refDomains) - 1) - Math.abs(b.overview!.refDomains / Math.max(1, co.refDomains) - 1))[0];
+    const nearRatio = nearest ? nearest.overview!.refDomains / Math.max(1, co.refDomains) : 0;
+    const behind = rdRatio > 1.05;
+    const tiles: string[] = [];
+    if (nearest && nearest.domain !== topComp?.domain) tiles.push(tile(`vs ${nearest.domain}`, mult(nearRatio), `${nearest.domain}'s referring-domain edge — the closest authority peer on file.`));
+    else if (nearest) tiles.push(tile(`vs ${nearest.domain}`, mult(nearRatio), `Referring-domain ratio against your closest tracked rival.`));
+    if (topComp && tierRatio > 0) tiles.push(tile(`Top-tier gap vs ${topComp.domain}`, mult(tierRatio), `${n0(topComp.qualityTiers!.ge50)} high-authority referring domains (AS≥50) to your ${n0(c.qualityTiers?.ge50 ?? 0)} — the tier that moves rankings and AI citations most.`, tierRatio > 1.3 ? 'bad' : ''));
+    if (brandRatio > 0) tiles.push(tile('Brand demand gap', mult(brandRatio), `${vol(topComp!.brandVolume!)} monthly brand searches for ${topComp!.domain} vs your ${vol(c.brandVolume!)} — brand gravity compounds every other signal.`, brandRatio > 2 ? 'bad' : ''));
+    pages.push(pageWrap('AUTHORITY SIGNALS', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg">${behind ? 'Where your link authority stands — and where the gap is.' : 'Your link authority leads the tracked field.'}</h1>
+      <div class="lede">Real crawled backlink signals for ${esc(c.domain)} against ${auth.comps.length} tracked rival${auth.comps.length === 1 ? '' : 's'}: referring domains, the high-authority tier, follow share, and brand demand. Counts are facts about the crawled index; Authority Score is the index's modeled composite and is labeled as such.</div>
+      <table class="dt" style="margin-bottom:16px;">
+        <tr><th>Domain</th><th style="width:.95in;">Authority Score <span style="font-weight:400; text-transform:none;">(modeled)</span></th><th style="width:.95in;">Referring domains</th><th style="width:.9in;">High-authority RDs (AS&ge;50)</th><th style="width:.75in;">Follow share</th><th style="width:1in;">Brand demand /mo</th></tr>
+        ${tableRows}
+      </table>
+      ${tiles.length ? `<div class="tiles c3" style="margin-bottom:16px;">${tiles.slice(0, 3).join('')}</div>` : ''}
+      <div class="two">
+        <div class="panelbox"><div class="figtitle">What the profile says</div>
+          <p style="margin-top:6px; font-size:10px;">${followShare(co) >= 70 ? `Your follow share (${p0(followShare(co))}) is healthy and your mid-tier link base is competitive — this is not a domain that needs remedial link building.` : `Your follow share (${p0(followShare(co))}) trails the leaders — link quality, not just quantity, is part of the gap.`} The deficit that matters most sits where links are hardest to buy and easiest to earn: top-authority publishers and press.</p></div>
+        <div class="panelbox" style="border-top:3px solid var(--blue);"><div class="figtitle">Why this compounds the earned-media step</div>
+          <p style="margin-top:6px; font-size:10px;">The earned-media outreach in the recommended program targets exactly these hosts. Every mention converted to a linked citation does double duty: it enters AI answer supply chains <b>and</b> lands a high-authority referring domain — the tier of this table where gains matter most.</p></div>
+      </div>
+      <div class="src">Source: crawled backlinks-index rows from the latest authority scan — referring-domain and follow counts are facts about that index; Authority Score is the index's modeled composite (labeled); brand demand is real monthly volume for each domain's brand phrase.</div>`));
+  }
+
+  // Local search (conditional — omitted entirely when no scan)
+  if (lp && scan) {
+    const dist = { big: 0, mid: 0, small: 0 };
+    for (const l of lp.clientLocs) {
+      const r = l.reviews || 0;
+      if (r >= 100) dist.big++; else if (r >= 25) dist.mid++; else if (r >= 1) dist.small++;
+    }
+    const distMax = Math.max(1, dist.big, dist.mid, dist.small);
+    const withAnyReview = dist.big + dist.mid + dist.small;
+    const solvTop = lp.solv.slice(0, 5);
+    const solvMax = Math.max(1, ...solvTop.map(r => r.appearances));
+    const solvBars = solvTop.map(r =>
+      barRow(r.isClient ? `${d.clientName} (you)` : r.name, (r.appearances / solvMax) * 100, `${n0(r.appearances)} · ${p0(r.sharePct)}`, r.isClient ? 'var(--blue)' : '#c9c8c1', '1.5in', '.85in')).join('');
+    pages.push(pageWrap('LOCAL SEARCH — THE MAP PACK', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg">${lp.pack.presenceRate < 50 ? `Where you show up, you ${lp.pack.avgRank > 0 && lp.pack.avgRank <= 2 ? 'win' : 'compete'}. You show up ${p0(lp.pack.presenceRate)} of the time.` : `You appear in ${p0(lp.pack.presenceRate)} of your map packs.`}</h1>
+      <div class="lede">The local scan checked <b>${n0(lp.pack.scanned)} local-intent keywords</b> against your <b>${n0(lp.clientLocs.length)} location${lp.clientLocs.length === 1 ? '' : 's'}</b>: ${n0(lp.pack.withPack)} returned a Google map pack, and you appear in ${n0(lp.pack.inPack)} of them${lp.pack.avgRank > 0 ? ` — at an average rank of <b>${lp.pack.avgRank}</b> when you do` : ''}.</div>
+      <div class="tiles c3" style="margin-bottom:14px;">
+        ${tile('Local Visibility Index', String(lp.index.score), 'Blended index: pack presence 40% · rank quality 25% · reviews 20% · listing completeness 15% — each input a real scanned row.')}
+        ${tile('Map-pack presence', `${p0(lp.pack.presenceRate)} <small>${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)}</small>`, 'Packs on your keywords where any of your locations appears.', lp.pack.presenceRate < 50 ? 'bad' : '')}
+        ${tile('Rank when present', lp.pack.avgRank > 0 ? String(lp.pack.avgRank) : '—', 'Average position inside the 3-pack when you appear.')}
+      </div>
+      <div class="two" style="margin-bottom:14px;">
+        <div class="panelbox"${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? ' style="border-top:3px solid var(--critical);"' : ''}>
+          <div class="figtitle">The reputation gate</div>
+          <div class="figsub">Google reviews across ${n0(lp.reviews.locationCount)} rated locations</div>
+          <div style="display:flex; gap:14px; align-items:baseline; margin-bottom:10px;">
+            <span style="font-size:26px; font-weight:800; color:${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? 'var(--critical)' : 'var(--ink)'};">${lp.reviews.avgRating > 0 ? `${lp.reviews.avgRating}&#9733;` : '—'}</span>
+            <span style="font-size:10px; color:var(--ink2);">average across <b>${n0(lp.reviews.totalReviews)} reviews</b>${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? ' — below the ~4.0 bar that gates pack rank' : ''}</span>
+          </div>
+          ${barRow('100+ reviews', (dist.big / distMax) * 100, n0(dist.big), 'var(--blue)', '1.1in', '.6in')}
+          ${barRow('25–99 reviews', (dist.mid / distMax) * 100, n0(dist.mid), 'var(--blue)', '1.1in', '.6in')}
+          ${barRow('1–24 reviews', (dist.small / distMax) * 100, n0(dist.small), 'var(--blue)', '1.1in', '.6in')}
+          <p style="font-size:9px; color:var(--muted); margin-top:8px;">${withAnyReview > 0 && lp.clientLocs.length > 0 ? `${p0((withAnyReview / lp.clientLocs.length) * 100)} of locations have at least one review.` : ''}</p>
+        </div>
+        <div class="panelbox">
+          <div class="figtitle">Who holds the pack slots</div>
+          <div class="figsub">Businesses appearing most often across your scanned packs · you highlighted</div>
+          ${solvBars || '<p class="figsub">No pack appearances recorded in this scan.</p>'}
+          <p style="font-size:9px; color:var(--muted); margin-top:8px;">The full local opportunity queue is itemized in the app.</p>
+        </div>
+      </div>
+      ${insightHTML(l2 ?? l1, l2 ? 'FINDING · WHO OWNS YOUR MAP PACK' : 'DIAGNOSIS', l2 ? 'red' : 'blue')}
+      ${l2 ? insightHTML(l1, 'DIAGNOSIS') : ''}
+      ${insightHTML(l3, 'FINDING · REVIEW DEFICIT', 'red')}
+      <div class="src">Source: live local scan — pack presence, pack leaders, listings and Google ratings are real scanned rows; volumes are real per-keyword rows.</div>`));
+  }
+
+  // AI answer layer
   if (pf) {
-    // 6 · market position
     const maxTop = Math.max(1, ...pf.overallTop.map(b => b.pct));
     const topBars = pf.overallTop.slice(0, 10).map(b =>
       barRow(b.brand, (b.pct / maxTop) * 100, `${p1(b.pct)} · ${n0(b.count)}`, '#c9c8c1', '1.6in')).join('');
     const clientBar = pf.totalRuns > 0 ? barRow(pf.client || name, (pfVisPct / maxTop) * 100, `${p1(pfVisPct)} · ${n0(pf.clientHits)}`, 'var(--blue)', '1.6in') : '';
     const sovRank = pf.sov.slice().sort((a, b) => b.count - a.count).findIndex(s => s.isClient) + 1;
-    pages.push(pageWrap('05 · AI ANSWER ENGINES — MARKET POSITION', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('AI ANSWER ENGINES — MARKET POSITION', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Who AI recommends when your customers ask.</h1>
       <div class="lede">We analyzed <b>${n0(pf.totalRuns)} real AI answers</b> — ${n0(pf.promptN)} buyer prompts across ${pf.engines.length} engines — and counted who gets named. ${name} appears in ${p1(pfVisPct)} of answers.</div>
       <div class="tiles c3" style="margin-bottom:16px;">
@@ -273,10 +421,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="figtitle">Who AI engines actually name — share of all ${n0(pf.totalRuns)} answers</div>
       <div class="figsub">Every brand mentioned in scanned answers, ranked · ${name} highlighted</div>
       ${topBars}${clientBar}
-      <div class="src">Source: AI visibility dataset${d.aiDataDate ? `, ${esc(d.aiDataDate)}` : ''} — brand counts are direct mention counts from real answers.</div>
+      <div class="src">Source: AI visibility dataset — brand counts are direct mention counts from real answers.</div>
       ${insightHTML(a3, 'READ')}`));
 
-    // 7 · engine by engine
     const maxEng = Math.max(0.1, ...pf.engines.map(e => e.runs > 0 ? (e.hits / e.runs) * 100 : 0));
     const engBars = pf.engines.slice().sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs))).map(e => {
       const pct = e.runs > 0 ? (e.hits / e.runs) * 100 : 0;
@@ -298,7 +445,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         </div>
         <span class="val">${p0((e.earned / t) * 100)} earned · ${n0(e.total)}</span></div>`;
     }).join('');
-    pages.push(pageWrap('06 · ENGINE-BY-ENGINE', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('ENGINE-BY-ENGINE', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Each engine behaves differently. So should the plan.</h1>
       <div class="lede">Engines differ in two ways that matter: <b>how often they name you</b>, and <b>where they source their answers</b>. Engines leaning on earned media respond to PR; engines leaning on broad authority respond to content depth.</div>
       <div class="two" style="margin-bottom:14px;">
@@ -308,9 +455,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${mixRows ? `<div class="figtitle">How each engine sources its answers</div>
       <div class="figsub">Citation mix per engine — earned media · competitor-owned · client-owned · other</div>${mixRows}
       <div class="legend"><span><span class="sw" style="background:var(--blue)"></span>Earned media</span><span><span class="sw" style="background:var(--violet)"></span>Competitor-owned</span><span><span class="sw" style="background:var(--good)"></span>Client-owned</span><span><span class="sw" style="background:#e3e2dc"></span>Other</span></div>` : ''}
-      <div class="src">Source: AI visibility dataset${d.aiDataDate ? `, ${esc(d.aiDataDate)}` : ''} — per-engine counts are direct tallies.</div>`));
+      <div class="src">Source: AI visibility dataset — per-engine counts are direct tallies.</div>`));
 
-    // 8 · prompt demand & winnable set
     const maxDem = Math.max(0.1, ...pf.demandTopics.map(t => t.share));
     const demBars = pf.demandTopics.slice().sort((a, b) => b.share - a.share).map(t =>
       barRow(t.topic, (t.share / maxDem) * 100, `${p1(t.share)} · ${n0(t.prompts)} pr`, 'var(--blue)', '1.3in', '.95in')).join('');
@@ -324,7 +470,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       `<tr><td><b>${esc(r.topic)}</b></td><td class="n">${n0(r.n)}</td><td>${esc(r.leader)} leads ${n0(r.leaderN)}</td></tr>`).join('');
     const leaderTiles = leaderRows.slice(0, 3).map(([leader, n]) =>
       tile(`Led by ${leader}`, n0(n), 'Winnable prompts where this rival is the current incumbent.')).join('');
-    pages.push(pageWrap('07 · PROMPT DEMAND &amp; THE WINNABLE SET', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('PROMPT DEMAND &amp; THE WINNABLE SET', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">What buyers ask — and the ${n0((pf.gaps || []).length)} prompts you can take.</h1>
       <div class="lede">${n0(pf.demandPromptTotal)} tracked buyer questions carry measured demand, split across ${n0(pf.demandTopics.length)} product topics. Laying demand against your visibility exposes where the biggest questions meet the thinnest presence.</div>
       <div class="two" style="margin-bottom:14px;">
@@ -335,9 +481,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="figsub">Every prompt is itemized in the app with its leading rival · the battle map:</div>
       <table class="dt" style="margin-bottom:12px;"><tr><th>Topic</th><th style="width:1in;">Winnable</th><th>Who leads them</th></tr>${battleRows}</table>
       <div class="tiles c3">${leaderTiles}</div>` : ''}
-      <div class="src">Source: AI visibility dataset${d.aiDataDate ? `, ${esc(d.aiDataDate)}` : ''} — winnable counts and leaders are direct tallies of per-prompt mention rows.</div>`));
+      <div class="src">Source: AI visibility dataset — winnable counts and leaders are direct tallies of per-prompt mention rows.</div>`));
 
-    // 9 · citation supply chain
     const maxCat = Math.max(1, ...(pf.citeCatMix || []).map(c => c.pct));
     const catBars = (pf.citeCatMix || []).slice().sort((a, b) => b.count - a.count).map(c => {
       const isOwned = c.category.toLowerCase().includes('owned');
@@ -353,7 +498,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     const mentionByHost = new Map(pfMentionHosts.map(h => [h.hostname, h.count]));
     const bridgeRows = (pf.earnedTargets || []).slice(0, 6).map(t =>
       `<tr><td><b>${esc(t.hostname)}</b></td><td class="n">${n0(t.count)}</td><td class="n">${mentionByHost.has(t.hostname) ? n0(mentionByHost.get(t.hostname)!) : '—'}</td></tr>`).join('');
-    pages.push(pageWrap('08 · THE CITATION SUPPLY CHAIN', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('THE CITATION SUPPLY CHAIN', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Who feeds the answers.</h1>
       <div class="lede">Every AI answer is assembled from cited sources — <b>${n0(pf.citeTotal)}</b> of them across your tracked prompts, each classified by ownership. Your domain supplies <b>${p1(pf.citeOwnedShare)}</b> of the raw material${pf.citeCompetition ? `; competitor-owned domains supply ${n0(pf.citeCompetition)}` : ''}.</div>
       <div class="figtitle">Ownership of all ${n0(pf.citeTotal)} cited sources</div>
@@ -366,9 +511,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
           <table class="dt"><tr><th>Host</th><th style="width:.9in;">Cited (earned)</th><th style="width:.9in;">Your mentions</th></tr>${bridgeRows}</table></div>
       </div>
       ${insightHTML(a4, 'WHY THIS IS THE CHEAPEST WIN IN THE REPORT')}
-      <div class="src">Source: citation-level AI dataset${d.aiDataDate ? `, ${esc(d.aiDataDate)}` : ''} — ownership classes, domain counts and mention surface are direct counts.</div>`));
+      <div class="src">Source: citation-level AI dataset — ownership classes, domain counts and mention surface are direct counts.</div>`));
 
-    // 10 · sentiment
     const netPct = (pos: number, neg: number) => { const t = pos + neg; return t > 0 ? Math.round(((pos - neg) / t) * 100) : 0; };
     const sentSorted = (pf.sentBrands || []).slice().sort((a, b) => netPct(b.pos, b.neg) - netPct(a.pos, a.neg));
     const maxNet = Math.max(1, ...sentSorted.map(s => Math.abs(netPct(s.pos, s.neg))));
@@ -382,7 +526,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       tile('Neutral', `${p0((cms.neutral / cms.total) * 100)} <small>${n0(cms.neutral)}</small>`, 'Listed factually among options, no judgment attached.'),
       tile('Negative', `${p0((cms.neg / cms.total) * 100)} <small>${n0(cms.neg)}</small>`, `${n0(cms.neg)} negative mention${cms.neg === 1 ? '' : 's'} across all scanned answers.`),
     ].join('') : '';
-    pages.push(pageWrap('09 · SENTIMENT', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('SENTIMENT', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Is the problem tone — or frequency?</h1>
       <div class="lede">Two independent reads of tone: the claims AI engines make about each brand, and the tone of each actual mention. Together they answer whether this is a visibility build or a reputation repair.</div>
       <div class="figtitle">Net sentiment by brand — claims made inside AI answers</div>
@@ -392,9 +536,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="figsub">All ${n0(cms!.total)} assessed mentions across the engines</div>
       <div class="tiles c3">${toneTiles}</div>` : ''}
       <div class="callout"><div class="t">THE STANDING GUARD</div><p>Sentiment is re-scored on every dataset refresh. If net sentiment turns while visibility grows, the program flags it at the source level — AI answers repeat what the cited source pool says, so a souring theme is caught before it compounds into brand tracking.</p></div>
-      <div class="src">Source: AI visibility dataset${d.aiDataDate ? `, ${esc(d.aiDataDate)}` : ''} — sentiment claims and per-mention tone are classified in the dataset; counts are direct.</div>`));
+      <div class="src">Source: AI visibility dataset — sentiment claims and per-mention tone are classified in the dataset; counts are direct.</div>`));
   } else {
-    pages.push(pageWrap('05 · THE AI ANSWER LAYER', 'PART II · THE AI ANSWER LAYER', `
+    pages.push(pageWrap('THE AI ANSWER LAYER', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">The AI answer layer — not yet measured.</h1>
       <div class="lede">AI answer engines (ChatGPT, Perplexity, Gemini, Google's AI results) now answer a large share of buyer questions before any website is visited. This project does not yet have AI visibility data loaded, so this report makes no claims about it — per the governance rules, a gap is shown honestly rather than estimated.</div>
       ${gapBlock('AI visibility tracking', 'Load the AI visibility exports on the AI Answer Engines panel, then regenerate this report — the assessment expands with five sections: market position, engine-by-engine behavior, prompt demand and the winnable set, the citation supply chain, and sentiment.')}`));
@@ -408,10 +552,15 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   if (worstTopics.length > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--yellow);"><div class="stepk" style="color:#8a5a00;">STEP 3</div><div class="figtitle">Build into verified whitespace</div><p>Net-new answer-ready content aimed at the proven vacuums: ${worstTopics.map(t => `${esc(t.topic)} (${p1((t.hits / Math.max(1, t.runs)) * 100)})`).join(' · ')}.</p></div>`);
   if (steps.length === 0 && sov) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 1</div><div class="figtitle">Claim the open clicks</div><p>${p0(openPct * 100)} of modeled page-1 clicks on this footprint are unclaimed by any tracked competitor — the opportunity queue in the app itemizes them by demand.</p></div>`);
   if (steps.length > 0) {
-    pages.push(pageWrap(`${pf ? '10' : '06'} · THE RECOMMENDED PROGRAM`, 'PART III · THE OPPORTUNITY', `
+    const running: string[] = [];
+    if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating}&#9733; reputation gate` : ''}.`);
+    if (auth) running.push(`<b>Authority compounding</b> — every earned placement also lands a high-authority referring domain, the tier of the link profile where gains matter most.`);
+    running.push(`<b>Engine steer &amp; sentiment guard</b> — visibility and tone tracked on every refresh, so a souring theme is caught at the source level.`);
+    pages.push(pageWrap('THE RECOMMENDED PROGRAM', 'PART IV · THE OPPORTUNITY', `
       <h1 class="pg">Sequenced by cost of entry, not by habit.</h1>
       <div class="lede">The work is ordered by what each win costs: conversions of existing assets come before optimization, and optimization comes before net-new builds. Every step below is backed by the counts on the preceding pages.</div>
       <div style="display:grid; grid-template-columns:repeat(${Math.min(3, steps.length)},1fr); gap:14px; margin-bottom:16px;">${steps.join('')}</div>
+      <div class="panelbox" style="margin-bottom:14px;"><div class="figtitle">Running throughout</div><p style="margin-top:6px; font-size:10px;">${running.join(' ')}</p></div>
       <div class="callout"><div class="t">WHY THIS ORDER</div><p>Step 1 costs outreach and zero content. Later steps build on the citation trust the earlier ones create, so new content enters AI answers faster. Reversing the order means publishing into a surface that doesn't yet cite you.</p></div>`));
   }
 
@@ -423,9 +572,17 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   if (pf && pfClientCov) scoreRows.push(`<tr><td><b>AI prompt coverage</b></td><td class="n">${p0(pfClientCov.pct)}${pfRivalCov ? ` (vs ${esc(pfRivalCov.brand)} ${p0(pfRivalCov.pct)})` : ''}</td><td>Distinct prompts where you appear at least once</td></tr>`);
   if (pf && (pf.citeTotal || 0) > 0) scoreRows.push(`<tr><td><b>Owned citation share</b></td><td class="n">${p1(pf.citeOwnedShare)} (${n0(pf.citeOwned)} of ${n0(pf.citeTotal)})</td><td>Cited sources on your own domain</td></tr>`);
   if (pf && pfBridgeSum > 0) scoreRows.push(`<tr><td><b>Brand mentions → citations</b></td><td class="n">${n0(pfBridgeSum)} unconverted</td><td>Mentions on top citable hosts, tracked per host</td></tr>`);
+  if (auth) {
+    const topComp = auth.comps[0];
+    scoreRows.push(`<tr><td><b>High-authority referring domains</b> (AS&ge;50)</td><td class="n">${n0(auth.client.qualityTiers?.ge50 ?? 0)}${topComp?.qualityTiers ? ` (vs ${esc(topComp.domain)} ${n0(topComp.qualityTiers.ge50)})` : ''}</td><td>Earned placements land the top-tier links that close this gap</td></tr>`);
+  }
+  if (lp) {
+    scoreRows.push(`<tr><td><b>Map-pack presence</b></td><td class="n">${p0(lp.pack.presenceRate)} (${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)})</td><td>Listing coverage across ${n0(lp.clientLocs.length)} locations lifts presence first</td></tr>`);
+    if (lp.reviews.avgRating > 0) scoreRows.push(`<tr><td><b>Review reputation</b></td><td class="n">${lp.reviews.avgRating}&#9733; (${n0(lp.reviews.totalReviews)} reviews)</td><td>${lp.reviews.avgRating < 4 ? 'Crossing the ~4.0 gate unlocks pack rank the listings already earn' : 'Held above the ~4.0 pack-rank gate'}</td></tr>`);
+  }
   const cms2 = pf ? (pf.mentionSent || []).find(x => x.isClient) : null;
   if (cms2 && cms2.total > 0) scoreRows.push(`<tr><td><b>Mention tone</b></td><td class="n">${n0(cms2.pos)} pos · ${n0(cms2.neutral)} neu · ${n0(cms2.neg)} neg</td><td>Held healthy while visibility scales — the guard metric</td></tr>`);
-  pages.push(pageWrap(`${pf ? '11' : '07'} · THE BASELINE SCORECARD`, 'PART III · THE OPPORTUNITY', `
+  pages.push(pageWrap('THE BASELINE SCORECARD', 'PART IV · THE OPPORTUNITY', `
     <h1 class="pg">Today's numbers, on the record.</h1>
     <div class="lede">Every metric below is re-computed on the same methodology at each refresh, so progress is measured against this baseline — not a moving target. This is the page you hold us to.</div>
     <table class="dt"><tr><th>Metric</th><th style="width:1.7in;">Baseline</th><th>What it measures</th></tr>${scoreRows.join('')}</table>
@@ -435,9 +592,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     </div>`));
 
   // Appendix
-  pages.push(pageWrap(`${pf ? '12' : '08'} · APPENDIX &amp; DEFINITIONS`, 'APPENDIX', `
+  pages.push(pageWrap('APPENDIX &amp; DEFINITIONS', 'APPENDIX', `
     <h1 class="pg">The receipts.</h1>
-    <div class="lede">Definitions for every metric in this report. The full underlying data — every keyword, prompt, citation and mention — is live in the OrbitIQ workspace this report was generated from.</div>
+    <div class="lede">Definitions for every metric in this report. The full underlying data — every keyword, prompt, citation, mention, listing and pack row — is live in the OrbitIQ workspace this report was generated from.</div>
     <table class="dt" style="margin-bottom:16px;">
       <tr><th style="width:1.8in;">Term</th><th>Definition as used in this report</th></tr>
       <tr><td><b>Page-1 capture</b></td><td>Volume-weighted share of tracked keywords where the client holds a position 1–10 ranking. Direct from scan rows.</td></tr>
@@ -447,18 +604,22 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <tr><td><b>Owned citation</b></td><td>A cited source URL classified as client-owned in the citation landscape. Direct count from the citation-level dataset.</td></tr>
       <tr><td><b>Winnable prompt</b></td><td>A tracked prompt where at least one rival appears in the answer and the client does not. Direct tally of per-prompt mention rows.</td></tr>
       <tr><td><b>Earned share (per engine)</b></td><td>Share of an engine's citations classified as earned media — the measure of how much PR moves that engine.</td></tr>
+      ${auth ? `<tr><td><b>Authority Score / referring domains</b></td><td>Referring-domain, follow and tier counts are crawled backlink-index rows; Authority Score is that index's modeled composite, always labeled as modeled.</td></tr>` : ''}
+      ${lp ? `<tr><td><b>Map-pack presence / Local Visibility Index</b></td><td>Presence, rank and ratings are real scanned pack and listing rows; the index is a fixed, documented blend of those four real ratios (40/25/20/15) — an editorial weighting, not a hidden model.</td></tr>` : ''}
     </table>
     <div class="endbrand">
       <div><div style="font-size:12px; font-weight:800;">OrbitIQ</div>
         <div style="font-size:9px; color:var(--muted); margin-top:2px;">An iQuanti &amp; McKinsey Partnership product · every number traces to a scanned source</div></div>
-      <div style="font-size:9px; color:var(--muted); text-align:right;">Generated ${esc(d.preparedDate)}${d.scanDate ? `<br>from data as of ${esc(d.scanDate)}` : ''}</div>
+      <div style="font-size:9px; color:var(--muted); text-align:right;">Generated by OrbitIQ from live project data</div>
     </div>`));
 
-  // ── assemble with page numbers ──────────────────────────────────────────────
+  // ── assemble: section numbers + page numbers ───────────────────────────────
   const total = pages.length;
+  let secN = 0;
   const numbered = pages.map((p, i) =>
     p.replace('__FOOT__', `<div class="foot"><span>${footLeft}</span><span>Page ${i + 1} of ${total}</span></div>`)
-     .replace('__EBL__', `${name.toUpperCase()} — SEARCH &amp; AI VISIBILITY ASSESSMENT`));
+     .replace('__EBL__', `${name.toUpperCase()} — SEARCH &amp; AI VISIBILITY ASSESSMENT`)
+     .replace(/__SEC__/g, () => String(++secN).padStart(2, '0')));
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${name} — Search &amp; AI Visibility Assessment</title>
 <style>
@@ -501,6 +662,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   table.dt td{padding:6px 8px; border-bottom:1px solid var(--grid); color:var(--ink2); vertical-align:top;}
   table.dt td.n{font-variant-numeric:tabular-nums; text-align:right; color:var(--ink); font-weight:600;}
   table.dt td b{color:var(--ink);}
+  .chip{display:inline-block; font-size:8.5px; font-weight:800; letter-spacing:.05em; border-radius:3px; padding:2px 7px;}
+  .chip.climb{background:#e7effc; color:#184f95; border:1px solid #b7d3f6;}
   .legend{display:flex; gap:16px; font-size:9px; color:var(--ink2); margin-top:10px;}
   .legend .sw{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px;}
   .two{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
@@ -521,11 +684,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
 </style></head><body>${numbered.join('\n')}</body></html>`;
 }
 
-// content pages share this wrapper; cover manages its own chrome
-function pageWrap(secnum: string, right: string, inner: string): string {
+// content pages share this wrapper; cover manages its own chrome.
+// __SEC__ is replaced with the sequential section number at assembly, so
+// conditional sections never leave numbering holes.
+function pageWrap(secTitle: string, right: string, inner: string): string {
   return `<div class="page">
     <div class="eyebrow"><span class="l">__EBL__</span><span class="r">${right}</span></div>
-    <div class="secnum">${secnum}</div>
+    <div class="secnum">__SEC__ · ${secTitle}</div>
     ${inner}
     __FOOT__
   </div>`;
