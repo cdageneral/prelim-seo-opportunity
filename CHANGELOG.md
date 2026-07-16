@@ -1,3 +1,15 @@
+## v7.374 · header PDF button → Client Assessment Report — 2026-07-16
+
+The top-header PDF button now generates the multi-page **Search & AI Visibility Assessment** for the current project (design spec GEO/orbitiq-assessment-report-mockup-v3-2026-07-16.html, approved 2026-07-16) instead of the legacy brief.
+
+**New: `lib/pdf/assessmentTemplate.ts`** — builds the report server-side from the SAME shared math the panels render (Const II.6/II.7): pool + capture via buildKwPool/computeVolumeMetrics, SoV via computeSov (named-curve label kept at every appearance, I.5a), the AI answer-layer sections (market position · engine-by-engine · prompt demand & winnable set · citation supply chain · sentiment) from the stored Profound panel metrics (projects.profound_data, v7.318), and insight sentences reused verbatim from lib/insights.ts. Sections whose data source is absent render an explicit honest-gap block — never a placeholder value (I.5). Report rules per Wayne: no data-vendor names in the client-facing output (generic intelligence-layer names); every page carries "Provided by the iQuanti & McKinsey Partnership".
+
+**Changed:** `app/api/reports/pdf/route.ts` (assembles AssessmentData, renders Letter edge-to-edge; filename orbitiq-assessment-*), `app/projects/[id]/page.tsx` (button tooltip "Generate Assessment Report (PDF)").
+
+**Post-deploy runtime fixes (same release):** the legacy puppeteer path failed on Vercel's AL2023/node22 runtime — (1) upgraded `@sparticuz/chromium` ^130→^149 + `puppeteer-core` ^23→^24 (libnss3 missing at launch), adapting the launch call to the v149 API (defaultViewport/headless statics dropped; setContent waitUntil 'load'); (2) added `outputFileTracingIncludes` for the PDF route in next.config.js — the v149 bin folder was no longer traced into the lambda ("input directory .../bin does not exist").
+
+**Verified:** project tsc clean; retained suite A/B ZERO DELTA vs pristine v7.373 base (the 13 pre-existing local-ui/localpack fails documented 2026-07-06 remain, owned by their releases) + 10 new v374 retained checks PASS; both render modes (full + honest-gap) rendered to PDF and eyeballed page-by-page; LIVE end-to-end: TD Bank project → button → 200 + blob fileUrl → valid 13-page PDF from real stored data.
+
 ## v7.373 · post-release fixes — 2026-07-16 (login + admin panel go-live)
 
 Follow-up patches to the v7.373 auth layer, all verified live in production. Three issues surfaced after the initial push and were resolved:
