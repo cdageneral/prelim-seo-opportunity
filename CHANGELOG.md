@@ -1,3 +1,19 @@
+## v7.375 · assessment report v4 — no dates, Authority Signals + Local Search sections — 2026-07-16
+
+Implements the approved v4 mockup (GEO/orbitiq-assessment-report-mockup-v4-2026-07-16.html) into the live report.
+
+**Dates removed everywhere** (client request): the AssessmentData interface drops preparedDate/scanDate/aiDataDate; the route no longer computes them; cover, page-2 scorecard column, source lines, footers and end brand carry no dates. Retained check asserts no month-name date pattern anywhere in the output.
+
+**New conditional section: Authority Signals** (PART II · THE DIAGNOSIS) — renders ONLY when projects.authority_snapshot holds a client row plus at least one competitor with real crawled overview counts (honest gap, I.5: omitted entirely otherwise). Client-vs-rivals table (Authority Score labeled *(modeled)* per I.5a; referring domains, AS≥50 tier, follow share, brand demand — facts from the crawled index), nearest-peer / top-tier-gap / brand-demand-gap ratio tiles, and the earned-media compounding tie-in.
+
+**New conditional section: Local Search — The Map Pack** (PART II · THE DIAGNOSIS) — renders ONLY when the analysis snapshot's _localScan holds scanned keywords or listings. All rollups reuse lib/local/build.ts verbatim (II.7): buildPackRollup, buildReviewRollup, buildShareOfLocalVoice, buildLocalIndex (40/25/20/15 blend). Insight sentences are the panel's own shared rules L1/L2/L3 (localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight) with the same top-miss selection rule. Review-count distribution (100+/25–99/1–24) tallied directly from listings. NOTE: the mockup's "top local categories" box was replaced by the shared Share-of-Local-Voice "Who holds the pack slots" — the category taxonomy model is client-side only (flagged before build, approved).
+
+**Dynamic section numbering** — section numbers and page footers are assigned at assembly (__SEC__ placeholder), so conditional sections renumber cleanly in every data mode.
+
+Governance table, cover INTELLIGENCE LAYERS, baseline scorecard, program page ("Running throughout") and appendix definitions gain their authority/local rows conditionally.
+
+Files: lib/pdf/assessmentTemplate.ts (rewrite), app/api/reports/pdf/route.ts (passes authoritySnapshot + _localScan, date fields removed), package.json/package-lock.json (7.375.0). Verified live on TD Bank: 15 pages, Authority p.6 (td.com 41,037 RDs vs bankofamerica.com 86,728, 2.33× top-tier gap), Local p.7 (index 43, 24% presence 60/247, avg rank 1.5, 2.9★/64,377 reviews, Presto! ATM usurper finding), zero dates, partnership attribution on every page. Retained suite: 11 new v375 checks, A/B zero delta vs pristine v7.374 base.
+
 ## v7.374 · header PDF button → Client Assessment Report — 2026-07-16
 
 The top-header PDF button now generates the multi-page **Search & AI Visibility Assessment** for the current project (design spec GEO/orbitiq-assessment-report-mockup-v3-2026-07-16.html, approved 2026-07-16) instead of the legacy brief.
