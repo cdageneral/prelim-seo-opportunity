@@ -110,16 +110,20 @@ async function renderPDF(html: string): Promise<Buffer> {
   const chromium  = await import('@sparticuz/chromium');
   const puppeteer = await import('puppeteer-core');
 
+  // v7.374: @sparticuz/chromium ^149 (AL2023/node22-compatible — the ^130 build
+  // failed on Vercel's current runtime with a missing libnss3) + puppeteer-core
+  // ^24. The v149 API dropped the defaultViewport/headless statics.
   const browser = await puppeteer.default.launch({
-    args:            chromium.default.args,
-    defaultViewport: chromium.default.defaultViewport,
-    executablePath:  await chromium.default.executablePath(),
-    headless:        chromium.default.headless,
+    args:           chromium.default.args,
+    executablePath: await chromium.default.executablePath(),
+    headless:       true,
   });
 
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // 'load' (not networkidle0): the assessment HTML is fully self-contained —
+    // no external requests — and puppeteer-core 24 narrowed setContent's type.
+    await page.setContent(html, { waitUntil: 'load' });
     // v7.374: the assessment template lays out fixed 8.5×11in pages with its own
     // margins/footers, so the PDF prints Letter edge-to-edge (no outer margins).
     const pdf = await page.pdf({ format: 'Letter', printBackground: true, margin: { top: 0, right: 0, bottom: 0, left: 0 } });
