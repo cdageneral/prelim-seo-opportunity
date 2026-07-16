@@ -75,8 +75,16 @@ export async function ensureAuthTables(): Promise<void> {
 // ─── Users ──────────────────────────────────────────────────────────────────
 
 export async function countUsers(): Promise<number> {
-  const rows = await db.select({ n: sql<number>`count(*)::int` }).from(appUsers);
-  return rows[0]?.n ?? 0;
+  // Raw SQL rather than the drizzle select-builder: `db.select({ n: sql`count(*)` })`
+  // was observed returning an undefined key (→ 0) in some compiled route bundles
+  // even when the table has rows, which wrongly drove the first-run bootstrap flow.
+  // The raw count is parsed defensively across neon-http result shapes.
+  const res = await db.execute(sql`select count(*)::int as c from app_users`);
+  const rows = (res as unknown as { rows?: Array<Record<string, unknown>> }).rows
+    ?? (res as unknown as Array<Record<string, unknown>>);
+  const first = Array.isArray(rows) ? rows[0] : undefined;
+  const c = first != null ? Number((first as Record<string, unknown>).c) : 0;
+  return Number.isFinite(c) ? c : 0;
 }
 
 export async function getUserByEmail(email: string) {
