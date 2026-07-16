@@ -1,5 +1,8 @@
 /**
- * GET /api/auth/me  (v7.373) — TEMP DIAGNOSTIC BUILD
+ * GET /api/auth/me  (v7.373)
+ * Returns the current user (or null), whether enforcement is on, and whether the
+ * app still needs its first Owner (drives the sign-in page's bootstrap form).
+ * Public (under /api/auth) so the sign-in page can call it while signed out.
  */
 
 export const runtime = 'nodejs';
@@ -9,38 +12,18 @@ import { NextResponse } from 'next/server';
 import { getActiveUser } from '@/lib/auth/session';
 import { authEnforced } from '@/lib/auth/config';
 import { ensureAuthTables, countUsers } from '@/lib/auth/store';
-import { db } from '@/db';
-import { sql } from 'drizzle-orm';
 
 export async function GET() {
-  const diag: Record<string, unknown> = {};
   let needsBootstrap = false;
   try {
     await ensureAuthTables();
-    const cu = await countUsers();
-    diag.countUsers = cu;
-    needsBootstrap = cu === 0;
-  } catch (e) { diag.err = String((e as Error)?.message ?? e); }
-  try {
-    const r = await db.execute(sql`select count(*)::int as c from app_users`);
-    diag.rawCount = (r as { rows?: unknown }).rows ?? r;
-  } catch (e) { diag.rawErr = String((e as Error)?.message ?? e); }
-  try {
-    const r = await db.execute(sql`select current_database() as db, current_schema() as schema, current_user as usr`);
-    diag.dbInfo = (r as { rows?: unknown }).rows ?? r;
-  } catch (e) { diag.dbInfoErr = String((e as Error)?.message ?? e); }
-  try {
-    const r = await db.execute(sql`select id, email from app_users limit 3`);
-    diag.sample = (r as { rows?: unknown }).rows ?? r;
-  } catch (e) { diag.sampleErr = String((e as Error)?.message ?? e); }
-  diag.hasDbUrl = !!process.env.DATABASE_URL;
-  diag.dbUrlTail = (process.env.DATABASE_URL || '').slice(-24);
+    needsBootstrap = (await countUsers()) === 0;
+  } catch { /* DB not reachable — treat as not-needing-bootstrap */ }
 
   const user = await getActiveUser();
   return NextResponse.json({
     enforced: authEnforced(),
     needsBootstrap,
     user: user ? { id: user.sub, name: user.name, email: user.email, role: user.role } : null,
-    diag,
   });
 }
