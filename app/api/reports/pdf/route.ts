@@ -72,23 +72,23 @@ export async function POST(req: NextRequest) {
   });
 
   // ── v7.374: assemble the assessment-report data (real sources only, I.1) ──
-  const fmtDate = (v: unknown): string | null => {
-    if (!v) return null;
-    const dt = v instanceof Date ? v : new Date(String(v));
-    return isNaN(dt.getTime()) ? null : dt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-  };
+  // v7.375: all dates removed from the report (client feedback), and two new
+  // conditional sections wired in — Authority Signals (projects.authority_snapshot,
+  // the panel's own persisted aggregate, v7.367) and Local Search (the analysis
+  // snapshot's _localScan blob the Local panel reads). Both render ONLY when
+  // their source data exists (honest gaps, Const I.5); the shared rollup math
+  // lives in lib/local/build.ts and the template (Const II.6/II.7).
   const profound = ((project as any).profoundData ?? null) as ProfoundMetrics | null;
   const html = buildAssessmentHTML({
     clientName:   project.clientName ?? 'Client',
     websiteUrl:   project.websiteUrl ?? '',
     industry:     project.industry ?? null,
-    preparedDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
-    scanDate:     fmtDate((analysis as any).updatedAt ?? (analysis as any).createdAt),
-    aiDataDate:   fmtDate((project as any).profoundDataUpdatedAt),
     poolCount:    pool.length,
     metrics,
     sov,
     profound,
+    authority:    ((project as any).authoritySnapshot ?? null),
+    localScan:    (((snap as any)?._localScan) ?? null),
   });
   let pdfBuffer: Buffer;
 
