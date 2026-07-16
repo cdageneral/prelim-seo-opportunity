@@ -372,9 +372,31 @@ export default function ProjectBriefPage() {
     if (!analysisForPanels) return;
     const analysisId = (analysisForPanels as any)?.id ?? 'unknown';
     const cacheKey   = `orbitiq-cluster-assigns-${analysisId}`;
+    // v7.376: the assignment map is now ALSO persisted server-side at
+    // semrushSnapshot._clusterAssigns (so the assessment report builds the same
+    // canonical topics — Const II.7). Read order: stored map first (mirror into
+    // localStorage), else the localStorage cache (write it through to the server
+    // once so existing projects converge on a stored copy), else run the pass
+    // (the route now persists what it computes).
+    const stored = ((analysisForPanels as any)?.semrushSnapshot?._clusterAssigns ?? null) as Record<string, IntentType> | null;
+    if (stored && Object.keys(stored).length > 0) {
+      setPageClaudeAssigns(stored);
+      try { localStorage.setItem(cacheKey, JSON.stringify(stored)); } catch { /* silent */ }
+      return;
+    }
     try {
       const cached = localStorage.getItem(cacheKey);
-      if (cached) { setPageClaudeAssigns(JSON.parse(cached)); return; }
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setPageClaudeAssigns(parsed);
+        if (parsed && Object.keys(parsed).length > 0) {
+          fetch(`/api/projects/${projectId}/clusters`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignments: parsed, analysisId }),
+          }).catch(() => { /* best-effort write-through */ });
+        }
+        return;
+      }
     } catch { /* unavailable */ }
     const snap         = (analysisForPanels as any).semrushSnapshot ?? {};
     const clientDomain = (snap.domain as string) ?? '';
@@ -389,7 +411,7 @@ export default function ProjectBriefPage() {
     let cancelled = false;
     fetch(`/api/projects/${projectId}/clusters`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ keywords: pool, industry, domain: clientDomain }),
+      body: JSON.stringify({ keywords: pool, industry, domain: clientDomain, analysisId }),   // v7.376: route persists onto this analysis
     })
       .then((r: Response) => (r.ok ? r.json() : null))
       .then((d: any) => {
