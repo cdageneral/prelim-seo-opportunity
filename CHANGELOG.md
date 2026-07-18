@@ -1,3 +1,16 @@
+## v7.378 · Send to Delivery — delivery baseline package — 2026-07-18
+
+New header button **Send to Delivery** (in the project header, next to PDF / PPT Prompt) builds a one-click *delivery baseline* a colleague can integrate as the starting point for delivery work. It downloads a single zip:
+
+- `delivery-manifest.json` — the machine-readable integration backbone: the full taxonomy nested **umbrella > theme > topic > keyword** with exact volume rollups; per-topic performance positioning (state, action, funnel stage, priority, quick-win, best real SERP position, client capture %); both journeys (product full-funnel + pre-product awareness); audience segments with attribution; competitor-gap scope (core vs adjacent); rank + modeled Share of Voice; AI / authority / local aggregates; and the panel insight findings.
+- `orbitiq-delivery-<client>.xlsx` — human-readable mirror (Overview, Taxonomy, Keywords, Content Plan, Segments, Journey Stages, Insights).
+- `csv/*.csv` — flat-file mirrors for pipelines.
+- `README.md` — data dictionary.
+
+The full footprint is included; every topic carries `inContentPlan` / `inDeliveryScope` flags marking the finalized delivery subset. The server route `/api/reports/delivery-package` reuses the assessment report's exact canonical assembly (Const II.6/II.7), so the package reconciles with the panels to the number; the serializer (`lib/export/deliveryPackage.ts`) never re-derives taxonomy, membership, volume, or attribution. Every value is a real rollup (Const I.1); Share of Voice is the only modeled metric and is labeled (Const I.5a); missing data is an honest gap (null). Data-vendor names are omitted. One-click download only — no email/push.
+
+New: `lib/export/deliveryPackage.ts`, `app/api/reports/delivery-package/route.ts`; edited `app/projects/[id]/page.tsx`; version bump to 7.378.0. Verified: project tsc clean; serializer harness 27/27 at real scale; regression suite 347 pass / 13 pre-existing local FAILs, zero regression delta + 14 new v7.378 checks.
+
 ## v7.377 · assessment report — iQuanti-only attribution (McKinsey removed) — 2026-07-17
 
 Client request (Wayne): remove the McKinsey partnership from the report. All four attribution sites in the assessment template now read iQuanti-only: page footers "OrbitIQ Assessment · Provided by iQuanti · {client}", cover PROVIDED BY "iQuanti", governance lede "proprietary to iQuanti", appendix endbrand "An iQuanti product". No other content changed.
