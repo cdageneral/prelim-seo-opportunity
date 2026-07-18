@@ -288,6 +288,8 @@ export default function ProjectBriefPage() {
   // Export state
   const [pdfLoading,  setPdfLoading]  = useState(false);
   const [pptLoading,  setPptLoading]  = useState(false);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);   // v7.378: Send to Delivery
+  const [deliveryNote,    setDeliveryNote]    = useState<string | null>(null);
   const [pptPrompt,   setPptPrompt]   = useState<string | null>(null);
   const [pptCopied,   setPptCopied]   = useState(false);
 
@@ -753,6 +755,41 @@ export default function ProjectBriefPage() {
     }
   }
 
+  // v7.378: one-click delivery baseline — bundles every panel's structure, positioning
+  // and insights (full footprint + finalized delivery-subset flags) into a downloadable
+  // zip (JSON manifest + Excel/CSV mirrors + README). Server route mirrors the report's
+  // canonical assembly (Const II.6/II.7), so the package agrees with the panels.
+  async function sendToDelivery() {
+    if (!analysis) return;
+    setDeliveryLoading(true);
+    setDeliveryNote(null);
+    try {
+      const res  = await fetch('/api/reports/delivery-package', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ analysisId: analysis.id }),
+      });
+      const data = await res.json();
+      if (res.ok && data.fileUrl) {
+        // trigger the download of the returned blob zip
+        const a = document.createElement('a');
+        a.href = data.fileUrl;
+        a.download = data.filename || 'orbitiq-delivery.zip';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        const st = data.stats;
+        setDeliveryNote(st ? `Package ready · ${st.topics} topics · ${st.selectedForDelivery} selected for delivery` : 'Package ready');
+      } else {
+        setDeliveryNote(data?.error ? `Failed: ${typeof data.error === 'string' ? data.error : 'build error'}` : 'Failed to build package');
+      }
+    } catch {
+      setDeliveryNote('Failed to build package');
+    } finally {
+      setDeliveryLoading(false);
+    }
+  }
+
   async function generatePPTPrompt() {
     if (!analysis) return;
     setPptLoading(true);
@@ -1057,6 +1094,17 @@ export default function ProjectBriefPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
                 {pptLoading ? 'Generating…' : 'PPT Prompt'}
+              </button>
+              <button
+                onClick={sendToDelivery}
+                disabled={deliveryLoading}
+                title={deliveryNote ?? 'Package every panel (structure + positioning + insights) as a delivery baseline — JSON + Excel/CSV + README'}
+                className="text-xs text-emerald-500 hover:text-emerald-400 border border-emerald-500/40 hover:border-emerald-500/60 px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+                </svg>
+                {deliveryLoading ? 'Building…' : 'Send to Delivery'}
               </button>
               <div className="w-px h-5 bg-orbit-border mx-1" />
             </>
