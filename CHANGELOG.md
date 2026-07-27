@@ -1,3 +1,25 @@
+## v7.380 · Visibility Score reconciles with Profound + coverage window — 2026-07-27
+
+**Wayne:** the Profound dashboard showed **12.7%** visibility for US Bank while OrbitIQ showed **9.93%** on the *same* export. Neither was an arithmetic error — they scored **different prompt sets**, and the gap is fully explained by the `type` column:
+
+| `type` | answers | client hits | visibility |
+|---|---|---|---|
+| `Visibility` (pure visibility prompts) | 3,564 | 449 | **12.60%** |
+| `Sentiment, Visibility` (dual-purpose) | 8,442 | 743 | 8.80% |
+| combined — what v7.379 scored | 12,006 | 1,192 | 9.93% |
+
+Profound's Visibility Score counts only the pure `Visibility` rows; the dual-purpose sentiment prompts are real answers but sit outside its denominator, dragging the blend down 2.7pp. Reconciled exactly: over `type == 'Visibility'`, the trailing 6-day window 2026-07-21…26 gives 436/3,420 = **12.75% → 12.7%**, the dashboard figure to the decimal.
+
+**Two denominators, each stated on screen, never mixed.** The headline Overall AI visibility card and the per-engine chart now use the **strict** set, so they reconcile with the client's own Profound screen (a deliverable that contradicts the client's dashboard is indefensible regardless of which denominator is more generous). Topic whitespace, prompt gaps, prompt coverage and Share of Voice deliberately keep the **full** 12,006-answer footprint — narrowing them to 165 prompts would discard two-thirds of the real answers the client could have won and collapse topic coverage from 71 topics to 20 (Const I.6: no unrequested caps). Every panel names its own denominator, and a new line above the cards states the coverage window and which set the headline uses. Metrics saved before v7.380 carry no strict tallies and fall back to the blended figure rather than silently mis-labelling it.
+
+This also **flips the engine ranking**, which the blend was hiding: on the strict set Perplexity is the *worst* engine at 3.9%, not mid-pack at 6.8%; Copilot moves from worst to third. Strict per-engine: Google AI Mode 25.6%, Google AI Overviews 21.9%, Microsoft Copilot 8.9%, Google Gemini 8.8%, ChatGPT 6.6%, Perplexity 3.9%.
+
+**Coverage window + prompt-inventory change.** The export spans 2026-07-20…26, and the prompt set *changed mid-window*: 852 answers/day were added on 07-24 (tagged "Checking account - new prompts" 534/day and "Savings account - new prompts" 318/day), taking the strict set from 144 to 996 answers/day. The new prompts score higher (~13-14% vs ~9-10%), so a pooled average across that boundary reads as a visibility **trend** when it is really a change of denominator — which is what Profound's green "+1.8%" is largely measuring. The panel now derives the window from the real `date` column, detects every day-over-day change in answer volume, and states it as an on-screen notice rather than averaging it away silently.
+
+New in `Metrics`: `visRuns`, `visHits`, `visPromptN`, `visEngines`, `dateFrom`, `dateTo`, `dateDays`, `inventoryChanges`. `date` added to the v7.379 alias resolver as an optional column. The compute layer no longer calls the presentational `fmt()` helper.
+
+Files: `components/brief/ProfoundVisibilitySection.tsx`, `package.json`/`package-lock.json` (7.380.0). Verified: project tsc clean; 12 new real-scale assertions against the actual 44MB `visibility.csv` (strict 449/3,564 = 12.60%, full unchanged at 1,192/12,006, window 07-20…26, +852/day change on 07-24 detected); dual-theme SSR render; full retained suite A/B — **414 pass / 13 pre-existing, zero delta**, plus 13 new v7.380 checks.
+
 ## v7.379 · Profound export schema drift — the panel can no longer report a silent zero — 2026-07-27
 
 **Incident.** The AI Answer Engines panel reported US Bank Deposits at **0.00% overall AI visibility (0 of 12,006 answers), 0/366 prompt coverage and 71/71 topics at 0%** — a fully-formatted, entirely wrong result. Profound had changed its export schema: `normalized_mentions` was renamed to **`mentions`**, and `sentiment_claims` was **removed** (replaced by a sparse, brand-less `sentiment_v2_score`, 0.43% populated). Those two columns were the only sources of the tracked-brand roster, so the roster came back empty, `matchClient` fell through to the raw project name, and every client tally went to 0 by construction. The single-word columns (`type`, `platform`, `topic`, `prompt`, `citation_1..N`) survived because the old header lookup lowercased keys — which is why 12,006 answers, 71 topics, 366 prompts and 131,111 citations all parsed correctly and only the client numbers zeroed, making a broken parse look like a real finding.
