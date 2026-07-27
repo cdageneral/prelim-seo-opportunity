@@ -321,12 +321,31 @@ const SLOT_FILE: Record<SlotKey, string> = {
 };
 
 class ProfoundParseError extends Error {
-  slot: SlotKey; missing: FieldSpec[]; header: string[];
-  constructor(slot: SlotKey, missing: FieldSpec[], header: string[]) {
+  slot: SlotKey; missing: FieldSpec[]; header: string[]; looksLike: SlotKey | null;
+  constructor(slot: SlotKey, missing: FieldSpec[], header: string[], looksLike: SlotKey | null = null) {
     super(`${SLOT_FILE[slot]}: missing required column${missing.length > 1 ? 's' : ''} ${missing.map((m) => m.field).join(', ')}`);
     this.name = 'ProfoundParseError';
-    this.slot = slot; this.missing = missing; this.header = header;
+    this.slot = slot; this.missing = missing; this.header = header; this.looksLike = looksLike;
   }
+}
+
+// v7.381: the commonest upload error is a RIGHT file in the WRONG box — the five Profound
+// exports look alike and four of them share most columns. Naming the missing column is accurate
+// but unhelpful when the real problem is that this is a different export entirely. So when a
+// required column is missing, check whether the header fully satisfies some OTHER step's schema
+// and, if exactly one does, say which — "this looks like Step 1 · Responses" beats "missing share".
+function identifySlot(header: string[], exclude: SlotKey): SlotKey | null {
+  const raw: Record<string, boolean> = {};
+  for (let i = 0; i < header.length; i++) { const k = normKey(header[i]); if (k) raw[k] = true; }
+  const hits: SlotKey[] = [];
+  (Object.keys(COLS) as SlotKey[]).forEach((sk) => {
+    if (sk === exclude) return;
+    const specs = COLS[sk].filter((sp) => sp.required);
+    if (specs.length === 0) return;                       // no required columns → not identifiable
+    const all = specs.every((sp) => sp.aliases.some((a) => normKey(a) in raw));
+    if (all) hits.push(sk);
+  });
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // Resolves the header row into a LOGICAL field → column-index map. Unrecognised columns are
@@ -350,7 +369,7 @@ function resolveHeader(slot: SlotKey, header: string[]): Record<string, number> 
     if (hit >= 0) out[spec.field] = hit;
     else if (spec.required) missing.push(spec);
   }
-  if (missing.length > 0) throw new ProfoundParseError(slot, missing, header);
+  if (missing.length > 0) throw new ProfoundParseError(slot, missing, header, identifySlot(header, slot));
   Object.keys(raw).forEach((k) => { if (!(k in out)) out[k] = raw[k]; });
   return out;
 }
@@ -1083,11 +1102,11 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
                 <button
                   type="button"
                   aria-label={`Clear ${s.title}`}
-                  title={`Clear ${s.title}`}
+                  title={`Remove this file and recompute from the remaining steps`}
                   onClick={(e) => { e.stopPropagation(); void clearSlot(s.key); }}
-                  className="absolute -top-2 right-2 z-10 w-5 h-5 flex items-center justify-center rounded-full bg-orbit-surface border border-orbit-border text-orbit-tertiary hover:text-rose-500 hover:border-rose-500/50 text-[11px] leading-none transition-colors"
+                  className="absolute -top-2.5 right-2 z-10 flex items-center gap-1 rounded-full bg-orbit-surface border border-rose-500/40 text-rose-500 hover:bg-rose-500/10 hover:border-rose-500 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider leading-none transition-colors"
                 >
-                  ×
+                  <span aria-hidden="true">×</span> Clear
                 </button>
               )}
               <button
@@ -1141,8 +1160,16 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
           file, the field, every alias tried, and the header row actually found. */}
       {parseErr && (
         <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-4 text-xs">
-          <p className="text-rose-500 font-semibold">Upload rejected — the export schema does not match</p>
-          <p className="text-orbit-secondary mt-1">{SLOT_FILE[parseErr.slot]}</p>
+          <p className="text-rose-500 font-semibold">
+            {parseErr.looksLike ? 'Wrong box — this file belongs in a different step' : 'Upload rejected — the export schema does not match'}
+          </p>
+          <p className="text-orbit-secondary mt-1">Dropped into {SLOT_FILE[parseErr.slot]}</p>
+          {parseErr.looksLike && (
+            <p className="text-amber-600 mt-1.5">
+              Its columns match <span className="font-semibold">{SLOT_FILE[parseErr.looksLike]}</span> — drop it there instead, and put the{' '}
+              <span className="font-mono">{(SLOT_DEFS.find((d) => d.key === parseErr.slot) || { file: '' }).file}</span> export in this box.
+            </p>
+          )}
           <ul className="mt-2 space-y-1.5">
             {parseErr.missing.map((mf) => (
               <li key={mf.field} className="text-orbit-secondary">

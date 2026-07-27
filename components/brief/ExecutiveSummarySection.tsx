@@ -114,6 +114,13 @@ interface ProfoundMetrics {
   totalCites:        number;
   clientDomainCites: number;
   promptN:           number;
+  // v7.381: Profound-matched (strict `type == 'Visibility'`) tallies, added by the panel in
+  // v7.380. OPTIONAL — metrics saved by an earlier version carry none, and the exec then falls
+  // back to the blended figure exactly as the panel does, so the two never disagree.
+  visRuns?:          number;
+  visHits?:          number;
+  visPromptN?:       number;
+  visEngines?:       Array<{ platform: string; runs: number; hits: number }>;
   updatedAt:         string;
 }
 
@@ -603,9 +610,20 @@ export default function ExecutiveSummarySection({
   // client's mention rate across ALL tested AI answers (every engine). The LLM probe
   // is the fallback ONLY when that panel has no data (honest gap, I.5). One aiVisPct
   // drives the score pillar, the bar, the landscape line, and the card by construction.
-  const pfVisExact: number | null = pfHasData ? (100 * pfMetrics!.clientHits / pfMetrics!.totalRuns) : null;
-  const aiEnginesZero = pfHasData ? pfMetrics!.engines.filter(e => e.hits === 0).length : 0;
-  const aiEnginesTot  = pfHasData ? pfMetrics!.engines.length : 0;
+  // v7.381: reconcile with the AI Answer Engines panel AND with Profound's own dashboard.
+  // The panel's headline scores the STRICT prompt set (`type == 'Visibility'`) — Profound's own
+  // denominator — while topic whitespace and prompt gaps keep the full footprint. The exec pillar
+  // is a VIEW over that panel (Const II.6), so it must read the same strict tallies or the summary
+  // and the panel below it will state two different visibility numbers for the same client.
+  const pfStrict = pfHasData && typeof pfMetrics!.visRuns === 'number' && (pfMetrics!.visRuns as number) > 0;
+  const pfScoreRuns = pfStrict ? (pfMetrics!.visRuns as number) : (pfHasData ? pfMetrics!.totalRuns : 0);
+  const pfScoreHits = pfStrict ? (pfMetrics!.visHits as number) : (pfHasData ? pfMetrics!.clientHits : 0);
+  const pfScoreEngines = (pfStrict && (pfMetrics!.visEngines || []).length)
+    ? (pfMetrics!.visEngines as Array<{ platform: string; runs: number; hits: number }>)
+    : (pfHasData ? pfMetrics!.engines : []);
+  const pfVisExact: number | null = pfHasData && pfScoreRuns > 0 ? (100 * pfScoreHits / pfScoreRuns) : null;
+  const aiEnginesZero = pfHasData ? pfScoreEngines.filter(e => e.hits === 0).length : 0;
+  const aiEnginesTot  = pfHasData ? pfScoreEngines.length : 0;
   const aiTopicsZero  = pfHasData ? pfMetrics!.topics.filter(t => t.hits === 0).length : 0;
   const aiTopicsTot   = pfHasData ? pfMetrics!.topics.length : 0;
   const aiVisPct: number | null =
@@ -614,7 +632,7 @@ export default function ExecutiveSummarySection({
     : aioAvail > 0 ? aioRate
     : null;
   const aiVisDenom =
-    pfHasData ? `of ${pfMetrics!.totalRuns.toLocaleString()} AI answers across ${aiEnginesTot} engines`
+    pfHasData ? `of ${pfScoreRuns.toLocaleString()} AI answers across ${aiEnginesTot} engines${pfStrict ? ' · Profound Visibility prompts' : ''}`
     : llmMentionPct !== null ? `of ${llmMentionTotal} AI responses citing you`
     : aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
     : 'run an AI probe to measure';
@@ -872,7 +890,7 @@ export default function ExecutiveSummarySection({
           </div>
           <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
             <SignalCard source="Invisible engines" value={`${aiEnginesZero} of ${aiEnginesTot}`}
-              desc={pfMetrics!.engines.filter(e => e.hits === 0).map(e => e.platform).join(', ') || 'present on all engines'} accentColor="var(--c-ef4444)" />
+              desc={pfScoreEngines.filter(e => e.hits === 0).map(e => e.platform).join(', ') || 'present on all engines'} accentColor="var(--c-ef4444)" />
             <SignalCard source="Topic whitespace" value={`${aiTopicsZero} of ${aiTopicsTot}`}
               desc="topics with 0% AI presence" accentColor="var(--c-f59e0b)" />
             <SignalCard source="Winnable prompts" value={`${pfMetrics!.gaps.length}`}
