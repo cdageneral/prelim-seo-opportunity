@@ -112,6 +112,12 @@ interface Metrics {
   citeMentionSources: MentionSource[];
   citeMentionByPlatform: { platform: string; count: number }[];
   slots: SlotMap;
+  // v7.379 — parse-integrity surface
+  clientMatched: boolean;      // was the client resolved to a brand IN the data?
+  clientMatchScore: number;    // 0..1 share of the matched brand's tokens covered
+  flagHits: number;            // Profound's own `mentioned?` = Yes tally (0 when column absent)
+  hasFlagCol: boolean;
+  notices: string[];           // honest, on-screen notes about degraded/absent inputs
   updatedAt: string;
 }
 
@@ -123,12 +129,33 @@ const SUFFIXES = new Set<string>([
 ]);
 
 function toks(s: string): string[] {
-  return (s || '')
+  // v7.379: a run of single-character tokens is an initialism that punctuation split apart
+  // ("U.S. Bank" → u | s | bank). Re-join the run BEFORE suffix filtering so the initialism
+  // and its unpunctuated twin collapse to the same signature. This is not cosmetic: the real
+  // US Bank export carries BOTH "U.S. Bank" (1,169 rows) and "US Bank" (1,223 rows) as separate
+  // `mentions` strings. Without the merge they tokenise differently (['u','s','bank'] vs
+  // ['us','bank']), so brandIn() matches one surface form and misses the other, and the roster
+  // carries the same brand twice — double-counting its Share of Voice.
+  const raw = (s || '')
     .toLowerCase()
     .replace(/[^a-z0-9 ]+/g, ' ')
     .split(/\s+/)
-    .filter((t) => t.length > 0 && !SUFFIXES.has(t));
+    .filter((t) => t.length > 0);
+  const merged: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].length === 1) {
+      let j = i;
+      let acc = '';
+      while (j < raw.length && raw[j].length === 1) { acc += raw[j]; j++; }
+      if (acc.length > 1) { merged.push(acc); i = j - 1; continue; }
+    }
+    merged.push(raw[i]);
+  }
+  return merged.filter((t) => !SUFFIXES.has(t));
 }
+
+// canonical signature for a brand string — two surface forms of one brand share it
+function brandSig(s: string): string { return toks(s).join(' '); }
 
 // brand tokens are a subset of some mention's tokens
 function brandIn(brand: string, mentions: string[]): boolean {
@@ -143,18 +170,34 @@ function brandIn(brand: string, mentions: string[]): boolean {
   return false;
 }
 
-function matchClient(clientName: string, candidates: string[]): string | null {
+// v7.379: score = share of the CANDIDATE's own tokens covered by the project name, not the raw
+// overlap count. The old raw-count version took the first strict maximum, so for the project
+// "US Bank Deposits" the candidates "U.S. Bank" and "Bank of America" both scored 1 (the shared
+// word "bank") and whichever sat earlier in the roster won — a silent WRONG-client identification,
+// which is more dangerous than the 0% this release fixes. Coverage scoring separates them
+// cleanly: "US Bank" 2/2 = 1.00 vs "Bank of America" 1/3 = 0.33.
+const MATCH_MIN = 0.5;
+interface ClientMatch { brand: string; score: number; }
+
+function matchClient(clientName: string, candidates: string[]): ClientMatch | null {
   const ct = new Set(toks(clientName));
   if (ct.size === 0) return null;
-  let best: string | null = null;
-  let bestScore = 0;
+  let best: ClientMatch | null = null;
+  let bestOverlap = 0;
   for (let i = 0; i < candidates.length; i++) {
     const at = toks(candidates[i]);
+    if (at.length === 0) continue;
     let overlap = 0;
     for (let k = 0; k < at.length; k++) { if (ct.has(at[k])) overlap++; }
-    if (overlap > bestScore) { bestScore = overlap; best = candidates[i]; }
+    if (overlap === 0) continue;
+    const score = overlap / at.length;
+    if (!best || score > best.score || (score === best.score && overlap > bestOverlap)) {
+      best = { brand: candidates[i], score };
+      bestOverlap = overlap;
+    }
   }
-  return bestScore > 0 ? best : null;
+  // One shared generic word out of many is not an identification — say so instead of guessing.
+  return best && best.score >= MATCH_MIN ? best : null;
 }
 
 function clientDomainRoot(clientName: string): string {
@@ -201,13 +244,100 @@ async function streamCsv(
   return idx;
 }
 
-function headerIndex(header: string[]): Record<string, number> {
-  const m: Record<string, number> = {};
-  for (let i = 0; i < header.length; i++) {
-    const key = (header[i] || '').replace(/^﻿/, '').trim().toLowerCase();
-    if (key && !(key in m)) m[key] = i;
+// ─── Header resolution + validation (v7.379) ────────────────────────────────────
+// Profound renamed export columns between exports (`normalized_mentions` → `mentions`,
+// `sentiment_claims` removed entirely, `Prompts.csv` shipped Title-Case headers). The old
+// lookup did `.trim().toLowerCase()` and then indexed a bare literal, so a renamed column
+// silently yielded `row[undefined]` → `''` → every tally zero. The panel then rendered a
+// confident, fully-formatted 0.00% off a broken parse — the exact failure this layer removes.
+//
+// Two defences, plus the assertions in computeAll():
+//   1. normKey() collapses BOM/case/separators, so `Normalized Mentions`, `normalized-mentions`
+//      and `normalized_mentions` all resolve to one key. Casing/separator drift can never break
+//      the parse again, for any column, without a code change.
+//   2. Every logical field carries an ALIAS LIST and a required flag. A missing REQUIRED column
+//      throws a named diagnostic (Const I.5: an honest, specific gap) — never a silent zero.
+function normKey(s: string): string {
+  return (s || '').replace(/^﻿/, '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+interface FieldSpec { field: string; aliases: string[]; required: boolean; note?: string }
+
+// Aliases are grounded in the REAL export headers verified on 2026-07-27, not guessed.
+// Left-most alias wins; the logical `field` name is what computeAll() indexes by, so the
+// downstream call sites are untouched when Profound renames a column again.
+const COLS: Record<SlotKey, FieldSpec[]> = {
+  visibility: [
+    { field: 'type', aliases: ['type', 'run_type', 'response_type'], required: true },
+    { field: 'prompt', aliases: ['prompt', 'query', 'question'], required: true },
+    { field: 'platform', aliases: ['platform', 'engine', 'model'], required: true },
+    { field: 'topic', aliases: ['topic', 'category'], required: true },
+    // 2026-07-27: Profound renamed `normalized_mentions` → `mentions`. THE break.
+    { field: 'normalized_mentions', aliases: ['mentions', 'normalized_mentions', 'brand_mentions', 'brands', 'companies'], required: true },
+    // Profound's own client-mentioned flag — used as an independent cross-check below.
+    { field: 'mentioned_flag', aliases: ['mentioned?', 'mentioned', 'is_mentioned'], required: false },
+  ],
+  // `sentiment_claims` was REMOVED from the 2026-07-27 export (replaced by a sparse,
+  // brand-less `sentiment_v2_score`). Optional → the panel degrades to an honest empty
+  // sentiment state instead of failing the whole upload.
+  sentiment: [
+    { field: 'sentiment_claims', aliases: ['sentiment_claims', 'claims', 'sentiment_claims_json'], required: false },
+  ],
+  platforms: [],   // citation_1..N are resolved dynamically below
+  demand: [
+    { field: 'topic', aliases: ['topic'], required: true },
+    { field: 'prompt', aliases: ['prompt', 'query'], required: true },
+    { field: 'share', aliases: ['share', 'volume', 'demand_share'], required: true },
+  ],
+  citations: [
+    { field: 'hostname', aliases: ['hostname', 'host', 'domain'], required: true },
+    { field: 'platform', aliases: ['platform', 'engine'], required: true },
+    { field: 'category', aliases: ['category', 'citationcategory', 'source_category'], required: true },
+    { field: 'mentioned', aliases: ['mentioned', 'mentioned?'], required: false },
+  ],
+};
+
+const SLOT_FILE: Record<SlotKey, string> = {
+  visibility: 'Step 1 · Responses',
+  sentiment: 'Step 2 · Sentiment',
+  platforms: 'Step 3 · Platforms & Citations',
+  demand: 'Step 4 · Prompt Volume',
+  citations: 'Step 5 · Citation Landscape',
+};
+
+class ProfoundParseError extends Error {
+  slot: SlotKey; missing: FieldSpec[]; header: string[];
+  constructor(slot: SlotKey, missing: FieldSpec[], header: string[]) {
+    super(`${SLOT_FILE[slot]}: missing required column${missing.length > 1 ? 's' : ''} ${missing.map((m) => m.field).join(', ')}`);
+    this.name = 'ProfoundParseError';
+    this.slot = slot; this.missing = missing; this.header = header;
   }
-  return m;
+}
+
+// Resolves the header row into a LOGICAL field → column-index map. Unrecognised columns are
+// passed through under their normalised key so dynamic families (citation_1..N) still work.
+function resolveHeader(slot: SlotKey, header: string[]): Record<string, number> {
+  const raw: Record<string, number> = {};
+  for (let i = 0; i < header.length; i++) {
+    const k = normKey(header[i]);
+    if (k && !(k in raw)) raw[k] = i;
+  }
+  const out: Record<string, number> = {};
+  const missing: FieldSpec[] = [];
+  const specs = COLS[slot] || [];
+  for (let s = 0; s < specs.length; s++) {
+    const spec = specs[s];
+    let hit = -1;
+    for (let a = 0; a < spec.aliases.length; a++) {
+      const nk = normKey(spec.aliases[a]);
+      if (nk in raw) { hit = raw[nk]; break; }
+    }
+    if (hit >= 0) out[spec.field] = hit;
+    else if (spec.required) missing.push(spec);
+  }
+  if (missing.length > 0) throw new ProfoundParseError(slot, missing, header);
+  Object.keys(raw).forEach((k) => { if (!(k in out)) out[k] = raw[k]; });
+  return out;
 }
 
 function splitMentions(s: string): string[] {
@@ -323,8 +453,9 @@ async function computeAll(
     let H: Record<string, number> = {};
     const f = files.sentiment;
     const rows = await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = headerIndex(row); return; }
-      const sc = row[H['sentiment_claims']];
+      if (idx === 0) { H = resolveHeader('sentiment', row); return; }
+      const sci = H['sentiment_claims'];
+      const sc = sci === undefined ? '' : row[sci];
       if (!sc || sc[0] !== '[') return;
       let claims: Array<{ asset?: string; sentiment?: string; theme?: string }>;
       try { claims = JSON.parse(sc); } catch { return; }
@@ -362,12 +493,15 @@ async function computeAll(
   const overallRaw: Record<string, number> = {};
   const promptInfo: Record<string, { topic: string; runs: number }> = {};
   const evalSubjects: Record<string, boolean> = {};
+  let flagHits = 0;                 // v7.379: tally of Profound's own `mentioned?` = Yes
+  let hasFlagCol = false;
+  const notices: string[] = [];     // v7.379: honest, on-screen notes about degraded inputs
   // capture each visibility row's mentions for pass-2 by re-streaming (files stay in memory)
   if (files.visibility) {
     let H: Record<string, number> = {};
     const f = files.visibility;
     await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = headerIndex(row); return; }
+      if (idx === 0) { H = resolveHeader('visibility', row); return; }
       const type = row[H['type']] || '';
       const ev = /^Evaluate (.+?) on /.exec(row[H['prompt']] || '');
       if (ev) evalSubjects[ev[1].trim()] = true;
@@ -383,24 +517,56 @@ async function computeAll(
       const seen: Record<string, boolean> = {};
       const ms = splitMentions(row[H['normalized_mentions']] || '');
       for (let k = 0; k < ms.length; k++) { if (!seen[ms[k]]) { seen[ms[k]] = true; overallRaw[ms[k]] = (overallRaw[ms[k]] || 0) + 1; } }
+      // Profound's own client-mentioned flag, tallied independently for the cross-check below.
+      const mfi = H['mentioned_flag'];
+      if (mfi !== undefined) { hasFlagCol = true; if ((row[mfi] || '').trim().toLowerCase() === 'yes') flagHits++; }
     }, (pct, r) => setProgress({ label: 'Responses', pct, rows: r, startedAt }));
+
+    // ── Layer C · structural assertions (v7.379) ──
+    // Aliasing fixes header RENAMES. These catch the other failure mode: a column that still
+    // resolves but whose VALUES changed shape. A real competitive export cannot have thousands
+    // of parsed answers and no brands in them — if it does, the parse is broken, and a loud
+    // failure is the only defensible output (Const I.1/I.5).
+    if (totalRuns === 0) {
+      throw new ProfoundParseError('visibility', [{ field: 'type', aliases: ['type'], required: true, note: 'resolved, but no row matched the "Visibility" run type — the type vocabulary may have changed' }], []);
+    }
+    if (Object.keys(overallRaw).length === 0) {
+      throw new ProfoundParseError('visibility', [{ field: 'normalized_mentions', aliases: COLS.visibility[4].aliases, required: true, note: `resolved, but ${totalRuns} answers yielded zero brand mentions — the column format may have changed` }], []);
+    }
   }
 
   // ── Determine client + tracked roster (no hardcoding) ──
+  // v7.379: dedupe the roster by canonical signature FIRST. The real export lists the same brand
+  // under multiple surface forms ("U.S. Bank" and "US Bank"); left un-deduped each becomes its own
+  // roster entry and splits that brand's Share of Voice across two bars. Keep the most-mentioned
+  // surface form as the display label.
+  function dedupeBySig(list: string[]): string[] {
+    const bySig: Record<string, string> = {};
+    for (let i = 0; i < list.length; i++) {
+      const sg = brandSig(list[i]);
+      if (!sg) continue;
+      const cur = bySig[sg];
+      if (!cur || (overallRaw[list[i]] || 0) > (overallRaw[cur] || 0)) bySig[sg] = list[i];
+    }
+    return Object.keys(bySig).map((k) => bySig[k]);
+  }
   const rosterFromData = Object.keys(assets).length > 0
     ? Object.keys(assets)
     : Object.keys(evalSubjects);
-  let tracked: string[] = rosterFromData.slice();
-  let client = matchClient(clientName, tracked.length ? tracked : Object.keys(overallRaw)) || clientName.trim();
+  let tracked: string[] = dedupeBySig(rosterFromData);
+  const cm = matchClient(clientName, tracked.length ? tracked : dedupeBySig(Object.keys(overallRaw)));
+  const clientMatched = !!cm;
+  const clientMatchScore = cm ? cm.score : 0;
+  let client = cm ? cm.brand : clientName.trim();
   if (tracked.length === 0) {
     // No roster in the data → derive a competitive set from the most-mentioned brands.
-    const top = Object.keys(overallRaw).sort((a, b) => overallRaw[b] - overallRaw[a]);
+    const top = dedupeBySig(Object.keys(overallRaw)).sort((a, b) => overallRaw[b] - overallRaw[a]);
     const picked: string[] = [];
     for (let i = 0; i < top.length && picked.length < 7; i++) {
-      if (toks(top[i]).join(' ') !== toks(client).join(' ')) picked.push(top[i]);
+      if (brandSig(top[i]) !== brandSig(client)) picked.push(top[i]);
     }
     tracked = [client].concat(picked);
-  } else if (!tracked.some((b) => toks(b).join(' ') === toks(client).join(' '))) {
+  } else if (!tracked.some((b) => brandSig(b) === brandSig(client))) {
     tracked = [client].concat(tracked);
   }
   const brandList = tracked.slice();
@@ -419,7 +585,7 @@ async function computeAll(
     let H: Record<string, number> = {};
     const f = files.visibility;
     const rows = await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = headerIndex(row); return; }
+      if (idx === 0) { H = resolveHeader('visibility', row); return; }
       const type = row[H['type']] || '';
       if (type.indexOf('Visibility') === -1) return;
       const plat = row[H['platform']] || '';
@@ -444,6 +610,34 @@ async function computeAll(
       }
     }, (pct, r) => setProgress({ label: 'Responses (analysing)', pct, rows: r, startedAt }));
     slots.visibility = { fileName: f.name, rows };
+
+    // v7.379 · independent cross-check. Two unrelated signals should agree on client presence:
+    // (a) brand-token matching over `mentions`, (b) Profound's own `mentioned?` flag. On the
+    // verified 2026-07-27 US Bank export they agree on all 1,192 of 1,192 rows. A material
+    // divergence means one of the two inputs drifted — surface it rather than quietly picking one.
+    if (hasFlagCol && totalRuns > 0) {
+      const delta = Math.abs(flagHits - clientHits) / totalRuns;
+      if (delta > 0.02) {
+        notices.push(
+          `Cross-check divergence: brand matching found the client in ${clientHits} of ${totalRuns} answers, ` +
+          `while Profound's own "mentioned?" flag reports ${flagHits} (${(delta * 100).toFixed(1)}pp apart). ` +
+          `Treat both as unconfirmed until the export is reviewed.`,
+        );
+      }
+    }
+    if (!clientMatched) {
+      notices.push(
+        `The project name "${clientName.trim()}" could not be matched to any brand in the uploaded data, ` +
+        `so every client figure below is 0 by construction. Rename the project to the brand as the export ` +
+        `spells it, or confirm the client is actually tracked in this Profound export.`,
+      );
+    }
+  }
+  if (files.sentiment && Object.keys(assets).length === 0) {
+    notices.push(
+      `${SLOT_FILE.sentiment}: this export carries no per-brand sentiment claims (the "sentiment_claims" ` +
+      `column is absent), so the brand and theme sentiment charts are unavailable. Everything else is unaffected.`,
+    );
   }
   // prompt coverage = distinct prompts where a brand appears at least once
   const promptKeys = Object.keys(promptInfo);
@@ -477,8 +671,8 @@ async function computeAll(
     const f = files.platforms;
     const rows = await streamCsv(f, (row, idx) => {
       if (idx === 0) {
-        H = headerIndex(row);
-        citeCols = Object.keys(H).filter((k) => /^citation_\d+$/.test(k)).map((k) => H[k]);
+        H = resolveHeader('platforms', row);
+        citeCols = Object.keys(H).filter((k) => /^citation\d+$/.test(k)).map((k) => H[k]);
         return;
       }
       for (let c = 0; c < citeCols.length; c++) {
@@ -505,7 +699,7 @@ async function computeAll(
     let H: Record<string, number> = {};
     const f = files.demand;
     const rows = await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = headerIndex(row); return; }
+      if (idx === 0) { H = resolveHeader('demand', row); return; }
       const topic = (row[H['topic']] || '').trim();
       const prompt = (row[H['prompt']] || '').trim();
       const share = parseFloat(row[H['share']] || '');
@@ -534,11 +728,12 @@ async function computeAll(
     let H: Record<string, number> = {};
     const f = files.citations;
     const rows = await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = headerIndex(row); return; }
+      if (idx === 0) { H = resolveHeader('citations', row); return; }
       const host = (row[H['hostname']] || '').replace(/^www\./, '').toLowerCase().trim();
       const plat = (row[H['platform']] || '').trim();
       const cat = (row[H['category']] || 'Other').trim() || 'Other';
-      const mentioned = (row[H['mentioned']] || '').trim().toLowerCase() === 'mentioned';
+      const mi = H['mentioned'];
+      const mentioned = (mi === undefined ? '' : (row[mi] || '')).trim().toLowerCase() === 'mentioned';
       if (!host && !plat) return;
       citeTotal++;
       citeCatCount[cat] = (citeCatCount[cat] || 0) + 1;
@@ -654,7 +849,8 @@ async function computeAll(
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
     citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
     earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
-    slots, updatedAt: new Date().toISOString(),
+    slots, clientMatched, clientMatchScore, flagHits, hasFlagCol, notices,
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -689,6 +885,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
   const [files, setFiles] = useState<FileMap>({});
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [parseErr, setParseErr] = useState<ProfoundParseError | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const inputRefs = {
     visibility: useRef<HTMLInputElement>(null),
@@ -723,25 +920,46 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
     return () => { alive = false; };
   }, [projectId]);
 
-  async function onPick(slot: SlotKey, file: File | null) {
-    if (!file) return;
-    setError(null);
-    const nextFiles: FileMap = { ...files, [slot]: file };
+  async function runCompute(nextFiles: FileMap) {
+    setError(null); setParseErr(null);
     setFiles(nextFiles);
+    if (!nextFiles.visibility) {
+      // Step 1 is the required file — with it gone there is nothing to compute (I.5).
+      setMetrics(null);
+      void serverDelete(projectId);
+      void idbDelete(projectId);
+      return;
+    }
     try {
       const m = await computeAll(nextFiles, cName || 'client', setProgress);
       setMetrics(m);
       void serverSave(projectId, m);   // v7.318: persist to the shared project row (survives refresh + reaches other users)
       void idbSave(projectId, m);      // and the fast local cache
     } catch (e) {
-      setError('Could not parse that file — check it is the matching Profound export. ' + (e instanceof Error ? e.message : ''));
+      // v7.379: a schema mismatch is NOT a generic parse failure — surface the structured
+      // diagnostic, and drop any previously-rendered metrics so a stale panel can never be
+      // mistaken for the result of this upload.
+      if (e instanceof ProfoundParseError) { setParseErr(e); setMetrics(null); }
+      else setError('Could not parse that file — check it is the matching Profound export. ' + (e instanceof Error ? e.message : ''));
     } finally {
       setProgress(null);
     }
   }
 
+  async function onPick(slot: SlotKey, file: File | null) {
+    if (!file) return;
+    await runCompute({ ...files, [slot]: file });
+  }
+
+  // v7.379 (Wayne): clear ONE box and recompute from whatever remains.
+  async function clearSlot(slot: SlotKey) {
+    const nextFiles: FileMap = { ...files };
+    delete nextFiles[slot];
+    await runCompute(nextFiles);
+  }
+
   function clearAll() {
-    setMetrics(null); setFiles({}); setError(null);
+    setMetrics(null); setFiles({}); setError(null); setParseErr(null);
     void serverDelete(projectId);   // v7.318: clear the shared store so it clears for everyone
     void idbDelete(projectId);
   }
@@ -760,11 +978,18 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
             <span className="text-[10px] bg-orbit-accent/10 border border-orbit-accent/30 text-orbit-accent px-2 py-0.5 rounded-full font-medium">
               Uploaded data · Profound
             </span>
-            {metrics && (
+            {metrics && (metrics.clientMatched !== false ? (
               <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 px-2 py-0.5 rounded-full font-medium">
                 Client auto-identified: {trackedBrandLabel}
               </span>
-            )}
+            ) : (
+              /* v7.379: the old badge said "auto-identified" even when the match FAILED and the
+                 label was just the project name echoed back — which is precisely what made a
+                 broken parse look like a real 0% result. Failure now reads as failure. */
+              <span className="text-[10px] bg-rose-500/10 border border-rose-500/30 text-rose-500 px-2 py-0.5 rounded-full font-medium">
+                Client NOT found in data: &ldquo;{trackedBrandLabel}&rdquo; matches no brand in this export
+              </span>
+            ))}
             {metrics && (
               <span className="text-orbit-tertiary text-[10px]">
                 Updated {new Date(metrics.updatedAt).toLocaleString()}
@@ -786,6 +1011,19 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
           return (
             <div key={s.key} className="relative">
               <span className="absolute -top-2 left-3 z-10 text-[9px] font-semibold uppercase tracking-wider bg-orbit-accent text-white rounded px-1.5 py-0.5">{s.step}</span>
+              {loaded && (
+                /* v7.379 (Wayne): per-box clear — drop just this file and recompute from the rest,
+                   instead of the all-or-nothing global "Clear data". */
+                <button
+                  type="button"
+                  aria-label={`Clear ${s.title}`}
+                  title={`Clear ${s.title}`}
+                  onClick={(e) => { e.stopPropagation(); void clearSlot(s.key); }}
+                  className="absolute -top-2 right-2 z-10 w-5 h-5 flex items-center justify-center rounded-full bg-orbit-surface border border-orbit-border text-orbit-tertiary hover:text-rose-500 hover:border-rose-500/50 text-[11px] leading-none transition-colors"
+                >
+                  ×
+                </button>
+              )}
               <button
                 onClick={() => inputRefs[s.key].current?.click()}
                 className={`w-full text-left bg-orbit-surface border ${loaded ? 'border-emerald-500/40' : 'border-orbit-border'} hover:border-orbit-accent/40 rounded-xl p-4 pt-4 transition-colors`}
@@ -832,8 +1070,44 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
         </div>
       )}
 
-      {error && (
+      {/* v7.379 · structured parse diagnostic. A missing REQUIRED column used to sail through as
+          an empty string and render a confident 0.00%; it now stops the compute and names the
+          file, the field, every alias tried, and the header row actually found. */}
+      {parseErr && (
+        <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-4 text-xs">
+          <p className="text-rose-500 font-semibold">Upload rejected — the export schema does not match</p>
+          <p className="text-orbit-secondary mt-1">{SLOT_FILE[parseErr.slot]}</p>
+          <ul className="mt-2 space-y-1.5">
+            {parseErr.missing.map((mf) => (
+              <li key={mf.field} className="text-orbit-secondary">
+                <span className="text-rose-500 font-mono">{mf.field}</span>
+                {mf.note ? <span className="text-orbit-tertiary"> — {mf.note}</span> : null}
+                <div className="text-orbit-tertiary mt-0.5">
+                  tried: <span className="font-mono">{mf.aliases.join(', ')}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {parseErr.header.length > 0 && (
+            <div className="mt-2 text-orbit-tertiary">
+              columns found: <span className="font-mono break-all">{parseErr.header.slice(0, 30).join(', ')}{parseErr.header.length > 30 ? ` … (+${parseErr.header.length - 30})` : ''}</span>
+            </div>
+          )}
+          <p className="text-orbit-tertiary mt-2">Nothing was computed or saved from this file, so no figure below is derived from a partial parse.</p>
+        </div>
+      )}
+
+      {error && !parseErr && (
         <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{error}</div>
+      )}
+
+      {/* v7.379 · non-fatal integrity notices (Const I.5 — an honest gap, stated on screen) */}
+      {metrics && (metrics.notices || []).length > 0 && (
+        <div className="mt-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-1.5">
+          {(metrics.notices || []).map((n, i) => (
+            <p key={i} className="text-amber-600 text-[11px] leading-snug">{n}</p>
+          ))}
+        </div>
       )}
 
       {/* Empty state */}
