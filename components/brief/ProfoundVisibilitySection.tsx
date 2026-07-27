@@ -112,6 +112,19 @@ interface Metrics {
   citeMentionSources: MentionSource[];
   citeMentionByPlatform: { platform: string; count: number }[];
   slots: SlotMap;
+  // v7.380 — Profound-matched Visibility Score (strict `type == 'Visibility'` prompt set).
+  // Profound's own dashboard scores ONLY the pure visibility prompts; the dual-purpose
+  // 'Sentiment, Visibility' rows are real answers but are NOT in its denominator, which is why
+  // the blended figure read 2.7pp low against the client's own Profound screen. Headline score +
+  // per-engine now reconcile with Profound; gap/whitespace/coverage keep the FULL prompt set.
+  visRuns: number;
+  visHits: number;
+  visPromptN: number;
+  visEngines: PlatStat[];
+  dateFrom: string;
+  dateTo: string;
+  dateDays: number;
+  inventoryChanges: { date: string; delta: number }[];
   // v7.379 — parse-integrity surface
   clientMatched: boolean;      // was the client resolved to a brand IN the data?
   clientMatchScore: number;    // 0..1 share of the matched brand's tokens covered
@@ -276,6 +289,8 @@ const COLS: Record<SlotKey, FieldSpec[]> = {
     { field: 'normalized_mentions', aliases: ['mentions', 'normalized_mentions', 'brand_mentions', 'brands', 'companies'], required: true },
     // Profound's own client-mentioned flag — used as an independent cross-check below.
     { field: 'mentioned_flag', aliases: ['mentioned?', 'mentioned', 'is_mentioned'], required: false },
+    // v7.380: run date — drives the coverage window + prompt-inventory-change notice.
+    { field: 'date', aliases: ['date', 'run_date', 'timestamp'], required: false },
   ],
   // `sentiment_claims` was REMOVED from the 2026-07-27 export (replaced by a sparse,
   // brand-less `sentiment_v2_score`). Optional → the panel degrades to an honest empty
@@ -495,6 +510,11 @@ async function computeAll(
   const evalSubjects: Record<string, boolean> = {};
   let flagHits = 0;                 // v7.379: tally of Profound's own `mentioned?` = Yes
   let hasFlagCol = false;
+  // v7.380: STRICT set = Profound's own Visibility Score denominator (type is exactly 'Visibility').
+  let visRuns = 0;
+  const visPlatRuns: Record<string, number> = {};
+  const visPrompts: Record<string, boolean> = {};
+  const rowsByDate: Record<string, number> = {};
   const notices: string[] = [];     // v7.379: honest, on-screen notes about degraded inputs
   // capture each visibility row's mentions for pass-2 by re-streaming (files stay in memory)
   if (files.visibility) {
@@ -510,6 +530,17 @@ async function computeAll(
       const plat = row[H['platform']] || '';
       const topic = row[H['topic']] || '';
       const prompt = (row[H['prompt']] || '').trim();
+      // v7.380: strict = Profound's denominator; broad = every answer the client could have won.
+      if (type.trim() === 'Visibility') {
+        visRuns++;
+        visPlatRuns[plat] = (visPlatRuns[plat] || 0) + 1;
+        if (prompt) visPrompts[prompt] = true;
+      }
+      const di = H['date'];
+      if (di !== undefined) {
+        const d = (row[di] || '').slice(0, 10);
+        if (d) rowsByDate[d] = (rowsByDate[d] || 0) + 1;
+      }
       platRuns[plat] = (platRuns[plat] || 0) + 1;
       topicRuns[topic] = (topicRuns[topic] || 0) + 1;
       if (!promptInfo[prompt]) promptInfo[prompt] = { topic, runs: 0 };
@@ -578,7 +609,9 @@ async function computeAll(
   const promptBrand: Record<string, Record<string, number>> = {};
   const coverage: Record<string, number> = {};
   let clientHits = 0;
+  let visHits = 0;                                        // v7.380 strict-set client hits
   const platClient: Record<string, number> = {};
+  const visPlatClient: Record<string, number> = {};       // v7.380 strict-set per-engine hits
   const topicClient: Record<string, number> = {};
   brandList.forEach((b) => { trackedOverall[b] = 0; coverage[b] = 0; });
   if (files.visibility) {
@@ -606,6 +639,10 @@ async function computeAll(
           clientHits++;
           platClient[plat] = (platClient[plat] || 0) + 1;
           topicClient[topic] = (topicClient[topic] || 0) + 1;
+          if (type.trim() === 'Visibility') {
+            visHits++;
+            visPlatClient[plat] = (visPlatClient[plat] || 0) + 1;
+          }
         }
       }
     }, (pct, r) => setProgress({ label: 'Responses (analysing)', pct, rows: r, startedAt }));
@@ -759,6 +796,33 @@ async function computeAll(
   }
 
   // ── Finalise ──
+  // ── v7.380 · coverage window + prompt-inventory change ──────────────────────────
+  // The export can span a period in which the prompt set itself changed (the 2026-07-27 US Bank
+  // export added 852 answers/day on 07-24). A single pooled percentage across such a boundary
+  // reads as a visibility TREND when it is really a change of denominator — so the window and
+  // every inventory change are stated on screen rather than silently averaged away.
+  const dateKeys = Object.keys(rowsByDate).sort();
+  const dateFrom = dateKeys.length ? dateKeys[0] : '';
+  const dateTo = dateKeys.length ? dateKeys[dateKeys.length - 1] : '';
+  const inventoryChanges: { date: string; delta: number }[] = [];
+  for (let i = 1; i < dateKeys.length; i++) {
+    const delta = rowsByDate[dateKeys[i]] - rowsByDate[dateKeys[i - 1]];
+    if (delta !== 0) inventoryChanges.push({ date: dateKeys[i], delta });
+  }
+  if (inventoryChanges.length > 0) {
+    notices.push(
+      `Prompt set changed mid-window: ` +
+      inventoryChanges.map((c) => `${c.date} (${c.delta > 0 ? '+' : ''}${c.delta.toLocaleString()} answers/day)`).join(', ') +
+      `. Figures below pool every date in ${dateFrom} – ${dateTo}, so a change in the score across this ` +
+      `window partly reflects the new prompts entering the average — not visibility movement alone.`,
+    );
+  }
+
+  // v7.380: per-engine visibility on the STRICT set, so it reconciles with the headline score.
+  const visEngines: PlatStat[] = Object.keys(visPlatRuns)
+    .map((p) => ({ platform: p, runs: visPlatRuns[p], hits: visPlatClient[p] || 0 }))
+    .sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs)));
+
   const engines: PlatStat[] = Object.keys(platRuns)
     .map((p) => ({ platform: p, runs: platRuns[p], hits: platClient[p] || 0 }))
     .sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs)));
@@ -850,6 +914,8 @@ async function computeAll(
     citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
     earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
     slots, clientMatched, clientMatchScore, flagHits, hasFlagCol, notices,
+    visRuns, visHits, visPromptN: Object.keys(visPrompts).length, visEngines,
+    dateFrom, dateTo, dateDays: dateKeys.length, inventoryChanges,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -1129,8 +1195,23 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
 
 // ─── Analysis render ─────────────────────────────────────────────────────────────
 function Analysis({ m }: { m: Metrics }) {
-  const visPct = m.totalRuns ? (100 * m.clientHits) / m.totalRuns : 0;
-  const enginesZero = m.engines.filter((e) => e.hits === 0).length;
+  // v7.380 · TWO denominators, each stated on screen and never mixed.
+  //   STRICT  (`type == 'Visibility'`) = Profound's own Visibility Score denominator → the headline
+  //           score + the per-engine chart, so both reconcile with the client's Profound dashboard.
+  //   FULL    (every Visibility-typed answer, incl. the dual-purpose 'Sentiment, Visibility' rows)
+  //           = the opportunity lens → topic whitespace, prompt gaps, coverage, Share of Voice.
+  // Narrowing the opportunity views to the strict set would discard two-thirds of the real answers
+  // the client could have won, so they deliberately keep the full footprint (Const I.6).
+  // Metrics saved before v7.380 carry no strict tallies → fall back to the blended figure.
+  const hasStrict = typeof m.visRuns === 'number' && m.visRuns > 0;
+  const scoreRuns = hasStrict ? m.visRuns : m.totalRuns;
+  const scoreHits = hasStrict ? m.visHits : m.clientHits;
+  const visPct = scoreRuns ? (100 * scoreHits) / scoreRuns : 0;
+  const scoreEngines = (hasStrict && (m.visEngines || []).length) ? m.visEngines : m.engines;
+  const windowLabel = m.dateFrom && m.dateTo
+    ? (m.dateFrom === m.dateTo ? m.dateFrom : `${m.dateFrom} – ${m.dateTo}`)
+    : '';
+  const enginesZero = scoreEngines.filter((e) => e.hits === 0).length;
   const topicsZero = m.topics.filter((t) => t.hits === 0).length;
   const sovRank = m.sov.findIndex((s) => s.isClient) + 1;
   const clientSent = m.sentBrands.find((s) => s.isClient);
@@ -1143,11 +1224,11 @@ function Analysis({ m }: { m: Metrics }) {
   const cms = (m.mentionSent || []).find((x) => x.isClient);
 
   const cards: Array<{ k: string; v: string; tone: string; s: string; kind?: 'sentiment' }> = [
-    { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${m.clientHits} of ${fmt(m.totalRuns)} answers` },
+    { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${fmt(scoreHits)} of ${fmt(scoreRuns)} answers${hasStrict ? ' · Profound Visibility prompts' : ''}` },
   ];
-  if (clientCov) cards.push({ k: 'Prompt coverage', v: `${clientCov.count} / ${m.promptN}`, tone: 'text-amber-500', s: `${clientCov.pct.toFixed(1)}% of tested prompts` });
+  if (clientCov) cards.push({ k: 'Prompt coverage', v: `${clientCov.count} / ${m.promptN}`, tone: 'text-amber-500', s: `${clientCov.pct.toFixed(1)}% of all tested prompts` });
   if (sovRank > 0) cards.push({ k: 'Share-of-Voice rank', v: `#${sovRank} / ${m.sov.length}`, tone: 'text-amber-500', s: 'tracked brands' });
-  if (m.engines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${m.engines.length}`, tone: 'text-rose-500', s: m.engines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
+  if (scoreEngines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${scoreEngines.length}`, tone: 'text-rose-500', s: scoreEngines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
   if (m.topics.length) cards.push({ k: 'Topics at 0%', v: `${topicsZero} / ${m.topics.length}`, tone: 'text-amber-500', s: 'no presence at all' });
   if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims`, kind: 'sentiment' });
   if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
@@ -1188,6 +1269,15 @@ function Analysis({ m }: { m: Metrics }) {
     <div className="mt-6 space-y-6">
       <InsightStack insights={_insights} />
       {/* Summary cards */}
+      {/* v7.380 · coverage window + which prompt set the headline score uses. Stated up front so
+          the score is never read against the wrong denominator or the wrong date range. */}
+      {(windowLabel || hasStrict) && (
+        <p className="text-orbit-tertiary text-[11px] mb-3">
+          {windowLabel ? <>Data covers <span className="text-orbit-secondary">{windowLabel}</span>{m.dateDays > 1 ? ` (${m.dateDays} days)` : ''}. </> : null}
+          {hasStrict ? <>Headline score and per-engine chart use Profound&apos;s Visibility prompt set (<span className="text-orbit-secondary">{fmt(m.visRuns)}</span> answers · {m.visPromptN} prompts), so they reconcile with the Profound dashboard. Topic whitespace, prompt gaps and Share of Voice use all <span className="text-orbit-secondary">{fmt(m.totalRuns)}</span> tested answers ({m.promptN} prompts).</> : null}
+        </p>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {cards.map((c) => (
           c.kind === 'sentiment' && cms && cms.total > 0 ? (
@@ -1223,13 +1313,13 @@ function Analysis({ m }: { m: Metrics }) {
 
       {/* Visibility by engine + SoV */}
       <div className="grid md:grid-cols-2 gap-4">
-        <Panel title="AI visibility by engine" sub="% of competitive answers where the client appears, per engine">
-          {m.engines.map((e) => {
+        <Panel title="AI visibility by engine" sub={hasStrict ? `% of Profound Visibility answers where the client appears (${fmt(m.visRuns)} answers · ${m.visPromptN} prompts)` : '% of competitive answers where the client appears, per engine'}>
+          {scoreEngines.map((e) => {
             const pct = e.runs ? (100 * e.hits) / e.runs : 0;
-            return <Bar key={e.platform} label={e.platform} valueLabel={`${pct.toFixed(1)}%`} frac={pct / Math.max(1, Math.max(...m.engines.map((x) => (x.runs ? (100 * x.hits) / x.runs : 0)), 1))} color={e.hits === 0 ? 'bg-orbit-muted' : 'bg-indigo-500'} sub={`${e.hits}/${e.runs}`} />;
+            return <Bar key={e.platform} label={e.platform} valueLabel={`${pct.toFixed(1)}%`} frac={pct / Math.max(1, Math.max(...scoreEngines.map((x) => (x.runs ? (100 * x.hits) / x.runs : 0)), 1))} color={e.hits === 0 ? 'bg-orbit-muted' : 'bg-indigo-500'} sub={`${e.hits}/${e.runs}`} />;
           })}
         </Panel>
-        <Panel title="Share of Voice — tracked brands" sub="% of competitive answers mentioning each tracked firm">
+        <Panel title="Share of Voice — tracked brands" sub={`% of ALL ${fmt(m.totalRuns)} tested answers mentioning each tracked firm`}>
           {m.sov.map((s) => (
             <Bar key={s.brand} label={disp(s.brand)} valueLabel={`${s.pct.toFixed(2)}%`} frac={s.count / maxSov} color={s.isClient ? 'bg-emerald-500' : 'bg-indigo-500'} sub={`${s.count}`} highlight={s.isClient} />
           ))}
@@ -1242,7 +1332,7 @@ function Analysis({ m }: { m: Metrics }) {
       </div>
 
       {/* Topics */}
-      <Panel title={`Topic visibility — ${topicsZero} of ${m.topics.length} topics at 0%`} sub="Client visibility % across every topic (sorted; 0% = whitespace opportunity)">
+      <Panel title={`Topic visibility — ${topicsZero} of ${m.topics.length} topics at 0%`} sub={`Client visibility % across every topic, over ALL ${fmt(m.totalRuns)} tested answers (sorted; 0% = whitespace opportunity)`}>
         <div className="space-y-1">
           {m.topics.map((t) => {
             const pct = t.runs ? (100 * t.hits) / t.runs : 0;
