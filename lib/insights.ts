@@ -559,6 +559,17 @@ export function execKeyInsights(a: {
         seg(a.aiZeroEngineNames.length > 0 ? ` — ${oxford(a.aiZeroEngineNames)}.` : '.')],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
     });
+  } else if (a.aiEnginesTotal > 0) {
+    // v7.388: the clean sweep is a real reading and it used to be stated on the removed
+    // AI-answer-engines card ("present on all engines"). Without this branch, a client with no
+    // blackouts loses the finding entirely — a rule that only speaks when the news is bad tells
+    // half the truth (Const I.6).
+    push({
+      id: 'K2', cat: 'other', sev: 2, kicker: 'Win · Engine coverage',
+      parts: [seg('You are cited on '), seg(`all ${a.aiEnginesTotal} engines tested`, true),
+        seg(' at least once — thin in places, but no engine is a blackout.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
   }
 
   // ── K3 · topic whitespace ─────────────────────────────────────────────────
@@ -568,6 +579,14 @@ export function execKeyInsights(a: {
       kicker: 'Watch · Topic whitespace',
       parts: [seg(`${a.aiTopicsZero} of ${a.aiTopicsTotal} tested topic${a.aiTopicsTotal === 1 ? '' : 's'}`, true),
         seg(' return zero mentions of you — whole subject areas where the assistants have no reason to name you yet.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  } else if (a.aiTopicsTotal > 0) {
+    // v7.388: as K2 — "no topic whitespace" was on the removed card and is worth stating.
+    push({
+      id: 'K3', cat: 'other', sev: 2, kicker: 'Win · Topic coverage',
+      parts: [seg('You appear somewhere in '), seg(`all ${a.aiTopicsTotal} tested topic${a.aiTopicsTotal === 1 ? '' : 's'}`, true),
+        seg(' — there is no subject area you are completely absent from.')],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
     });
   }
