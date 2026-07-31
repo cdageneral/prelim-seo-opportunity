@@ -1,3 +1,15 @@
+## v7.385 · The quick-wins ladder comes out of the Executive Summary — 2026-07-31
+
+**Wayne:** *"lets remove this row as well"* — the **"Where to spend first · effort vs payoff"** block.
+
+Removed, along with its compute: the `ladder` array, the three modeled click estimates (`quickClicks` / `climbClicks` / `betClicks`) and the `ctrAt` import that fed them, so no dead calculation is left running behind a deleted view.
+
+**Nothing measured was lost.** All three of the ladder's readings already reach the reader through the Key Insights rail, with the same real numbers: near-misses at positions 4–10 and page-2 climbers under **Quick wins ready now** (K8), and net-new gap keywords under **Competitors outperforming** (K10). The near-miss and climber pools are still computed here for exactly that purpose, and the regression suite asserts they still reach the rule set with their real counts and real search volume — a block can be deleted, but a measured reading may not vanish with it.
+
+**What did leave is the modeled click estimate per tier** (~3.2M / ~702K / ~32.9M clicks). Those were the panel's only projection of value-at-stake, derived from the GrowthSRC CTR curve and labeled as modeled. Losing them is a net gain in honesty rather than a loss of data (Const I.1 / I.5a) — every remaining figure in the Executive Summary's action guidance is now measured. If a value-at-stake reading is wanted back it should return as a single labeled rail line rather than a table of three, and that is a deliberate decision to make rather than a side effect of this cleanup.
+
+Files: `components/brief/ExecutiveSummarySection.tsx`, `package.json`/`package-lock.json` (7.385.0). Verified: project `tsc --noEmit` clean; full retained suite — **579 pass / 13 pre-existing, zero new failures**, plus **11 new v7.385 checks** covering both halves of the change: the block, its render loop, its data structure, the modeled figures and the CTR import are all gone, and the near-miss / climber / gap readings still reach the rail.
+
 ## v7.384 · The two standalone finding rows move into the Key Insights rail — 2026-07-31
 
 **Wayne:** *"lets remove these two rows in the executive summary. Also any insights from these rows should move to the key insight section."* The rows were the v7.366 sentence layer sitting under the KPI cards — **A6 "Known, never recommended"** and **A8 "AI whitespace"**. Both are gone from the panel body; both findings now appear in the rail under **Missed opportunities**, ranked critical.
