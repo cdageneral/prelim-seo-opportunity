@@ -1,3 +1,17 @@
+## v7.386 · "The landscape" block removed; its contrast moves into the rail — 2026-07-31
+
+**Wayne:** *"lets remove this row as well - again if the insights are there move them to the insight panel in the appropriate location."*
+
+The block held two different things, and they deserved opposite fates.
+
+**The framing sentence moved.** *"You win page-1 rankings for 37% of demand — but you're cited in just 1.8% of the AI answers your buyers now read first"* is the product's whole thesis in one line, and both halves were already computed live. It now renders inside the Key Insights rail as **K1 · Two worlds of visibility**, off the same two figures. The contrast is drawn **only when the two worlds actually diverge** — a project whose AI visibility runs ahead of its page-1 rank gets the plain AI-visibility reading instead of a manufactured contrast, and a project with no page-1 basis never has a contrast drawn against zero. K6 keeps stating the Google reading in its own right, so nothing is lost by the merge.
+
+**The AI narrative paragraph did not move, deliberately.** That prose is written **once at analysis time** while every card on the page recomputes live — which is exactly why v7.334 had to stamp it with an analysis date, and why QC audit A2 caught it asserting "9% capture" beside a live 3% Share-of-Voice card. Carrying stale prose into a rail whose entire promise is that each line states its own source and freshness would import the one failure the rail is built to prevent. It is removed rather than re-homed (Const I.1 / I.5). The Executive Summary now contains **no analysis-time prose at all** — the `_narrative` snapshot read, the `firstSentences` helper and the derivation are all gone. The analysis-date **stamp** survives, because the AI-generated priorities row further down still needs it and still shows it.
+
+Retained-suite note (Const V.6): the v7.382 check asserting `cited in 1.8% of the 2,400 AI answers` was **amended with a dated note, not deleted** — K1's rate and denominator are no longer adjacent now that the rank clause sits between them, so the check asserts both are present rather than matching one literal string.
+
+Files: `components/brief/ExecutiveSummarySection.tsx`, `lib/insights.ts`, `package.json`/`package-lock.json` (7.386.0). Verified: project `tsc --noEmit` clean; behavioural fixtures over three shapes — diverged (TD Bank), AI-ahead-of-rank, and no-rank-basis — asserting the contrast fires only where it is true and keeps its denominator; full retained suite — **597 pass / 13 pre-existing, zero new failures**, plus **18 new v7.386 checks** covering both the removal (block, derivation, snapshot read, helper) and the survival of the analysis stamp on the priorities row.
+
 ## v7.385 · The quick-wins ladder comes out of the Executive Summary — 2026-07-31
 
 **Wayne:** *"lets remove this row as well"* — the **"Where to spend first · effort vs payoff"** block.
