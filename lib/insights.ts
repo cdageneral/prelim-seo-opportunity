@@ -443,6 +443,27 @@ export interface ExecKeyInsight {
   panel?:   string;                        // the deep panel this rolls up from (Const II.6)
 }
 
+// v7.384 (Wayne 2026-07-31): the two standalone finding rows that used to sit under the KPI
+// cards — A6 "Known, never recommended" and A8 "AI whitespace" — were removed from the panel
+// body and re-homed into the rail. They are ADOPTED, not rewritten: the sentence still comes
+// from the single v7.366 rule that owns it, so the wording and the evidence stamp can never
+// drift into a second version. Only the section and the urgency rank are assigned here.
+export function adoptInsight(
+  ins: Insight | null,
+  cat: ExecInsightCat,
+  sev: 0 | 1 | 2,
+  opts?: { kicker?: string; panel?: string },
+): ExecKeyInsight | null {
+  if (!ins) return null;
+  return {
+    id: ins.id, cat, sev,
+    kicker: opts?.kicker ?? ins.kicker,
+    parts: ins.parts,             // verbatim — never re-derived
+    evidence: ins.evidence,       // verbatim — the rule's own provenance stamp
+    panel: opts?.panel,
+  };
+}
+
 export const EXEC_INSIGHT_SECTIONS: Array<{ cat: ExecInsightCat; label: string; accent: string }> = [
   { cat: 'opportunity', label: 'Missed opportunities',     accent: 'var(--c-f59e0b)' },
   { cat: 'competitor',  label: 'Competitors outperforming', accent: 'var(--c-ef4444)' },
@@ -499,6 +520,10 @@ export function execKeyInsights(a: {
   // rival figures rather than inferred from the client's own numbers.
   sovRivals?:      Array<{ domain: string; pct: number }>;   // page-1 click capture, MODELED (same curve as K7)
   promptRivals?:   Array<{ brand: string; count: number }>;  // prompts each rival appears on (Profound)
+  // v7.384: the A6/A8 findings, computed by the caller from the SAME probe figures the LLM
+  // panel shows and passed in whole. Null when the rule declines to fire (honest gap, I.5).
+  probeAnchor?:    Insight | null;
+  aiWhitespace?:   Insight | null;
 }): ExecKeyInsight[] {
   const out: ExecKeyInsight[] = [];
   const push = (i: ExecKeyInsight | null) => { if (i) out.push(i); };
@@ -537,6 +562,16 @@ export function execKeyInsights(a: {
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
     });
   }
+
+  // ── A6 / A8 · adopted from the v7.366 rules (v7.384) ──────────────────────
+  // Both are missed opportunities in the plainest sense: real demand, real answers being
+  // given, and the client absent from them. Ranked critical because the gates on those two
+  // rules only open when the gap is already stark (A6 needs branded ≥70% with unbranded
+  // ≤25%; A8 needs an above-median-demand category at ≤2% mention rate).
+  push(adoptInsight(a.aiWhitespace ?? null, 'opportunity', 0,
+    { kicker: 'Critical · AI whitespace', panel: 'LLM Visibility (08)' }));
+  push(adoptInsight(a.probeAnchor ?? null, 'opportunity', 0,
+    { kicker: 'Critical · Known, never recommended', panel: 'LLM Visibility (08)' }));
 
   // ── K4 · winnable prompts (rivals cited, you absent) ──────────────────────
   if (a.winnablePrompts > 0) {
