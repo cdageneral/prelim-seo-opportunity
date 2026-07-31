@@ -1068,9 +1068,11 @@ export default function ExecutiveSummarySection({
                 title={clickable ? `${b.navLabel} →` : undefined}
                 onClick={clickable ? () => onNavigate!(b.nav) : undefined}
                 onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate!(b.nav); } } : undefined}
+                /* v7.388 (Wayne 2026-07-31): no vertical colour bar on the summary cards — a
+                   plain rounded card. The colour coding is not lost: each card's label keeps its
+                   accent, which is where a reader looks to identify the card anyway. */
                 className="orbit-card oiq-rise p-3.5"
-                style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0',
-                  cursor: clickable ? 'pointer' : 'default', ['--oiq-i' as any]: i + 1 }}>
+                style={{ cursor: clickable ? 'pointer' : 'default', ['--oiq-i' as any]: i + 1 }}>
                 <p className="text-[10px] uppercase font-bold" style={{ color: b.accent, letterSpacing: '.08em' }}>{b.icon}</p>
                 <p className="font-bold leading-none" style={{ fontSize: 30, color: b.bigColor, margin: '8px 0 0', letterSpacing: '-.02em' }}>
                   <CountValue value={b.num} decimals={b.dec} suffix={b.suffix} animate={animate} />
