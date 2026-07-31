@@ -895,6 +895,8 @@ export function execActionLanes(a: {
   ownedCites:        number | null;
   totalCites:        number | null;
   netSentiment:      number | null;
+  promptsSeen:       number | null;
+  promptsTotal:      number | null;
   aiSourceLabel:     string;
   // Content
   netNewTopics:   number;
@@ -978,6 +980,17 @@ export function execActionLanes(a: {
     add(ai, { id: 'A5', lane: 'ai', title: 'Fix what the assistants say when they do name you',
       parts: [seg('Net sentiment is '), seg(String(a.netSentiment), true),
         seg(' — being found is currently working against you.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+  // v7.390: a client with no engine blackout, no topic whitespace and positive sentiment was
+  // only producing two AI moves — honest, but it left a real, measured one unsaid. Prompt
+  // coverage is the widest remaining AI gap for exactly that client, so it sits last in the
+  // lane order and only surfaces once the sharper problems above have nothing to report.
+  if (a.promptsSeen !== null && a.promptsTotal !== null && a.promptsTotal > 0 && a.promptsSeen < a.promptsTotal) {
+    const absent = a.promptsTotal - a.promptsSeen;
+    add(ai, { id: 'A6', lane: 'ai', title: `Get named on the ${absent.toLocaleString()} tracked prompt${absent === 1 ? '' : 's'} you never appear on`,
+      parts: [seg('You surface on '), seg(`${a.promptsSeen.toLocaleString()} of ${a.promptsTotal.toLocaleString()}`, true),
+        seg(' tracked prompts at least once — the rest run without you in the answer.')],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
   }
 
