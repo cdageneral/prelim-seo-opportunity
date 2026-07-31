@@ -161,24 +161,6 @@ function StatRow({ label, value, valueColor }: { label: string; value: string; v
   );
 }
 
-function SignalCard({ source, value, desc, accentColor }: {
-  source: string; value: string; desc: string; accentColor: string;
-}) {
-  return (
-    <div className="px-3 py-2.5 mb-1.5"
-      style={{
-        background: 'var(--c-111118)', borderLeft: `3px solid ${accentColor}`,
-        borderTop: '1px solid var(--c-1e1e2e)', borderRight: '1px solid var(--c-1e1e2e)',
-        borderBottom: '1px solid var(--c-1e1e2e)', borderRadius: '0 6px 6px 0',
-      }}>
-      <p className="text-[8px] font-bold uppercase tracking-wider mb-0.5" style={{ color: accentColor }}>
-        {source}
-      </p>
-      <p className="text-[17px] font-bold leading-tight" style={{ color: 'var(--c-f0f0ff)' }}>{value}</p>
-      <p className="text-[9px] leading-snug mt-0.5" style={{ color: 'var(--c-8888aa)' }}>{desc}</p>
-    </div>
-  );
-}
 
 // ─── v7.382: motion (UX review recs M1 · M3) ─────────────────────────────────
 // The count-up runs ONCE, on panel entry — never again when the data refetches
@@ -292,10 +274,16 @@ function KeyInsightsRail({ insights, expanded, onToggle }: {
   const next = () => { idx += 1; return idx; };
 
   return (
-    <aside className="oiq-rise"
+    // v7.387 (Wayne 2026-07-31): the rail ends LEVEL with the last row of the left column.
+    // A plain `max-height: 100%` cannot do this — the rail is a grid item, so it drives the very
+    // row height it would be clamping against, and the constraint resolves to "as tall as I
+    // already am". Taking it out of flow (absolute inside a relative cell) breaks that circle:
+    // the row is then sized by the left column alone and the rail fills exactly that box, with
+    // its own scroll for the overflow. It stops being sticky as a result — which is coherent now
+    // that it is exactly as tall as the block it belongs to.
+    <aside className="oiq-rise oiq-rail"
       style={{ background: 'var(--c-0f0f1c)', border: '1px solid var(--ca-108-99-255-0_4)',
-        borderRadius: 16, padding: 14, position: 'sticky', top: 0, alignSelf: 'start',
-        maxHeight: 'calc(100vh - 120px)', overflowY: 'auto', ['--oiq-i' as any]: 5 }}>
+        borderRadius: 16, padding: 14, overflowY: 'auto', ['--oiq-i' as any]: 5 }}>
       <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase',
         color: 'var(--c-6c63ff)', margin: 0 }}>Key Insights</p>
       <p style={{ fontSize: 9, color: 'var(--c-555570)', margin: '3px 0 12px' }}>
@@ -966,6 +954,12 @@ export default function ExecutiveSummarySection({
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
+      {/* v7.387 (Wayne 2026-07-31): the panel names itself, set off from the global nav. */}
+      <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-.02em', lineHeight: 1.1,
+        color: 'var(--c-f0f0ff)', margin: '10px 0 2px' }}>
+        Executive Summary
+      </h1>
+
       {/* ═══ v7.383 (Wayne 2026-07-31) — TOP BLOCK + KEY INSIGHTS RAIL ═══════════
           The hero, the landscape headline and the KPI cards run in the left column; the
           Key Insights rail sits to their right and stays pinned while the reader scrolls
@@ -973,7 +967,7 @@ export default function ExecutiveSummarySection({
           the per-engine chart and the priorities row keep the room they need to be read.
           On a narrow viewport the grid collapses to one column and the rail simply follows
           the cards. */}
-      <div className="oiq-exec-top" style={{ display: 'grid', gap: 12, alignItems: 'start' }}>
+      <div className="oiq-exec-top" style={{ display: 'grid', gap: 12 }}>
         <div className="flex flex-col gap-3" style={{ minWidth: 0 }}>
 
       {/* ═══ v7.131 — OVERALL VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
@@ -1100,41 +1094,12 @@ export default function ExecutiveSummarySection({
           body. Both findings now live in the Key Insights rail under Missed opportunities,
           adopted verbatim from the same v7.366 rules, so nothing was lost, only re-homed. */}
 
-      {/* ═══ v7.312: AI ANSWER ENGINES — CMO VIEW (rolls up from nav 09) ═══ */}
-      {pfHasData ? (
-        <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-239-68-68-0_12)' }}>
-          <div className="flex items-center justify-between mb-2" style={{ flexWrap: 'wrap', gap: 6 }}>
-            <p className="text-[9px] font-bold uppercase tracking-widest text-orbit-tertiary">AI answer engines · what a CMO should know</p>
-            <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>
-              from AI Answer Engines (09) · {pfMetrics!.client} · updated {new Date(pfMetrics!.updatedAt).toLocaleDateString()}
-            </span>
-          </div>
-          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-            <SignalCard source="Invisible engines" value={`${aiEnginesZero} of ${aiEnginesTot}`}
-              desc={pfScoreEngines.filter(e => e.hits === 0).map(e => e.platform).join(', ') || 'present on all engines'} accentColor="var(--c-ef4444)" />
-            <SignalCard source="Topic whitespace" value={`${aiTopicsZero} of ${aiTopicsTot}`}
-              desc="topics with 0% AI presence" accentColor="var(--c-f59e0b)" />
-            <SignalCard source="Winnable prompts" value={`${pfMetrics!.gaps.length}`}
-              desc={pfMetrics!.gaps.length > 0 ? `rivals cited, you absent · led by ${pfMetrics!.gaps[0].leader}` : 'none — you appear everywhere tested'} accentColor="var(--c-f59e0b)" />
-            <SignalCard source="Prompt coverage"
-              value={(() => { const c = pfMetrics!.coverage.find(x => x.isClient); return c ? `${c.count} of ${pfMetrics!.promptN}` : '—'; })()}
-              desc="prompts where you appear" accentColor="var(--c-6c63ff)" />
-          </div>
-          {(() => {
-            const cs = pfMetrics!.sentBrands.find(s => s.isClient);
-            const worst = pfMetrics!.clientThemes.length > 0 ? pfMetrics!.clientThemes[pfMetrics!.clientThemes.length - 1] : null;
-            const bits: string[] = [];
-            if (cs) { const n = netPctOf(cs.pos, cs.neg); bits.push(`Net AI sentiment ${n > 0 ? '+' : ''}${n} (${cs.pos} positive / ${cs.neg} negative)`); }
-            if (worst && netPctOf(worst.pos, worst.neg) < 0) bits.push(`weakest theme: ${worst.theme} (${netPctOf(worst.pos, worst.neg)})`);
-            if (pfMetrics!.totalCites > 0) bits.push(`${pfMetrics!.clientDomainCites.toLocaleString()} of ${pfMetrics!.totalCites.toLocaleString()} AI citations point to your domain`);
-            return bits.length > 0 ? (
-              <p className="text-[10px] mt-2" style={{ color: 'var(--c-8888aa)', lineHeight: 1.6 }}>{bits.join(' · ')}</p>
-            ) : (
-              <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>Add the Sentiment, Platforms &amp; Prompt-Volume exports in the AI Answer Engines panel to surface sentiment, citations &amp; demand here.</p>
-            );
-          })()}
-        </div>
-      ) : null}
+      {/* v7.388 (Wayne 2026-07-31): the "AI answer engines · what a CMO should know" card was
+          removed. Every one of its six readings is in the Key Insights rail: winnable prompts
+          (K4), prompt coverage (K5), net sentiment (K14) and citation share (K15) were already
+          there, and the two ZERO cases — no invisible engines, no topic whitespace — were only
+          ever stated here, so K2/K3 gained win branches rather than staying silent when the news
+          is good. The deep panel (nav 09) is untouched. */}
 
       {/* ═══ WHERE YOU DISAPPEAR ACROSS THE JOURNEY ═══ */}
       <div className="orbit-card p-4">
@@ -1179,8 +1144,12 @@ export default function ExecutiveSummarySection({
 
         </div>
 
-        <KeyInsightsRail insights={keyInsights} expanded={showAllInsights}
-          onToggle={() => setShowAllInsights(v => !v)} />
+        {/* v7.387: the cell stretches to the row height (the left column); the sticky rail
+            inside it clamps to that height, so the two end level. */}
+        <div className="oiq-rail-cell">
+          <KeyInsightsRail insights={keyInsights} expanded={showAllInsights}
+            onToggle={() => setShowAllInsights(v => !v)} />
+        </div>
       </div>
 
       {/* ═══ SUPPORTING EVIDENCE: Share of Voice on Google + LLM visibility ═══ */}
