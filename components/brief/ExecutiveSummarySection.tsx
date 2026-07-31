@@ -95,10 +95,6 @@ function normDomain(d: string): string {
   return d.toLowerCase().replace(/^www\./, '');
 }
 
-function firstSentences(text: string, n: number): string {
-  const m = text.match(/[^.!?]*[.!?]+/g) ?? [];
-  return m.slice(0, n).join(' ').trim() || text;
-}
 
 // ─── v7.312: AI Answer Engines (Profound panel, nav 09) — rollup reader ──────────
 // The exec AI pillar/card READ the SAME computed metrics the AI Answer Engines panel
@@ -464,7 +460,6 @@ export default function ExecutiveSummarySection({
   const semSnap: any   = analysis.semrushSnapshot  ?? {};
   const serpSnap: any  = analysis.serpApiSnapshot   ?? {};
   const cb: any        = semSnap._categoryBreakdown ?? {};
-  const narrative: any = semSnap._narrative         ?? {};
 
   // ── Market capture metrics — from the same canonical pool as the stats above ──
   const _volMetrics = computeVolumeMetrics(kwPool);
@@ -745,16 +740,11 @@ export default function ExecutiveSummarySection({
   const actions          = opps.length > 0 ? opps : fallbackActions;
   const hasFallbackActions = opps.length === 0;
 
-  // ── Narrative ─────────────────────────────────────────────────────────────
-  const rawNarrative =
-    narrative.marketPositionNarrative ??
-    narrative.strategicCall           ??
-    narrative.competitorGapNarrative  ?? '';
-  const narrativeText = rawNarrative ? firstSentences(rawNarrative, 4) : '';
-  // v7.334: the AI narrative + AI-generated priorities are written ONCE at analysis time,
-  // while the cards on this page recompute live (pool + later scans/uploads). Stamp the
-  // synthesis-time content with its analysis date so a reader never takes those figures
-  // as current (QC audit A2: narrative said "9% capture" beside a live 3% SoV card).
+  // ── Analysis-time stamp — still read by the priorities header below ─────────
+  // v7.334: AI-generated priorities are written ONCE at analysis time while the cards on this
+  // page recompute live, so anything synthesis-written is stamped with its analysis date and a
+  // reader never takes those figures as current (QC audit A2). v7.386 removed the narrative
+  // paragraph that shared this stamp; the priorities row still carries it.
   const analysisDateLabel = analysis?.completedAt
     ? new Date(analysis.completedAt).toLocaleDateString()
     : null;
@@ -1031,27 +1021,13 @@ export default function ExecutiveSummarySection({
         </div>
       </div>
 
-      {/* ═══ THE LANDSCAPE — headline renders ONLY when narrative data exists ═══ */}
-      {narrativeText ? (
-        <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
-          <p className="text-[9px] uppercase mb-1" style={{ color: 'var(--c-6c63ff)', letterSpacing: '.12em' }}>
-            The landscape · your position in the new discovery ecosystem
-          </p>
-          <p className="font-semibold" style={{ fontSize: 18, color: 'var(--c-f0f0ff)', lineHeight: 1.35 }}>
-            You win page-1 rankings for <span style={{ color: 'var(--c-22c55e)' }}>{page1Pct}%</span> of demand
-            {aiVisPct !== null
-              ? <> — but you&rsquo;re cited in just <span style={{ color: aiVisColor }}>{aiVisPct}%</span> of the AI answers your buyers now read first.</>
-              : <>. AI-answer visibility is not yet measured — run an AIO scan to see it.</>}
-          </p>
-          <p className="text-orbit-secondary mt-2" style={{ fontSize: 11, lineHeight: 1.6 }}>
-            {narrativeText}
-          </p>
-          {/* v7.334: honest freshness label (I.5) — narrative figures are analysis-time */}
-          <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
-            AI narrative written at analysis{analysisDateLabel ? ` (${analysisDateLabel})` : ''} — the cards below recompute live and are the current numbers.
-          </p>
-        </div>
-      ) : null}
+      {/* v7.386 (Wayne 2026-07-31): "The landscape" block removed. Its framing sentence — the
+          contrast between page-1 rankings won and AI answers cited — is now computed live inside
+          the Key Insights rail (K1, "Two worlds of visibility") off the same two figures. What did
+          NOT come with it is the AI narrative paragraph: that prose is written ONCE at analysis
+          time while every card here recomputes live, which is why it carried a freshness stamp and
+          why QC audit A2 caught it stating "9% capture" beside a live 3% SoV card. Stale prose
+          beside live numbers is the exact failure Const I.1/I.5 exists to prevent. */}
 
       {/* ═══ THE APPROACH — TWO WORLDS OF VISIBILITY ═══ */}
       {/* v7.382: rebuilt to the approved mockup — display-size figures, one supporting
