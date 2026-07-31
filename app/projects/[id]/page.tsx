@@ -1625,6 +1625,13 @@ export default function ProjectBriefPage() {
           {/* ── Executive Summary — Layout B ── */}
           {hasResults && analysis && activeSection === 'overview' && (
             <ExecutiveSummarySection
+              /* v7.382 (UX review rec F5): the exec KPI cards open the deep panel each one
+                 rolls up from. The cast is guarded by the switch below — an unknown id is
+                 ignored rather than navigating the app into an empty section. */
+              onNavigate={(sec) => {
+                const allowed: NavSection[] = ['serp', 'aiEngines', 'content', 'journeys'];
+                if ((allowed as string[]).includes(sec)) setActiveSection(sec as NavSection);
+              }}
               kwVersion={kwVersion}
               analysis={analysisForPanels}
               projectId={projectId}
