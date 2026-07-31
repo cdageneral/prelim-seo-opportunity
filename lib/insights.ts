@@ -409,3 +409,267 @@ export function executionGapInsight(a: {
       seg(String(planCount), true), seg('.')],
     evidence: 'plan selections vs prioritized topic set · exact counts' };
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// v7.382 — KEY INSIGHTS (Executive Summary box). Wayne 2026-07-31: "list all the
+// key insights an executive or CMO would need to know."
+//
+// Same contract as every rule above: PURE, no fetches, no forked math. Every
+// figure arrives as an argument the Executive Summary already derived from the
+// deep panels it rolls up (Const II.6) — this file never recomputes one. A rule
+// that has no real data behind it returns nothing rather than a placeholder
+// sentence (Const I.5). The ONE modeled input any rule touches is Share of Voice
+// (the approved GrowthSRC CTR curve, Const I.5a); its sentence says "modeled" on
+// screen and names the curve in its evidence stamp — every other line is measured.
+//
+// `sev` is a PRESENTATIONAL rank only (0 critical → 1 watch → 2 win/context). It
+// orders the box; it never trims, caps, or hides the underlying panels (Const I.6).
+// The caller renders the top N with the rest one click away — nothing is dropped.
+// ═════════════════════════════════════════════════════════════════════════════
+
+export interface ExecKeyInsight {
+  id:       string;                        // stable key (also the anchor for future click-through)
+  sev:      0 | 1 | 2;                     // 0 = critical · 1 = watch · 2 = win / context
+  kicker:   string;                        // small uppercase label
+  parts:    InsightSeg[];                  // the sentence, key figures emphasized
+  evidence: string;                        // source + freshness stamp (Const I.1 / IV.5)
+  panel?:   string;                        // the deep panel this rolls up from (Const II.6)
+}
+
+const oxford = (xs: string[]): string =>
+  xs.length <= 1 ? (xs[0] ?? '')
+  : xs.length === 2 ? `${xs[0]} and ${xs[1]}`
+  : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+
+export function execKeyInsights(a: {
+  // ── AI answer engines (nav 09 · Profound) — null when that panel has no data
+  aiVisPct:        number | null;
+  aiAnswers:       number;                 // strict denominator the panel headlines
+  aiEnginesZero:   number;
+  aiEnginesTotal:  number;
+  aiZeroEngineNames: string[];
+  aiTopicsZero:    number;
+  aiTopicsTotal:   number;
+  winnablePrompts: number;
+  winnableLeader:  string | null;
+  promptsSeen:     number | null;          // prompts where the client appears
+  promptsTotal:    number | null;
+  netSentiment:    number | null;          // −100…+100, null when no sentiment export
+  ownedCites:      number | null;
+  totalCites:      number | null;
+  aiSourceLabel:   string;                 // e.g. "AI Answer Engines (09) · Profound export, updated <date>"
+  // ── Google rank / SoV
+  page1Pct:        number;
+  top3Pct:         number;
+  sovPct:          number | null;          // MODELED (CTR curve) — labeled on screen
+  ctrSourceLabel:  string;
+  nearMissCount:   number;
+  nearMissMonthly: number;
+  climberCount:    number;
+  // ── Coverage map (nav 05)
+  optimizeTopics:  number;
+  netNewTopics:    number;
+  netNewMonthly:   number;
+  gapKwCount:      number;
+  gapMonthly:      number;
+  // ── Journey (nav 04)
+  absentStages:    string[];
+  thinStages:      string[];
+  preProductBuilt: boolean;
+  // ── SERP features (nav 07)
+  aioAvail:        number;
+  aioAcq:          number;
+  // ── Read confidence
+  confidencePct:   number;
+  missingSignals:  string[];
+}): ExecKeyInsight[] {
+  const out: ExecKeyInsight[] = [];
+  const push = (i: ExecKeyInsight | null) => { if (i) out.push(i); };
+
+  // ── K1 · AI answer visibility (the headline a CMO is asked about first) ────
+  if (a.aiVisPct !== null && a.aiAnswers > 0) {
+    const crit = a.aiVisPct < 10;
+    push({
+      id: 'K1', sev: crit ? 0 : a.aiVisPct < 30 ? 1 : 2,
+      kicker: crit ? 'Critical · AI answers' : 'Finding · AI answers',
+      parts: [seg('You are cited in '), seg(`${a.aiVisPct}%`, true),
+        seg(` of the ${a.aiAnswers.toLocaleString()} AI answers tested across ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`),
+        seg(crit ? ' — the buyers who ask an assistant first almost never hear your name.' : '.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K2 · engine blackouts (which assistants never say your name) ───────────
+  if (a.aiEnginesTotal > 0 && a.aiEnginesZero > 0) {
+    push({
+      id: 'K2', sev: 0, kicker: 'Critical · Engine blackout',
+      parts: [seg(`${a.aiEnginesZero} of ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`, true),
+        seg(' never cite you once'),
+        seg(a.aiZeroEngineNames.length > 0 ? ` — ${oxford(a.aiZeroEngineNames)}.` : '.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K3 · topic whitespace ─────────────────────────────────────────────────
+  if (a.aiTopicsTotal > 0 && a.aiTopicsZero > 0) {
+    push({
+      id: 'K3', sev: a.aiTopicsZero / a.aiTopicsTotal >= 0.25 ? 0 : 1,
+      kicker: 'Watch · Topic whitespace',
+      parts: [seg(`${a.aiTopicsZero} of ${a.aiTopicsTotal} tested topic${a.aiTopicsTotal === 1 ? '' : 's'}`, true),
+        seg(' return zero mentions of you — whole subject areas where the assistants have no reason to name you yet.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K4 · winnable prompts (rivals cited, you absent) ──────────────────────
+  if (a.winnablePrompts > 0) {
+    push({
+      id: 'K4', sev: 1, kicker: 'Opportunity · Winnable prompts',
+      parts: [seg(`${a.winnablePrompts.toLocaleString()} prompt${a.winnablePrompts === 1 ? '' : 's'}`, true),
+        seg(' cite a rival but never you'),
+        seg(a.winnableLeader ? ` — ${a.winnableLeader} takes the most of them.` : '.'),
+        seg(' These are answers already being given; the question is who gets named.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K5 · prompt coverage ──────────────────────────────────────────────────
+  if (a.promptsTotal !== null && a.promptsSeen !== null && a.promptsTotal > 0) {
+    const pct = Math.round((100 * a.promptsSeen) / a.promptsTotal);
+    push({
+      id: 'K5', sev: pct < 40 ? 1 : 2, kicker: 'Finding · Prompt coverage',
+      parts: [seg('You surface on '), seg(`${a.promptsSeen.toLocaleString()} of ${a.promptsTotal.toLocaleString()} tracked prompts`, true),
+        seg(` (${pct}%) at least once.`)],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K6 · Google page-1 capture ────────────────────────────────────────────
+  push({
+    id: 'K6', sev: a.page1Pct < 25 ? 0 : a.page1Pct < 50 ? 1 : 2,
+    kicker: a.page1Pct < 25 ? 'Critical · Google ranks' : 'Finding · Google ranks',
+    parts: [seg('You hold page 1 for '), seg(`${a.page1Pct}% of your tracked demand`, true),
+      seg(`, and only ${a.top3Pct}% sits in the top 3 — where the clicks actually are.`)],
+    evidence: 'ranked search volume on the canonical keyword pool · this scan', panel: 'Google Rank (06)',
+  });
+
+  // ── K7 · Share of Voice — the one MODELED line (Const I.5a) ────────────────
+  if (a.sovPct !== null) {
+    push({
+      id: 'K7', sev: a.sovPct < 10 ? 1 : 2, kicker: 'Modeled · Share of voice',
+      parts: [seg('You capture an estimated '), seg(`${a.sovPct}%`, true),
+        seg(` of the page-1 clicks available across your footprint — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`)],
+      evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)',
+    });
+  }
+
+  // ── K8 · near-miss quick wins (measured counts, no modeled click figure) ───
+  if (a.nearMissCount > 0) {
+    push({
+      id: 'K8', sev: 2, kicker: 'Opportunity · One step from the top 3',
+      parts: [seg(`${a.nearMissCount.toLocaleString()} keyword${a.nearMissCount === 1 ? '' : 's'}`, true),
+        seg(` already rank 4–10 — ${fmtInsightVol(a.nearMissMonthly * 12)} searches/yr sitting one position band below the click curve`),
+        seg(a.climberCount > 0 ? `, with another ${a.climberCount.toLocaleString()} on page 2.` : '.')],
+      evidence: 'exact keyword counts + real Semrush volume at real positions · this scan', panel: 'Google Rank (06)',
+    });
+  }
+
+  // ── K9 · coverage map split ───────────────────────────────────────────────
+  if (a.optimizeTopics + a.netNewTopics > 0) {
+    push({
+      id: 'K9', sev: 2, kicker: 'Plan · Coverage map',
+      parts: [seg(`${(a.optimizeTopics + a.netNewTopics).toLocaleString()} page${a.optimizeTopics + a.netNewTopics === 1 ? '' : 's'}`, true),
+        seg(` are mapped — ${a.optimizeTopics.toLocaleString()} existing to optimize and `),
+        seg(`${a.netNewTopics.toLocaleString()} net-new to build`, true),
+        seg(a.netNewMonthly > 0 ? ` (${fmtInsightVol(a.netNewMonthly * 12)} searches/yr behind the net-new set).` : '.')],
+    evidence: 'canonical content-map topics · exact rollups', panel: 'Content Map (05)',
+    });
+  }
+
+  // ── K10 · competitor gap ──────────────────────────────────────────────────
+  if (a.gapKwCount > 0) {
+    push({
+      id: 'K10', sev: 1, kicker: 'Watch · Competitor gap',
+      parts: [seg(`${a.gapKwCount.toLocaleString()} in-scope keyword${a.gapKwCount === 1 ? '' : 's'}`, true),
+        seg(` earn a competitor a ranking and you nothing — ${fmtInsightVol(a.gapMonthly * 12)} searches/yr you are not in the running for.`)],
+      evidence: 'competitor-gap rows on the canonical pool, scope-gated · this scan', panel: 'Keyword Landscape (02)',
+    });
+  }
+
+  // ── K11 · journey blind spots ─────────────────────────────────────────────
+  if (a.absentStages.length > 0) {
+    push({
+      id: 'K11', sev: 0, kicker: 'Critical · Journey blind spot',
+      parts: [seg('You have no page-1 presence at all in '), seg(oxford(a.absentStages), true),
+        seg(' — the buyer moves through that stage without meeting you.')],
+      evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)',
+    });
+  } else if (a.thinStages.length > 0) {
+    push({
+      id: 'K11', sev: 1, kicker: 'Watch · Thin journey stage',
+      parts: [seg('Your coverage is thin (under a fifth of stage demand) in '), seg(oxford(a.thinStages), true), seg('.')],
+      evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)',
+    });
+  }
+
+  // ── K12 · pre-product lane not built (honest gap, Const III.2a-ii) ─────────
+  if (!a.preProductBuilt) {
+    push({
+      id: 'K12', sev: 1, kicker: 'Gap · Pre-product journey',
+      parts: [seg('The pre-product journey — the problem-aware demand that reaches buyers before they know your category — '),
+        seg('has not been built yet', true), seg('. Until it is, this read covers only people already searching for the product.')],
+      evidence: 'deep-journey build state · nothing inferred from the ranking footprint', panel: 'Journeys (04)',
+    });
+  }
+
+  // ── K13 · AI Overviews toll booth ─────────────────────────────────────────
+  if (a.aioAvail > 0) {
+    const rate = Math.round((100 * a.aioAcq) / a.aioAvail);
+    push({
+      id: 'K13', sev: rate < 20 ? 1 : 2, kicker: 'Finding · AI Overviews',
+      parts: [seg('Google shows an AI Overview on '), seg(`${a.aioAvail.toLocaleString()} of your keywords`, true),
+        seg(` and cites you on ${a.aioAcq.toLocaleString()} of them (${rate}%) — the answer box sits above every rank you own there.`)],
+      evidence: 'scanned SERP rows + uploaded Semrush SERP-feature flags · live rollup', panel: 'SERP Features (07)',
+    });
+  }
+
+  // ── K14 · AI sentiment when you ARE named ─────────────────────────────────
+  if (a.netSentiment !== null) {
+    push({
+      id: 'K14', sev: a.netSentiment < 0 ? 0 : 2,
+      kicker: a.netSentiment < 0 ? 'Critical · AI sentiment' : 'Win · AI sentiment',
+      parts: [seg('When the assistants do name you, net sentiment is '),
+        seg(`${a.netSentiment > 0 ? '+' : ''}${a.netSentiment}`, true),
+        seg(a.netSentiment < 0 ? ' — being found is currently working against you.' : ' — the mentions you earn read favourably.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K15 · whose pages the assistants actually quote ───────────────────────
+  if (a.totalCites !== null && a.ownedCites !== null && a.totalCites > 0) {
+    const pct = (100 * a.ownedCites) / a.totalCites;
+    push({
+      id: 'K15', sev: pct < 5 ? 1 : 2, kicker: 'Finding · Citation share',
+      parts: [seg(`${a.ownedCites.toLocaleString()} of ${a.totalCites.toLocaleString()} AI citations`, true),
+        seg(` point at your own domain (${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%) — the rest is your story told on someone else's page.`)],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K16 · read confidence (what this read cannot yet see) ─────────────────
+  if (a.missingSignals.length > 0) {
+    push({
+      id: 'K16', sev: 1, kicker: 'Gap · Read confidence',
+      parts: [seg(`This read is at ${a.confidencePct}% confidence — `),
+        seg(oxford(a.missingSignals), true), seg(` ${a.missingSignals.length === 1 ? 'is' : 'are'} still missing, so anything above that depends on ${a.missingSignals.length === 1 ? 'it' : 'them'} is unmeasured rather than zero.`)],
+      evidence: 'presence of each input signal on this project · not a data quality score',
+    });
+  }
+
+  // Severity first, then original (topic) order — a stable sort, so two runs of
+  // the same data always produce the same list.
+  return out
+    .map((ins, i) => ({ ins, i }))
+    .sort((x, y) => (x.ins.sev - y.ins.sev) || (x.i - y.i))
+    .map(x => x.ins);
+}
