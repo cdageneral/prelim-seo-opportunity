@@ -996,3 +996,17 @@ body, header, aside, nav, .orbit-card, button, input, textarea, select {
   .oiq-rise,
   .oiq-bar-fill { animation: none; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   v7.383 — Executive Summary top block: hero + KPI cards on the left, the Key
+   Insights rail pinned on the right. The rail is a fixed 360px so the sentences
+   keep a readable measure; below ~1180px of panel width it would squeeze the KPI
+   cards past legibility, so the grid collapses to one column and the rail simply
+   follows the cards. Everything under this block stays full width.
+   ───────────────────────────────────────────────────────────────────────── */
+.oiq-exec-top { grid-template-columns: minmax(0, 1fr) 360px; }
+
+@media (max-width: 1180px) {
+  .oiq-exec-top { grid-template-columns: minmax(0, 1fr); }
+  .oiq-exec-top > aside { position: static !important; max-height: none !important; }
+}
