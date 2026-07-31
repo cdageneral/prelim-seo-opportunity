@@ -529,14 +529,23 @@ export function execKeyInsights(a: {
   const push = (i: ExecKeyInsight | null) => { if (i) out.push(i); };
 
   // ── K1 · AI answer visibility (the headline a CMO is asked about first) ────
+  // v7.386: this line absorbed the framing sentence from the removed "The landscape" block —
+  // the CONTRAST between what you win on Google and what you win in AI answers. Both figures
+  // were already stated separately (here and in K6); the juxtaposition is the finding, and it
+  // is now computed live off the same two numbers rather than sitting in analysis-time prose.
   if (a.aiVisPct !== null && a.aiAnswers > 0) {
     const crit = a.aiVisPct < 10;
+    const diverged = a.page1Pct > 0 && a.aiVisPct < a.page1Pct;
+    const denom = ` of the ${a.aiAnswers.toLocaleString()} AI answers tested across ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`;
     push({
       id: 'K1', cat: 'other', sev: crit ? 0 : a.aiVisPct < 30 ? 1 : 2,
-      kicker: crit ? 'Critical · AI answers' : 'Finding · AI answers',
-      parts: [seg('You are cited in '), seg(`${a.aiVisPct}%`, true),
-        seg(` of the ${a.aiAnswers.toLocaleString()} AI answers tested across ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`),
-        seg(crit ? ' — the buyers who ask an assistant first almost never hear your name.' : '.')],
+      kicker: crit ? 'Critical · Two worlds of visibility' : 'Finding · AI answers',
+      parts: diverged
+        ? [seg('You win page 1 for '), seg(`${a.page1Pct}% of demand`, true),
+           seg(' — but you are cited in just '), seg(`${a.aiVisPct}%`, true), seg(denom),
+           seg(crit ? '. The buyers who ask an assistant first almost never hear your name.' : '.')]
+        : [seg('You are cited in '), seg(`${a.aiVisPct}%`, true), seg(denom),
+           seg(crit ? ' — the buyers who ask an assistant first almost never hear your name.' : '.')],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
     });
   }
