@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
 import { SovPanel, computeSov, ctrAt } from '@/components/brief/GoogleSerpSection';
 import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySection';
@@ -10,7 +10,8 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
 import { InsightStack } from '@/components/brief/InsightBanner';   // v7.366: insight-sentence layer
-import { probeAnchorInsight, aiWhitespaceInsight } from '@/lib/insights';   // v7.366 (A6 · A8)
+import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8) · v7.382 (Key Insights)
+import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.382: the ONE approved curve, named on screen (Const I.5a)
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
 // analysis.aioAvailable/aioAcquired + serpFeatureSummary columns (stale after scans).
@@ -57,6 +58,10 @@ interface Props {
   // card builds canonical content-map topics with the SAME map the Content Map
   // panel uses (the builder under-counts when fed {}; II.7).
   claudeAssigns?:          Record<string, IntentType>;
+  // v7.382 (UX review rec F5): the KPI cards become click-through — each opens the deep
+  // panel it rolls up from. Optional, so the component still renders standalone (report
+  // route, harness) with the cards as plain, non-interactive cards.
+  onNavigate?:             (section: string) => void;
 }
 
 // ─── Helpers (mirrors GoogleSerpSection exactly) ──────────────────────────────
@@ -180,6 +185,102 @@ function SignalCard({ source, value, desc, accentColor }: {
   );
 }
 
+// ─── v7.382: motion (UX review recs M1 · M3) ─────────────────────────────────
+// The count-up runs ONCE, on panel entry — never again when the data refetches
+// underneath it, so a figure a reader is looking at can't start re-rolling. Under
+// prefers-reduced-motion, and in any environment without requestAnimationFrame
+// (SSR, the report route, the jsdom harness), the value is shown settled on the
+// first paint. Motion is presentation only: it never touches what the number is.
+
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    setReduced(!!mq.matches);
+    const onChange = () => setReduced(!!mq.matches);
+    mq.addEventListener?.('change', onChange);
+    return () => mq.removeEventListener?.('change', onChange);
+  }, []);
+  return reduced;
+}
+
+function useCountUp(target: number | null, decimals = 0, animate = true): number | null {
+  const [shown, setShown] = useState<number | null>(target);   // settled on first paint (SSR-safe)
+  const ranRef = useRef(false);
+  useEffect(() => {
+    if (target === null || !isFinite(target)) { setShown(target); return; }
+    if (ranRef.current || !animate || typeof requestAnimationFrame !== 'function') { setShown(target); return; }
+    ranRef.current = true;
+    const pow = Math.pow(10, decimals);
+    const dur = 750;
+    const t0  = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    let raf = 0;
+    let live = true;
+    const step = (now: number) => {
+      if (!live) return;
+      const p = Math.min(1, (now - t0) / dur);
+      const e = 1 - Math.pow(1 - p, 3);
+      setShown(Math.round(target * e * pow) / pow);
+      if (p < 1) raf = requestAnimationFrame(step); else setShown(target);
+    };
+    raf = requestAnimationFrame(step);
+    return () => { live = false; if (raf) cancelAnimationFrame(raf); };
+  }, [target, decimals, animate]);
+  return shown;
+}
+
+/** A number that counts up on entry and is always readable as its settled value. */
+function CountValue({ value, decimals = 0, suffix = '', animate = true, dash = '—' }: {
+  value: number | null; decimals?: number; suffix?: string; animate?: boolean; dash?: string;
+}) {
+  const shown = useCountUp(value, decimals, animate);
+  if (value === null || shown === null) return <>{dash}</>;
+  return <>{shown.toFixed(decimals)}{suffix}</>;
+}
+
+/** A meter whose fill animates in from 0 and settles at its real width. */
+function Meter({ pct, color, index = 0, height = 8 }: { pct: number; color: string; index?: number; height?: number }) {
+  const w = `${Math.max(0, Math.min(100, pct))}%`;
+  return (
+    <div style={{ background: 'var(--c-1e1e2e)', borderRadius: height / 2, height, overflow: 'hidden' }}>
+      <div className="oiq-bar-fill"
+        style={{ width: w, background: color, height, borderRadius: height / 2,
+          ['--oiq-w' as any]: w, ['--oiq-i' as any]: index }} />
+    </div>
+  );
+}
+
+// ─── v7.382: Key Insights row (severity-ranked, Wayne 2026-07-31) ────────────
+const KEY_SEV_STYLE: Record<0 | 1 | 2, { bar: string; kicker: string }> = {
+  0: { bar: 'var(--c-ef4444)', kicker: 'var(--c-ef4444)' },
+  1: { bar: 'var(--c-f59e0b)', kicker: 'var(--c-f59e0b)' },
+  2: { bar: 'var(--c-22c55e)', kicker: 'var(--c-22c55e)' },
+};
+
+function KeyInsightRow({ ins, index }: { ins: ExecKeyInsight; index: number }) {
+  const st = KEY_SEV_STYLE[ins.sev];
+  return (
+    <div className="oiq-rise px-3 py-2.5"
+      style={{ background: 'var(--c-111118)', borderLeft: `3px solid ${st.bar}`,
+        borderTop: '1px solid var(--c-1e1e2e)', borderRight: '1px solid var(--c-1e1e2e)',
+        borderBottom: '1px solid var(--c-1e1e2e)', borderRadius: '0 6px 6px 0',
+        ['--oiq-i' as any]: index }}>
+      <p className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: st.kicker }}>{ins.kicker}</p>
+      <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--c-c0c0e0)', margin: 0 }}>
+        {ins.parts.map((seg, i) => seg.em
+          ? <strong key={i} style={{ color: 'var(--c-f0f0ff)', fontWeight: 700 }}>{seg.t}</strong>
+          : <span key={i}>{seg.t}</span>)}
+      </p>
+      <p className="text-[9px] mt-1" style={{ color: 'var(--c-555570)' }}>
+        {/* The panel name is only prefixed when the evidence stamp doesn't already open
+            with it — the AI rules carry the panel inside their source label. */}
+        {ins.panel && !ins.evidence.startsWith(ins.panel) ? `${ins.panel} · ` : ''}{ins.evidence}
+      </p>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function ExecutiveSummarySection({
@@ -191,6 +292,7 @@ export default function ExecutiveSummarySection({
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   claudeAssigns = {},
+  onNavigate,
 }: Props) {
 
   // ── DB keyword fetch (mirrors GoogleSerpSection exactly) ──────────────────
@@ -693,6 +795,68 @@ export default function ExecutiveSummarySection({
     total: _llmSent.totalMentions ?? ((_llmSent.positive ?? 0) + (_llmSent.neutral ?? 0) + (_llmSent.negative ?? 0)),
   };
 
+  // ═══ v7.382 — layout rebuild to the approved mockup + Key Insights ═══════════
+  // Nothing below RE-DERIVES a metric: every figure here is one already computed
+  // above from the deep panels this summary rolls up (Const II.6/II.7). The only
+  // new work is ordering, wording, and how wide a bar is drawn.
+
+  const reducedMotion = usePrefersReducedMotion();
+  const animate       = !reducedMotion;
+
+  // Per-engine citation rates — the SAME strict series the AI pillar scores off
+  // (pfScoreEngines), so the chart and the headline can never disagree. Engines
+  // with no answers tested are dropped rather than drawn at 0% (Const I.5).
+  const engineSeries = useMemo(() => pfScoreEngines
+    .filter(e => e.runs > 0)
+    .map(e => ({ platform: e.platform, runs: e.runs, hits: e.hits, pct: (100 * e.hits) / e.runs }))
+    .sort((x, y) => y.pct - x.pct), [pfScoreEngines]);
+  // Wayne 2026-07-31: bars are scaled to the TOP engine so single-digit rates stay
+  // readable, and the caption says so. The label on every bar is the TRUE rate —
+  // the scaling is a drawing decision, never a number decision (Const I.5a spirit).
+  const engineMaxPct = engineSeries.length > 0 ? Math.max(...engineSeries.map(e => e.pct)) : 0;
+
+  const aiSourceLabel = pfHasData
+    ? `AI Answer Engines (09) · ${pfMetrics!.client} · Profound export, updated ${new Date(pfMetrics!.updatedAt).toLocaleDateString()}`
+    : 'LLM probe · real classified probe responses · this scan';
+
+  const clientSent   = pfHasData ? pfMetrics!.sentBrands.find(sb => sb.isClient) ?? null : null;
+  const clientCov    = pfHasData ? pfMetrics!.coverage.find(cv => cv.isClient) ?? null : null;
+  const winnableLead = pfHasData && pfMetrics!.gaps.length > 0 ? pfMetrics!.gaps[0].leader : null;
+  const sovPctNum    = _sov.availableClicks > 0 ? Math.round(_sov.sovPct * 1000) / 10 : null;
+
+  const keyInsights: ExecKeyInsight[] = useMemo(() => execKeyInsights({
+    aiVisPct, aiAnswers: pfHasData ? pfScoreRuns : llmMentionTotal,
+    aiEnginesZero, aiEnginesTotal: aiEnginesTot,
+    aiZeroEngineNames: pfHasData ? pfScoreEngines.filter(e => e.hits === 0).map(e => e.platform) : [],
+    aiTopicsZero, aiTopicsTotal: aiTopicsTot,
+    winnablePrompts: pfHasData ? pfMetrics!.gaps.length : 0,
+    winnableLeader:  winnableLead,
+    promptsSeen:     clientCov ? clientCov.count : null,
+    promptsTotal:    pfHasData ? pfMetrics!.promptN : null,
+    netSentiment:    clientSent ? netPctOf(clientSent.pos, clientSent.neg) : null,
+    ownedCites:      pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.clientDomainCites : null,
+    totalCites:      pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.totalCites : null,
+    aiSourceLabel,
+    page1Pct, top3Pct: top3VolPct,
+    sovPct: sovPctNum, ctrSourceLabel: CTR_SOURCE_LABEL,
+    nearMissCount: nearMiss.length, nearMissMonthly: nearMissVol, climberCount: climber.length,
+    optimizeTopics, netNewTopics, netNewMonthly: netNewVol,
+    gapKwCount, gapMonthly: gapVolume,
+    absentStages: journeyStages.filter(st => st.status === 'absent').map(st => st.label),
+    thinStages:   journeyStages.filter(st => st.status === 'thin').map(st => st.label),
+    preProductBuilt: journeyLanes.preTotal > 0,
+    aioAvail, aioAcq,
+    confidencePct, missingSignals,
+  }), [aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines,
+       aiTopicsZero, aiTopicsTot, pfMetrics, winnableLead, clientCov, clientSent, aiSourceLabel,
+       page1Pct, top3VolPct, sovPctNum, nearMiss.length, nearMissVol, climber.length,
+       optimizeTopics, netNewTopics, netNewVol, gapKwCount, gapVolume, journeyStages, journeyLanes,
+       aioAvail, aioAcq, confidencePct, missingSignals]);
+
+  const KEY_INSIGHTS_SHOWN = 8;   // Wayne: top 6–8 on screen, the rest one click away (never dropped)
+  const [showAllInsights, setShowAllInsights] = useState(false);
+  const visibleInsights = showAllInsights ? keyInsights : keyInsights.slice(0, KEY_INSIGHTS_SHOWN);
+
   // ── Defer render until DB keywords resolve (prevents stale capture-rate flash) ──
   // Mirrors the v7.67 ThemeClustersPanel fix: first paint used only the stored
   // snapshot fallbacks, then re-rendered with merged DB keywords — flashing two
@@ -714,34 +878,43 @@ export default function ExecutiveSummarySection({
 
       {/* ═══ v7.131 — OVERALL VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
       {/* v7.279: renamed from "GEO Visibility Score" to "Overall Visibility Score" (Wayne). */}
-      <div className="orbit-card p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 14, alignItems: 'center' }}>
-          <div style={{ textAlign: 'center', paddingRight: 14, borderRight: '1px solid var(--c-1e1e2e)' }}>
-            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>Overall Visibility Score</p>
-            <p style={{ margin: '4px 0 0', fontSize: 40, fontWeight: 800, lineHeight: 1, color: geoScoreColor }}>
-              {geoScore}<span style={{ fontSize: 16, color: 'var(--c-555570)' }}>/100</span>
+      {/* v7.382: restyled to the approved mockup (UX review 2026-07-10, tab 3) — the score
+          leads at display size, each pillar gets its own full-width meter under a label/value
+          line, and read confidence sits in its own column. Same three pillars, same formula,
+          same numbers as v7.131 — presentation only. */}
+      <div className="orbit-card oiq-rise p-5" style={{ borderColor: 'var(--ca-108-99-255-0_4)', ['--oiq-i' as any]: 0 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 22, alignItems: 'center' }}>
+          <div style={{ paddingRight: 22, borderRight: '1px solid var(--c-1e1e2e)', minWidth: 168 }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.09em', color: 'var(--c-8888aa)', fontWeight: 700 }}>Overall Visibility Score</p>
+            <p style={{ margin: '8px 0 0', fontSize: 52, fontWeight: 800, lineHeight: 1, color: geoScoreColor, letterSpacing: '-.02em' }}>
+              <CountValue value={geoScore} animate={animate} />
+              <span style={{ fontSize: 19, fontWeight: 700, color: 'var(--c-555570)' }}>/100</span>
             </p>
           </div>
           <div>
-            <p style={{ margin: '0 0 6px', fontSize: 10, color: 'var(--c-555570)' }}>
-              Equal-weighted ⅓ each · {scoreDims.map(d => `${d.label.toLowerCase()} ${d.val}`).join(' · ')}{aiMeasured ? '' : ' · AI not yet measured (excluded)'}
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {scoreDims.map(d => (
-                <div key={d.label} className="flex items-center gap-2">
-                  <span style={{ width: 118, fontSize: 11, color: d.color }}>{d.label}</span>
-                  <div style={{ flex: 1, background: 'var(--c-1e1e2e)', borderRadius: 3, height: 7 }}>
-                    <div style={{ width: `${Math.min(100, d.val)}%`, background: d.color, height: 7, borderRadius: 3 }} />
+            <div className="flex flex-col gap-3">
+              {scoreDims.map((d, i) => (
+                <div key={d.label}>
+                  <div className="flex items-baseline justify-between" style={{ marginBottom: 5 }}>
+                    <span style={{ fontSize: 13, color: 'var(--c-c0c0e0)' }}>{d.label}</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--c-f0f0ff)' }}>
+                      <CountValue value={d.val} decimals={Number.isInteger(d.val) ? 0 : 1} animate={animate} />
+                    </span>
                   </div>
-                  <span style={{ fontSize: 11, color: 'var(--c-8888aa)', width: 28, textAlign: 'right' }}>{d.val}</span>
+                  <Meter pct={d.val} color={d.color} index={i} height={8} />
                 </div>
               ))}
             </div>
+            <p style={{ margin: '10px 0 0', fontSize: 10, color: 'var(--c-555570)' }}>
+              Equal-weighted ⅓ each · {scoreDims.map(d => `${d.label.toLowerCase()} ${d.val}`).join(' · ')}{aiMeasured ? '' : ' · AI not yet measured (excluded)'}
+            </p>
           </div>
-          <div style={{ textAlign: 'center', paddingLeft: 14, borderLeft: '1px solid var(--c-1e1e2e)', minWidth: 110 }}>
-            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--c-8888aa)' }}>Read confidence</p>
-            <p style={{ margin: '4px 0 2px', fontSize: 22, fontWeight: 700, color: confColor }}>{confidencePct}%</p>
-            <p style={{ margin: 0, fontSize: 9, color: 'var(--c-555570)' }}>
+          <div style={{ textAlign: 'center', paddingLeft: 22, borderLeft: '1px solid var(--c-1e1e2e)', minWidth: 138 }}>
+            <p style={{ margin: 0, fontSize: 10, textTransform: 'uppercase', letterSpacing: '.09em', color: 'var(--c-8888aa)', fontWeight: 700 }}>Read confidence</p>
+            <p style={{ margin: '8px 0 4px', fontSize: 34, fontWeight: 800, lineHeight: 1, color: confColor }}>
+              <CountValue value={confidencePct} suffix="%" animate={animate} />
+            </p>
+            <p style={{ margin: 0, fontSize: 10, color: 'var(--c-555570)', lineHeight: 1.4 }}>
               {signalsOk} of {signals.length} signals{missingSignals.length > 0 ? ` · missing: ${missingSignals.join(', ')}` : ' · all present'}
             </p>
           </div>
@@ -771,6 +944,11 @@ export default function ExecutiveSummarySection({
       ) : null}
 
       {/* ═══ THE APPROACH — TWO WORLDS OF VISIBILITY ═══ */}
+      {/* v7.382: rebuilt to the approved mockup — display-size figures, one supporting
+          line each, staggered entry (M1), and each card opens the deep panel it rolls up
+          from (F5). The 4th card is Winnable prompts when the AI Answer Engines panel has
+          data (Wayne 2026-07-31) and falls back to the Journey card when it doesn't, so
+          the row is never padded with an empty box and never loses the journey read. */}
       <div>
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary">
           The approach · two worlds of visibility
@@ -778,86 +956,83 @@ export default function ExecutiveSummarySection({
         <div className="grid grid-cols-4 gap-2">
           {([
             // v7.280: "Traditional" renamed to "Google SERP Ranks" (Wayne).
-            { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Google SERP Ranks',
-              big: dbLoaded ? `${page1Pct}%` : '—', bigSuffix: '', bigColor: 'var(--c-f0f0ff)',
-              sub: 'of demand ranked page 1',
-              breakdown: dbLoaded ? [
-                { label: 'Ranks 1\u20133', val: `${top3VolPct}%` },
-                { label: 'Ranks 4\u201310', val: `${rank410Pct}%` },
-              ] : undefined },
-            { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility',
-              big: aiVisPct !== null ? `${aiVisPct}%` : '—', bigSuffix: '', bigColor: aiVisColor,
-              sub: aiVisDenom,
-              // v7.312: when the AI Answer Engines panel has data, the breakdown shows the
-              // two figures a CMO acts on — engines & topics with zero presence. Falls back
-              // to the LLM probe's non-branded/branded split when only the probe is present.
-              breakdown: pfHasData ? [
-                { label: 'Engines at 0%', val: `${aiEnginesZero}/${aiEnginesTot}` },
-                { label: 'Topics at 0%', val: `${aiTopicsZero}/${aiTopicsTot}` },
-              ] : (nonBrandedPct !== null && brandedPct !== null) ? [
-                { label: 'Non-branded', val: `${nonBrandedPct}%` },
-                { label: 'Branded', val: `${brandedPct}%` },
-              ] : undefined },
-            // v7.280: Coverage now shows BOTH halves of the Content Map (05) — existing
-            // pages to optimise + net-new pages to build (Wayne).
-            { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage map',
-              big: dbLoaded ? `${coverageTopics}` : '—', bigSuffix: dbLoaded ? (coverageTopics === 1 ? ' page' : ' pages') : '', bigColor: 'var(--c-f59e0b)',
-              sub: dbLoaded ? undefined : 'mapping pages…',
-              breakdown: dbLoaded ? [
-                { label: 'Existing (optimize)', val: `${optimizeTopics}` },
-                { label: 'Net-new (build)', val: `${netNewTopics}` },
-              ] : undefined },
-            // v7.280: Journey split into two stacked rows — pre-product (top) + product.
-            // v7.281: counts come straight from the Journey panel's lane split
-            // (journeyLaneSummary) — pre-product shows "—/not built yet" until the deep
-            // journey exists, exactly like the panel's "Pre-product journey 0".
-            { key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey',
-              rows: [
-                { label: 'Pre-product', big: journeyLanes.preTotal > 0 ? `${journeyLanes.preCovered}` : '—',
-                  suffix: journeyLanes.preTotal > 0 ? ` of ${journeyLanes.preTotal}` : '',
-                  sub: journeyLanes.preTotal > 0 ? 'topics with coverage' : 'not built yet' },
-                { label: 'Product', big: dbLoaded ? `${journeyLanes.productCovered}` : '—',
-                  suffix: dbLoaded ? ` of ${journeyLanes.productTotal}` : '',
-                  sub: 'topics with coverage' },
-              ] },
-          ] as Array<{ key: string; accent: string; icon: string; big?: string; bigSuffix?: string; bigColor?: string; sub?: string; rows?: Array<{ label: string; big: string; suffix: string; sub: string }>; breakdown?: Array<{ label: string; val: string }> }>).map(b => (
-            <div key={b.key} className="orbit-card p-3"
-              style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0' }}>
-              <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: b.accent }}>{b.icon}</p>
-              {b.rows ? (
-                <div className="flex flex-col gap-2 mt-1.5">
-                  {b.rows.map(r => (
-                    <div key={r.label}>
-                      <p className="uppercase tracking-wider font-semibold" style={{ fontSize: 10, color: 'var(--c-c0c0e0)' }}>{r.label}</p>
-                      <p className="font-bold leading-none" style={{ fontSize: 19, color: 'var(--c-f0f0ff)', marginTop: 2 }}>
-                        {r.big}{r.suffix ? <span style={{ fontSize: 12, color: 'var(--c-8888aa)' }}>{r.suffix}</span> : null}
-                      </p>
-                      <p className="mt-0.5" style={{ fontSize: 10, color: 'var(--c-8888aa)' }}>{r.sub}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  <p className="font-bold leading-none" style={{ fontSize: 24, color: b.bigColor ?? 'var(--c-f0f0ff)', marginTop: 8 }}>
-                    {b.big}{b.bigSuffix ? <span style={{ fontSize: 13, color: 'var(--c-8888aa)' }}>{b.bigSuffix}</span> : null}
-                  </p>
-                  {b.sub ? <p className="mt-1" style={{ fontSize: 11, color: 'var(--c-8888aa)' }}>{b.sub}</p> : null}
-                  {b.breakdown ? (
-                    <div className="flex flex-col gap-1 mt-2">
-                      {b.breakdown.map(d => (
-                        <div key={d.label} className="flex items-center justify-between" style={{ gap: 6 }}>
-                          <span style={{ fontSize: 12, color: 'var(--c-c0c0e0)' }}>{d.label}</span>
-                          <span className="font-bold" style={{ fontSize: 14, color: 'var(--c-e8e8ff)' }}>{d.val}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-          ))}
+            { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Google SERP Ranks', nav: 'serp', navLabel: 'Open Google Ranks',
+              num: dbLoaded ? page1Pct : null, dec: 0, suffix: '%', bigColor: 'var(--c-f0f0ff)',
+              sub: dbLoaded ? `of demand ranked page 1 · ${top3VolPct}% ranks 1–3` : 'reading keyword data…' },
+            { key: 'ai', accent: 'var(--c-ef4444)', icon: 'AI visibility', nav: 'aiEngines', navLabel: 'Open AI Answer Engines',
+              num: aiVisPct, dec: aiVisPct !== null && !Number.isInteger(aiVisPct) ? 1 : 0, suffix: '%', bigColor: aiVisColor,
+              sub: aiVisDenom },
+            // v7.280: Coverage shows BOTH halves of the Content Map (05) — optimise + build.
+            { key: 'gap', accent: 'var(--c-f59e0b)', icon: 'Coverage map', nav: 'content', navLabel: 'Open Content Map',
+              num: dbLoaded ? coverageTopics : null, dec: 0, suffix: '', bigColor: 'var(--c-f59e0b)',
+              sub: dbLoaded
+                ? `page${coverageTopics === 1 ? '' : 's'} · ${optimizeTopics} optimize · ${netNewTopics} net-new build`
+                : 'mapping pages…' },
+            ...(pfHasData
+              ? [{ key: 'winnable', accent: 'var(--c-06b6d4)', icon: 'Winnable prompts', nav: 'aiEngines', navLabel: 'Open AI Answer Engines',
+                  num: pfMetrics!.gaps.length, dec: 0, suffix: '', bigColor: 'var(--c-06b6d4)',
+                  sub: pfMetrics!.gaps.length > 0
+                    ? `rivals cited, you absent · led by ${pfMetrics!.gaps[0].leader}`
+                    : 'none — you appear everywhere tested' }]
+              // Honest fallback (Const I.5): with no AI Answer Engines data there are no
+              // winnable prompts to count, so the card keeps showing the journey read.
+              : [{ key: 'journey', accent: 'var(--c-06b6d4)', icon: 'Journey', nav: 'journeys', navLabel: 'Open Journeys',
+                  num: dbLoaded ? journeyLanes.productCovered : null, dec: 0, suffix: '', bigColor: 'var(--c-06b6d4)',
+                  sub: dbLoaded
+                    ? `of ${journeyLanes.productTotal} product topics with coverage · pre-product ${journeyLanes.preTotal > 0 ? `${journeyLanes.preCovered} of ${journeyLanes.preTotal}` : 'not built yet'}`
+                    : 'reading journey data…' }]),
+          ] as Array<{ key: string; accent: string; icon: string; nav: string; navLabel: string; num: number | null; dec: number; suffix: string; bigColor: string; sub: string }>).map((b, i) => {
+            const clickable = typeof onNavigate === 'function';
+            return (
+              <div key={b.key} role={clickable ? 'button' : undefined} tabIndex={clickable ? 0 : undefined}
+                title={clickable ? `${b.navLabel} →` : undefined}
+                onClick={clickable ? () => onNavigate!(b.nav) : undefined}
+                onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate!(b.nav); } } : undefined}
+                className="orbit-card oiq-rise p-3.5"
+                style={{ borderLeft: `3px solid ${b.accent}`, borderRadius: '0 8px 8px 0',
+                  cursor: clickable ? 'pointer' : 'default', ['--oiq-i' as any]: i + 1 }}>
+                <p className="text-[10px] uppercase font-bold" style={{ color: b.accent, letterSpacing: '.08em' }}>{b.icon}</p>
+                <p className="font-bold leading-none" style={{ fontSize: 30, color: b.bigColor, margin: '8px 0 0', letterSpacing: '-.02em' }}>
+                  <CountValue value={b.num} decimals={b.dec} suffix={b.suffix} animate={animate} />
+                </p>
+                <p style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginTop: 6, lineHeight: 1.45 }}>{b.sub}</p>
+                {clickable ? (
+                  <p style={{ fontSize: 9.5, color: 'var(--c-6c63ff)', marginTop: 7 }}>{b.navLabel} →</p>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </div>
+
+      {/* ═══ v7.382 — KEY INSIGHTS (Wayne 2026-07-31) ═══════════════════════════
+          Every line is a computed sentence over figures this summary already read
+          off the deep panels (Const II.6) — no new fetch, no forked math, nothing
+          modeled except the Share-of-Voice line, which says so and names its curve
+          (Const I.5a). Ranked worst-first; the on-screen cut is presentational only
+          and the full set is one click away (Const I.6). */}
+      {keyInsights.length > 0 ? (
+        <div className="orbit-card oiq-rise p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)', ['--oiq-i' as any]: 5 }}>
+          <div className="flex items-center justify-between mb-2.5" style={{ flexWrap: 'wrap', gap: 6 }}>
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--c-6c63ff)' }}>
+              Key insights · what an executive needs to know
+            </p>
+            <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>
+              ranked most-urgent first · {keyInsights.length} finding{keyInsights.length === 1 ? '' : 's'} from this scan
+            </span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {visibleInsights.map((ins, i) => <KeyInsightRow key={ins.id} ins={ins} index={i} />)}
+          </div>
+          {keyInsights.length > KEY_INSIGHTS_SHOWN ? (
+            <button type="button" onClick={() => setShowAllInsights(v => !v)}
+              className="text-[10px] mt-2.5 rounded px-2 py-1"
+              style={{ color: 'var(--c-8b85ff)', background: 'var(--ca-108-99-255-0_12)', border: '1px solid var(--ca-108-99-255-0_4)' }}>
+              {showAllInsights ? 'Show top 8' : `Show all ${keyInsights.length} insights`}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* v7.366: exec insight sentences (A6 known-but-never-recommended · A8 AI
           whitespace) — pure rules over the SAME probe figures the AI pillar and
@@ -960,6 +1135,39 @@ export default function ExecutiveSummarySection({
       <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} title="Share of Voice on Google" />
 
+        {/* v7.382: when the AI Answer Engines panel (09) has data, the right-hand slot
+            shows per-engine citation rates — the SAME strict series the AI pillar scores
+            off, so the chart and the headline can never state two numbers (Const II.6).
+            With no Profound data it falls back to the LLM-probe view below, unchanged. */}
+        {pfHasData && engineSeries.length > 0 ? (
+          <div className="orbit-card oiq-rise p-4" style={{ ['--oiq-i' as any]: 1 }}>
+            <p className="text-orbit-secondary text-xs font-medium mb-1">
+              AI visibility by engine · % of answers citing {pfMetrics!.client}
+            </p>
+            <p style={{ fontSize: 9, color: 'var(--c-4a4a70)', marginTop: 2, marginBottom: 12 }}>
+              {pfStrict ? 'Profound Visibility prompt set' : 'all tested prompts'} · {pfScoreRuns.toLocaleString()} answers across {engineSeries.length} engine{engineSeries.length === 1 ? '' : 's'}
+            </p>
+            <div className="flex flex-col gap-2.5">
+              {engineSeries.map((e, i) => {
+                const col = e.hits === 0 ? 'var(--c-ef4444)' : 'var(--c-6c63ff)';
+                return (
+                  <div key={e.platform} title={`${e.hits.toLocaleString()} of ${e.runs.toLocaleString()} answers on ${e.platform} cite you`}>
+                    <div className="flex items-baseline justify-between" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: 'var(--c-c0c0e0)' }}>{e.platform}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: e.hits === 0 ? 'var(--c-ef4444)' : 'var(--c-f0f0ff)' }}>
+                        {e.pct === 0 ? '0%' : `${e.pct < 10 ? e.pct.toFixed(1) : Math.round(e.pct)}%`}
+                      </span>
+                    </div>
+                    <Meter pct={engineMaxPct > 0 ? (100 * e.pct) / engineMaxPct : 0} color={col} index={i} height={7} />
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-[9px] mt-3" style={{ color: 'var(--c-555570)', lineHeight: 1.5 }}>
+              Bars are scaled to the top engine ({engineMaxPct < 10 ? engineMaxPct.toFixed(1) : Math.round(engineMaxPct)}%) so single-digit rates stay readable — every label is the true rate.
+            </p>
+          </div>
+        ) : (
         <div className="orbit-card p-4">
           <p className="text-orbit-secondary text-xs font-medium mb-1">LLM visibility · AI answer citations</p>
           {(isLlmProbeV1 || isLlmProbeV2) && llmPlatforms.length > 0 ? (
@@ -1027,6 +1235,7 @@ export default function ExecutiveSummarySection({
             <p className="text-orbit-tertiary text-[10px] mt-2">Run the LLM probe to see AI answer citations.</p>
           )}
         </div>
+        )}
       </div>
 
       {/* ═══ WHERE TO SPEND FIRST — QUICK-WINS LADDER (effort vs payoff) ═══ */}
