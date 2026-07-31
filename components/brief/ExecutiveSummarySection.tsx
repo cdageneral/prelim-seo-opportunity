@@ -9,8 +9,7 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
-import { InsightStack } from '@/components/brief/InsightBanner';   // v7.366: insight-sentence layer
-import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, EXEC_INSIGHT_SECTIONS, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8) · v7.382 (Key Insights) · v7.383 (rail sections)
+import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, EXEC_INSIGHT_SECTIONS, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8, adopted into the rail in v7.384) · v7.382 (Key Insights) · v7.383 (rail sections)
 import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.382: the ONE approved curve, named on screen (Const I.5a)
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
@@ -940,11 +939,27 @@ export default function ExecutiveSummarySection({
     // isn't already on screen somewhere below (Const II.6).
     sovRivals:    sovRivals,
     promptRivals: promptRivals,
+    // v7.384: the A6/A8 findings, computed from the SAME probe figures the AI pillar and the
+    // LLM panel read (Const II.6) and handed to the rule set whole — the sentence is still
+    // owned by the v7.366 rule, the rail only decides where it sits and how urgent it is.
+    aiWhitespace: aiWhitespaceInsight({
+      cats: (isLlmProbeV2 ? (llmSnap.categories ?? []) : []).map((c: any) => ({
+        category:      String(c.category ?? ''),
+        monthlyDemand: c.monthlyDemand ?? 0,
+        mentions:      (c.claudeMentions ?? 0) + (c.chatgptMentions ?? 0),
+        total:         (c.claudeTotal ?? 0) + (c.chatgptTotal ?? 0),
+      })),
+    }),
+    probeAnchor: probeAnchorInsight({
+      brandedScore:   brandedPct,
+      unbrandedScore: nonBrandedPct,
+      unbrandedTotal: isLlmProbeV2 ? (llmSnap.unbranded?.total ?? 0) : 0,
+    }),
   }), [aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines, sovRivals, promptRivals,
        aiTopicsZero, aiTopicsTot, pfMetrics, winnableLead, clientCov, clientSent, aiSourceLabel,
        page1Pct, top3VolPct, sovPctNum, nearMiss.length, nearMissVol, climber.length,
        optimizeTopics, netNewTopics, netNewVol, gapKwCount, gapVolume, journeyStages, journeyLanes,
-       aioAvail, aioAcq, confidencePct, missingSignals]);
+       aioAvail, aioAcq, confidencePct, missingSignals, isLlmProbeV2, llmSnap, brandedPct, nonBrandedPct]);
 
   const KEY_INSIGHTS_SHOWN = 8;   // Wayne: top 6–8 on screen, the rest one click away (never dropped)
   const [showAllInsights, setShowAllInsights] = useState(false);
@@ -1112,25 +1127,10 @@ export default function ExecutiveSummarySection({
             here balances the row against the rail — otherwise the rail towers over a short
             left column and leaves a band of dead space beside it. The wide blocks (SoV
             donut, per-engine chart, quick-wins ladder, priorities) stay full width below. */}
-      {/* v7.366: exec insight sentences (A6 known-but-never-recommended · A8 AI
-          whitespace) — pure rules over the SAME probe figures the AI pillar and
-          the LLM panel show (Const II.6); real classified probe responses only
-          (I.1); null → nothing rendered (I.5). */}
-      <InsightStack insights={[
-        probeAnchorInsight({
-          brandedScore: brandedPct,
-          unbrandedScore: nonBrandedPct,
-          unbrandedTotal: isLlmProbeV2 ? (llmSnap.unbranded?.total ?? 0) : 0,
-        }),
-        aiWhitespaceInsight({
-          cats: (isLlmProbeV2 ? (llmSnap.categories ?? []) : []).map((c: any) => ({
-            category: String(c.category ?? ''),
-            monthlyDemand: c.monthlyDemand ?? 0,
-            mentions: (c.claudeMentions ?? 0) + (c.chatgptMentions ?? 0),
-            total: (c.claudeTotal ?? 0) + (c.chatgptTotal ?? 0),
-          })),
-        }),
-      ]} />
+      {/* v7.384 (Wayne 2026-07-31): the two standalone finding rows that sat here — A6
+          "Known, never recommended" and A8 "AI whitespace" — were removed from the panel
+          body. Both findings now live in the Key Insights rail under Missed opportunities,
+          adopted verbatim from the same v7.366 rules, so nothing was lost, only re-homed. */}
 
       {/* ═══ v7.312: AI ANSWER ENGINES — CMO VIEW (rolls up from nav 09) ═══ */}
       {pfHasData ? (
