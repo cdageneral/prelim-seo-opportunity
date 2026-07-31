@@ -970,3 +970,29 @@ body, header, aside, nav, .orbit-card, button, input, textarea, select {
 .orbit-card:hover { border-color: rgba(108, 99, 255, 0.3); transition: border-color 0.2s; }
 
 .orbit-glow { box-shadow: 0 0 0 1px rgba(108,99,255,0.2), 0 8px 32px rgba(108,99,255,0.12); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   v7.382 — Executive Summary entrance choreography (UX review 2026-07-10,
+   recs M1 · M3). Purely presentational: motion never changes a number, only
+   when it becomes visible.
+
+   Both rules are CSS ANIMATIONS with fill-mode `both`, not transitions, and the
+   settled state is written inline on the element. That matters for honesty as
+   much as for style: a server render, a jsdom harness render, a PDF/report
+   render and a reduced-motion reader all get the SETTLED value with no script
+   running — the animation can only ever replay the way the element already is.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@keyframes oiqRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes oiqFill { from { width: 0; }                                to { width: var(--oiq-w, 0%); } }
+
+/* M1 — hero + card entrance, staggered by --oiq-i (index) */
+.oiq-rise { animation: oiqRise .42s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc(var(--oiq-i, 0) * 70ms); }
+
+/* M3 — bar tracks fill from 0 to their real width, staggered the same way */
+.oiq-bar-fill { animation: oiqFill .7s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc(var(--oiq-i, 0) * 70ms); }
+
+@media (prefers-reduced-motion: reduce) {
+  .oiq-rise,
+  .oiq-bar-fill { animation: none; }
+}
