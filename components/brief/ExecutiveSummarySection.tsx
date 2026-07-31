@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { buildKwPool, computeVolumeMetrics } from '@/lib/utils/kwVolume';
-import { SovPanel, computeSov, ctrAt } from '@/components/brief/GoogleSerpSection';
+import { SovPanel, computeSov } from '@/components/brief/GoogleSerpSection';   // v7.385: ctrAt dropped with the quick-wins ladder
 import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySection';
 // v7.279: Coverage-gap card reads the SAME canonical content-map build the Content
 // Map panel (05) renders — buildCanonicalClusterTopics → buildContentPlanFromTopics
@@ -843,22 +843,14 @@ export default function ExecutiveSummarySection({
   const missingSignals = signals.filter(s => !s.ok).map(s => s.key);
   const confColor      = confidencePct >= 80 ? 'var(--c-22c55e)' : confidencePct >= 50 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)';
 
-  // ── v7.131: Quick-wins ladder + modeled value-at-stake (CTR-by-position) ────
-  // v7.245: CTR curve unified — uses the shared ctrAt() (GrowthSRC 2025) imported
-  // from GoogleSerpSection, the SAME curve the Share-of-Voice metric uses, so the
-  // exec's value-at-stake and the SoV donut reconcile on one CTR source of truth.
+  // ── Near-miss / climber pools — still read by the Key Insights rail (K8) ──────
+  // v7.385: the modeled click estimates that used to sit beside these (quickClicks /
+  // climbClicks / betClicks, off the shared ctrAt curve) went with the ladder block. The
+  // COUNTS and the real search volume below are measured and stay (Const I.1).
   const nearMiss    = posKws.filter(k => k.position >= 4 && k.position <= 10);
   const climber     = posKws.filter(k => k.position >= 11 && k.position <= 20);
   const nearMissVol = nearMiss.reduce((s, k) => s + k.searchVolume, 0);
   const climberVol  = climber.reduce((s, k) => s + k.searchVolume, 0);
-  const quickClicks = Math.round(nearMiss.reduce((s, k) => s + Math.max(0, ctrAt(3) - ctrAt(k.position)) * k.searchVolume * 12, 0));
-  const climbClicks = Math.round(climber.reduce((s, k) => s + Math.max(0, ctrAt(8) - ctrAt(k.position)) * k.searchVolume * 12, 0));
-  const betClicks   = Math.round(ctrAt(8) * gapVolume * 12);
-  const ladder = [
-    { tier: 'Quick win', color: 'var(--c-22c55e)', move: 'Near-misses (pos 4–10) → push to top 3',     n: nearMiss.length, volMonthly: nearMissVol, clicks: quickClicks },
-    { tier: 'Climber',   color: 'var(--c-f59e0b)', move: 'Page-2 (pos 11–20) → push to page 1',         n: climber.length,  volMonthly: climberVol,  clicks: climbClicks },
-    { tier: 'Big bet',   color: 'var(--c-ef4444)', move: 'Net-new (gaps) → build content authority',    n: gapKwCount,      volMonthly: gapVolume,   clicks: betClicks },
-  ];
 
   // ── v7.134: LLM sentiment-when-mentioned for the LLM-visibility card ────────
   const _llmSent: any = llmSnap.sentiment ?? {};
@@ -988,7 +980,7 @@ export default function ExecutiveSummarySection({
           The hero, the landscape headline and the KPI cards run in the left column; the
           Key Insights rail sits to their right and stays pinned while the reader scrolls
           the section. Everything BELOW this block returns to full width so the SoV donut,
-          the per-engine chart and the quick-wins ladder keep the room they need to be read.
+          the per-engine chart and the priorities row keep the room they need to be read.
           On a narrow viewport the grid collapses to one column and the rail simply follows
           the cards. */}
       <div className="oiq-exec-top" style={{ display: 'grid', gap: 12, alignItems: 'start' }}>
@@ -1126,7 +1118,7 @@ export default function ExecutiveSummarySection({
         {/* v7.383: these three read fine at the narrowed column width, and moving them up
             here balances the row against the rail — otherwise the rail towers over a short
             left column and leaves a band of dead space beside it. The wide blocks (SoV
-            donut, per-engine chart, quick-wins ladder, priorities) stay full width below. */}
+            donut, per-engine chart, priorities) stay full width below. */}
       {/* v7.384 (Wayne 2026-07-31): the two standalone finding rows that sat here — A6
           "Known, never recommended" and A8 "AI whitespace" — were removed from the panel
           body. Both findings now live in the Key Insights rail under Missed opportunities,
@@ -1322,24 +1314,12 @@ export default function ExecutiveSummarySection({
         )}
       </div>
 
-      {/* ═══ WHERE TO SPEND FIRST — QUICK-WINS LADDER (effort vs payoff) ═══ */}
-      <div className="orbit-card p-4">
-        <p className="text-orbit-secondary text-xs font-medium mb-3">Where to spend first · effort vs payoff</p>
-        <div className="flex flex-col gap-2">
-          {ladder.map(t => (
-            <div key={t.tier} style={{ display: 'grid', gridTemplateColumns: '92px 1fr auto', gap: 12, alignItems: 'center' }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: t.color }}>{t.tier}</span>
-              <span style={{ fontSize: 11, color: 'var(--c-f0f0ff)' }}>{t.move}</span>
-              <span style={{ fontSize: 11, color: 'var(--c-8888aa)', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                {t.n.toLocaleString()} kws · {fmtAnnual(t.volMonthly)}/yr · <span style={{ color: 'var(--c-6c63ff)' }}>~{fmtCompact(t.clicks)} clicks</span>
-              </span>
-            </div>
-          ))}
-        </div>
-        <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
-          Keyword counts and searches/yr are measured. Estimated clicks are <span style={{ color: 'var(--c-8888aa)' }}>modeled</span> from the GrowthSRC 2025 organic CTR-by-position curve (pos 1≈19%, pos 3≈9.8%, pos 8≈2.7%); they show the upside of each move, not a guarantee.
-        </p>
-      </div>
+      {/* v7.385 (Wayne 2026-07-31): the "Where to spend first · effort vs payoff" ladder was
+          removed. Its three measured readings already live in the Key Insights rail — near-misses
+          and page-2 climbers under Quick wins (K8), net-new gap keywords under Competitors
+          outperforming (K10) — each with the same real counts and real search volume. The only
+          thing that left with the block is the MODELED click estimate per tier, which is a net
+          gain in honesty rather than a loss of data (Const I.1/I.5a). */}
 
       {/* ═══ THE CONTINUOUS CYCLE — SECURE THE COVERAGE GAPS ═══ */}
       <div>
