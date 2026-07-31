@@ -1,3 +1,15 @@
+## v7.384 · The two standalone finding rows move into the Key Insights rail — 2026-07-31
+
+**Wayne:** *"lets remove these two rows in the executive summary. Also any insights from these rows should move to the key insight section."* The rows were the v7.366 sentence layer sitting under the KPI cards — **A6 "Known, never recommended"** and **A8 "AI whitespace"**. Both are gone from the panel body; both findings now appear in the rail under **Missed opportunities**, ranked critical.
+
+**Adopted, not rewritten.** The obvious way to do this — retype the two sentences as new rules — would leave two copies of the same wording free to drift apart, which is exactly the failure this codebase keeps re-learning. Instead `adoptInsight()` takes the `Insight` the v7.366 rule returns and re-files it: the sentence `parts` and the `evidence` stamp are carried **verbatim**, and only the section and the urgency rank are assigned at the rail. The regression suite asserts byte-identity between the rail's rendered sentence and the rule's own output, so a future edit to either rule updates the rail automatically and can never produce a second version. The probe finding still carries its original *"live LLM probe — real classified responses, never modeled"* stamp.
+
+Both are ranked **critical**, which is defensible because the gates on those rules only open when the gap is already stark: A6 needs brand recognition at ≥70% *with* unbranded recommendation at ≤25%, and A8 needs an above-median-demand category running at ≤2% mention rate. On TD Bank they read *"1.3M monthly searches — you were mentioned in 0 of 10 AI answers"* and *"recognize your brand in 100% of branded prompts — and recommend you in 10% of 302 unbranded answers"*, and both surface in the visible top 3 of Missed opportunities. When either rule declines to fire, nothing is invented and no placeholder row appears (Const I.5) — `adoptInsight(null, …)` returns null by construction, which the suite also asserts.
+
+The `InsightStack` import was removed with the block, so the panel carries no dead dependency on the standalone row layer. That layer is untouched and still in use on the nine other panels it was built for (v7.366) — this release only removes it from the Executive Summary.
+
+Files: `components/brief/ExecutiveSummarySection.tsx`, `lib/insights.ts`, `package.json`/`package-lock.json` (7.384.0). Verified: project `tsc --noEmit` clean; dual-theme jsdom render confirming the rows are gone and the rail intact; behavioural fixtures asserting sentence and evidence byte-identity with the source rules, correct section and rank, the figures surviving the move, and the honest-gap path; full retained suite — **568 pass / 13 pre-existing, zero new failures**, plus **23 new v7.384 checks**.
+
 ## v7.383 · Key Insights becomes a right-hand rail, grouped into three sections — 2026-07-31
 
 **Wayne:** *"lets have a box with rounded corners to the right side of the executive panel. Lable it key insights. Then have the top 3 missed opportunities, the top 3 competitor out performing and any other last category. Then have the option to show all in expanding it."*
