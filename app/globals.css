@@ -1006,7 +1006,17 @@ body, header, aside, nav, .orbit-card, button, input, textarea, select {
    ───────────────────────────────────────────────────────────────────────── */
 .oiq-exec-top { grid-template-columns: minmax(0, 1fr) 360px; }
 
+/* v7.387 — the rail ends LEVEL with the last row of the left column.
+   The cell is a grid item and stretches to the row height; the rail inside it is absolutely
+   positioned, so it contributes NOTHING to that height — the row is sized by the left column
+   alone and the rail then fills exactly that box. This is the only way to break the circular
+   constraint: as an in-flow grid item the rail would grow the row it was trying to clamp to. */
+.oiq-exec-top > .oiq-rail-cell { position: relative; min-width: 0; min-height: 0; }
+.oiq-exec-top .oiq-rail { position: absolute; inset: 0; }
+
 @media (max-width: 1180px) {
   .oiq-exec-top { grid-template-columns: minmax(0, 1fr); }
-  .oiq-exec-top > aside { position: static !important; max-height: none !important; }
+  /* one column: the rail follows the cards and takes its natural height again */
+  .oiq-exec-top > .oiq-rail-cell { position: static; }
+  .oiq-exec-top .oiq-rail { position: static; inset: auto; max-height: none; }
 }
