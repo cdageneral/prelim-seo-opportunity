@@ -793,22 +793,24 @@ interface SovArc extends SovRawEntry {
   dashOffset: number;
 }
 
-function LegendRow({ arc }: { arc: SovArc }) {
+// v7.390: `bump` scales the row's type for the Executive Summary's larger card. It defaults to 0,
+// so every existing call site (nav 06) renders byte-identically to before.
+function LegendRow({ arc, bump = 0 }: { arc: SovArc; bump?: number }) {
   // v7.94: client rows carry the actual client name/domain in arc.domain
   const label    = arc.domain.replace(/^www\./, '');
   const isClient = arc.type === 'client';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
-      <div style={{ width: '9px', height: '9px', borderRadius: '2px', background: arc.color, flexShrink: 0 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: `${3 + bump}px` }}>
+      <div style={{ width: `${9 + bump}px`, height: `${9 + bump}px`, borderRadius: '2px', background: arc.color, flexShrink: 0 }} />
       <span style={{
-        fontSize: isClient ? '12px' : '11px',
+        fontSize: `${(isClient ? 12 : 11) + bump}px`,
         color: isClient ? 'var(--c-c0c0e8)' : 'var(--c-888899)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
         flex: 1, fontWeight: isClient ? 600 : 400,
       }}>
         {label}
       </span>
-      <span style={{ fontSize: '10px', color: arc.color, fontWeight: isClient ? 700 : 400, flexShrink: 0, marginLeft: '4px', fontVariantNumeric: 'tabular-nums' }}>
+      <span style={{ fontSize: `${10 + bump}px`, color: arc.color, fontWeight: isClient ? 700 : 400, flexShrink: 0, marginLeft: '4px', fontVariantNumeric: 'tabular-nums' }}>
         {/* v7.91: sub-1% shares show one decimal instead of rounding to a misleading 0% */}
         {arc.pct > 0 && arc.pct < 0.01 ? `${(arc.pct * 100).toFixed(1)}%` : `${Math.round(arc.pct * 100)}%`}
       </span>
@@ -864,6 +866,14 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
   const anyCompArcs = compArcs.length > 0 || serpArcs.length > 0;
   const sovDisplay = sovPct > 0 && sovPct < 0.01 ? (sovPct * 100).toFixed(1) : String(Math.round(sovPct * 100));
 
+  // v7.390 (Wayne): "make the graph and numbers larger in the summary card." The exec panel lost
+  // five blocks of prose in v7.389 and the card was left with a lot of empty space, so the chart
+  // scales up to fill it. Scaled by VIEWBOX, not by re-laying-out the SVG — every coordinate below
+  // stays in the 144-unit space, so the donut geometry and the label positions cannot drift apart.
+  // Gated on the variant: nav 06 renders at its original size (Const II.7).
+  const svgPx      = isExec ? 200 : 144;   // rendered size; viewBox stays 0 0 144 144
+  const legendBump = isExec ? 2 : 0;       // px added to each legend row's type + swatch
+
   return (
     <div className="orbit-card p-5 flex flex-col gap-3">
       <div>
@@ -876,7 +886,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
         {/* Donut SVG — group rotated -90° so the arc path starts at 12 o'clock */}
         <div style={{ flexShrink: 0 }}>
-          <svg width="144" height="144" viewBox="0 0 144 144" role="img"
+          <svg width={svgPx} height={svgPx} viewBox="0 0 144 144" role="img"
             aria-label={`Page-1 Share of Voice. Client captures an estimated ${sovDisplay}% of the page-1 clicks available across its footprint.`}>
             <title>Page-1 Share of Voice (modeled)</title>
             <g transform="rotate(-90, 72, 72)">
@@ -907,14 +917,14 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
         {/* Legend */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {clientArc && <LegendRow arc={clientArc} />}
+          {clientArc && <LegendRow arc={clientArc} bump={legendBump} />}
 
           {compArcs.length > 0 && (
             <>
               <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-3a3a5c)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '7px 0 3px' }}>
                 {serpArcs.length > 0 ? 'Tracked competitors (page-1 capture)' : 'Competitors (page-1 capture)'}
               </p>
-              {compArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+              {compArcs.map(a => <LegendRow key={a.domain} arc={a} bump={legendBump} />)}
             </>
           )}
 
@@ -925,7 +935,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
               <p style={{ fontSize: '9px', fontWeight: 600, color: 'var(--c-d9a23f)', letterSpacing: '.08em', textTransform: 'uppercase' as const, margin: '8px 0 3px' }}>
                 Top SERP rivals (page-1 capture)
               </p>
-              {serpArcs.map(a => <LegendRow key={a.domain} arc={a} />)}
+              {serpArcs.map(a => <LegendRow key={a.domain} arc={a} bump={legendBump} />)}
               <p style={{ fontSize: '9px', color: 'var(--c-55557a)', lineHeight: 1.5, margin: '3px 0 0' }}>
                 largest organic rivals on your footprint &middot; real page-1 positions, same denominator
               </p>
@@ -934,7 +944,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
           {openArc && (
             <div style={{ marginTop: anyCompArcs ? '7px' : '0', paddingTop: anyCompArcs ? '5px' : '0', borderTop: anyCompArcs ? '1px solid var(--c-1a1a2e)' : 'none' }}>
-              <LegendRow arc={openArc} />
+              <LegendRow arc={openArc} bump={legendBump} />
             </div>
           )}
 

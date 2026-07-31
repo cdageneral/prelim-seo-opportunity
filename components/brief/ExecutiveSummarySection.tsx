@@ -949,6 +949,8 @@ export default function ExecutiveSummarySection({
     ownedCites: pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.clientDomainCites : null,
     totalCites: pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.totalCites : null,
     netSentiment: clientSent ? netPctOf(clientSent.pos, clientSent.neg) : null,
+    promptsSeen: clientCov ? clientCov.count : null,
+    promptsTotal: pfHasData ? pfMetrics!.promptN : null,
     aiSourceLabel,
     netNewTopics, netNewMonthly: netNewVol, optimizeTopics,
     gapKwCount, gapMonthly: gapVolume,
@@ -1344,7 +1346,12 @@ export default function ExecutiveSummarySection({
                           ? <strong key={k} style={{ color: 'var(--c-d0d0f0)', fontWeight: 700 }}>{p.t}</strong>
                           : <span key={k}>{p.t}</span>)}
                       </p>
-                      <p className="text-[9px]" style={{ color: 'var(--c-44446a)', margin: '2px 0 0' }}>{act.panel} · {act.evidence}</p>
+                      {/* v7.390: same guard the rail uses — some evidence stamps already open with
+                          their panel name (the AI source label does), and printing the prefix again
+                          gave "AI Answer Engines (09) · AI Answer Engines (09) · …" on the exec. */}
+                      <p className="text-[9px]" style={{ color: 'var(--c-44446a)', margin: '2px 0 0' }}>
+                        {act.evidence.startsWith(act.panel) ? act.evidence : `${act.panel} · ${act.evidence}`}
+                      </p>
                     </div>
                   </div>
                 ))}
