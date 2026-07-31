@@ -817,7 +817,16 @@ function LegendRow({ arc }: { arc: SovArc }) {
 }
 
 
-export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title, footer }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string; footer?: ReactNode }) {
+// v7.389 (Wayne 2026-07-31): `variant` lets the Executive Summary render this card as the
+// chart alone while nav 06 keeps every word. It is a PRESENTATION switch only — the same
+// computeSov() call, the same numbers, no second implementation (Const II.7). Everything the
+// 'exec' variant hides is re-homed into the Key Insights rail on that panel, so no finding
+// and no figure leaves the report (Const I.6); the modeled-estimate + CTR-curve stamp stays
+// on the card in BOTH variants, because a modeled number may not render unlabelled (I.5a).
+type SovVariant = 'full' | 'exec';
+
+export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title, footer, variant = 'full' }: { analysis: any; competitors?: string[]; dbKeywords?: any[]; clientLabel?: string; title?: string; footer?: ReactNode; variant?: SovVariant }) {
+  const isExec = variant === 'exec';
   const {
     basis, rawEntries, total, sovPct, capturedClicks, availableClicks,
     totalVolMonthly, page1VolMonthly, page1KwCount, totalKwCount, clientDisplay, ctrSource,
@@ -860,7 +869,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <div>
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '9px', color: 'var(--c-4a4a70)', marginTop: 2 }}>
-          page-1 click capture — modeled clicks won &divide; all page-1 clicks available across the footprint
+          {isExec ? 'page-1 click capture' : 'page-1 click capture — modeled clicks won ÷ all page-1 clicks available across the footprint'}
         </p>
       </div>
 
@@ -929,11 +938,15 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
             </div>
           )}
 
+          {/* v7.389: on the Executive Summary this sentence now lives in the Key Insights rail
+              (K7 carries the same ~captured / ~available pair from the same computeSov() call). */}
+          {!isExec && (
           <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, margin: '6px 0 0' }}>
             Client wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
             {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint
             {anyCompArcs ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
           </p>
+          )}
         </div>
       </div>
 
@@ -941,7 +954,9 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           above renders (Const II.6); click figures stay labeled with the curve
           source (Const I.5a via ctrSource). One implementation — this panel is
           rendered on Google Ranks AND the Executive Summary. */}
-      {(() => {
+      {/* v7.389: hidden on the Executive Summary — the SAME G2 rule is adopted into that
+          panel's Key Insights rail (adoptInsight, sentence + evidence verbatim). */}
+      {!isExec && (() => {
         const openEntry  = rawEntries.find(e => e.type === 'open');
         const rivals     = rawEntries.filter(e => e.type === 'competitor' || e.type === 'serp')
           .slice().sort((a, b) => b.traffic - a.traffic);
@@ -960,7 +975,8 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
 
       {/* v7.246: competitors on file with no usable page-1 ranking on shared
           keywords — shown as an honest gap (Const I.5), never a modeled/zero slice. */}
-      {compGaps.length > 0 && (
+      {/* v7.389: on the Executive Summary this gap is re-homed to the rail as K20. */}
+      {!isExec && compGaps.length > 0 && (
         <div style={{
           background: 'var(--ca-245-158-11-0_06)', border: '1px solid var(--ca-245-158-11-0_25)',
           borderRadius: '8px', padding: '8px 10px',
@@ -976,7 +992,17 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
         </div>
       )}
 
-      {/* Modeled-estimate disclosure (Const I.1 / Art. IX labeled CTR exception) */}
+      {/* Modeled-estimate disclosure (Const I.1 / Art. IX labeled CTR exception).
+          v7.389: the Executive Summary collapses the pill + both footnote paragraphs into
+          ONE 9px line. It cannot drop the line entirely — the donut renders a modeled figure,
+          and Art. I.5a requires a modeled figure to name its curve where it is shown. The
+          measured inputs behind it (footprint counts, volumes, the SoV formula) are one click
+          away on Google Ranks (06), which still prints all of it. */}
+      {isExec ? (
+        <p style={{ fontSize: '9px', color: 'var(--c-55557a)', margin: 0, lineHeight: 1.5 }}>
+          modeled estimate &middot; CTR curve: {ctrSource}
+        </p>
+      ) : (<>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' as const, alignItems: 'center' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '20px', fontSize: '9px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--ca-245-158-11-0_2)', color: 'var(--c-f59e0b)' }}>
           <span style={{ width: '5px', height: '5px', background: 'var(--c-f59e0b)', borderRadius: '50%' }} />
@@ -993,6 +1019,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <p style={{ fontSize: '9px', color: 'var(--c-44446a)', margin: 0, lineHeight: 1.5 }}>
         SoV = &Sigma;(volume &times; CTR at client position, pos 1&ndash;10) &divide; &Sigma;(volume &times; {PAGE1_CTR_SUM.toFixed(3)} page-1 CTR sum). Volume &amp; position are measured; CTR is the labeled model curve.
       </p>
+      </>)}
       {footer}
     </div>
   );

@@ -9,7 +9,7 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 // — so the exec card's net-new topic count + volume reconcile to that panel (II.6/II.7).
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
-import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, EXEC_INSIGHT_SECTIONS, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8, adopted into the rail in v7.384) · v7.382 (Key Insights) · v7.383 (rail sections)
+import { probeAnchorInsight, aiWhitespaceInsight, landGrabInsight, execKeyInsights, EXEC_INSIGHT_SECTIONS, execActionLanes, EXEC_ACTION_LANES, EXEC_ACTIONS_PER_LANE, type ExecKeyInsight, type ExecAction } from '@/lib/insights';   // v7.366 (A6 · A8, adopted into the rail in v7.384) · v7.382 (Key Insights) · v7.383 (rail sections) · v7.389 (G2 adopted + the three action lanes)
 import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.382: the ONE approved curve, named on screen (Const I.5a)
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
@@ -36,13 +36,9 @@ interface DbKeyword {
   source:       string;
 }
 
-interface Opportunity {
-  id?:      string;
-  rank:     number;
-  category: string;
-  title:    string;
-  summary:  string;
-}
+// v7.389: the local `Opportunity` shape went with the analysis-time priorities row that was
+// the only thing reading it. The stored records are unchanged — this panel no longer renders
+// them, so it no longer needs to describe them.
 
 interface Props {
   analysis:                any;
@@ -713,29 +709,15 @@ export default function ExecutiveSummarySection({
   const coverageTopics = optimizeTopics + netNewTopics;       // total mapped pages
 
   // ── Opportunities ─────────────────────────────────────────────────────────
-  const opps: Opportunity[] = (analysis.opportunities ?? [])
-    .sort((a: Opportunity, b: Opportunity) => a.rank - b.rank)
-    .slice(0, 3);
-
-  const fallbackActions: Opportunity[] = [
-    { rank: 1, category: 'Content', title: 'Close the content gap',
-      summary: `${gapKwCount} non-branded gap keywords where competitors rank but client does not. Focus on highest-volume procedure clusters.` },
-    { rank: 2, category: 'SEO',     title: 'Target competitor-gap keywords',
-      summary: `${gapKwCount} keywords where top competitors rank page 1 and client does not — worth ${fmtAnnual(gapVolume)} annual searches.` },
-    { rank: 3, category: 'GEO',     title: 'Build AI search presence',
-      summary: `Cited in ${overallMentions} of ${overallTotal || 6} AI probes. Structured content aligned to LLM prompt patterns will lift citation rates on Claude and ChatGPT.` },
-  ];
-  const actions          = opps.length > 0 ? opps : fallbackActions;
-  const hasFallbackActions = opps.length === 0;
-
-  // ── Analysis-time stamp — still read by the priorities header below ─────────
-  // v7.334: AI-generated priorities are written ONCE at analysis time while the cards on this
-  // page recompute live, so anything synthesis-written is stamped with its analysis date and a
-  // reader never takes those figures as current (QC audit A2). v7.386 removed the narrative
-  // paragraph that shared this stamp; the priorities row still carries it.
-  const analysisDateLabel = analysis?.completedAt
-    ? new Date(analysis.completedAt).toLocaleDateString()
-    : null;
+  // v7.389 (Wayne 2026-07-31): `analysis.opportunities` — the synthesis-written priority list —
+  // is no longer read on this panel. It was the last analysis-time text left here: written once
+  // when the analysis ran, while every card around it recomputes on each render (QC audit A2,
+  // the reason the narrative paragraph went in v7.386). The bottom row now computes its moves
+  // live via execActionLanes() from the same measured rollups the cards read. The stored
+  // opportunities are untouched in the database and still render wherever else they are used —
+  // this panel simply stopped presenting stale prose beside live numbers.
+  // Removed with it: the fallbackActions trio, the actions/hasFallbackActions switch, the
+  // analysisDateLabel stamp that only that header consumed, and the CATEGORY_COLOR/TEXT maps.
 
   // ── Color helpers ─────────────────────────────────────────────────────────
   const captureColor = captureRate < 0.15 ? 'var(--c-ef4444)' : captureRate < 0.35 ? 'var(--c-f59e0b)' : 'var(--c-22c55e)';
@@ -744,14 +726,6 @@ export default function ExecutiveSummarySection({
   const aioColor     = aioRate < 20 ? 'var(--c-ef4444)' : aioRate < 50 ? 'var(--c-f59e0b)' : 'var(--c-06b6d4)';
   const avgPosColor  = weightedPos > 0 && weightedPos <= 5 ? 'var(--c-22c55e)'
     : weightedPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)';
-
-  const CATEGORY_COLOR: Record<string, string> = {
-    SEO: 'var(--ca-108-99-255-0_15)', GEO: 'var(--ca-6-182-212-0_12)', Content: 'var(--ca-139-133-255-0_12)',
-    Technical: 'var(--ca-245-158-11-0_12)', Competitive: 'var(--ca-239-68-68-0_12)',
-  };
-  const CATEGORY_TEXT: Record<string, string> = {
-    SEO: 'var(--c-8b85ff)', GEO: 'var(--c-06b6d4)', Content: 'var(--c-8b85ff)', Technical: 'var(--c-f59e0b)', Competitive: 'var(--c-ef4444)',
-  };
 
   // ── AI visibility — single defendable figure ───────────────────────────────
   // v7.279 (Wayne): the AI-visibility card + the Overall Visibility Score's AI
@@ -881,6 +855,29 @@ export default function ExecutiveSummarySection({
     [pfHasData, pfMetrics],
   );
 
+  // ── v7.389: the SoV card's prose moves into the rail ──────────────────────
+  // Wayne 2026-07-31: "remove all of this wording — again any insights need to be grouped
+  // with the others." The Share-of-Voice card on THIS panel now renders as the chart alone
+  // (SovPanel variant="exec"); the sentences it used to carry are re-homed below from the
+  // SAME computeSov() result the donut draws, so nothing is recomputed and nothing is lost.
+  // The G2 rule itself is reused whole — this calls the rule, it does not restate it.
+  const sovLandGrab = useMemo(() => {
+    if (!(_sov.availableClicks > 0)) return null;
+    const openEntry = _sov.rawEntries.find((e: any) => e.type === 'open');
+    const rivals = _sov.rawEntries
+      .filter((e: any) => e.type === 'competitor' || e.type === 'serp')
+      .slice().sort((x: any, y: any) => y.traffic - x.traffic);
+    return landGrabInsight({
+      clientPct: _sov.sovPct,
+      openPct: _sov.total > 0 && openEntry ? openEntry.traffic / _sov.total : 0,
+      availableClicks: _sov.availableClicks,
+      topRival: rivals.length > 0 && _sov.total > 0
+        ? { label: rivals[0].domain.replace(/^www\./, ''), pct: rivals[0].traffic / _sov.total }
+        : null,
+      ctrLabel: CTR_SOURCE_LABEL,
+    });
+  }, [_sov]);
+
   const keyInsights: ExecKeyInsight[] = useMemo(() => execKeyInsights({
     aiVisPct, aiAnswers: pfHasData ? pfScoreRuns : llmMentionTotal,
     aiEnginesZero, aiEnginesTotal: aiEnginesTot,
@@ -925,11 +922,42 @@ export default function ExecutiveSummarySection({
       unbrandedScore: nonBrandedPct,
       unbrandedTotal: isLlmProbeV2 ? (llmSnap.unbranded?.total ?? 0) : 0,
     }),
-  }), [aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines, sovRivals, promptRivals,
+    // v7.389: the three readings the SoV card stopped printing on this panel.
+    sovCapturedClicks:  _sov.availableClicks > 0 ? _sov.capturedClicks  : null,
+    sovAvailableClicks: _sov.availableClicks > 0 ? _sov.availableClicks : null,
+    sovCompGaps:        _sov.compGaps,
+    landGrab:           sovLandGrab,
+  }), [_sov, sovLandGrab, aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines, sovRivals, promptRivals,
        aiTopicsZero, aiTopicsTot, pfMetrics, winnableLead, clientCov, clientSent, aiSourceLabel,
        page1Pct, top3VolPct, sovPctNum, nearMiss.length, nearMissVol, climber.length,
        optimizeTopics, netNewTopics, netNewVol, gapKwCount, gapVolume, journeyStages, journeyLanes,
        aioAvail, aioAcq, confidencePct, missingSignals, isLlmProbeV2, llmSnap, brandedPct, nonBrandedPct]);
+
+  // ── v7.389 · the three action lanes that replaced the "continuous cycle" row ───────────
+  // Every argument below is a figure already rendered on this panel or in the rail above it,
+  // so a lane can never state something the cards contradict (Const II.6). Computed on THIS
+  // render — the row it replaced printed synthesis prose written once at analysis time.
+  const actionLanes = useMemo(() => execActionLanes({
+    nearMissCount: nearMiss.length, nearMissMonthly: nearMissVol, climberCount: climber.length,
+    page1Pct, top3Pct: top3VolPct, aioAvail, aioAcq,
+    sovPct: sovPctNum, ctrSourceLabel: CTR_SOURCE_LABEL, sovRivals,
+    aiEnginesZero, aiEnginesTotal: aiEnginesTot,
+    aiZeroEngineNames: pfHasData ? pfScoreEngines.filter(e => e.hits === 0).map(e => e.platform) : [],
+    winnablePrompts: pfHasData ? pfMetrics!.gaps.length : 0,
+    winnableLeader:  winnableLead,
+    aiTopicsZero, aiTopicsTotal: aiTopicsTot,
+    ownedCites: pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.clientDomainCites : null,
+    totalCites: pfHasData && pfMetrics!.totalCites > 0 ? pfMetrics!.totalCites : null,
+    netSentiment: clientSent ? netPctOf(clientSent.pos, clientSent.neg) : null,
+    aiSourceLabel,
+    netNewTopics, netNewMonthly: netNewVol, optimizeTopics,
+    gapKwCount, gapMonthly: gapVolume,
+    absentStages: journeyStages.filter(st => st.status === 'absent').map(st => st.label),
+    thinStages:   journeyStages.filter(st => st.status === 'thin').map(st => st.label),
+  }), [nearMiss.length, nearMissVol, climber.length, page1Pct, top3VolPct, aioAvail, aioAcq,
+       sovPctNum, sovRivals, aiEnginesZero, aiEnginesTot, pfHasData, pfScoreEngines, pfMetrics,
+       winnableLead, aiTopicsZero, aiTopicsTot, clientSent, aiSourceLabel,
+       netNewTopics, netNewVol, optimizeTopics, gapKwCount, gapVolume, journeyStages]);
 
   const KEY_INSIGHTS_SHOWN = 8;   // Wayne: top 6–8 on screen, the rest one click away (never dropped)
   const [showAllInsights, setShowAllInsights] = useState(false);
@@ -954,9 +982,10 @@ export default function ExecutiveSummarySection({
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
 
-      {/* v7.387 (Wayne 2026-07-31): the panel names itself, set off from the global nav. */}
-      <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: '-.02em', lineHeight: 1.1,
-        color: 'var(--c-f0f0ff)', margin: '10px 0 2px' }}>
+      {/* v7.387 (Wayne 2026-07-31): the panel names itself, set off from the global nav.
+          v7.389 (Wayne): a touch smaller, with real air above and below it. */}
+      <h1 style={{ fontSize: 25, fontWeight: 800, letterSpacing: '-.02em', lineHeight: 1.15,
+        color: 'var(--c-f0f0ff)', margin: '20px 0 16px' }}>
         Executive Summary
       </h1>
 
@@ -1156,7 +1185,10 @@ export default function ExecutiveSummarySection({
 
       {/* ═══ SUPPORTING EVIDENCE: Share of Voice on Google + LLM visibility ═══ */}
       <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} title="Share of Voice on Google" />
+        {/* v7.389 (Wayne): chart only here — every sentence this card used to print is now a
+            row in the Key Insights rail above (G2 adopted, K7 extended, K20 added). Nav 06
+            still renders the full card, wording and provenance intact (Const II.7). */}
+        <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} title="Share of Voice on Google" variant="exec" />
 
         {/* v7.382: when the AI Answer Engines panel (09) has data, the right-hand slot
             shows per-engine citation rates — the SAME strict series the AI pillar scores
@@ -1268,30 +1300,54 @@ export default function ExecutiveSummarySection({
           thing that left with the block is the MODELED click estimate per tier, which is a net
           gain in honesty rather than a loss of data (Const I.1/I.5a). */}
 
-      {/* ═══ THE CONTINUOUS CYCLE — SECURE THE COVERAGE GAPS ═══ */}
+      {/* ═══ WHAT TO DO NEXT — TOP 3 PER LANE ═══
+          v7.389 (Wayne 2026-07-31): "in the bottom row lets have the top 3 things to do for
+          Google SERP, top 3 for AI and top 3 in content." This replaced the "continuous cycle"
+          row, which rendered `analysis.opportunities` — synthesis prose written ONCE at analysis
+          time while every card above it recomputes live. That is the same staleness class the
+          narrative paragraph was removed for in v7.386 (QC audit A2), so it goes the same way
+          rather than being restyled. Each lane is computed on this render from the measured
+          rollups the cards and the rail already read (execActionLanes, Const II.6). */}
       <div>
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary"
           style={{ borderTop: '1px solid var(--c-1e1e2e)', paddingTop: 10 }}>
-          The continuous cycle · {hasFallbackActions ? 'recommended priorities to secure coverage' : 'AI-generated priorities to secure coverage'}{!hasFallbackActions && analysisDateLabel ? ` · written at analysis (${analysisDateLabel})` : ''}
+          What to do next · top {EXEC_ACTIONS_PER_LANE} per lane, computed live from this scan
         </p>
         <div className="grid grid-cols-3 gap-3">
-          {actions.map((a, i) => {
-            const catColor = CATEGORY_TEXT[a.category]  ?? 'var(--c-8b85ff)';
-            const catBg    = CATEGORY_COLOR[a.category] ?? 'var(--ca-108-99-255-0_12)';
+          {EXEC_ACTION_LANES.map((lane, li) => {
+            const rows: ExecAction[] = actionLanes[lane.lane] ?? [];
             return (
-              <div key={a.id ?? a.rank ?? i} className="orbit-card p-4 flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0"
-                    style={{ background: 'var(--c-6c63ff)' }}>
-                    {i + 1}
-                  </div>
-                  <span className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-                    style={{ background: catBg, color: catColor }}>
-                    {a.category}
-                  </span>
+              <div key={lane.lane} className="orbit-card oiq-rise p-4 flex flex-col gap-2.5"
+                style={{ ['--oiq-i' as any]: li + 1 }}>
+                <div>
+                  <p className="text-[10px] uppercase font-bold" style={{ color: lane.accent, letterSpacing: '.08em' }}>
+                    {lane.label}
+                  </p>
+                  <p className="text-[9px]" style={{ color: 'var(--c-55557a)', marginTop: 1 }}>{lane.sub}</p>
                 </div>
-                <p className="text-orbit-primary text-xs font-semibold leading-snug">{a.title}</p>
-                <p className="text-orbit-secondary text-[10px] leading-relaxed flex-1">{a.summary}</p>
+
+                {rows.length === 0 ? (
+                  /* Const I.5 — an empty lane says it is empty rather than inventing a move. */
+                  <p className="text-[10px]" style={{ color: 'var(--c-555570)' }}>
+                    Nothing measured in this lane yet — the inputs behind it have not been uploaded or scanned.
+                  </p>
+                ) : rows.map((act, i) => (
+                  <div key={act.id} className="flex gap-2" style={{ alignItems: 'flex-start' }}>
+                    <span className="shrink-0 rounded-full flex items-center justify-center text-[9px] font-bold"
+                      style={{ width: 16, height: 16, marginTop: 1, background: 'var(--c-1e1e2e)', color: lane.accent }}>
+                      {i + 1}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <p className="text-orbit-primary text-[11px] font-semibold leading-snug">{act.title}</p>
+                      <p className="text-orbit-secondary text-[10px] leading-relaxed" style={{ margin: '2px 0 0' }}>
+                        {act.parts.map((p, k) => p.em
+                          ? <strong key={k} style={{ color: 'var(--c-d0d0f0)', fontWeight: 700 }}>{p.t}</strong>
+                          : <span key={k}>{p.t}</span>)}
+                      </p>
+                      <p className="text-[9px]" style={{ color: 'var(--c-44446a)', margin: '2px 0 0' }}>{act.panel} · {act.evidence}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             );
           })}
