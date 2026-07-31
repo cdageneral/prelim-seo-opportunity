@@ -427,14 +427,27 @@ export function executionGapInsight(a: {
 // The caller renders the top N with the rest one click away — nothing is dropped.
 // ═════════════════════════════════════════════════════════════════════════════
 
+// v7.383 (Wayne 2026-07-31): the rail groups findings into three named categories, so
+// every rule declares which one it belongs to. `other` is not a fourth section — it is the
+// context/risk material that appears only once the reader expands the full set, so nothing
+// a rule computed is ever thrown away (Const I.6).
+export type ExecInsightCat = 'opportunity' | 'competitor' | 'quickwin' | 'other';
+
 export interface ExecKeyInsight {
   id:       string;                        // stable key (also the anchor for future click-through)
+  cat:      ExecInsightCat;                // which rail section this belongs to
   sev:      0 | 1 | 2;                     // 0 = critical · 1 = watch · 2 = win / context
   kicker:   string;                        // small uppercase label
   parts:    InsightSeg[];                  // the sentence, key figures emphasized
   evidence: string;                        // source + freshness stamp (Const I.1 / IV.5)
   panel?:   string;                        // the deep panel this rolls up from (Const II.6)
 }
+
+export const EXEC_INSIGHT_SECTIONS: Array<{ cat: ExecInsightCat; label: string; accent: string }> = [
+  { cat: 'opportunity', label: 'Missed opportunities',     accent: 'var(--c-f59e0b)' },
+  { cat: 'competitor',  label: 'Competitors outperforming', accent: 'var(--c-ef4444)' },
+  { cat: 'quickwin',    label: 'Quick wins ready now',      accent: 'var(--c-22c55e)' },
+];
 
 const oxford = (xs: string[]): string =>
   xs.length <= 1 ? (xs[0] ?? '')
@@ -482,6 +495,10 @@ export function execKeyInsights(a: {
   // ── Read confidence
   confidencePct:   number;
   missingSignals:  string[];
+  // ── v7.383: competitor-relative rows, so "Competitors outperforming" is built from real
+  // rival figures rather than inferred from the client's own numbers.
+  sovRivals?:      Array<{ domain: string; pct: number }>;   // page-1 click capture, MODELED (same curve as K7)
+  promptRivals?:   Array<{ brand: string; count: number }>;  // prompts each rival appears on (Profound)
 }): ExecKeyInsight[] {
   const out: ExecKeyInsight[] = [];
   const push = (i: ExecKeyInsight | null) => { if (i) out.push(i); };
@@ -490,7 +507,7 @@ export function execKeyInsights(a: {
   if (a.aiVisPct !== null && a.aiAnswers > 0) {
     const crit = a.aiVisPct < 10;
     push({
-      id: 'K1', sev: crit ? 0 : a.aiVisPct < 30 ? 1 : 2,
+      id: 'K1', cat: 'other', sev: crit ? 0 : a.aiVisPct < 30 ? 1 : 2,
       kicker: crit ? 'Critical · AI answers' : 'Finding · AI answers',
       parts: [seg('You are cited in '), seg(`${a.aiVisPct}%`, true),
         seg(` of the ${a.aiAnswers.toLocaleString()} AI answers tested across ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`),
@@ -502,7 +519,7 @@ export function execKeyInsights(a: {
   // ── K2 · engine blackouts (which assistants never say your name) ───────────
   if (a.aiEnginesTotal > 0 && a.aiEnginesZero > 0) {
     push({
-      id: 'K2', sev: 0, kicker: 'Critical · Engine blackout',
+      id: 'K2', cat: 'opportunity', sev: 0, kicker: 'Critical · Engine blackout',
       parts: [seg(`${a.aiEnginesZero} of ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`, true),
         seg(' never cite you once'),
         seg(a.aiZeroEngineNames.length > 0 ? ` — ${oxford(a.aiZeroEngineNames)}.` : '.')],
@@ -513,7 +530,7 @@ export function execKeyInsights(a: {
   // ── K3 · topic whitespace ─────────────────────────────────────────────────
   if (a.aiTopicsTotal > 0 && a.aiTopicsZero > 0) {
     push({
-      id: 'K3', sev: a.aiTopicsZero / a.aiTopicsTotal >= 0.25 ? 0 : 1,
+      id: 'K3', cat: 'opportunity', sev: a.aiTopicsZero / a.aiTopicsTotal >= 0.25 ? 0 : 1,
       kicker: 'Watch · Topic whitespace',
       parts: [seg(`${a.aiTopicsZero} of ${a.aiTopicsTotal} tested topic${a.aiTopicsTotal === 1 ? '' : 's'}`, true),
         seg(' return zero mentions of you — whole subject areas where the assistants have no reason to name you yet.')],
@@ -524,7 +541,7 @@ export function execKeyInsights(a: {
   // ── K4 · winnable prompts (rivals cited, you absent) ──────────────────────
   if (a.winnablePrompts > 0) {
     push({
-      id: 'K4', sev: 1, kicker: 'Opportunity · Winnable prompts',
+      id: 'K4', cat: 'competitor', sev: 1, kicker: 'Opportunity · Winnable prompts',
       parts: [seg(`${a.winnablePrompts.toLocaleString()} prompt${a.winnablePrompts === 1 ? '' : 's'}`, true),
         seg(' cite a rival but never you'),
         seg(a.winnableLeader ? ` — ${a.winnableLeader} takes the most of them.` : '.'),
@@ -537,7 +554,7 @@ export function execKeyInsights(a: {
   if (a.promptsTotal !== null && a.promptsSeen !== null && a.promptsTotal > 0) {
     const pct = Math.round((100 * a.promptsSeen) / a.promptsTotal);
     push({
-      id: 'K5', sev: pct < 40 ? 1 : 2, kicker: 'Finding · Prompt coverage',
+      id: 'K5', cat: 'other', sev: pct < 40 ? 1 : 2, kicker: 'Finding · Prompt coverage',
       parts: [seg('You surface on '), seg(`${a.promptsSeen.toLocaleString()} of ${a.promptsTotal.toLocaleString()} tracked prompts`, true),
         seg(` (${pct}%) at least once.`)],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
@@ -546,7 +563,7 @@ export function execKeyInsights(a: {
 
   // ── K6 · Google page-1 capture ────────────────────────────────────────────
   push({
-    id: 'K6', sev: a.page1Pct < 25 ? 0 : a.page1Pct < 50 ? 1 : 2,
+    id: 'K6', cat: 'other', sev: a.page1Pct < 25 ? 0 : a.page1Pct < 50 ? 1 : 2,
     kicker: a.page1Pct < 25 ? 'Critical · Google ranks' : 'Finding · Google ranks',
     parts: [seg('You hold page 1 for '), seg(`${a.page1Pct}% of your tracked demand`, true),
       seg(`, and only ${a.top3Pct}% sits in the top 3 — where the clicks actually are.`)],
@@ -556,7 +573,7 @@ export function execKeyInsights(a: {
   // ── K7 · Share of Voice — the one MODELED line (Const I.5a) ────────────────
   if (a.sovPct !== null) {
     push({
-      id: 'K7', sev: a.sovPct < 10 ? 1 : 2, kicker: 'Modeled · Share of voice',
+      id: 'K7', cat: 'other', sev: a.sovPct < 10 ? 1 : 2, kicker: 'Modeled · Share of voice',
       parts: [seg('You capture an estimated '), seg(`${a.sovPct}%`, true),
         seg(` of the page-1 clicks available across your footprint — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`)],
       evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)',
@@ -566,7 +583,7 @@ export function execKeyInsights(a: {
   // ── K8 · near-miss quick wins (measured counts, no modeled click figure) ───
   if (a.nearMissCount > 0) {
     push({
-      id: 'K8', sev: 2, kicker: 'Opportunity · One step from the top 3',
+      id: 'K8', cat: 'quickwin', sev: 2, kicker: 'Opportunity · One step from the top 3',
       parts: [seg(`${a.nearMissCount.toLocaleString()} keyword${a.nearMissCount === 1 ? '' : 's'}`, true),
         seg(` already rank 4–10 — ${fmtInsightVol(a.nearMissMonthly * 12)} searches/yr sitting one position band below the click curve`),
         seg(a.climberCount > 0 ? `, with another ${a.climberCount.toLocaleString()} on page 2.` : '.')],
@@ -577,7 +594,7 @@ export function execKeyInsights(a: {
   // ── K9 · coverage map split ───────────────────────────────────────────────
   if (a.optimizeTopics + a.netNewTopics > 0) {
     push({
-      id: 'K9', sev: 2, kicker: 'Plan · Coverage map',
+      id: 'K9', cat: 'opportunity', sev: 2, kicker: 'Plan · Coverage map',
       parts: [seg(`${(a.optimizeTopics + a.netNewTopics).toLocaleString()} page${a.optimizeTopics + a.netNewTopics === 1 ? '' : 's'}`, true),
         seg(` are mapped — ${a.optimizeTopics.toLocaleString()} existing to optimize and `),
         seg(`${a.netNewTopics.toLocaleString()} net-new to build`, true),
@@ -589,7 +606,7 @@ export function execKeyInsights(a: {
   // ── K10 · competitor gap ──────────────────────────────────────────────────
   if (a.gapKwCount > 0) {
     push({
-      id: 'K10', sev: 1, kicker: 'Watch · Competitor gap',
+      id: 'K10', cat: 'competitor', sev: 1, kicker: 'Watch · Competitor gap',
       parts: [seg(`${a.gapKwCount.toLocaleString()} in-scope keyword${a.gapKwCount === 1 ? '' : 's'}`, true),
         seg(` earn a competitor a ranking and you nothing — ${fmtInsightVol(a.gapMonthly * 12)} searches/yr you are not in the running for.`)],
       evidence: 'competitor-gap rows on the canonical pool, scope-gated · this scan', panel: 'Keyword Landscape (02)',
@@ -599,14 +616,14 @@ export function execKeyInsights(a: {
   // ── K11 · journey blind spots ─────────────────────────────────────────────
   if (a.absentStages.length > 0) {
     push({
-      id: 'K11', sev: 0, kicker: 'Critical · Journey blind spot',
+      id: 'K11', cat: 'opportunity', sev: 0, kicker: 'Critical · Journey blind spot',
       parts: [seg('You have no page-1 presence at all in '), seg(oxford(a.absentStages), true),
         seg(' — the buyer moves through that stage without meeting you.')],
       evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)',
     });
   } else if (a.thinStages.length > 0) {
     push({
-      id: 'K11', sev: 1, kicker: 'Watch · Thin journey stage',
+      id: 'K11', cat: 'opportunity', sev: 1, kicker: 'Watch · Thin journey stage',
       parts: [seg('Your coverage is thin (under a fifth of stage demand) in '), seg(oxford(a.thinStages), true), seg('.')],
       evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)',
     });
@@ -615,7 +632,7 @@ export function execKeyInsights(a: {
   // ── K12 · pre-product lane not built (honest gap, Const III.2a-ii) ─────────
   if (!a.preProductBuilt) {
     push({
-      id: 'K12', sev: 1, kicker: 'Gap · Pre-product journey',
+      id: 'K12', cat: 'opportunity', sev: 1, kicker: 'Gap · Pre-product journey',
       parts: [seg('The pre-product journey — the problem-aware demand that reaches buyers before they know your category — '),
         seg('has not been built yet', true), seg('. Until it is, this read covers only people already searching for the product.')],
       evidence: 'deep-journey build state · nothing inferred from the ranking footprint', panel: 'Journeys (04)',
@@ -626,7 +643,7 @@ export function execKeyInsights(a: {
   if (a.aioAvail > 0) {
     const rate = Math.round((100 * a.aioAcq) / a.aioAvail);
     push({
-      id: 'K13', sev: rate < 20 ? 1 : 2, kicker: 'Finding · AI Overviews',
+      id: 'K13', cat: 'quickwin', sev: rate < 20 ? 1 : 2, kicker: 'Finding · AI Overviews',
       parts: [seg('Google shows an AI Overview on '), seg(`${a.aioAvail.toLocaleString()} of your keywords`, true),
         seg(` and cites you on ${a.aioAcq.toLocaleString()} of them (${rate}%) — the answer box sits above every rank you own there.`)],
       evidence: 'scanned SERP rows + uploaded Semrush SERP-feature flags · live rollup', panel: 'SERP Features (07)',
@@ -636,7 +653,7 @@ export function execKeyInsights(a: {
   // ── K14 · AI sentiment when you ARE named ─────────────────────────────────
   if (a.netSentiment !== null) {
     push({
-      id: 'K14', sev: a.netSentiment < 0 ? 0 : 2,
+      id: 'K14', cat: 'other', sev: a.netSentiment < 0 ? 0 : 2,
       kicker: a.netSentiment < 0 ? 'Critical · AI sentiment' : 'Win · AI sentiment',
       parts: [seg('When the assistants do name you, net sentiment is '),
         seg(`${a.netSentiment > 0 ? '+' : ''}${a.netSentiment}`, true),
@@ -649,7 +666,7 @@ export function execKeyInsights(a: {
   if (a.totalCites !== null && a.ownedCites !== null && a.totalCites > 0) {
     const pct = (100 * a.ownedCites) / a.totalCites;
     push({
-      id: 'K15', sev: pct < 5 ? 1 : 2, kicker: 'Finding · Citation share',
+      id: 'K15', cat: 'other', sev: pct < 5 ? 1 : 2, kicker: 'Finding · Citation share',
       parts: [seg(`${a.ownedCites.toLocaleString()} of ${a.totalCites.toLocaleString()} AI citations`, true),
         seg(` point at your own domain (${pct < 1 ? pct.toFixed(1) : Math.round(pct)}%) — the rest is your story told on someone else's page.`)],
       evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
@@ -659,10 +676,47 @@ export function execKeyInsights(a: {
   // ── K16 · read confidence (what this read cannot yet see) ─────────────────
   if (a.missingSignals.length > 0) {
     push({
-      id: 'K16', sev: 1, kicker: 'Gap · Read confidence',
+      id: 'K16', cat: 'other', sev: 1, kicker: 'Gap · Read confidence',
       parts: [seg(`This read is at ${a.confidencePct}% confidence — `),
         seg(oxford(a.missingSignals), true), seg(` ${a.missingSignals.length === 1 ? 'is' : 'are'} still missing, so anything above that depends on ${a.missingSignals.length === 1 ? 'it' : 'them'} is unmeasured rather than zero.`)],
       evidence: 'presence of each input signal on this project · not a data quality score',
+    });
+  }
+
+  // ── K17 · a rival takes more page-1 clicks than you (MODELED, same curve as K7) ──
+  const rivalsAhead = (a.sovRivals ?? []).filter(r => a.sovPct !== null && r.pct > a.sovPct);
+  if (rivalsAhead.length > 0 && a.sovPct !== null) {
+    const top = rivalsAhead.slice().sort((x, y) => y.pct - x.pct)[0];
+    push({
+      id: 'K17', cat: 'competitor', sev: 1, kicker: 'Modeled · Page-1 clicks',
+      parts: [seg(top.domain, true), seg(' takes an estimated '), seg(`${top.pct}%`, true),
+        seg(` of the page-1 clicks across your footprint to your ${a.sovPct}%`),
+        seg(rivalsAhead.length > 1 ? ` — and ${rivalsAhead.length - 1} other tracked rival${rivalsAhead.length === 2 ? '' : 's'} sit ahead of you too.` : '.')],
+      evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)',
+    });
+  }
+
+  // ── K18 · a rival is named on more AI prompts than you ────────────────────
+  const promptAhead = (a.promptRivals ?? [])
+    .filter(r => a.promptsSeen !== null && r.count > (a.promptsSeen as number))
+    .sort((x, y) => y.count - x.count);
+  if (promptAhead.length > 0 && a.promptsSeen !== null && a.promptsTotal) {
+    const top = promptAhead[0];
+    push({
+      id: 'K18', cat: 'competitor', sev: 0, kicker: 'Critical · AI prompt share',
+      parts: [seg(top.brand, true), seg(' is named on '), seg(`${top.count.toLocaleString()} of ${a.promptsTotal.toLocaleString()} tracked prompts`, true),
+        seg(` — ${(top.count / Math.max(1, a.promptsSeen)).toFixed(1)}× your ${a.promptsSeen.toLocaleString()}. The assistants have a default answer, and it isn't you.`)],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)',
+    });
+  }
+
+  // ── K19 · pages that already exist and just need work (quick win) ─────────
+  if (a.optimizeTopics > 0) {
+    push({
+      id: 'K19', cat: 'quickwin', sev: 2, kicker: 'Ready now · Pages you already have',
+      parts: [seg(`${a.optimizeTopics.toLocaleString()} mapped topic${a.optimizeTopics === 1 ? '' : 's'}`, true),
+        seg(' already have a page behind them — these are optimisations, not net-new builds, so they move first and cost least.')],
+      evidence: 'canonical content-map topics matched to existing pages · exact counts', panel: 'Content Map (05)',
     });
   }
 
