@@ -10,7 +10,7 @@ import { buildClusters, journeyLaneSummary } from '@/components/brief/JourneySec
 import { buildCanonicalClusterTopics, type IntentType } from '@/components/brief/ThemeClustersPanel';
 import { buildContentPlanFromTopics, planFromSnapshot, brandTermsOf } from '@/lib/journey/contentPlan';   // v7.356: brandTermsOf
 import { InsightStack } from '@/components/brief/InsightBanner';   // v7.366: insight-sentence layer
-import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8) · v7.382 (Key Insights)
+import { probeAnchorInsight, aiWhitespaceInsight, execKeyInsights, EXEC_INSIGHT_SECTIONS, type ExecKeyInsight } from '@/lib/insights';   // v7.366 (A6 · A8) · v7.382 (Key Insights) · v7.383 (rail sections)
 import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.382: the ONE approved curve, named on screen (Const I.5a)
 // v7.337 (QC audit B4-proper, Const II.6/II.7): live SERP-feature roll-up — the SAME
 // shared builders the SERP Features panel (07) computes from, instead of the stored
@@ -251,33 +251,108 @@ function Meter({ pct, color, index = 0, height = 8 }: { pct: number; color: stri
   );
 }
 
-// ─── v7.382: Key Insights row (severity-ranked, Wayne 2026-07-31) ────────────
-const KEY_SEV_STYLE: Record<0 | 1 | 2, { bar: string; kicker: string }> = {
-  0: { bar: 'var(--c-ef4444)', kicker: 'var(--c-ef4444)' },
-  1: { bar: 'var(--c-f59e0b)', kicker: 'var(--c-f59e0b)' },
-  2: { bar: 'var(--c-22c55e)', kicker: 'var(--c-22c55e)' },
+// ─── v7.382/v7.383: Key Insights rail (Wayne 2026-07-31) ─────────────────────
+// v7.383: the box became a rounded, sticky rail on the RIGHT of the exec panel, grouped
+// into three named sections — Missed opportunities · Competitors outperforming · Quick wins
+// ready now — top 3 each. "Show all" reveals every remaining finding, including the context
+// and risk lines that don't belong to a section, so the cut stays presentational (Const I.6).
+const KEY_SEV_STYLE: Record<0 | 1 | 2, string> = {
+  0: 'var(--c-ef4444)',
+  1: 'var(--c-f59e0b)',
+  2: 'var(--c-22c55e)',
 };
 
 function KeyInsightRow({ ins, index }: { ins: ExecKeyInsight; index: number }) {
-  const st = KEY_SEV_STYLE[ins.sev];
   return (
-    <div className="oiq-rise px-3 py-2.5"
-      style={{ background: 'var(--c-111118)', borderLeft: `3px solid ${st.bar}`,
-        borderTop: '1px solid var(--c-1e1e2e)', borderRight: '1px solid var(--c-1e1e2e)',
-        borderBottom: '1px solid var(--c-1e1e2e)', borderRadius: '0 6px 6px 0',
-        ['--oiq-i' as any]: index }}>
-      <p className="text-[9px] font-bold uppercase tracking-wider mb-1" style={{ color: st.kicker }}>{ins.kicker}</p>
-      <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--c-c0c0e0)', margin: 0 }}>
-        {ins.parts.map((seg, i) => seg.em
-          ? <strong key={i} style={{ color: 'var(--c-f0f0ff)', fontWeight: 700 }}>{seg.t}</strong>
-          : <span key={i}>{seg.t}</span>)}
+    <div className="oiq-rise"
+      style={{ background: 'var(--c-111118)', border: '1px solid var(--c-1e1e2e)',
+        borderLeft: `3px solid ${KEY_SEV_STYLE[ins.sev]}`,
+        borderRadius: '4px 10px 10px 4px', padding: '8px 10px', ['--oiq-i' as any]: index }}>
+      <p style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase',
+        color: KEY_SEV_STYLE[ins.sev], margin: '0 0 3px' }}>{ins.kicker}</p>
+      <p style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--c-c0c0e0)', margin: 0 }}>
+        {ins.parts.map((sg, i) => sg.em
+          ? <strong key={i} style={{ color: 'var(--c-f0f0ff)', fontWeight: 700 }}>{sg.t}</strong>
+          : <span key={i}>{sg.t}</span>)}
       </p>
-      <p className="text-[9px] mt-1" style={{ color: 'var(--c-555570)' }}>
-        {/* The panel name is only prefixed when the evidence stamp doesn't already open
-            with it — the AI rules carry the panel inside their source label. */}
+      <p style={{ fontSize: 8.5, color: 'var(--c-555570)', margin: '4px 0 0', lineHeight: 1.4 }}>
         {ins.panel && !ins.evidence.startsWith(ins.panel) ? `${ins.panel} · ` : ''}{ins.evidence}
       </p>
     </div>
+  );
+}
+
+const RAIL_TOP_N = 3;   // Wayne: top 3 per section, the rest behind "Show all"
+
+function KeyInsightsRail({ insights, expanded, onToggle }: {
+  insights: ExecKeyInsight[]; expanded: boolean; onToggle: () => void;
+}) {
+  const sections = EXEC_INSIGHT_SECTIONS.map(sec => {
+    const all = insights.filter(i => i.cat === sec.cat);   // already severity-ranked
+    return { ...sec, all, shown: expanded ? all : all.slice(0, RAIL_TOP_N) };
+  });
+  const other  = insights.filter(i => i.cat === 'other');
+  const hidden = sections.reduce((n, sec) => n + Math.max(0, sec.all.length - RAIL_TOP_N), 0) + other.length;
+  let idx = -1;
+  const next = () => { idx += 1; return idx; };
+
+  return (
+    <aside className="oiq-rise"
+      style={{ background: 'var(--c-0f0f1c)', border: '1px solid var(--ca-108-99-255-0_4)',
+        borderRadius: 16, padding: 14, position: 'sticky', top: 0, alignSelf: 'start',
+        maxHeight: 'calc(100vh - 120px)', overflowY: 'auto', ['--oiq-i' as any]: 5 }}>
+      <p style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase',
+        color: 'var(--c-6c63ff)', margin: 0 }}>Key Insights</p>
+      <p style={{ fontSize: 9, color: 'var(--c-555570)', margin: '3px 0 12px' }}>
+        {insights.length} finding{insights.length === 1 ? '' : 's'} from this scan · most urgent first
+      </p>
+
+      {sections.map(sec => (
+        <div key={sec.cat} style={{ marginBottom: 14 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 6, gap: 6 }}>
+            <p style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase',
+              color: sec.accent, margin: 0 }}>{sec.label}</p>
+            <span style={{ fontSize: 9, color: 'var(--c-555570)' }}>
+              {sec.all.length > RAIL_TOP_N && !expanded ? `top ${RAIL_TOP_N} of ${sec.all.length}` : sec.all.length || ''}
+            </span>
+          </div>
+          {sec.shown.length > 0 ? (
+            <div className="flex flex-col" style={{ gap: 6 }}>
+              {sec.shown.map(ins => <KeyInsightRow key={ins.id} ins={ins} index={next()} />)}
+            </div>
+          ) : (
+            // Honest empty state (Const I.5, Wayne 2026-07-31): an empty section says WHY it is
+            // empty — for the competitor lane that absence is itself the finding, not a blank.
+            <p style={{ fontSize: 10.5, color: 'var(--c-8888aa)', lineHeight: 1.5, margin: 0,
+              border: '1px dashed var(--c-2a2a3a)', borderRadius: 8, padding: '8px 10px' }}>
+              {sec.cat === 'competitor'
+                ? 'No tracked rival is measurably ahead of you here — the page-1 and AI-answer field is open rather than taken.'
+                : sec.cat === 'quickwin'
+                  ? 'Nothing sits one step from a win yet — the gains here need net-new work, not optimisation.'
+                  : 'Nothing measured for this section on the current scan.'}
+            </p>
+          )}
+        </div>
+      ))}
+
+      {expanded && other.length > 0 ? (
+        <div style={{ marginBottom: 14 }}>
+          <p style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase',
+            color: 'var(--c-8888aa)', margin: '0 0 6px' }}>Context &amp; risk</p>
+          <div className="flex flex-col" style={{ gap: 6 }}>
+            {other.map(ins => <KeyInsightRow key={ins.id} ins={ins} index={next()} />)}
+          </div>
+        </div>
+      ) : null}
+
+      {hidden > 0 || expanded ? (
+        <button type="button" onClick={onToggle}
+          style={{ fontSize: 10, width: '100%', color: 'var(--c-8b85ff)', background: 'var(--ca-108-99-255-0_12)',
+            border: '1px solid var(--ca-108-99-255-0_4)', borderRadius: 8, padding: '6px 8px' }}>
+          {expanded ? 'Show top 3 per section' : `Show all ${insights.length} insights`}
+        </button>
+      ) : null}
+    </aside>
   );
 }
 
@@ -823,6 +898,19 @@ export default function ExecutiveSummarySection({
   const clientCov    = pfHasData ? pfMetrics!.coverage.find(cv => cv.isClient) ?? null : null;
   const winnableLead = pfHasData && pfMetrics!.gaps.length > 0 ? pfMetrics!.gaps[0].leader : null;
   const sovPctNum    = _sov.availableClicks > 0 ? Math.round(_sov.sovPct * 1000) / 10 : null;
+  // v7.383: rivals for the "Competitors outperforming" section. Uploaded competitors AND the
+  // auto-discovered SERP rivals — exactly the two sets the SoV donut slices — never a third
+  // list assembled here (Const II.7). Same modeled CTR basis as the donut, labeled as such.
+  const sovRivals = useMemo(
+    () => [..._sov.compEntries, ..._sov.serpEntries]
+      .map(e => ({ domain: e.domain, pct: Math.round(e.pct * 1000) / 10 }))
+      .filter(e => e.pct > 0),
+    [_sov],
+  );
+  const promptRivals = useMemo(
+    () => (pfHasData ? pfMetrics!.coverage.filter(c => !c.isClient).map(c => ({ brand: c.brand, count: c.count })) : []),
+    [pfHasData, pfMetrics],
+  );
 
   const keyInsights: ExecKeyInsight[] = useMemo(() => execKeyInsights({
     aiVisPct, aiAnswers: pfHasData ? pfScoreRuns : llmMentionTotal,
@@ -847,7 +935,12 @@ export default function ExecutiveSummarySection({
     preProductBuilt: journeyLanes.preTotal > 0,
     aioAvail, aioAcq,
     confidencePct, missingSignals,
-  }), [aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines,
+    // v7.383: real rival rows — the SAME entries the SoV donut draws and the SAME roster the
+    // AI Answer Engines panel ranks, so the competitor section can never quote a figure that
+    // isn't already on screen somewhere below (Const II.6).
+    sovRivals:    sovRivals,
+    promptRivals: promptRivals,
+  }), [aiVisPct, pfHasData, pfScoreRuns, llmMentionTotal, aiEnginesZero, aiEnginesTot, pfScoreEngines, sovRivals, promptRivals,
        aiTopicsZero, aiTopicsTot, pfMetrics, winnableLead, clientCov, clientSent, aiSourceLabel,
        page1Pct, top3VolPct, sovPctNum, nearMiss.length, nearMissVol, climber.length,
        optimizeTopics, netNewTopics, netNewVol, gapKwCount, gapVolume, journeyStages, journeyLanes,
@@ -875,6 +968,16 @@ export default function ExecutiveSummarySection({
 
   return (
     <div className="overflow-y-auto flex-1 p-3 flex flex-col gap-3 animate-fade-in">
+
+      {/* ═══ v7.383 (Wayne 2026-07-31) — TOP BLOCK + KEY INSIGHTS RAIL ═══════════
+          The hero, the landscape headline and the KPI cards run in the left column; the
+          Key Insights rail sits to their right and stays pinned while the reader scrolls
+          the section. Everything BELOW this block returns to full width so the SoV donut,
+          the per-engine chart and the quick-wins ladder keep the room they need to be read.
+          On a narrow viewport the grid collapses to one column and the rail simply follows
+          the cards. */}
+      <div className="oiq-exec-top" style={{ display: 'grid', gap: 12, alignItems: 'start' }}>
+        <div className="flex flex-col gap-3" style={{ minWidth: 0 }}>
 
       {/* ═══ v7.131 — OVERALL VISIBILITY SCORE + READ CONFIDENCE (lead KPI) ═══ */}
       {/* v7.279: renamed from "GEO Visibility Score" to "Overall Visibility Score" (Wayne). */}
@@ -953,7 +1056,7 @@ export default function ExecutiveSummarySection({
         <p className="text-[9px] font-bold uppercase tracking-widest mb-2 text-orbit-tertiary">
           The approach · two worlds of visibility
         </p>
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
           {([
             // v7.280: "Traditional" renamed to "Google SERP Ranks" (Wayne).
             { key: 'trad', accent: 'var(--c-22c55e)', icon: 'Google SERP Ranks', nav: 'serp', navLabel: 'Open Google Ranks',
@@ -1005,35 +1108,10 @@ export default function ExecutiveSummarySection({
         </div>
       </div>
 
-      {/* ═══ v7.382 — KEY INSIGHTS (Wayne 2026-07-31) ═══════════════════════════
-          Every line is a computed sentence over figures this summary already read
-          off the deep panels (Const II.6) — no new fetch, no forked math, nothing
-          modeled except the Share-of-Voice line, which says so and names its curve
-          (Const I.5a). Ranked worst-first; the on-screen cut is presentational only
-          and the full set is one click away (Const I.6). */}
-      {keyInsights.length > 0 ? (
-        <div className="orbit-card oiq-rise p-4" style={{ borderColor: 'var(--ca-108-99-255-0_4)', ['--oiq-i' as any]: 5 }}>
-          <div className="flex items-center justify-between mb-2.5" style={{ flexWrap: 'wrap', gap: 6 }}>
-            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--c-6c63ff)' }}>
-              Key insights · what an executive needs to know
-            </p>
-            <span className="text-[9px]" style={{ color: 'var(--c-555570)' }}>
-              ranked most-urgent first · {keyInsights.length} finding{keyInsights.length === 1 ? '' : 's'} from this scan
-            </span>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {visibleInsights.map((ins, i) => <KeyInsightRow key={ins.id} ins={ins} index={i} />)}
-          </div>
-          {keyInsights.length > KEY_INSIGHTS_SHOWN ? (
-            <button type="button" onClick={() => setShowAllInsights(v => !v)}
-              className="text-[10px] mt-2.5 rounded px-2 py-1"
-              style={{ color: 'var(--c-8b85ff)', background: 'var(--ca-108-99-255-0_12)', border: '1px solid var(--ca-108-99-255-0_4)' }}>
-              {showAllInsights ? 'Show top 8' : `Show all ${keyInsights.length} insights`}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-
+        {/* v7.383: these three read fine at the narrowed column width, and moving them up
+            here balances the row against the rail — otherwise the rail towers over a short
+            left column and leaves a band of dead space beside it. The wide blocks (SoV
+            donut, per-engine chart, quick-wins ladder, priorities) stay full width below. */}
       {/* v7.366: exec insight sentences (A6 known-but-never-recommended · A8 AI
           whitespace) — pure rules over the SAME probe figures the AI pillar and
           the LLM panel show (Const II.6); real classified probe responses only
@@ -1129,6 +1207,12 @@ export default function ExecutiveSummarySection({
         <p className="text-[9px] mt-2" style={{ color: 'var(--c-555570)' }}>
           AI per-stage = your brand&rsquo;s mention rate in AI answers for each stage&rsquo;s topics (LLM probe category visibility mapped to journey stages). Audience segments and Sentinel live signals are still in build.
         </p>
+      </div>
+
+        </div>
+
+        <KeyInsightsRail insights={keyInsights} expanded={showAllInsights}
+          onToggle={() => setShowAllInsights(v => !v)} />
       </div>
 
       {/* ═══ SUPPORTING EVIDENCE: Share of Voice on Google + LLM visibility ═══ */}
