@@ -1,3 +1,35 @@
+## v7.389 · Share-of-Voice card stripped to the chart · bottom row rebuilt as three action lanes · title resized — 2026-07-31
+
+**Wayne:** *"lets remove all of this wording - again any insights need to be grouped with the others. in the bottom row lets have the top 3 things to do for Google SERP, top 3 for AI and top 3 in content."* Plus, mid-pass: *"lets make the words a little smaller and add more spacing above and below the words."*
+
+**1 · The Share-of-Voice card is now the chart alone — on this panel only.** The card was carrying five blocks of prose under the donut: the *Land grab* finding banner, the amber "competitor on file but not scoreable" notice, the "Client wins ~596,686 of ~13,210,953 page-1 clicks/mo" sentence, the measured-inputs footer, and the SoV formula line. All of it is gone from the Executive Summary.
+
+The thing worth recording is *how*. `SovPanel` is **one component rendered on both this panel and nav 06 (Google Ranks)**. Deleting those blocks outright would have stripped them from the deep panel too — where they are the whole point. So the card gained a `variant` prop: `variant="exec"` hides the prose, the default keeps every word. It is a presentation switch over the same `computeSov()` call, not a second implementation (Const II.7), and a retained check asserts nav 06 renders it *without* the variant so a future edit can't quietly flip it.
+
+**2 · Every sentence that left the card landed in the rail.** Nothing was deleted, per the standing rule that findings move rather than disappear:
+
+- The **Land grab / contested-market** read is *adopted* — the same `landGrabInsight` rule is called, and the rail row is asserted byte-identical to the rule's own sentence and evidence stamp. It files under Missed opportunities.
+- **K7** (Share of Voice) gained the absolute pair the card stopped printing: *"That is ~596,686 of ~13,210,953 page-1 clicks a month."* With no click figures supplied it says nothing about them rather than printing a zero (Const I.5).
+- **K20** is new: the competitor-on-file-but-not-scoreable gap, one row per competitor, filed as context.
+
+**3 · One line could not go, and it is worth being explicit about why.** The donut renders a *modeled* figure, and Art. I.5a says a modeled number names its curve on the surface where it is shown. So the exec keeps a single 9px line — `modeled estimate · CTR curve: GrowthSRC 2025 · 200K-kw study` — collapsed down from a pill plus two footnote paragraphs. The measured inputs behind it (footprint counts, volumes, the formula) are one click away on nav 06, which still prints all of it. If that last line should go too, the honest options are to drop the SoV donut from this panel entirely or to amend Art. I.5a — not to render the number bare.
+
+**4 · The bottom row is rebuilt as three lanes, computed live.** The old row rendered `analysis.opportunities` — synthesis prose **written once when the analysis ran**, sitting beside cards that recompute on every render. That is the same staleness class the narrative paragraph was removed for in v7.386 (QC audit A2), so it went the same way rather than being restyled. In its place, `execActionLanes()` derives up to three moves per lane from the same measured rollups the cards and the rail already read:
+
+- **Google SERP** — near-misses at 4–10, page-2 climbers, AI Overviews you're absent from, the modeled page-1 click gap, page-1-to-top-3 conversion.
+- **AI answers** — engine blackouts, winnable prompts, topic whitespace, citations on pages you don't own, negative sentiment.
+- **Content** — net-new builds, existing pages to optimise, the competitor keyword gap, absent or thin journey stages.
+
+Ordering inside a lane is **declared, not scored**. Each lane lists its candidates in distance-to-result order and shows the first three with real data behind them. There is no blended priority score, because the inputs are in different units — positions, prompts, pages — and a composite of those is a number nobody could defend (Const I.1). Every action prints its evidence and the deep panel holding the full list; a lane with nothing measured says so rather than inventing a move (Const I.5). Retained checks assert the near-miss, gap and blackout actions quote the *same* figures K8, K10 and K2 quote, so an action can never contradict the rail above it.
+
+Removed with the old row, all now dead: `fallbackActions`, the `actions`/`hasFallbackActions` switch, the `analysisDateLabel` stamp only that header consumed, the `CATEGORY_COLOR`/`CATEGORY_TEXT` maps, and the local `Opportunity` type. The stored opportunities are untouched in the database.
+
+**5 · The panel title.** 30px → 25px, margin `10px 0 2px` → `20px 0 16px`.
+
+Retained-suite note (Const V.6): three checks were **amended with dated notes, not deleted**. Two pinned the title's exact size and margin; they now pin the weight plus a large-heading band and a minimum gap on each edge, so a later tweak can't quietly close the spacing back up. The third asserted the v7.334 honesty rule in its weaker form — *if* the panel prints synthesis prose, that prose carries its write date. With the last synthesis prose gone there is nothing left to stamp, so it is re-pinned in its **stronger** form: the panel must render no analysis-time prose at all. Synthesis text returning here undated would fail it exactly as the old pair would have.
+
+Files: `components/brief/ExecutiveSummarySection.tsx`, `components/brief/GoogleSerpSection.tsx`, `lib/insights.ts`, `package.json`/`package-lock.json` (7.389.0). Verified: project `tsc --noEmit` clean; dual-theme jsdom render asserting the prose is off the card, the CTR curve is still named, all three lanes render, and the no-AI-data shape stays clean; behavioural fixtures over full-data and thin-data projects; full retained suite — **687 pass / 13 pre-existing, zero new failures**, plus **54 new v7.389 checks**.
+
 ## v7.388 · No vertical colour bars on the summary cards — 2026-07-31
 
 **Wayne:** *"lets also remove all the vertical color bars on all of the summary cards."*
