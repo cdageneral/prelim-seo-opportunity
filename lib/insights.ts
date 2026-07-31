@@ -524,6 +524,14 @@ export function execKeyInsights(a: {
   // panel shows and passed in whole. Null when the rule declines to fire (honest gap, I.5).
   probeAnchor?:    Insight | null;
   aiWhitespace?:   Insight | null;
+  // ── v7.389 (Wayne 2026-07-31): the prose the Share-of-Voice card used to carry on the
+  // Executive Summary was taken off that card and re-homed here. These inputs are the SAME
+  // values computeSov() hands the donut (Const II.6) — nothing is recomputed, and the modeled
+  // click figures stay stamped with the CTR curve exactly as they were on the card.
+  sovCapturedClicks?:  number | null;   // MODELED monthly page-1 clicks the client wins
+  sovAvailableClicks?: number | null;   // MODELED monthly page-1 clicks available across the footprint
+  sovCompGaps?:        Array<{ domain: string; rows: number; hasPositions: boolean; minPos: number | null }>;
+  landGrab?:           Insight | null;  // the G2 land-grab banner, adopted verbatim
 }): ExecKeyInsight[] {
   const out: ExecKeyInsight[] = [];
   const push = (i: ExecKeyInsight | null) => { if (i) out.push(i); };
@@ -635,10 +643,17 @@ export function execKeyInsights(a: {
 
   // ── K7 · Share of Voice — the one MODELED line (Const I.5a) ────────────────
   if (a.sovPct !== null) {
+    // v7.389: the absolute click pair ("~X of ~Y page-1 clicks/mo") used to sit under the SoV
+    // donut on the Executive Summary. The card lost the sentence, so the numbers land here —
+    // same computeSov() outputs, same modeled stamp, so no figure left the report (Const I.6).
+    const haveAbs = (a.sovCapturedClicks ?? 0) > 0 && (a.sovAvailableClicks ?? 0) > 0;
     push({
       id: 'K7', cat: 'other', sev: a.sovPct < 10 ? 1 : 2, kicker: 'Modeled · Share of voice',
       parts: [seg('You capture an estimated '), seg(`${a.sovPct}%`, true),
-        seg(` of the page-1 clicks available across your footprint — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`)],
+        seg(` of the page-1 clicks available across your footprint — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`),
+        ...(haveAbs
+          ? [seg(` That is ~${Math.round(a.sovCapturedClicks as number).toLocaleString()} of ~${Math.round(a.sovAvailableClicks as number).toLocaleString()} page-1 clicks a month.`)]
+          : [])],
       evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)',
     });
   }
@@ -783,10 +798,222 @@ export function execKeyInsights(a: {
     });
   }
 
+  // ── K20 · competitor on file that cannot be scored (honest gap, Const I.5) ──
+  // v7.389: this was the amber notice under the SoV donut ("<domain>: N keywords on file —
+  // none rank page 1…"). It is a real, defendable gap in the read, so it moves into the rail
+  // rather than disappearing with the card. Wording is the card's, verbatim in substance.
+  for (const g of (a.sovCompGaps ?? [])) {
+    const dom = g.domain.replace(/^www\./, '');
+    push({
+      id: `K20:${dom}`, cat: 'other', sev: 1, kicker: 'Gap · Competitor not scoreable',
+      parts: [seg(dom, true),
+        seg(` has ${g.rows.toLocaleString()} keyword${g.rows === 1 ? '' : 's'} on file`),
+        seg(g.hasPositions
+          ? ` — none rank page 1 on your footprint (best position ${g.minPos ?? '—'}), so it has no Share-of-Voice slice yet.`
+          : ' — no ranking positions were uploaded, so its Share of Voice cannot be computed. Re-upload its CSV including a Position column.')],
+      evidence: 'competitor rows on file vs the canonical footprint · this scan', panel: 'Google Rank (06)',
+    });
+  }
+
+  // ── A-G2 · the land-grab / contested-market read (adopted verbatim) ────────
+  // v7.389: the G2 banner used to render inside the SoV card on this panel. Same rule, same
+  // sentence, same evidence stamp — only its section and urgency are assigned here. Nav 06
+  // still renders the banner in place; this is a second HOME, not a second implementation.
+  push(adoptInsight(a.landGrab ?? null, 'opportunity', a.landGrab?.tone === 'watch' ? 0 : 1,
+    { panel: 'Google Rank (06)' }));
+
   // Severity first, then original (topic) order — a stable sort, so two runs of
   // the same data always produce the same list.
   return out
     .map((ins, i) => ({ ins, i }))
     .sort((x, y) => (x.ins.sev - y.ins.sev) || (x.i - y.i))
     .map(x => x.ins);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// v7.389 — WHAT TO DO NEXT (Executive Summary bottom row). Wayne 2026-07-31:
+// "in the bottom row lets have the top 3 things to do for Google SERP, top 3 for
+// AI and top 3 in content."
+//
+// This REPLACES the old "continuous cycle" row, which rendered the synthesis
+// prose written once at analysis time while every card above it recomputed live —
+// the same staleness class removed from this panel in v7.386. These lanes are
+// computed on THIS render from the same measured rollups the cards and the rail
+// read (Const II.6), so an action can never quote a figure the panel contradicts.
+//
+// ORDERING is declared, not scored. Each lane lists its candidate moves in
+// distance-to-result order — a keyword already sitting at position 4 is closer to
+// a click than a page that has not been written — and the first three that have
+// real data behind them are the ones shown. Nothing is ranked by a blended score,
+// because the inputs are in different units (positions, prompts, pages) and a
+// composite of those would be a number nobody could defend (Const I.1).
+//
+// A rule with no data returns nothing; a lane with nothing to say says so rather
+// than inventing filler (Const I.5). The three-per-lane limit is the one Wayne
+// asked for and the UI names the deep panel that holds the rest (Const I.6).
+// ═════════════════════════════════════════════════════════════════════════════
+
+export type ExecActionLane = 'serp' | 'ai' | 'content';
+
+export interface ExecAction {
+  id:       string;
+  lane:     ExecActionLane;
+  title:    string;         // the move, in the imperative
+  parts:    InsightSeg[];   // why — measured figures emphasized
+  evidence: string;
+  panel:    string;         // the deep panel that owns the full list
+}
+
+export const EXEC_ACTION_LANES: Array<{ lane: ExecActionLane; label: string; sub: string; accent: string }> = [
+  { lane: 'serp',    label: 'Google SERP', sub: 'closest to a page-1 click first', accent: 'var(--c-8b85ff)' },
+  { lane: 'ai',      label: 'AI answers',  sub: 'widest blind spot first',         accent: 'var(--c-06b6d4)' },
+  { lane: 'content', label: 'Content',     sub: 'demand already mapped first',     accent: 'var(--c-f59e0b)' },
+];
+
+export const EXEC_ACTIONS_PER_LANE = 3;   // Wayne's ask — the deep panels keep the full set
+
+export function execActionLanes(a: {
+  // Google / SERP
+  nearMissCount:   number;
+  nearMissMonthly: number;
+  climberCount:    number;
+  page1Pct:        number;
+  top3Pct:         number;
+  aioAvail:        number;
+  aioAcq:          number;
+  sovPct:          number | null;
+  ctrSourceLabel:  string;
+  sovRivals?:      Array<{ domain: string; pct: number }>;
+  // AI
+  aiEnginesZero:     number;
+  aiEnginesTotal:    number;
+  aiZeroEngineNames: string[];
+  winnablePrompts:   number;
+  winnableLeader:    string | null;
+  aiTopicsZero:      number;
+  aiTopicsTotal:     number;
+  ownedCites:        number | null;
+  totalCites:        number | null;
+  netSentiment:      number | null;
+  aiSourceLabel:     string;
+  // Content
+  netNewTopics:   number;
+  netNewMonthly:  number;
+  optimizeTopics: number;
+  gapKwCount:     number;
+  gapMonthly:     number;
+  absentStages:   string[];
+  thinStages:     string[];
+}): Record<ExecActionLane, ExecAction[]> {
+  const serp: ExecAction[] = [];
+  const ai:   ExecAction[] = [];
+  const cont: ExecAction[] = [];
+  const add = (bucket: ExecAction[], x: ExecAction | null) => { if (x) bucket.push(x); };
+
+  const GOOGLE_EV = 'real Semrush positions + real volume on the canonical pool · this scan';
+
+  // ── Google SERP — ordered by how few positions stand between you and a click ──
+  if (a.nearMissCount > 0) {
+    add(serp, { id: 'S1', lane: 'serp', title: `Push ${a.nearMissCount.toLocaleString()} near-miss keyword${a.nearMissCount === 1 ? '' : 's'} into the top 3`,
+      parts: [seg('They already rank '), seg('4–10', true),
+        seg(` on ${fmtInsightVol(a.nearMissMonthly)} searches/mo — the shortest move on the board.`)],
+      evidence: GOOGLE_EV, panel: 'Google Rank (06)' });
+  }
+  if (a.climberCount > 0) {
+    add(serp, { id: 'S2', lane: 'serp', title: `Lift ${a.climberCount.toLocaleString()} page-2 keyword${a.climberCount === 1 ? '' : 's'} onto page 1`,
+      parts: [seg(`${a.climberCount.toLocaleString()} keyword${a.climberCount === 1 ? '' : 's'}`, true),
+        seg(' sit at positions 11–20, where the click curve is effectively flat.')],
+      evidence: GOOGLE_EV, panel: 'Google Rank (06)' });
+  }
+  if (a.aioAvail > 0 && a.aioAcq < a.aioAvail) {
+    const miss = a.aioAvail - a.aioAcq;
+    add(serp, { id: 'S3', lane: 'serp', title: `Claim the ${miss.toLocaleString()} AI Overview${miss === 1 ? '' : 's'} you are absent from`,
+      parts: [seg('Google shows an AI Overview on '), seg(`${a.aioAvail.toLocaleString()} of your keywords`, true),
+        seg(` and cites you on ${a.aioAcq.toLocaleString()} — that box sits above every rank you own there.`)],
+      evidence: 'scanned SERP rows + uploaded Semrush SERP-feature flags · live rollup', panel: 'SERP Features (07)' });
+  }
+  {
+    const ahead = (a.sovRivals ?? []).filter(r => a.sovPct !== null && r.pct > (a.sovPct as number))
+      .slice().sort((x, y) => y.pct - x.pct);
+    if (ahead.length > 0 && a.sovPct !== null) {
+      add(serp, { id: 'S4', lane: 'serp', title: `Close the page-1 click gap with ${ahead[0].domain}`,
+        parts: [seg('Modeled, they take '), seg(`${ahead[0].pct}%`, true),
+          seg(` of the page-1 clicks across your footprint to your ${a.sovPct}%.`)],
+        evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)' });
+    }
+  }
+  if (a.page1Pct > 0 && a.top3Pct < a.page1Pct) {
+    add(serp, { id: 'S5', lane: 'serp', title: 'Convert page-1 rankings into top-3 positions',
+      parts: [seg(`You hold page 1 on ${a.page1Pct}% of tracked demand but the top 3 on only `),
+        seg(`${a.top3Pct}%`, true), seg(' — the rankings exist, the clicks do not.')],
+      evidence: GOOGLE_EV, panel: 'Google Rank (06)' });
+  }
+
+  // ── AI answers — ordered by the size of the blind spot ────────────────────
+  if (a.aiEnginesTotal > 0 && a.aiEnginesZero > 0) {
+    add(ai, { id: 'A1', lane: 'ai', title: a.aiZeroEngineNames.length > 0 ? `Break the blackout on ${oxford(a.aiZeroEngineNames)}` : `Break the blackout on ${a.aiEnginesZero} engine${a.aiEnginesZero === 1 ? '' : 's'}`,
+      parts: [seg(`${a.aiEnginesZero} of ${a.aiEnginesTotal} engine${a.aiEnginesTotal === 1 ? '' : 's'}`, true),
+        seg(' never cite you once across the answers tested.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+  if (a.winnablePrompts > 0) {
+    add(ai, { id: 'A2', lane: 'ai', title: `Contest ${a.winnablePrompts.toLocaleString()} winnable prompt${a.winnablePrompts === 1 ? '' : 's'}`,
+      parts: [seg(`${a.winnablePrompts.toLocaleString()} prompt${a.winnablePrompts === 1 ? '' : 's'}`, true),
+        seg(a.winnableLeader ? ` in your set are led by ${a.winnableLeader} and name no clear alternative — the door is open.` : ' in your set name no clear leader yet.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+  if (a.aiTopicsTotal > 0 && a.aiTopicsZero > 0) {
+    add(ai, { id: 'A3', lane: 'ai', title: `Cover the ${a.aiTopicsZero.toLocaleString()} topic${a.aiTopicsZero === 1 ? '' : 's'} you are never cited on`,
+      parts: [seg(`${a.aiTopicsZero.toLocaleString()} of ${a.aiTopicsTotal.toLocaleString()} tracked topics`, true),
+        seg(' return your name zero times — whole subjects where the assistants have never heard of you.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+  if (a.totalCites !== null && a.ownedCites !== null && a.totalCites > 0 && a.ownedCites < a.totalCites) {
+    add(ai, { id: 'A4', lane: 'ai', title: 'Move citations onto pages you own',
+      parts: [seg(`${a.ownedCites.toLocaleString()} of ${a.totalCites.toLocaleString()} citations`, true),
+        seg(' point at your own domain — the rest is your story told on someone else’s page.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+  if (a.netSentiment !== null && a.netSentiment < 0) {
+    add(ai, { id: 'A5', lane: 'ai', title: 'Fix what the assistants say when they do name you',
+      parts: [seg('Net sentiment is '), seg(String(a.netSentiment), true),
+        seg(' — being found is currently working against you.')],
+      evidence: a.aiSourceLabel, panel: 'AI Answer Engines (09)' });
+  }
+
+  // ── Content — ordered by demand already mapped and measured ───────────────
+  if (a.netNewTopics > 0) {
+    add(cont, { id: 'C1', lane: 'content', title: `Build the ${a.netNewTopics.toLocaleString()} net-new page${a.netNewTopics === 1 ? '' : 's'} already mapped`,
+      parts: [seg(`${fmtInsightVol(a.netNewMonthly)} searches/mo`, true),
+        seg(' sit behind topics with no page of yours behind them today.')],
+      evidence: 'canonical content-map topics · exact rollups', panel: 'Content Map (05)' });
+  }
+  if (a.optimizeTopics > 0) {
+    add(cont, { id: 'C2', lane: 'content', title: `Optimise the ${a.optimizeTopics.toLocaleString()} page${a.optimizeTopics === 1 ? '' : 's'} you already have`,
+      parts: [seg(`${a.optimizeTopics.toLocaleString()} mapped topic${a.optimizeTopics === 1 ? '' : 's'}`, true),
+        seg(' already have a page behind them — these move first and cost least.')],
+      evidence: 'canonical content-map topics matched to existing pages · exact counts', panel: 'Content Map (05)' });
+  }
+  if (a.gapKwCount > 0) {
+    add(cont, { id: 'C3', lane: 'content', title: `Cover ${a.gapKwCount.toLocaleString()} keyword${a.gapKwCount === 1 ? '' : 's'} a rival ranks for and you do not`,
+      parts: [seg(`${fmtInsightVol(a.gapMonthly)} searches/mo`, true),
+        seg(' you are not in the running for, on in-scope terms a competitor already holds.')],
+      evidence: 'competitor-gap rows on the canonical pool, scope-gated · this scan', panel: 'Keyword Landscape (02)' });
+  }
+  if (a.absentStages.length > 0) {
+    add(cont, { id: 'C4', lane: 'content', title: `Write for the ${oxford(a.absentStages)} stage`,
+      parts: [seg('You have '), seg('no page-1 presence at all', true),
+        seg(' there — the buyer moves through that stage without meeting you.')],
+      evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)' });
+  } else if (a.thinStages.length > 0) {
+    add(cont, { id: 'C4', lane: 'content', title: `Thicken the ${oxford(a.thinStages)} stage`,
+      parts: [seg('Coverage there is under '), seg('a fifth', true), seg(' of the stage’s measured demand.')],
+      evidence: 'journey-stage volume rollups from the canonical clusters · this scan', panel: 'Journeys (04)' });
+  }
+
+  return {
+    serp:    serp.slice(0, EXEC_ACTIONS_PER_LANE),
+    ai:      ai.slice(0, EXEC_ACTIONS_PER_LANE),
+    content: cont.slice(0, EXEC_ACTIONS_PER_LANE),
+  };
 }
