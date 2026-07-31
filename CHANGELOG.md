@@ -1,3 +1,15 @@
+## v7.388 · No vertical colour bars on the summary cards — 2026-07-31
+
+**Wayne:** *"lets also remove all the vertical color bars on all of the summary cards."*
+
+The four KPI cards drop their 3px accent stripe and the asymmetric `0 8px 8px 0` radius that squared off the barred edge, so each is now a plain rounded card matching everything else in the panel.
+
+**The colour coding is not lost with the stripe.** Each card's label keeps its accent — green for Google SERP Ranks, red for AI visibility, amber for Coverage map, cyan for Winnable prompts — which is where a reader looks to identify a card anyway. A retained check asserts the label still carries `b.accent` and that the per-card accents are still defined, so a later cleanup can't quietly strip the colour identity along with the decoration.
+
+**The Key Insights rows keep their bar, deliberately.** That stripe is not decoration: it is the only thing encoding severity at a glance — red critical, amber watch, green win — in a rail where the reader is scanning for what matters most. Removing it would cost information rather than clutter. It is a separate call to make if Wayne wants a flatter rail, and a retained check now pins the distinction so the two are not conflated in a future pass.
+
+Files: `components/brief/ExecutiveSummarySection.tsx`, `package.json`/`package-lock.json` (7.388.0). Verified: project `tsc --noEmit` clean; full retained suite — **631 pass / 13 pre-existing, zero new failures**, plus **5 new v7.388 checks**.
+
 ## v7.387 · Rail ends level with the column · panel title · AI-engines card removed — 2026-07-31
 
 Three changes from Wayne in one pass.
