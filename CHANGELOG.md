@@ -1,3 +1,21 @@
+## v7.393 · Step 2 rebuilt — labelled dimension selector, tier table, standing result line — 2026-08-01
+
+**Wayne**, after reviewing three rendered options: *"option 3"*.
+
+**The pill row is now a table, and the numbers have units.** `P0 · Do first 34 · 2.4M` never said 34 *what* or 2.4M *what* — the reader supplied "topics" and "searches per month" from memory. The five tiers now sit in a table under a header that names them: **Priority · Topics · Searches/mo · Share of demand**, one row each, with a bar showing that tier's share.
+
+**The share column exists because equal-width pills hid the only reading that mattered.** On TD Bank, **P1 · Next holds 116.8M of the 120.6M total monthly searches — 97% of all demand — across 201 topics, while P0 · Do first holds 2.4M across 34.** Five identically-sized pills flattened that completely. The bar makes it the first thing you see. Share is computed against the **same faceted base the All row reports**, so the column reconciles with the 100% on screen — a retained check asserts the tier shares sum to it (Const I.1). An empty tier (`P3 · Backlog`) is now `aria-disabled` and out of the tab order, and its share reads as a dash rather than a misleading 0%.
+
+**Tabs became a labelled segmented control.** An underlined tab strip answers "where am I"; this control answers "what am I slicing by", so it carries a **Filter by** label and reads as one control rather than page navigation. Same five dimensions, same order, same active-filter dot.
+
+**A standing result line closes the card, and it is the actual fix.** It renders in *every* state — `Showing 428 topics · 120.6M/mo — no filters, the whole map` — and once anything is filtering it names every active filter **across dimensions**, each removable, plus a labelled clear. Previously, picking P0 and switching to Funnel stage left a 6px dot on a tab as the only trace of the P0 filter; the hint promised filters combine while the UI hid the combination.
+
+**Two readings were removed rather than left to duplicate it.** The toolbar's `428 topics · 120.6M/mo` now sat ~40px below an identical line, so it is dropped **on the Content Map only** — Content Plan and Scope have no result line and keep theirs. The right-hand hint said *"Tabs filter · click a row for the detail"*, naming a control that no longer exists; on the Content Map it now reads *"Click a row for the detail"*. And `PChip`, the v7.360 filter pill, was **deleted** — the pill row was its only caller in the app (the v7.385 rule: no dead compute behind a deleted surface), with a dated note left in its place.
+
+**What did not change:** the five dimensions, the tier definitions, the faceting (each dimension's counts are still computed over the *other* active filters), the per-tier Excel export, and the combine-across-dimensions logic. This release is presentation only — no topic is scored or counted differently.
+
+Files: `components/brief/ContentPlanSection.tsx`, `package.json`/`package-lock.json` (7.393.0). Verified: project `tsc --noEmit` clean; jsdom render against a deliberately **lopsided** fixture (one tier holding ~96% of demand on a minority of topics — the real TD Bank shape, so the scale assertions are made against the case the old design failed); static render screenshotted in both themes **and at a 1150px panel width**, where the table holds one line per tier while the old pill row wrapped to three. Retained suite: **709 pass, 16 pre-existing failures identical to pristine base — zero new failures**, +31 new v7.393 checks. Suite note (Const V.6): one v7.391 check was **amended with a dated note, not deleted** — it asserted "all five dimension tabs render"; it now asserts all five *dimensions* render, since the invariant it protects is that none was dropped when the control changed form.
+
 ## v7.392 · Step 3 removed · select-all moved above the topic table — 2026-08-01
 
 **Wayne:** *"lets actually remove step 3 so there is just the two steps on the top row. Then above the topics have a select all check box with the wording for selecting all the topics. Also show how many current topics are selected."*
