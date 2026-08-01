@@ -1,3 +1,19 @@
+## v7.392 · Step 3 removed · select-all moved above the topic table — 2026-08-01
+
+**Wayne:** *"lets actually remove step 3 so there is just the two steps on the top row. Then above the topics have a select all check box with the wording for selecting all the topics. Also show how many current topics are selected."*
+
+**Step 3 is gone; the top row is Steps 1 and 2.** Selecting topics was never really a configuration step alongside *choose an audience* and *filter* — it is the thing you do to the table once those two are set. Sitting it in a third card put a permanent instruction banner between the filters and the rows it described. The row is now two cells, `minmax(0,1fr) minmax(0,1.5fr)`, Step 2 keeping the wider track.
+
+**The select-all is a real checkbox, directly above the rows, in their own column.** It sits in the leading 18px column so it lines up vertically with every row checkbox beneath it — it reads as the header of that column, which is what it is. Wording states the action and the count together: **"Select all 6 topics for your scope & content plan"**, flipping to **"Unselect all 6 topics"** once everything is in. When filters are narrowing the table it says so explicitly — *"Select all 34 topics shown by these filters"* — so a bulk click can never quietly mean something other than what the label promised.
+
+**Three states, and the middle one is the point.** `SelectBox` gained an explicit `mixed` state: some of the shown rows selected draws a **dash** and reports `aria-checked="mixed"`, never a tick. A half-selected list cannot render as a fully selected one. Row callers pass nothing and are byte-identical to before (Const II.7).
+
+**The count on the right is two honest numbers, not one convenient one.** It reads **"2 of 6 topics selected"** — both halves counted over the topics in *this* view, the same set the rows and the toolbar rollup describe (Const I.1). If the content plan holds selections that live outside the current view — another audience segment, another filter — that is appended **separately** (*"· 9 in the full plan"*) rather than folded into the pair, and stays silent when the two agree.
+
+**Nothing was deleted without checking what it carried.** Step 3 held exactly two things: the bulk select-all and the selected count. Both are asserted at their new home by retained checks, and `stepThree` was removed along with the card so there is no dead compute behind a deleted surface (the v7.385 rule). The bulk action still routes through the same `onBulkSelect` prop — one write path to the content plan, not a second one.
+
+Files: `components/brief/ContentPlanSection.tsx`, `package.json`/`package-lock.json` (7.392.0). Verified: project `tsc --noEmit` clean; jsdom render across four selection states (none / partial / all / selection-outside-the-view) asserting the wording, the count, the mixed state and the bulk-call shape, plus DOM-order proof that the bar sits above the column header and outside the step row; static render screenshotted in both themes. Retained suite: **678 pass, 16 pre-existing failures identical to pristine base — zero new failures**, +27 new v7.392 checks. Suite note (Const V.6): **four v7.391 checks and one v7.353 check were AMENDED with dated notes, not deleted** — the v7.391 row checks now assert two cells and a 1 : 1.5 track pair, and the v7.353 bulk-select check was widened from "a button labelled Select all shown (3)" to any control (button or `role=checkbox`) that puts every shown topic in the plan in a single call, which is the invariant it always protected.
+
 ## v7.391 · Content Map — Steps 1 · 2 · 3 side by side instead of stacked — 2026-08-01
 
 **Wayne:** *"lets change how we are doing step 1, 2, 3 — so rather than stacking them on top of each other, have 3 boxes inline on the same row. Step 1, 2 then 3."*
