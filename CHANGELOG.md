@@ -1,3 +1,13 @@
+## v7.395 · Step 1 at laptop width — a name is never cut — 2026-08-01
+
+**Caught on the v7.394 live check, and it was mine.** At a 1409px window the step row is still two-up, which leaves the Step 1 card about 460px wide — and the longest segment name rendered as **"The Financially Wak…"**. A count can shrink and a quote can go, but truncating a person's name in a panel whose entire job is telling you who these people are defeats the release that just shipped.
+
+**Between 1201 and 1440px the card now gives up its audience-share column, and the name wraps instead of truncating.** Three things change in that band only: the quote hides (it was already doing so), the **Audience share column is dropped from the grid template** — removed, not merely hidden, so no empty track is left behind — and `white-space` on the name goes to `normal`, so a long name takes two lines rather than losing characters. Below 1200px the cards stack full width (v7.391) and the complete layout returns; above 1440px nothing changes.
+
+The order of sacrifice is deliberate and now pinned by retained checks: **the quote goes first, then a whole column, and the name and both counts survive to the end.**
+
+Files: `components/brief/SegmentLens.tsx`, `package.json`/`package-lock.json` (7.395.0). Verified: project `tsc --noEmit` clean; the card re-rendered at the exact failing case — a 1409px viewport with a 1150px panel — and every segment name asserted non-truncating via `scrollWidth <= clientWidth` (it was 1 of 3 clipped before, 0 of 3 after). Retained suite: **754 pass, 16 pre-existing failures identical to pristine base — zero new failures**, +4 new v7.395 checks. Suite gotcha worth recording: the first attempt at those checks put an apostrophe inside a `node -e '…'` block, which silently terminated the shell string and took six unrelated checks offline with it — the pass count dropping from 750 to 744 was the only symptom. **Watch the PASS count, not just the FAIL count.**
+
 ## v7.394 · Step 1 becomes a segment table — and the counts stop looking broken — 2026-08-01
 
 **Wayne**, after reviewing three rendered options: *"lets do option a"*.
