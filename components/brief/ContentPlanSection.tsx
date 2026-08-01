@@ -130,23 +130,56 @@ function FCard({ active, onClick, label, icon, val, sub, color, children, onDown
 }
 
 // ─── v7.249: SERP-page filter chip ───────────────────────────────────────────────
-function PChip({ active, onClick, label, count, sub, color, onDownload }: {
-  active: boolean; onClick: () => void; label: string; count: number; color: string;
-  sub?: string;              // v7.358: optional secondary metric after the count (e.g. "· 52K")
-  onDownload?: () => void;   // v7.328: inline green Excel-download control after the count
+// v7.393: PChip (the Step-2 filter pill, v7.360) was DELETED with the pill row it drew — its
+// only caller. Nothing else in the app used it. The row form it was replaced by is DimRow below.
+// ─── v7.393: Step-2 dimension table (Option 3) ────────────────────────────────────
+// The five tier figures were a wrapping pill row: two numbers and a share crammed into each
+// pill, no units on either, and every tier the same width — which flattened the one reading
+// that matters (on TD Bank, P1 holds 116.8M of 120.6M monthly searches, 97% of all demand,
+// while P0 holds 2%). Five numbers with a share each is a TABLE. As rows every figure sits in
+// a column you can run your eye down, nothing wraps at any panel width, and the bar makes the
+// distribution instant. Wayne 2026-08-01, from the rendered Option 3.
+const DIM_COLS = 'minmax(0,1.4fr) 62px 96px minmax(64px,1.3fr) 26px';
+
+function DimRow({ label, color, count, vol, share, active, empty, onClick, onDownload, volLabel }: {
+  label: string; color: string; count: number; vol: number; share: number;
+  active: boolean; empty: boolean; onClick: () => void; onDownload?: () => void; volLabel: string;
 }) {
   return (
-    <button onClick={onClick} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-      background: active ? `${color}1f` : 'var(--ca-120-120-160-0_08)',
-      border: `1px solid ${active ? color : COL.line}`, borderRadius: 999,
-      padding: '5px 11px', fontSize: 11, fontWeight: 600,
-      color: active ? color : COL.mut, transition: 'border-color 0.12s, color 0.12s',
-    }}>
-      {label}
-      <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 10.5, color: active ? color : COL.mut2 }}>{count}{sub ? ` · ${sub}` : ''}</span>
-      {onDownload && <SegmentDownloadButton onDownload={onDownload} title="Download as Excel" />}
-    </button>
+    <div
+      role="button"
+      aria-pressed={active}
+      aria-disabled={empty}
+      tabIndex={empty ? -1 : 0}
+      onClick={() => { if (!empty) onClick(); }}
+      onKeyDown={(e) => { if (!empty && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); onClick(); } }}
+      title={empty ? `No topics sit in ${label}` : `Filter to ${label}`}
+      style={{
+        display: 'grid', gridTemplateColumns: DIM_COLS, gap: 10, alignItems: 'center',
+        padding: '8px 12px', borderBottom: `1px solid ${COL.line}`,
+        cursor: empty ? 'default' : 'pointer', opacity: empty ? 0.42 : 1,
+        background: active ? 'var(--ca-34-211-238-0_08)' : 'transparent',
+        boxShadow: active ? `inset 3px 0 0 ${COL.cyan}` : 'none',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: active ? COL.cyan : COL.txt2 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>{label}</span>
+      </div>
+      <div style={{ textAlign: 'right' as const, fontFamily: 'monospace', fontSize: 12.5, color: empty ? COL.mut : COL.txt }}>{count}</div>
+      <div style={{ textAlign: 'right' as const, fontFamily: 'monospace', fontSize: 12.5, color: empty ? COL.mut : COL.txt }}>{volLabel}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <span style={{ height: 6, borderRadius: 3, background: COL.line, flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          {!empty && <span style={{ display: 'block', height: '100%', borderRadius: 3, width: `${Math.max(share > 0 ? 1.5 : 0, share)}%`, background: color }} />}
+        </span>
+        <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: COL.mut2, width: 34, textAlign: 'right' as const, flexShrink: 0 }}>
+          {empty ? '—' : `${share >= 9.5 ? Math.round(share) : share.toFixed(1)}%`}
+        </span>
+      </div>
+      <div style={{ textAlign: 'center' as const }}>
+        {onDownload && !empty && <SegmentDownloadButton onDownload={onDownload} title="Download this tier as Excel" />}
+      </div>
+    </div>
   );
 }
 
@@ -573,41 +606,95 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}@media(max-width:1200px){.cmStepRow{grid-template-columns:minmax(0,1fr)!important}}`}</style>;
 
   // v7.391: Step 2, built here and placed by the step row below (was rendered inline).
+  // v7.393 (Option 3, Wayne 2026-08-01): three changes, all presentation — the tier maths,
+  // the five dimensions and the per-tier export are untouched.
+  //   1. The tabs became a LABELLED segmented control. Underlined tabs read as page navigation
+  //      ("where am I") when the job is picking a lens ("what am I slicing by").
+  //   2. The wrapping pill row became a TABLE with units in the header — topics / searches per
+  //      month / share of demand — plus a bar per tier. Two unlabelled figures per pill made
+  //      the reader supply the units, and equal-width pills hid the distribution entirely.
+  //   3. A STANDING result line closes the card. It always says what the table below is
+  //      listing and names every active filter ACROSS dimensions, each removable. Previously
+  //      a filter went invisible the moment you switched dimension — a 6px dot on a tab was
+  //      the only trace of it.
   const stepTwo = (
-        <StepCard n={2} inRow title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match.">
-        {/* v7.360 (Option C): dimension tabs → one contextual chip row. v7.361: chips sit in a tab-panel inset. */}
-        <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', borderBottom: `1px solid ${COL.line}`, margin: '12px 0 0' }}>
-          {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
-            const on = dimTab === d;
-            const n = activeFilters.filter((f) => f.d === d).length;
-            return (
-              <button key={d} type="button" onClick={() => setDimTab(d)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', background: 'transparent', border: 'none', borderBottom: `2px solid ${on ? COL.cyan : 'transparent'}`, color: on ? COL.cyan : COL.mut, fontSize: 12, fontWeight: 700, padding: '8px 12px' }}>
-                <i className={`ti ${icon}`} style={{ fontSize: 14 }} />{label}
-                {n > 0 && <span style={{ width: 6, height: 6, borderRadius: '50%', background: COL.cyan }} />}
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderTop: 'none', borderRadius: '0 0 10px 10px', padding: '14px' }}>
-          {activeDimChips && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <PChip active={activeDimChips.current === 'all'} onClick={() => activeDimChips.set('all')} label="All" count={activeDimChips.allRows.length} sub={fmtVol(activeDimChips.allVol)} color="var(--c-c8c8e8)" onDownload={() => dl(activeDimChips.allRows, `All ${activeDimChips.label}`)} />
-              {activeDimChips.items.map((it) => (
-                <PChip key={it.key} active={activeDimChips.current === it.key} onClick={() => activeDimChips.set(activeDimChips.current === it.key ? 'all' : it.key)} label={it.label} count={it.count} sub={fmtVol(it.vol)} color={it.color} onDownload={() => dl(it.rows, `${activeDimChips.label} ${it.label}`)} />
-              ))}
-            </div>
-          )}
-          {activeFilters.length > 0 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${COL.line}` }}>
-              <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' as const, color: COL.dim }}>Filters</span>
-              {activeFilters.map((f) => (
-                <button key={f.d} type="button" onClick={f.clear} title="Remove this filter" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10.5, fontWeight: 700, color: COL.cyan, background: 'var(--ca-34-211-238-0_08)', border: `1px solid ${COL.cyan}55`, borderRadius: 999, padding: '3px 9px' }}>
-                  {f.label}<i className="ti ti-x" style={{ fontSize: 12 }} />
+        <StepCard n={2} inRow title="Filter &amp; focus" hint="Filters stack across dimensions. The line at the bottom always shows what the table below is currently listing.">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', margin: '14px 0 12px' }}>
+          <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: COL.dim }}>Filter by</span>
+          <div style={{ display: 'inline-flex', background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderRadius: 8, padding: 3, gap: 2, flexWrap: 'wrap' }}>
+            {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
+              const on = dimTab === d;
+              const n = activeFilters.filter((f) => f.d === d).length;
+              return (
+                <button key={d} type="button" onClick={() => setDimTab(d)} aria-pressed={on}
+                  title={n > 0 ? `${label} — filtering now` : `Slice by ${label.toLowerCase()}`}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', borderRadius: 6, border: 'none',
+                    background: on ? 'var(--ca-34-211-238-0_12)' : 'transparent', color: on ? COL.cyan : COL.mut,
+                    fontSize: 11.5, fontWeight: 700, padding: '6px 11px' }}>
+                  <i className={`ti ${icon}`} style={{ fontSize: 14 }} />{label}
+                  {n > 0 && <span style={{ width: 6, height: 6, borderRadius: '50%', background: COL.cyan }} />}
                 </button>
-              ))}
-              <button type="button" onClick={clearAllDims} style={{ fontSize: 11, color: COL.mut, background: 'none', border: 'none', cursor: 'pointer' }}>Clear all</button>
-            </div>
-          )}
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderRadius: 10, padding: 12 }}>
+          {activeDimChips && (() => {
+            // Share is of the demand in THIS dimension's faceted base — the same denominator the
+            // All row reports, so the column always sums to the 100% on screen (Const I.1).
+            const denom = activeDimChips.allVol;
+            const pct = (v: number) => (denom > 0 ? (v / denom) * 100 : 0);
+            return (
+              <div style={{ border: `1px solid ${COL.line}`, borderRadius: 9, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: DIM_COLS, gap: 10, alignItems: 'center', padding: '8px 12px',
+                  borderBottom: `1px solid ${COL.line}`, background: COL.panel,
+                  fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: COL.dim }}>
+                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>{activeDimChips.label}</div>
+                  <div style={{ textAlign: 'right' as const }}>Topics</div>
+                  <div style={{ textAlign: 'right' as const }}>Searches/mo</div>
+                  <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>Share of demand</div>
+                  <div aria-hidden="true" />
+                </div>
+                {/* Plain "All", not "All priority" / "All where you rank" — the column header
+                    already names the dimension, and pluralising it reads wrong on three of five. */}
+                <DimRow label="All" color="var(--c-c8c8e8)"
+                  count={activeDimChips.allRows.length} vol={activeDimChips.allVol} volLabel={fmtVol(activeDimChips.allVol)}
+                  share={denom > 0 ? 100 : 0} active={activeDimChips.current === 'all'} empty={activeDimChips.allRows.length === 0}
+                  onClick={() => activeDimChips.set('all')}
+                  onDownload={() => dl(activeDimChips.allRows, `All ${activeDimChips.label}`)} />
+                {activeDimChips.items.map((it) => (
+                  <DimRow key={it.key} label={it.label} color={it.color}
+                    count={it.count} vol={it.vol} volLabel={fmtVol(it.vol)} share={pct(it.vol)}
+                    active={activeDimChips.current === it.key} empty={it.count === 0}
+                    onClick={() => activeDimChips.set(activeDimChips.current === it.key ? 'all' : it.key)}
+                    onDownload={() => dl(it.rows, `${activeDimChips.label} ${it.label}`)} />
+                ))}
+              </div>
+            );
+          })()}
+          {/* The standing result line — rendered in EVERY state, including none, because its
+              job is to remove the question "what am I looking at right now" entirely. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 12,
+            background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', borderRadius: 9, padding: '9px 13px' }}>
+            <span style={{ fontSize: 12.5, color: COL.txt2 }}>
+              Showing <b style={{ fontFamily: 'monospace', fontWeight: 500, fontSize: 13.5, color: COL.cyan }}>{shownRows.length}</b> topics
+              {' · '}<b style={{ fontFamily: 'monospace', fontWeight: 500, fontSize: 13.5, color: COL.cyan }}>{fmtVol(shownRows.reduce((s, t) => s + t.totalVol, 0))}</b>/mo
+            </span>
+            {activeFilters.length === 0
+              ? <span style={{ fontSize: 11.5, color: COL.mut }}>no filters — the whole map</span>
+              : <>
+                  <span style={{ fontSize: 11.5, color: COL.mut }}>filtered by</span>
+                  {activeFilters.map((f) => (
+                    <button key={f.d} type="button" onClick={f.clear} title="Remove this filter"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 10.5, fontWeight: 700,
+                        color: COL.cyan, background: 'var(--ca-34-211-238-0_12)', border: `1px solid ${COL.cyan}55`, borderRadius: 999, padding: '3px 9px' }}>
+                      {f.label}<i className="ti ti-x" style={{ fontSize: 12 }} />
+                    </button>
+                  ))}
+                  <button type="button" onClick={clearAllDims}
+                    style={{ fontSize: 11, color: COL.mut, background: 'none', border: 'none', cursor: 'pointer', marginLeft: 'auto' }}>Clear all filters</button>
+                </>}
+          </div>
         </div>
         </StepCard>
   );
@@ -692,9 +779,15 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
 
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11.5, color: COL.mut }}>
-          <b style={{ color: COL.txt2 }}>{shownRows.length}</b> topics · <b style={{ color: COL.txt2 }}>{fmtVol(shownRows.reduce((s, t) => s + t.totalVol, 0))}/mo</b>
-        </span>
+        {/* v7.393: on the Content Map this exact pair is now the FIRST thing the Step-2 result
+            line says, ~40px above. Two identical readings that close together are noise, not
+            reassurance, so the toolbar copy is dropped there and kept for Content Plan / Scope,
+            which have no result line of their own. */}
+        {mode !== 'content' && (
+          <span style={{ fontSize: 11.5, color: COL.mut }}>
+            <b style={{ color: COL.txt2 }}>{shownRows.length}</b> topics · <b style={{ color: COL.txt2 }}>{fmtVol(shownRows.reduce((s, t) => s + t.totalVol, 0))}/mo</b>
+          </span>
+        )}
         {/* v7.355: Clear all — one click removes every SHOWN topic from the plan (bulk ×).
             Two-click guard so a stray click can't wipe the plan; the red trio is the same
             both-theme pair the drawer's competitor strip and the brief-error strip use
@@ -719,7 +812,9 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         {mode === 'plan' && (pStatus !== 'all' || pPriority !== 'all') && (
           <button onClick={() => { setPStatus('all'); setPPriority('all'); }} style={{ fontSize: 11, color: COL.cyan, background: 'none', border: 'none', cursor: 'pointer' }}><i className="ti ti-x" /> Clear filters</button>
         )}
-        <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>{mode === 'plan' ? 'Cards filter · ' : 'Tabs filter · '}click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
+        {/* v7.393: "Tabs filter · " described the underlined tab strip that Option 3 replaced —
+            and the Step-2 card now states what is filtering, in words, right above. */}
+        <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>{mode === 'plan' ? 'Cards filter · click a row for the writer brief' : 'Click a row for the detail'}</span>
       </div>
 
       {/* v7.392: select-all sits directly above the rows, checkbox aligned to their column. */}
