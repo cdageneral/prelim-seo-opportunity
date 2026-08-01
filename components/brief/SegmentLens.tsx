@@ -262,17 +262,17 @@ export function SegmentTable({ segments, active, onChange, total, bucket }: {
         onClick={() => { if (!disabled) onChange(id); }}
         onKeyDown={(e) => { if (!disabled && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); onChange(id); } }}
         title={disabled ? `No topics are attributed to ${name}` : `Filter the map to ${name}`}
-        style={cell(on, !!disabled)}>
+        className="segRow" style={cell(on, !!disabled)}>
         <SegAvatar img={img} label={name} accent={accent} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: on ? 'var(--c-a78bfa)' : 'var(--c-c8c8e8)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>{name}</div>
+          <div className="segName" style={{ fontSize: 12.5, fontWeight: 600, color: on ? 'var(--c-a78bfa)' : 'var(--c-c8c8e8)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>{name}</div>
           {quote && <div className="segQuote" style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, marginTop: 2 }}>{quote}</div>}
         </div>
         <div>
           <div style={{ textAlign: 'right' as const, fontFamily: 'monospace', fontSize: 12.5, color: 'var(--c-dcdcf4)' }}>{count}</div>
           <div style={{ textAlign: 'right' as const, fontSize: 9.5, color: 'var(--c-6a6a90)', marginTop: 2 }}>{sub}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+        <div className="segShareCol" style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
           <span style={{ height: 6, borderRadius: 3, background: 'var(--c-1a1a30)', flex: 1, overflow: 'hidden', minWidth: 0 }}>
             {pct !== null && <span style={{ display: 'block', height: '100%', borderRadius: 3, width: `${Math.max(0, Math.min(100, pct))}%`, background: accent }} />}
           </span>
@@ -289,13 +289,19 @@ export function SegmentTable({ segments, active, onChange, total, bucket }: {
       {/* Between 1200 and 1440px the step row is still two-up but each card is narrow — the
           quote is the first thing to give up, never a number. Below 1200 the cards stack full
           width (v7.391) so it comes back. */}
-      <style>{`@media(min-width:1201px) and (max-width:1440px){.segQuote{display:none!important}}`}</style>
+      {/* v7.395: between 1200 and 1440px the step row is still two-up and this card is only
+          ~460px, which truncated the segment NAMES — the one thing that must stay readable.
+          In that band the quote AND the audience-share column give way; the name, the count and
+          its own-count all survive. Below 1200 the cards stack full width (v7.391) so the full
+          layout returns. A column is dropped from the TEMPLATE, not just hidden, so no empty
+          track is left behind. */}
+      <style>{`@media(min-width:1201px) and (max-width:1440px){.segQuote{display:none!important}.segShareCol{display:none!important}.segRow{grid-template-columns:26px minmax(0,1fr) 88px!important}.segName{white-space:normal!important;line-height:1.25}}`}</style>
       <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 9, overflow: 'hidden' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: SEG_TABLE_COLS, gap: 11, padding: '8px 12px', background: 'var(--c-08081a)', borderBottom: '1px solid var(--c-1a1a30)', ...hd }}>
+        <div className="segRow" style={{ display: 'grid', gridTemplateColumns: SEG_TABLE_COLS, gap: 11, padding: '8px 12px', background: 'var(--c-08081a)', borderBottom: '1px solid var(--c-1a1a30)', ...hd }}>
           <div aria-hidden="true" />
           <div style={{ minWidth: 0 }}>Segment</div>
           <div style={{ textAlign: 'right' as const }}>Topics</div>
-          <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>Audience share</div>
+          <div className="segShareCol" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>Audience share</div>
         </div>
         <Row id={null} name="All segments" quote="every topic on the map" accent="var(--c-a78bfa)"
           count={total} sub="all" pct={total > 0 ? 100 : null} />
