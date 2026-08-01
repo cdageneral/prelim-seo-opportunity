@@ -1,3 +1,29 @@
+## v7.394 · Step 1 becomes a segment table — and the counts stop looking broken — 2026-08-01
+
+**Wayne**, after reviewing three rendered options: *"lets do option a"*.
+
+**The real problem with Step 1 was never styling — the numbers looked wrong.** On TD Bank the chips read **238 + 202 + 248 = 688** against an **All Segments of 428**. The reason is that the same Shared topics are counted under every segment, and that was explained in two lines of grey 10px text at the bottom of the card — read *after* the reader had already stopped trusting the panel. Measured off the live app, it reconciles exactly:
+
+| segment | its own | + shared | = shown |
+|---|---|---|---|
+| The Financially Waking Millennial | 108 | 130 | **238** |
+| The Everyday TD Loyalist | 72 | 130 | **202** |
+| The Stressed Money Optimizer | 118 | 130 | **248** |
+
+108 + 72 + 118 + 130 = **428** — every topic accounted for, none unassigned.
+
+**So each row now shows its own count beside its total, and the overlap is stated as a finding rather than an apology:** *"The same 130 topics (30% of the map) speak to every segment, so each row is its own count plus those 130 — which is why the segments add to more than 428."* Every figure is counted off the **same bucket map `filterPlanBySegment` reads**, so what the table claims and what clicking the row yields cannot drift — a retained check asserts, per segment, that the printed number equals what the real filter function returns.
+
+**You can now tell who these people are.** The analysis has always held a first-person tagline and an audience share per segment; neither reached this panel. Both render here verbatim — *"I already bank with TD — I just need to log in, find an ATM, and get my stuff done"* — with a share bar that puts 42 / 35 / 23 in order at a glance. **A segment with no `volumePct` renders an em dash and no bar**, never a modelled percentage (Const I.5a).
+
+**"All Segments" is now the first of four rows** instead of a chip stranded on the label row, and the layout is the same table shape Step 2 took in v7.393, so the two cards in the step row read as one designed thing.
+
+**Scoped to the Content Map, as chosen.** `SegmentFilterBar` is untouched and still serves Content Plan and Scope — this is an additional form for one panel, not a fork of the shared attribution (Const II.7). Retained checks pin both halves of that.
+
+**A latent bug the new checks caught: `--c-090917` is defined in NEITHER theme.** `SegmentTable` used it for the table header, and the v7.353 both-themes token check failed it. It turns out `ContentPlanSection` has been using the same undefined token for its Step-2 inset since v7.361 — every `var(--c-090917)` was silently resolving to no background at all. All uses now point at `--c-08081a`, which is defined in both themes, so those insets finally render the background they were written to have. A new check asserts the dead token appears nowhere.
+
+Files: `components/brief/SegmentLens.tsx`, `components/brief/ContentMapSection.tsx`, `components/brief/ContentPlanSection.tsx`, `package.json`/`package-lock.json` (7.394.0). Verified: project `tsc --noEmit` clean; jsdom render at **TD Bank's real distribution** (108 / 72 / 118 own + 130 shared = 428) so the arithmetic under test is the arithmetic that confused the reader, plus a no-shared shape, a no-`volumePct` shape and an empty-segment shape; both themes byte-identical. Retained suite: **750 pass, 16 pre-existing failures identical to pristine base — zero new failures**, +41 new v7.394 checks. Suite note (Const V.6): one v7.391 check was **amended with a dated note, not deleted** — it pinned `SegmentFilterBar` + `countOf` in the Content Map; it now pins `SegmentTable` + the shared bucket map, because the invariant it protects is that Step 1 renders a real control fed by the one attribution, not which widget draws it. **Two checks in this release were themselves wrong first and were corrected against the data, not the other way round:** a word-boundary regex that matched concatenated cells, and an assertion that a segment with no topics of its own should be inert — it should not, because it still shows the 130 shared.
+
 ## v7.393 · Step 2 rebuilt — labelled dimension selector, tier table, standing result line — 2026-08-01
 
 **Wayne**, after reviewing three rendered options: *"option 3"*.
