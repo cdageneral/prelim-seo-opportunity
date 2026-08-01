@@ -1,3 +1,19 @@
+## v7.391 · Content Map — Steps 1 · 2 · 3 side by side instead of stacked — 2026-08-01
+
+**Wayne:** *"lets change how we are doing step 1, 2, 3 — so rather than stacking them on top of each other, have 3 boxes inline on the same row. Step 1, 2 then 3."*
+
+**The three guided steps now sit on one row.** Choosing an audience, filtering, and selecting topics were three full-width cards stacked one above the other, which pushed the topic table itself roughly 500px down the panel — the guided flow was costing more vertical space than the thing it was guiding. They are now three boxes on a single row, in reading order, all ending level.
+
+**Step 2 gets the wider track (1 : 1.5 : 1), not an equal third.** Step 1 holds a chip list and Step 3 holds a single banner, but Step 2 carries five dimension tabs *plus* the filter chip row with counts and volumes on each. In equal thirds the tab row wrapped three deep and drove the height of the whole row; at 1.5× it keeps its tabs on one line. Tracks are `minmax(0, …)` so a long chip can never push a column past its share, and the cells stretch, so the three boxes end level whichever one is tallest.
+
+**Below 1200px it folds back to a single stacked column.** On a laptop three equal boxes would each be about 430px wide and Step 2 would be unusable. The row is a `.cmStepRow` grid with a media rule that collapses it to one track — the previous stacked layout, unchanged, at the widths where stacking is the right answer.
+
+**How the row is assembled.** Step 1 belongs to `ContentMapSection` (it owns the segment state) while Steps 2 and 3 live in `ContentExplorer`, so the two could not previously share a grid. `ContentExplorer` now takes an optional `stepOne` slot and owns the single grid; the map panel hands its Step 1 card across rather than rendering it above. The segment state, the real row counts and the guard that hides Step 1 when a project has no segments all moved verbatim — only placement changed. Content Plan and Scope pass no slot and use `mode="plan"`, so they get no step row at all and their own filter cards are untouched. `StepCard` gained an `inRow` flag that drops its bottom margin (the grid gap owns the spacing) and stretches it to the cell; every stacked caller passes nothing and renders byte-identically to before (Const II.7).
+
+**One copy change.** Step 1's hint said *"Every step below respects this choice"* — nothing is below it now. It reads *"Every step here respects this choice."*
+
+Files: `components/brief/ContentPlanSection.tsx`, `components/brief/ContentMapSection.tsx`, `package.json`/`package-lock.json` (7.391.0). Verified: project `tsc --noEmit` clean; jsdom render of the real `ContentExplorer` in **both themes**, asserting the three cards are children of one grid element, in order, with the 1 : 1.5 : 1 tracks, and that the row's text is **byte-identical** dark vs light (Const IV.6/V.5); static render screenshotted at full panel width in both themes. Retained suite A/B: **650 pass, 16 pre-existing failures identical on base and change — zero new failures**, including **22 new v7.391 checks**. Suite note (Const V.6): the v7.389 and v7.390 sessions did not save a `_verify/run.sh` forward, so this A/B ran the last saved suite (`_work-v7.388`, 628 checks) — carried forward now as `_work-v7.391/_verify/run.sh` with the v7.391 block appended.
+
 ## v7.390 · Duplicate provenance prefix fixed · AI lane fills to three · larger SoV chart on the exec — 2026-07-31
 
 **Wayne:** *"make the graph and numbers larger in the summary card."* Plus two things caught on the live v7.389 render.
