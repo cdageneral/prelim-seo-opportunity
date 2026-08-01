@@ -157,12 +157,16 @@ const SELECT_COL = '30px';   // v7.260: leading checkbox column (Content Map onl
 // v7.260: theme-safe selection checkbox. Cyan fill + near-black tick are the same tokens
 // the primary CTA uses, so it reads in BOTH light and dark themes (Const IV.6). Clicking
 // toggles selection only — it never opens the row drawer (stopPropagation).
-function SelectBox({ checked, saving, onToggle }: { checked: boolean; saving: boolean; onToggle: () => void }) {
+// v7.392: `mixed` is the select-all header's partial state — SOME of the shown rows are in the
+// plan, not all. It draws a dash, never a tick, so a half-selected list can never read as fully
+// selected. Row callers pass nothing and render exactly as before (Const II.7).
+function SelectBox({ checked, saving, onToggle, mixed, label }: { checked: boolean; saving: boolean; onToggle: () => void; mixed?: boolean; label?: string }) {
+  const on = checked || !!mixed;
   return (
     <div
       role="checkbox"
-      aria-checked={checked}
-      aria-label={checked ? 'Remove from content plan' : 'Add to content plan'}
+      aria-checked={mixed ? 'mixed' : checked}
+      aria-label={label ?? (checked ? 'Remove from content plan' : 'Add to content plan')}
       tabIndex={0}
       onClick={(e) => { e.stopPropagation(); if (!saving) onToggle(); }}
       onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (!saving) onToggle(); } }}
@@ -170,13 +174,15 @@ function SelectBox({ checked, saving, onToggle }: { checked: boolean; saving: bo
         width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         cursor: saving ? 'default' : 'pointer', flexShrink: 0,
         background: checked ? COL.cyan : 'transparent',
-        border: `1.5px solid ${checked ? COL.cyan : 'var(--c-4a4a6a)'}`,
+        border: `1.5px solid ${on ? COL.cyan : 'var(--c-4a4a6a)'}`,
         transition: 'background 0.12s, border-color 0.12s',
       }}
     >
       {saving
         ? <i className="ti ti-loader-2" style={{ fontSize: 11, color: checked ? 'var(--c-08080f)' : COL.cyan }} />
-        : (checked ? <i className="ti ti-check" style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-08080f)' }} /> : null)}
+        : checked ? <i className="ti ti-check" style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-08080f)' }} />
+        : mixed ? <i className="ti ti-minus" style={{ fontSize: 12, fontWeight: 700, color: COL.cyan }} />
+        : null}
     </div>
   );
 }
@@ -625,41 +631,54 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         </>
   );
 
-  // v7.361: Step 3 — topic selection, in its own card (Content Map only).
-  const stepThree = !selectable ? null : (
-        <StepCard n={3} inRow={mode === 'content'} title="Select your topics" hint="Check the topics to include in your scope &amp; content plan — or use “Select all shown” to add a whole filtered view at once.">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', flexWrap: 'wrap' }}>
-          <i className="ti ti-checkbox" style={{ fontSize: 15, color: COL.cyan, flexShrink: 0 }} />
-          <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45, flex: 1, minWidth: 220 }}>
-            Check a box to select which topics to include in your <b style={{ color: COL.cyan }}>scope &amp; content plan</b>.
-            {selectedIds && selectedIds.size > 0 && <span style={{ color: COL.mut }}>&nbsp; · &nbsp;{selectedIds.size} selected</span>}
-          </span>
-          {/* v7.353: bulk select over the rows the active filters currently show — so
-              "all of segment A into the plan" is one click. Idempotent full-set save. */}
-          {onBulkSelect && shownRows.length > 0 && (() => {
-            const shownIds = shownRows.map((t: ContentTopic) => t.id);
-            const allShownSelected = !!selectedIds && shownIds.every((id: string) => selectedIds.has(id));
-            return (
-              <button type="button"
-                onClick={() => onBulkSelect(shownIds, !allShownSelected)}
-                title={allShownSelected ? 'Remove every topic shown by the current filters from the plan' : 'Add every topic shown by the current filters to the plan'}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0,
-                  background: 'transparent', border: `1px solid ${COL.cyan}`, color: COL.cyan,
-                  borderRadius: 7, padding: '5px 11px', fontSize: 11, fontWeight: 700 }}>
-                <i className={`ti ${allShownSelected ? 'ti-square-off' : 'ti-checks'}`} style={{ fontSize: 13 }} />
-                {allShownSelected ? `Unselect all shown (${shownIds.length})` : `Select all shown (${shownIds.length})`}
-              </button>
-            );
-          })()}
+  // v7.392: Step 3 is GONE (Wayne 2026-08-01) — selection is not a step you configure, it is
+  // the thing you do to the table, so the control now sits directly above the rows as a real
+  // select-all checkbox aligned to the row checkbox column. The bulk-select behaviour is the
+  // v7.353 one, unchanged: it acts on the rows the CURRENT filters show, in one idempotent
+  // full-set save. What is new is that the label says which set that is, and the count of what
+  // is already selected is on screen next to it instead of buried in a card above.
+  const selectAll = !(selectable && onBulkSelect) || shownRows.length === 0 ? null : (() => {
+    const shownIds = shownRows.map((t: ContentTopic) => t.id);
+    const shownSel = selectedIds ? shownIds.filter((id: string) => selectedIds.has(id)).length : 0;
+    const allShown = shownSel === shownIds.length;
+    const someShown = shownSel > 0 && !allShown;
+    // Denominator honesty (Const I.1): the headline pair counts topics in THIS view — the same
+    // set the rows and the toolbar rollup describe. When the plan holds selections outside this
+    // view (another segment, another filter), that is stated separately rather than folded in.
+    const inView = selectedIds ? T.filter((t: ContentTopic) => selectedIds.has(t.id)).length : 0;
+    const planTotal = selectedIds ? selectedIds.size : 0;
+    const filtered = shownIds.length !== T.length;
+    const act = allShown ? 'Unselect' : 'Select';
+    const what = filtered
+      ? `${act} all ${shownIds.length} topics shown by these filters`
+      : `${act} all ${shownIds.length} topics`;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        margin: '0 0 10px', padding: '9px 15px', borderRadius: 9,
+        background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)' }}>
+        <div style={{ width: 18, flexShrink: 0 }}>
+          <SelectBox checked={allShown} mixed={someShown} saving={false} label={what}
+            onToggle={() => onBulkSelect(shownIds, !allShown)} />
         </div>
-        </StepCard>
-  );
+        <span onClick={() => onBulkSelect(shownIds, !allShown)}
+          style={{ fontSize: 12, fontWeight: 600, color: COL.txt2, cursor: 'pointer', lineHeight: 1.4 }}>
+          {what} <span style={{ fontWeight: 500, color: COL.mut }}>for your </span>
+          <b style={{ color: COL.cyan, fontWeight: 700 }}>scope &amp; content plan</b>
+        </span>
+        <span style={{ fontSize: 11.5, color: COL.mut, marginLeft: 'auto' }}>
+          <b style={{ color: COL.cyan }}>{inView}</b> of <b style={{ color: COL.txt2 }}>{T.length}</b> topics selected
+          {planTotal !== inView && <span style={{ color: COL.dim }}>&nbsp;·&nbsp;{planTotal} in the full plan</span>}
+        </span>
+      </div>
+    );
+  })();
 
-  // v7.391: Steps 1 · 2 · 3 sit inline on ONE row instead of stacking (Wayne 2026-08-01).
-  // Step 2 takes the wider track — it carries five dimension tabs plus the chip row, where
-  // 1 and 3 hold a chip list and a single banner. Tracks are minmax(0,…) so a long chip can
-  // never blow the column out, and every card stretches to the tallest so the row ends level.
-  const stepRowCols = [stepOne ? 'minmax(0,1fr)' : null, 'minmax(0,1.5fr)', stepThree ? 'minmax(0,1fr)' : null].filter(Boolean).join(' ');
+  // v7.391: the guided steps sit inline on ONE row instead of stacking (Wayne 2026-08-01).
+  // AMENDED v7.392 (same day): the row is now TWO cells, not three — Step 3 was dropped and its
+  // job moved to the select-all bar above the table. Step 2 keeps the wider track; it carries
+  // five dimension tabs plus the chip row where Step 1 holds a chip list. Tracks are minmax(0,…)
+  // so a long chip can never blow the column out, and cells stretch so the row ends level.
+  const stepRowCols = [stepOne ? 'minmax(0,1fr)' : null, 'minmax(0,1.5fr)'].filter(Boolean).join(' ');
 
   return (
     <div>
@@ -668,14 +687,8 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         <div className="cmStepRow" style={{ display: 'grid', gridTemplateColumns: stepRowCols, gap: 14, alignItems: 'stretch', marginBottom: 16 }}>
           {stepOne}
           {stepTwo}
-          {stepThree}
         </div>
-      ) : (
-        <>
-          {planCards}
-          {stepThree}
-        </>
-      )}
+      ) : planCards}
 
       {/* toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '4px 0 12px', flexWrap: 'wrap' }}>
@@ -708,6 +721,9 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         )}
         <span style={{ fontSize: 11, color: COL.dim, marginLeft: 'auto' }}>{mode === 'plan' ? 'Cards filter · ' : 'Tabs filter · '}click a row for the {mode === 'plan' ? 'writer brief' : 'detail'}</span>
       </div>
+
+      {/* v7.392: select-all sits directly above the rows, checkbox aligned to their column. */}
+      {selectAll}
 
       {/* column header */}
       <div style={{ display: 'grid', gridTemplateColumns: ((selectable || removable) ? SELECT_COL + ' ' : '') + ROW_COLS, gap: 12, padding: '0 15px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: COL.dim }}>
