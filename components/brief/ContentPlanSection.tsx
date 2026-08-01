@@ -621,7 +621,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
         <StepCard n={2} inRow title="Filter &amp; focus" hint="Filters stack across dimensions. The line at the bottom always shows what the table below is currently listing.">
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', margin: '14px 0 12px' }}>
           <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: COL.dim }}>Filter by</span>
-          <div style={{ display: 'inline-flex', background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderRadius: 8, padding: 3, gap: 2, flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', background: 'var(--c-08081a)', border: `1px solid ${COL.line}`, borderRadius: 8, padding: 3, gap: 2, flexWrap: 'wrap' }}>
             {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
               const on = dimTab === d;
               const n = activeFilters.filter((f) => f.d === d).length;
@@ -638,7 +638,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             })}
           </div>
         </div>
-        <div style={{ background: 'var(--c-090917)', border: `1px solid ${COL.line}`, borderRadius: 10, padding: 12 }}>
+        <div style={{ background: 'var(--c-08081a)', border: `1px solid ${COL.line}`, borderRadius: 10, padding: 12 }}>
           {activeDimChips && (() => {
             // Share is of the demand in THIS dimension's faceted base — the same denominator the
             // All row reports, so the column always sums to the 100% on screen (Const I.1).

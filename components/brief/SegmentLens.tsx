@@ -189,3 +189,141 @@ export function SegmentFilterBar({ segments, active, onChange, countOf, note }: 
     </div>
   );
 }
+
+// ─── v7.394: SegmentTable — the Content Map's Step 1 (Wayne 2026-08-01, "option a") ───────
+//
+// The chip bar above still serves Content Plan and Scope unchanged (Const II.7 — this is an
+// ADDITIONAL form for the one panel that asked for it, not a fork of the attribution). What
+// it fixes on the Content Map:
+//
+//  1. THE COUNTS LOOKED BROKEN. On TD Bank the chips read 238 + 202 + 248 = 688 against an
+//     "All Segments" of 428. The reason — the same Shared topics are counted under every
+//     segment — was a 10px footnote read AFTER the reader had already stopped trusting the
+//     numbers. Each row now shows its OWN count beside its total, and the shared figure is
+//     stated once, in words, as a finding: on TD Bank 130 topics (30% of the map) speak to
+//     every segment. Every number is counted off the SAME bucket map the filter itself uses,
+//     so what the table claims and what clicking the row yields cannot drift (Const I.1).
+//  2. YOU COULD NOT TELL WHO THESE PEOPLE ARE. The analysis already holds a first-person
+//     tagline and an audience share per segment; neither reached this panel. Both render here,
+//     verbatim — and a segment with no `volumePct` shows an em dash, never a made-up bar.
+//  3. "All" sat on the label row, visually separated from the three choices it belongs with.
+//     It is now the first row of four.
+//
+// Layout is deliberately the same table shape Step 2 took in v7.393, so the two cards in the
+// step row read as one designed thing rather than pills beside a grid.
+const SEG_TABLE_COLS = '26px minmax(0,1fr) 88px 108px';   // 108 so the AUDIENCE SHARE header is not clipped
+
+function SegAvatar({ img, label, accent, size = 26 }: { img?: string; label: string; accent: string; size?: number }) {
+  const initials = label.replace(/^The\s+/i, '').split(/\s+/).slice(0, 2).map((w) => w[0] ?? '').join('').toUpperCase();
+  if (img) {
+    return <img src={img} alt={`Portrait representing ${label}`} loading="lazy"
+      style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', border: `1px solid ${accent}`, flexShrink: 0 }} />;
+  }
+  return (
+    <span aria-hidden="true" style={{ width: size, height: size, borderRadius: '50%', border: `1px solid ${accent}`, color: accent,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9.5, fontWeight: 700, flexShrink: 0 }}>{initials}</span>
+  );
+}
+
+export function SegmentTable({ segments, active, onChange, total, bucket }: {
+  segments:  any[];
+  active:    string | null;
+  onChange:  (id: string | null) => void;
+  total:     number;                      // topics on the map — the All row's count
+  bucket:    Map<string, string>;         // topic.id → segment.id | SHARED_BUCKET (the ONE attribution)
+}) {
+  if (!segments.length || bucket.size === 0) return null;
+
+  // Counted from the bucket, which is what filterPlanBySegment reads — so `own + shared` is
+  // BY CONSTRUCTION the row count a click produces, not a parallel estimate of it.
+  let shared = 0;
+  const own = new Map<string, number>();
+  bucket.forEach((b) => {
+    if (b === SHARED_BUCKET) shared += 1;
+    else own.set(b, (own.get(b) ?? 0) + 1);
+  });
+  const sharedPct = total > 0 ? Math.round((shared / total) * 100) : 0;
+
+  const hd: any = { fontSize: 9.5, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: 'var(--c-4a4a6a)' };
+  const cell = (on: boolean, dis: boolean) => ({
+    display: 'grid', gridTemplateColumns: SEG_TABLE_COLS, gap: 11, alignItems: 'center', padding: '9px 12px',
+    borderBottom: '1px solid var(--c-1a1a30)', cursor: dis ? 'default' : 'pointer', opacity: dis ? 0.45 : 1,
+    background: on ? 'var(--ca-167-139-250-0_08)' : 'transparent',
+    boxShadow: on ? 'inset 3px 0 0 var(--c-a78bfa)' : 'none',
+  });
+
+  const Row = ({ id, name, quote, accent, img, count, sub, pct, disabled }: {
+    id: string | null; name: string; quote: string; accent: string; img?: string;
+    count: number; sub: string; pct: number | null; disabled?: boolean;
+  }) => {
+    const on = active === id;
+    return (
+      <div role="button" aria-pressed={on} aria-disabled={!!disabled} tabIndex={disabled ? -1 : 0}
+        onClick={() => { if (!disabled) onChange(id); }}
+        onKeyDown={(e) => { if (!disabled && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); onChange(id); } }}
+        title={disabled ? `No topics are attributed to ${name}` : `Filter the map to ${name}`}
+        style={cell(on, !!disabled)}>
+        <SegAvatar img={img} label={name} accent={accent} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: on ? 'var(--c-a78bfa)' : 'var(--c-c8c8e8)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>{name}</div>
+          {quote && <div className="segQuote" style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, marginTop: 2 }}>{quote}</div>}
+        </div>
+        <div>
+          <div style={{ textAlign: 'right' as const, fontFamily: 'monospace', fontSize: 12.5, color: 'var(--c-dcdcf4)' }}>{count}</div>
+          <div style={{ textAlign: 'right' as const, fontSize: 9.5, color: 'var(--c-6a6a90)', marginTop: 2 }}>{sub}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+          <span style={{ height: 6, borderRadius: 3, background: 'var(--c-1a1a30)', flex: 1, overflow: 'hidden', minWidth: 0 }}>
+            {pct !== null && <span style={{ display: 'block', height: '100%', borderRadius: 3, width: `${Math.max(0, Math.min(100, pct))}%`, background: accent }} />}
+          </span>
+          <span style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--c-6a6a90)', width: 30, textAlign: 'right' as const, flexShrink: 0 }}>
+            {pct === null ? '—' : `${Math.round(pct)}%`}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ margin: '12px 0 0' }}>
+      {/* Between 1200 and 1440px the step row is still two-up but each card is narrow — the
+          quote is the first thing to give up, never a number. Below 1200 the cards stack full
+          width (v7.391) so it comes back. */}
+      <style>{`@media(min-width:1201px) and (max-width:1440px){.segQuote{display:none!important}}`}</style>
+      <div style={{ border: '1px solid var(--c-1a1a30)', borderRadius: 9, overflow: 'hidden' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: SEG_TABLE_COLS, gap: 11, padding: '8px 12px', background: 'var(--c-08081a)', borderBottom: '1px solid var(--c-1a1a30)', ...hd }}>
+          <div aria-hidden="true" />
+          <div style={{ minWidth: 0 }}>Segment</div>
+          <div style={{ textAlign: 'right' as const }}>Topics</div>
+          <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>Audience share</div>
+        </div>
+        <Row id={null} name="All segments" quote="every topic on the map" accent="var(--c-a78bfa)"
+          count={total} sub="all" pct={total > 0 ? 100 : null} />
+        {segments.map((s: any) => {
+          const id = String(s.id);
+          const o = own.get(id) ?? 0;
+          const ac = accentOf(segments, id).text;
+          const vp = typeof s.volumePct === 'number' ? s.volumePct : null;
+          return (
+            <Row key={id} id={id} name={String(s.name ?? 'Segment')} quote={String(s.tagline ?? '')}
+              accent={ac} img={s.personaImageUrl as string | undefined}
+              count={o + shared} sub={`${o} its own`} pct={vp} disabled={o + shared === 0} />
+          );
+        })}
+      </div>
+      {shared > 0 && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: 'var(--ca-167-139-250-0_08)',
+          border: '1px solid var(--ca-167-139-250-0_12)', borderRadius: 9, padding: '9px 12px', marginTop: 11,
+          fontSize: 11.5, color: 'var(--c-c8c8e8)', lineHeight: 1.55 }}>
+          <i className="ti ti-info-circle" style={{ color: 'var(--c-a78bfa)', fontSize: 14, flexShrink: 0, marginTop: 1 }} />
+          <span>
+            The same <b style={{ fontFamily: 'monospace', color: 'var(--c-a78bfa)', fontWeight: 700 }}>{shared}</b> topics
+            {sharedPct > 0 && ` (${sharedPct}% of the map)`} speak to <b style={{ color: 'var(--c-a78bfa)' }}>every</b> segment,
+            so each row is <i>its own</i> count plus those {shared} — which is why the segments add to more than {total}.
+            Same attribution as the Audience Journeys panel.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}

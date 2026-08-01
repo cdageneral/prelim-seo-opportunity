@@ -8,7 +8,7 @@ import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.336 (QC audit B1 mir
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.336 (QC audit B1 mirror): guard on buildClusters category reads (Const III.1a)
 // v7.353: audience-segment lens — the SAME topic→segment attribution the Journey panel
 // uses, carried into this panel as a filter + row tags (Const II.7, one partition).
-import { buildTopicSegmentMap, buildSegTags, filterPlanBySegment, SegmentFilterBar } from '@/components/brief/SegmentLens';
+import { buildTopicSegmentMap, buildSegTags, filterPlanBySegment, SegmentTable } from '@/components/brief/SegmentLens';   // v7.394: table form (chip bar still used by Content Plan / Scope)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1510,16 +1510,19 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
               segment state still lives here; only the placement moved. */}
           <ContentExplorer plan={viewPlan ?? plan} mode="content"
             stepOne={segments.length > 0 && topicBucket.size > 0 ? (
-              <StepCard n={1} inRow title="Choose your audience" hint="Filter the whole map to one audience segment — or keep All Segments. Every step here respects this choice.">
-                <SegmentFilterBar
+              <StepCard n={1} inRow title="Choose your audience" hint="Filter the whole map to one segment — or keep All. Every step here respects this choice.">
+                {/* v7.394 (Wayne "option a"): the chip bar became a table — each segment carries
+                    its own first-person tagline, its OWN topic count beside its total, and its
+                    audience share, with the shared overlap stated once instead of footnoted.
+                    `bucket` is the same map filterPlanBySegment reads, so the counts shown and
+                    the rows a click yields come from one source (Const I.1/II.7). The chip bar
+                    is untouched and still serves Content Plan and Scope. */}
+                <SegmentTable
                   segments={segments}
                   active={activeSeg}
                   onChange={setActiveSeg}
-                  countOf={(id: string | null) => {
-                    if (!plan) return 0;
-                    if (id === null) return plan.topics.length;
-                    return filterPlanBySegment(plan, topicBucket, id).topics.length;
-                  }}
+                  total={plan.topics.length}
+                  bucket={topicBucket}
                 />
               </StepCard>
             ) : undefined}
