@@ -50,9 +50,12 @@ export function StepHeader({ n, title, hint }: { n: number; title: string; hint?
 // v7.361: each guided step sits in its own card so the three blocks read as distinct
 // sections instead of one flat wall (Wayne 2026-07-07). Raised panel + hairline + radius,
 // theme-token styled (IV.6). The step header renders at the top of the card.
-export function StepCard({ n, title, hint, children }: { n: number; title: string; hint?: string; children?: any }) {
+// v7.391: `inRow` puts the card in the three-across step row — it drops its own bottom
+// margin (the grid owns the gap) and stretches to the tallest sibling so Steps 1/2/3 end
+// level. Stacked callers pass nothing and render exactly as before.
+export function StepCard({ n, title, hint, children, inRow }: { n: number; title: string; hint?: string; children?: any; inRow?: boolean }) {
   return (
-    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1f1f3a)', borderRadius: 12, padding: '4px 18px 18px', marginBottom: 16 }}>
+    <div style={{ background: 'var(--c-0d0d1e)', border: '1px solid var(--c-1f1f3a)', borderRadius: 12, padding: '4px 18px 18px', marginBottom: inRow ? 0 : 16, height: inRow ? '100%' : undefined, display: inRow ? 'flex' : undefined, flexDirection: inRow ? ('column' as const) : undefined, minWidth: 0 }}>
       <StepHeader n={n} title={title} hint={hint} />
       {children}
     </div>
@@ -430,8 +433,12 @@ function Drawer({ topic, onClose, onMovePriority }: { topic: ContentTopic | null
 }
 
 // ─── shared explorer (used by Content panel AND Content Plan) ────────────────────
-export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, onBulkRemove, clientName, topicSeg, onBulkSelect, onMovePriority }: {
+export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleSelect, savingIds, removable, onRemove, onBulkRemove, clientName, topicSeg, onBulkSelect, onMovePriority, stepOne }: {
   plan: ContentPlan; mode: 'content' | 'plan';
+  // v7.391: Step 1 is owned by the Content Map panel (it holds the segment state), but all
+  // three guided steps now share ONE grid row — so the panel hands its Step-1 card in here
+  // as a slot rather than rendering it above. Absent (Content Plan / Scope) → no cell.
+  stepOne?: any;
   clientName?: string;   // v7.328: filename stem for per-segment XLSX exports
   // v7.260: opt-in topic selection (used only by the Content Map instance). Checking a
   // row adds that topic to the Content Plan panel; selection persists to the project DB.
@@ -555,13 +562,13 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
   ].filter(Boolean) as Array<{ d: string; label: string; clear: () => void }> : [];
   const clearAllDims = () => { setCPriority('all'); setCFilter('all'); setPosFilter('all'); setFunnelPick('all'); setDemandPick('all'); };
 
-  const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}`}</style>;
+  // v7.391: below 1200px the three-across step row folds back to one stacked column — at a
+  // laptop width each third is ~430px and Step 2's tab row would wrap three deep.
+  const styleTag = <style>{`@media(max-width:860px){.ovHide{display:none!important}}@media(max-width:1200px){.cmStepRow{grid-template-columns:minmax(0,1fr)!important}}`}</style>;
 
-  return (
-    <div>
-      {styleTag}
-      {mode === 'content' ? (
-        <StepCard n={2} title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match.">
+  // v7.391: Step 2, built here and placed by the step row below (was rendered inline).
+  const stepTwo = (
+        <StepCard n={2} inRow title="Filter &amp; focus" hint="Pick a dimension below, then a chip to filter. Combine dimensions — counts and volumes update to match.">
         {/* v7.360 (Option C): dimension tabs → one contextual chip row. v7.361: chips sit in a tab-panel inset. */}
         <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', borderBottom: `1px solid ${COL.line}`, margin: '12px 0 0' }}>
           {(([['priority', 'Priority', 'ti-flag'], ['funnel', 'Funnel stage', 'ti-filter-cog'], ['demand', 'Search demand', 'ti-chart-bar'], ['rank', 'Where you rank', 'ti-trophy'], ['status', 'Status', 'ti-stack-2']]) as Array<['priority' | 'funnel' | 'demand' | 'rank' | 'status', string, string]>).map(([d, label, icon]) => {
@@ -597,7 +604,10 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
           )}
         </div>
         </StepCard>
-      ) : (
+  );
+
+  // Content Plan / Scope keep their own filter cards — no guided step row there.
+  const planCards = (
         <>
           {/* scope row: total / existing / net-new (all carry volume) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, margin: '16px 0 14px' }}>
@@ -613,11 +623,11 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
             <FCard active={pPriority === 'P2'} onClick={() => setPPriority('P2')} label="P2 · Later" val={sc.p2} sub={`${fmtVol(sc.p2Vol)}/mo`} color={priColor.P2} onDownload={() => dl(T.filter((t) => t.priority === 'P2'), 'P2 Later')} />
           </div>
         </>
-      )}
+  );
 
-      {/* v7.361: Step 3 — topic selection, in its own card (Content Map only). */}
-      {selectable && (
-        <StepCard n={3} title="Select your topics" hint="Check the topics to include in your scope &amp; content plan — or use “Select all shown” to add a whole filtered view at once.">
+  // v7.361: Step 3 — topic selection, in its own card (Content Map only).
+  const stepThree = !selectable ? null : (
+        <StepCard n={3} inRow={mode === 'content'} title="Select your topics" hint="Check the topics to include in your scope &amp; content plan — or use “Select all shown” to add a whole filtered view at once.">
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, margin: '0', padding: '9px 13px', borderRadius: 8, background: 'var(--ca-34-211-238-0_08)', border: '1px solid var(--ca-34-211-238-0_2)', flexWrap: 'wrap' }}>
           <i className="ti ti-checkbox" style={{ fontSize: 15, color: COL.cyan, flexShrink: 0 }} />
           <span style={{ fontSize: 12, color: COL.txt2, lineHeight: 1.45, flex: 1, minWidth: 220 }}>
@@ -643,6 +653,28 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
           })()}
         </div>
         </StepCard>
+  );
+
+  // v7.391: Steps 1 · 2 · 3 sit inline on ONE row instead of stacking (Wayne 2026-08-01).
+  // Step 2 takes the wider track — it carries five dimension tabs plus the chip row, where
+  // 1 and 3 hold a chip list and a single banner. Tracks are minmax(0,…) so a long chip can
+  // never blow the column out, and every card stretches to the tallest so the row ends level.
+  const stepRowCols = [stepOne ? 'minmax(0,1fr)' : null, 'minmax(0,1.5fr)', stepThree ? 'minmax(0,1fr)' : null].filter(Boolean).join(' ');
+
+  return (
+    <div>
+      {styleTag}
+      {mode === 'content' ? (
+        <div className="cmStepRow" style={{ display: 'grid', gridTemplateColumns: stepRowCols, gap: 14, alignItems: 'stretch', marginBottom: 16 }}>
+          {stepOne}
+          {stepTwo}
+          {stepThree}
+        </div>
+      ) : (
+        <>
+          {planCards}
+          {stepThree}
+        </>
       )}
 
       {/* toolbar */}

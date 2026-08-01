@@ -1505,21 +1505,24 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
         <div style={{ marginBottom: 26 }}>
           {/* v7.353: segment lens — same attribution as the Audience Journeys panel;
               Shared topics show under every segment. Chip counts are real row counts. */}
-          {segments.length > 0 && topicBucket.size > 0 && (
-            <StepCard n={1} title="Choose your audience" hint="Filter the whole map to one audience segment — or keep All Segments. Every step below respects this choice.">
-              <SegmentFilterBar
-                segments={segments}
-                active={activeSeg}
-                onChange={setActiveSeg}
-                countOf={(id: string | null) => {
-                  if (!plan) return 0;
-                  if (id === null) return plan.topics.length;
-                  return filterPlanBySegment(plan, topicBucket, id).topics.length;
-                }}
-              />
-            </StepCard>
-          )}
+          {/* v7.391: Step 1 is no longer rendered above the explorer — it is handed in as the
+              `stepOne` slot so Steps 1 · 2 · 3 share one inline row (Wayne 2026-08-01). The
+              segment state still lives here; only the placement moved. */}
           <ContentExplorer plan={viewPlan ?? plan} mode="content"
+            stepOne={segments.length > 0 && topicBucket.size > 0 ? (
+              <StepCard n={1} inRow title="Choose your audience" hint="Filter the whole map to one audience segment — or keep All Segments. Every step here respects this choice.">
+                <SegmentFilterBar
+                  segments={segments}
+                  active={activeSeg}
+                  onChange={setActiveSeg}
+                  countOf={(id: string | null) => {
+                    if (!plan) return 0;
+                    if (id === null) return plan.topics.length;
+                    return filterPlanBySegment(plan, topicBucket, id).topics.length;
+                  }}
+                />
+              </StepCard>
+            ) : undefined}
             selectable
             clientName={clientDomain || 'client'}
             selectedIds={selectedIds}
