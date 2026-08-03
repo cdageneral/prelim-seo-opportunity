@@ -18,12 +18,22 @@ interface Line { provider: string; unit: string; usage: number; baseline: number
 interface ProjectRollup { projectId: string | null; projectName: string; lines: Line[]; lastActivity: string | null; }
 interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRollup[]; note?: string; }
 
-// Cost rollup (v7.363) — USD computed at published list rates (Const I.5a).
-interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; }
-interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; unpriced: UnpricedLine[]; }
+// Cost rollup (v7.363; registry rebuilt v7.396) — USD at registry rates (Const I.5a).
+interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; unregistered: boolean; }
+interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; unpriced: UnpricedLine[]; }
 interface RateCardModel { label: string; inputPerM: number; outputPerM: number; }
-interface RateCard { asOf: string; models: RateCardModel[]; sources: string[]; }
-interface CostPayload { grandTotalUSD: number; pricingAsOf: string; basis: string; rateCard: RateCard; projects: ProjectCost[]; }
+interface RateCardUnit { label: string; usdPerUnit: number; plan: string; basis: string; source: string; asOf: string; }
+interface RateCardUnpriced { label: string; reason: string; asOf: string; }
+interface RateCard {
+  asOf: string; models: RateCardModel[]; units: RateCardUnit[];
+  unpriced: RateCardUnpriced[]; planQuotaCaveat: string; sources: string[];
+}
+interface UnregisteredLine { provider: string; unit: string; endpoint: string; reason: string; }
+interface CostPayload {
+  grandTotalUSD: number; grandPayPerUseUSD: number; grandPlanQuotaUSD: number;
+  pricingAsOf: string; basis: string; planQuotaCaveat: string; rateCard: RateCard;
+  registryOk: boolean; unregistered: UnregisteredLine[]; projects: ProjectCost[];
+}
 
 const PROVIDER_LABEL: Record<string, string> = {
   semrush: 'Semrush', serpapi: 'SerpAPI', profound: 'Profound',
@@ -43,6 +53,13 @@ function fmtUSD(n: number): string {
   // Show cents; for sub-cent amounts show enough precision to not read as $0.00.
   const frac = v > 0 && v < 0.01 ? 4 : 2;
   return `$${v.toLocaleString(undefined, { minimumFractionDigits: frac, maximumFractionDigits: frac })}`;
+}
+/** Per-unit rates are fractions of a cent — show enough digits to be checkable. */
+function fmtRate(n: number): string {
+  const v = n ?? 0;
+  if (v === 0) return '$0';
+  const digits = v < 0.01 ? 6 : 4;
+  return `$${v.toFixed(digits).replace(/0+$/, '').replace(/\.$/, '')}`;
 }
 function fmtTime(iso: string | null): string {
   if (!iso) return '—';
@@ -151,6 +168,35 @@ export default function UsageRollup() {
             ))}
           </div>
 
+          {/* Fail-closed registry alarm (v7.396) — a metered source with NO rate
+              entry of either kind. Loud on purpose: this is also an Art. VIII FAIL. */}
+          {cost && !cost.registryOk && (
+            <div className="orbit-card p-4 mb-4 border border-orbit-amber/40 bg-orbit-amber/10">
+              <h3 className="text-orbit-amber text-sm font-semibold mb-2 flex items-center gap-2">
+                <i className="ti ti-alert-triangle" aria-hidden="true" />
+                Unpriced source — no rate on file
+              </h3>
+              <p className="text-orbit-secondary text-xs mb-2 leading-relaxed">
+                {cost.unregistered.length === 1 ? 'A metered source is' : `${cost.unregistered.length} metered sources are`}{' '}
+                recording usage with no entry in the rate registry, so {cost.unregistered.length === 1 ? 'its' : 'their'} spend is
+                <strong className="text-orbit-primary"> missing from every total below</strong>. Add a rate — or an explicit
+                unpriced declaration — in <code className="text-orbit-primary">lib/usage/pricing.ts</code>.
+              </p>
+              <ul className="text-xs text-orbit-secondary space-y-1">
+                {cost.unregistered.map(u => (
+                  <li key={`${u.provider}|${u.unit}|${u.endpoint}`} className="flex gap-2">
+                    <span className="text-orbit-amber" aria-hidden="true">•</span>
+                    <span>
+                      <strong className="text-orbit-primary">{PROVIDER_LABEL[u.provider] ?? u.provider}</strong>
+                      {' · '}{u.endpoint}{' · '}{UNIT_LABEL[u.unit] ?? u.unit}
+                      <span className="block text-orbit-tertiary">{u.reason}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* Per-project breakdown */}
           <div className="orbit-card p-4">
             <h3 className="text-orbit-primary text-sm font-semibold mb-3 flex items-center gap-2">
@@ -221,22 +267,64 @@ export default function UsageRollup() {
           </p>
 
           {cost && (
-            <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
-              <strong className="text-orbit-secondary">Est. cost</strong> multiplies the real recorded input/output token
-              counts by published list rates{cost.rateCard?.asOf ? ` (as of ${cost.rateCard.asOf})` : ''}:{' '}
-              {(cost.rateCard?.models ?? []).map((m, i) => (
-                <span key={m.label}>
-                  {i > 0 ? ' · ' : ''}{m.label} ${m.inputPerM}/${m.outputPerM} per M in/out
-                </span>
-              ))}. It is a <em>computed estimate at list price</em>, not the actual invoice — caching, batch, and negotiated
-              discounts are not reflected, and Semrush units, SerpAPI searches &amp; image generations are plan-dependent or
-              count-only, so they are left unpriced. Provider dashboards remain the billing source of truth.{' '}
-              {(cost.rateCard?.sources ?? []).map((s, i) => (
-                <a key={s} href={s} target="_blank" rel="noreferrer" className="text-orbit-accent hover:underline">
-                  {i > 0 ? ' · ' : ''}source{i + 1}
-                </a>
-              ))}
-            </p>
+            <>
+              {/* The two bases mean different things — never merge them into one number silently. */}
+              <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+                <strong className="text-orbit-secondary">Est. cost splits two ways:</strong>{' '}
+                <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPayPerUseUSD)}</span> pay-per-use
+                (Anthropic &amp; OpenAI tokens, billed per token) +{' '}
+                <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPlanQuotaUSD)}</span> allocated from
+                prepaid plans ({(cost.rateCard?.units ?? []).map(u => u.label.replace(/ (search|API unit)$/, '')).join(' & ') || 'none configured'}) ={' '}
+                <span className="text-orbit-accent tabular-nums">{fmtUSD(cost.grandTotalUSD)}</span>.
+              </p>
+
+              <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+                <strong className="text-orbit-secondary">Rates</strong>
+                {cost.rateCard?.asOf ? ` (as of ${cost.rateCard.asOf})` : ''} —{' '}
+                <em>per token:</em>{' '}
+                {(cost.rateCard?.models ?? []).map((m, i) => (
+                  <span key={m.label}>
+                    {i > 0 ? ' · ' : ''}{m.label} ${m.inputPerM}/${m.outputPerM} per M in/out
+                  </span>
+                ))}
+                {(cost.rateCard?.units ?? []).length > 0 && (
+                  <>
+                    {'. '}<em>per unit:</em>{' '}
+                    {(cost.rateCard?.units ?? []).map((u, i) => (
+                      <span key={u.label}>
+                        {i > 0 ? ' · ' : ''}{u.label} {fmtRate(u.usdPerUnit)} ({u.plan})
+                      </span>
+                    ))}
+                  </>
+                )}
+                . It is a <em>computed estimate</em>, not the actual invoice — caching, batch, and negotiated discounts are
+                not reflected. Provider dashboards remain the billing source of truth.{' '}
+                {(cost.rateCard?.sources ?? []).map((s, i) => (
+                  <a key={s} href={s} target="_blank" rel="noreferrer" className="text-orbit-accent hover:underline">
+                    {i > 0 ? ' · ' : ''}source{i + 1}
+                  </a>
+                ))}
+              </p>
+
+              {cost.planQuotaCaveat && (
+                <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+                  <strong className="text-orbit-secondary">Why the prepaid figures are an allocation:</strong>{' '}
+                  {cost.planQuotaCaveat}
+                </p>
+              )}
+
+              {(cost.rateCard?.unpriced ?? []).length > 0 && (
+                <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+                  <strong className="text-orbit-secondary">Deliberately unpriced</strong> (honest gap, Const I.5 — a real
+                  quantity is still shown for each):{' '}
+                  {(cost.rateCard?.unpriced ?? []).map((u, i) => (
+                    <span key={u.label}>
+                      {i > 0 ? ' · ' : ''}<strong className="text-orbit-secondary">{u.label}</strong> — {u.reason} (as of {u.asOf})
+                    </span>
+                  ))}
+                </p>
+              )}
+            </>
           )}
         </>
       )}
