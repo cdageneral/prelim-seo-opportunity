@@ -46,7 +46,39 @@ export const PRICING_ASOF = '2026-08-03';
 export const PLAN_QUOTA_CAVEAT =
   'SerpAPI and Semrush are prepaid monthly allowances, not pay-per-use. Their cost is the plan price divided by its included quota — an allocation of a fixed subscription across measured usage, not a marginal cost. Unused quota is not allocated, so these figures sum to LESS than the invoice.';
 
-export type RateBasis = 'list-per-token' | 'plan-quota';
+/**
+ * v7.397 — 'measured' is the strongest basis there is: the provider reports the
+ * REAL cost of each call in its own response and the ledger stores that figure.
+ * No rate is applied at all, so the dollars are a source row (Const I.1) rather
+ * than a derived estimate (I.5a). DataForSEO is currently the only such source.
+ */
+export type RateBasis = 'list-per-token' | 'plan-quota' | 'measured';
+
+/** Providers whose ledger rows carry a real, provider-reported cost on meta.costUSD. */
+export interface MeasuredCostEntry {
+  provider: string;
+  unit:     string;
+  label:    string;
+  note:     string;   // how the figure is obtained — shown on-panel
+  /** Published rate, kept ONLY as a cross-check against the measured total. */
+  crossCheckPerUnit: number;
+  crossCheckNote:    string;
+  source:   string;
+  asOf:     string;
+}
+
+export const MEASURED_COST_PROVIDERS: MeasuredCostEntry[] = [
+  {
+    provider: 'dataforseo',
+    unit:     'searches',
+    label:    'DataForSEO SERP',
+    note:     'Cost is read from the `cost` field DataForSEO returns on every task and stored per call — the actual dollars charged, not a rate applied to a count.',
+    crossCheckPerUnit: 0.002,
+    crossCheckNote:    'Live-mode list price $0.002 per SERP (10 results); $0.0006 standard queue, $0.0012 priority. This is a CROSS-CHECK only — it is never charged and never added to a total; the measured per-task cost is what the ledger bills against.',
+    source:   'https://dataforseo.com/apis/serp-api/pricing',
+    asOf:     '2026-08-03',
+  },
+];
 
 export interface TokenRate { inputPerM: number; outputPerM: number; } // USD per 1,000,000 tokens
 export interface RateEntry { match: RegExp; label: string; rate: TokenRate; source: string; }
@@ -161,6 +193,13 @@ function findTokenRate(provider: string, endpoint: string): RateEntry | null {
   return null;
 }
 
+function findMeasured(provider: string, unit: string): MeasuredCostEntry | null {
+  for (const e of MEASURED_COST_PROVIDERS) {
+    if (e.provider === provider && e.unit === unit) return e;
+  }
+  return null;
+}
+
 function findUnitRate(provider: string, unit: string): UnitRateEntry | null {
   for (const e of UNIT_RATES) {
     if (e.provider === provider && e.unit === unit) return e;
@@ -193,6 +232,12 @@ export function resolveRate(provider: string, unit: string, endpoint: string): R
         reason: `No rate on file for model "${endpoint}" (${provider}) — add it to lib/usage/pricing.ts` };
     }
     return { status: 'rate', usdPerUnit: null, label: entry.label, source: entry.source, basis: 'list-per-token' };
+  }
+
+  // v7.397 — measured beats derived: if the provider reports its own cost, use it.
+  const measured = findMeasured(provider, unit);
+  if (measured) {
+    return { status: 'rate', usdPerUnit: null, label: measured.label, source: measured.source, basis: 'measured' };
   }
 
   const unitRate = findUnitRate(provider, unit);
@@ -245,11 +290,16 @@ export const RATE_CARD = {
   unpriced: UNPRICED_DECLARATIONS.map(u => ({
     label: `${u.provider} (${u.unit})`, reason: u.reason, asOf: u.asOf,
   })),
+  measured: MEASURED_COST_PROVIDERS.map(m => ({
+    label: m.label, note: m.note, crossCheckPerUnit: m.crossCheckPerUnit,
+    crossCheckNote: m.crossCheckNote, source: m.source, asOf: m.asOf,
+  })),
   planQuotaCaveat: PLAN_QUOTA_CAVEAT,
   sources: [
     'https://platform.claude.com/docs/en/about-claude/pricing',
     'https://platform.openai.com/docs/pricing',
     'https://serpapi.com/pricing',
+    'https://dataforseo.com/apis/serp-api/pricing',
   ],
 } as const;
 
@@ -260,6 +310,8 @@ export interface PriceInput {
   inputTokens: number;   // real, measured (api_usage.meta.inputTokens sum)
   outputTokens: number;  // real, measured (api_usage.meta.outputTokens sum)
   quantity: number;      // native-unit total (for non-token units)
+  /** v7.397 — provider-reported dollars summed from meta.costUSD, for 'measured' rows. */
+  measuredCostUSD?: number;
 }
 
 export interface PriceResult {
@@ -300,6 +352,19 @@ export function priceLine(inp: PriceInput): PriceResult {
       (inp.inputTokens  / 1_000_000) * entry.rate.inputPerM +
       (inp.outputTokens / 1_000_000) * entry.rate.outputPerM;
     return { priced: true, costUSD: cost, rateLabel: entry.label, source: entry.source, basis: 'list-per-token', unregistered: false };
+  }
+
+  // v7.397 — a measured row is NOT multiplied by anything. The provider told us
+  // what it charged; applying a rate on top would replace a fact with an estimate.
+  if (res.basis === 'measured') {
+    return {
+      priced: true,
+      costUSD: Number.isFinite(inp.measuredCostUSD) ? (inp.measuredCostUSD as number) : 0,
+      rateLabel: res.label,
+      source: res.source,
+      basis: 'measured',
+      unregistered: false,
+    };
   }
 
   const perUnit = res.usdPerUnit ?? 0;

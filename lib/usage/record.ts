@@ -95,7 +95,7 @@ export const SEMRUSH_RATES: Record<string, number> = {
 // meta note so an assumed rate is never passed off as a verified one.
 const SEMRUSH_DEFAULT_RATE = 10;
 
-export type Provider = 'semrush' | 'serpapi' | 'profound' | 'anthropic' | 'openai';
+export type Provider = 'semrush' | 'serpapi' | 'profound' | 'anthropic' | 'openai' | 'dataforseo';
 export type Unit     = 'units' | 'searches' | 'calls' | 'tokens' | 'images';
 
 interface RecordInput {
@@ -253,5 +253,34 @@ export async function recordOpenAIImages(count: number, endpoint: string, key?: 
     unit:     'images',
     quantity: count,
     keyHash:  keyFingerprint(key ?? process.env.OPENAI_API_KEY),
+  });
+}
+
+/**
+ * Record a DataForSEO SERP call (v7.397).
+ *
+ * ⭐ UNIQUE IN THIS LEDGER: DataForSEO reports the REAL cost of each request in
+ * its own response body, so `costUSD` here is a MEASURED figure — a real source
+ * row under Const I.1, not a rate × count estimate like every other provider.
+ * It is stored on `meta.costUSD` with `measured: true`, and the cost rollup sums
+ * that column directly instead of applying a rate card.
+ *
+ * `quantity` stays the request count so the usage view still reads in searches
+ * alongside SerpAPI; the dollars come from meta.
+ */
+export async function recordDataForSeo(
+  endpoint: string,
+  costUSD: number,
+  searches = 1,
+  login?: string | null,
+): Promise<void> {
+  const measured = Number.isFinite(costUSD) && costUSD >= 0 ? costUSD : 0;
+  await recordUsage({
+    provider: 'dataforseo',
+    endpoint,
+    unit:     'searches',
+    quantity: searches,
+    keyHash:  keyFingerprint(login ?? process.env.DATAFORSEO_LOGIN),
+    meta:     { costUSD: measured, measured: true },
   });
 }
