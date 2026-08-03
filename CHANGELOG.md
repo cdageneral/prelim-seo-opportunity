@@ -1,3 +1,13 @@
+## v7.398 · The ledger stops failing quietly — 2026-08-03
+
+**v7.397's comparison made 20 real, billed API calls and not one reached the usage ledger.** SerpAPI stayed at exactly 23,920 and no DataForSEO line appeared. Nothing showed in the logs either, because `recordUsage` swallows every failure on purpose — accounting must never break a real API call.
+
+**That design is right and the silence was wrong.** A swallowed ledger write is spend that vanishes from every total with nothing on screen to say so — the same failure mode Art. I.5b was written to prevent one level up. So the write now counts its failures, logs them at error level with the provider and endpoint attached, and the API Usage panel raises a red banner saying **these totals are understated and real money was charged anyway**. The count is per server instance and the panel says so — it is a floor, not a total, because the write that failed is precisely the one that cannot record its own failure.
+
+**And there is now a way to get the actual error instead of guessing at it.** `GET /api/usage/selftest` runs the same write path with **nothing swallowed**: it checks the database is reachable, resolves `to_regclass('public.api_usage')`, counts rows before and after, runs the memoised DDL step, performs the exact insert `recordUsage` performs and returns the raw error verbatim if it throws, then reports what actually landed in the last three hours by provider. Its own test row carries `kind = 'selftest'`, which the cost rollup filters out, so it can never contaminate a real figure.
+
+Files: `app/api/usage/selftest/route.ts` (new), `lib/usage/record.ts`, `app/api/usage/cost/route.ts`, `components/dashboard/UsageRollup.tsx`, `package.json`/`package-lock.json` (7.398.0). This release **diagnoses**; the fix follows once the self-test names the failing step.
+
 ## v7.397 · A second SERP provider, and the first cost OrbitIQ doesn't have to estimate — 2026-08-03
 
 **Wayne got a DataForSEO key and asked what it would be worth.** The answer was mostly one number: SerpAPI is **76% of OrbitIQ's entire API bill** — $219.27 of $288.49 — and it carries a hard 30,000-searches/month ceiling that a single client can eat half of in one pass (US Bank: 13,788 searches). DataForSEO is pay-as-you-go at **$0.002 per SERP live** against SerpAPI's **$0.0091667** effective, with no ceiling at all. At the current ~15,300 searches/month that is roughly **$31/mo against $275**.
