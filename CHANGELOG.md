@@ -1,3 +1,19 @@
+## v7.399 · The ledger was never broken — the read was — 2026-08-03
+
+**The self-test shipped in v7.398 answered the question in one call, and the answer was the opposite of what it looked like.** The database held **38,128 rows**, including 7 fresh SerpAPI rows and 3 DataForSEO rows written minutes earlier. The direct insert returned `ok`. Zero ledger failures were recorded. Every write from v7.397's provider comparison had landed perfectly.
+
+**What was wrong was the reading.** `/api/usage` reported SerpAPI stuck at exactly 23,920 and **no DataForSEO line at all** while querying that same database. Both usage read paths used a drizzle aggregate-alias select — `db.select({ quantity: sql\`coalesce(sum(...))\`, calls: sql\`count(*)\` }).from(...).groupBy(...)` — over neon-http, which returned stale, incomplete aggregates.
+
+**This exact failure is already in this project's history.** v7.373 hit it in the auth layer: `db.select({ n: sql\`count(*)\` }).from(appUsers)` returned 0 while four rows sat in the table, which broke every team login. The fix then was to go through `db.execute` with raw SQL. That is the fix now. Both rollups query the database directly and let it do the aggregation it is authoritative for.
+
+**The cost figures reported before this release were understated by an unknown amount** — every call recorded since whenever the drift began was in the table but absent from the totals. Nothing was lost; it was all there the whole time, just not being read.
+
+Two smaller things went in with it: the usage rollup now excludes `kind = 'selftest'`, so the diagnostic can never inflate a real count; and the v7.398 failure counter, error-level log and red panel banner stay, because the reason this took three releases to find is that the original failure was **silent**.
+
+**Suite gotcha, and it is the v7.385 lesson repeating:** the first version of the check that bans the drizzle aggregate pattern **failed on its own comment** — the comment documenting the banned pattern contains the banned pattern. The check now strips comments before asserting. Assert against code, never against the audit trail that describes it.
+
+Files: `app/api/usage/route.ts`, `app/api/usage/cost/route.ts`, `package.json`/`package-lock.json` (7.399.0). Verified: project `tsc --noEmit` clean; retained suite **825 pass, 16 pre-existing failures identical to base, zero new**, +15 new v7.398/v7.399 checks.
+
 ## v7.398 · The ledger stops failing quietly — 2026-08-03
 
 **v7.397's comparison made 20 real, billed API calls and not one reached the usage ledger.** SerpAPI stayed at exactly 23,920 and no DataForSEO line appeared. Nothing showed in the logs either, because `recordUsage` swallows every failure on purpose — accounting must never break a real API call.
