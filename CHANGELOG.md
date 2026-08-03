@@ -1,3 +1,61 @@
+## v7.400 · Light mode: the CTA buttons you could not read — 2026-08-03
+
+Wayne sent a screenshot of the SERP Features panel in light mode. The "Scan all
+7,496 remaining" button was there, dark navy, sitting exactly where it should —
+and its label was invisible. Measured contrast: **1.24:1**. Anything under 4.5:1
+fails WCAG AA; 1.24:1 is text the same brightness as the thing behind it.
+
+It was not a typo in one button. It was structural, and it had been shipping
+since v7.185.
+
+**What was actually wrong.** The theme system maps every literal colour in the
+components to a `--c-<hex>` token and gives it a light-mode value by inverting
+its lightness. That rule is correct for a colour sitting on the page: white text
+on a dark page has to become dark text on a white page or it disappears. It is
+wrong for a colour sitting on a *fill*, because a fill does not follow the page
+surface. `--c-ffffff` dutifully inverted to `#17182B`, so every button label
+written as `var(--c-ffffff)` turned near-black — while the button underneath
+stayed dark. Ten controls across five files: the SERP scans, Save on Edit
+Project, Create on New Project, five buttons in the Competitors modal, and the
+Google SERP action. Notably `RefreshModal.tsx` was fine the whole time, because
+it writes a literal `white` and never went through the token map.
+
+**The fix, in three parts.**
+
+*Pinned on-fill colour.* A new `--on-fill-accent` is declared with the same
+value in both theme blocks — deliberately, because a colour on a fill must not
+follow the page surface. The ten sites now use it.
+
+*A true indigo instead of a near-black.* The lightness inversion had turned the
+brand accent into `#09009c`, which reads as black more than as OrbitIQ indigo.
+Light mode now uses `#4338CA` for the fill and the ink alike, with the Tailwind
+channel triplet moved in step so class-styled and token-styled buttons cannot
+drift apart. White on it measures 7.9:1. The dark theme is untouched.
+
+*Signal inks that can carry text.* The same inversion left green, amber, cyan
+and orange too pale to read: status chips were landing between 2.1:1 and 4.2:1
+against their own tint. Nineteen tokens were recomputed to the point where each
+clears 4.5:1 against white **and** against a 15% wash of itself, which is the
+harder of the two and the case the chips actually present. Six faint labels that
+failed in *both* themes — an "ORBIT MAP" button at 1.67:1 among them — moved to
+the standard secondary-text token.
+
+**So it cannot happen again.** A dual-theme contrast gate now runs in the
+retained suite. Every inline style that sets both a background and a colour is
+resolved through the real token maps, once per theme, and checked against AA. A
+pair that fails in either theme is an Article VIII FAIL. Pairs whose value is a
+runtime expression are reported as skipped rather than guessed at — an
+unverifiable pair is never counted as passing. Twenty-one known dark-theme
+shortfalls that predate this release are recorded in a keyed allowlist with a
+reason each; the light theme carries **zero** allowlisted debt, and a separate
+assertion fails the build if a `|light` entry is ever added. Alongside it, the
+CTAs are rendered in real Chromium in both themes and every ternary branch is
+checked, because jsdom does not resolve `var()` in `getComputedStyle` and a
+harness that cannot see the real value cannot prove anything about it.
+
+`tsc` clean. Retained suite 878 pass / 16 pre-existing / zero delta, of which 38
+checks are new here.
+
 ## v7.399 · The ledger was never broken — the read was — 2026-08-03
 
 **The self-test shipped in v7.398 answered the question in one call, and the answer was the opposite of what it looked like.** The database held **38,128 rows**, including 7 fresh SerpAPI rows and 3 DataForSEO rows written minutes earlier. The direct insert returned `ok`. Zero ledger failures were recorded. Every write from v7.397's provider comparison had landed perfectly.
