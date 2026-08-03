@@ -135,9 +135,30 @@ export async function recordUsage(input: RecordInput): Promise<void> {
       meta:      input.meta ?? null,
     });
   } catch (err) {
-    // Accounting must never break the real call. Surface for debugging only.
-    console.warn('[OrbitIQ usage] record failed:', (err as any)?.message ?? err);
+    // Accounting must never break the real call — but v7.398: it must not be
+    // SILENT either. A swallowed ledger write is spend that vanishes from every
+    // total with nothing on screen to say so, which is the same failure mode
+    // Const I.5b exists to prevent one level up. Count it and log at error
+    // level so it is visible in the runtime logs and on the panel.
+    _ledgerFailures++;
+    const e = err as any;
+    _lastLedgerError = [e?.name, e?.code, e?.message ?? String(err)].filter(Boolean).join(' | ');
+    console.error('[OrbitIQ usage] LEDGER WRITE FAILED:', _lastLedgerError,
+      '| provider=', input.provider, 'endpoint=', input.endpoint);
   }
+}
+
+/**
+ * v7.398 — per-instance count of ledger writes that failed. Per-INSTANCE is a
+ * real limitation (a lambda that never recovers is invisible to a later one),
+ * but the alternative to an imperfect signal here is no signal at all: the
+ * write that failed is precisely the one that cannot record its own failure.
+ * `/api/usage/selftest` is the definitive check; this is the ambient one.
+ */
+let _ledgerFailures = 0;
+let _lastLedgerError: string | null = null;
+export function getLedgerFailures(): { count: number; lastError: string | null } {
+  return { count: _ledgerFailures, lastError: _lastLedgerError };
 }
 
 /** Count CSV data rows the way parseSemrushCSV does (header excluded, error bodies → 0). */
