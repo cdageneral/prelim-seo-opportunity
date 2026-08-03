@@ -1424,7 +1424,7 @@ export default function ProjectBriefPage() {
             </div>
             <button
               className="w-full flex items-center gap-1.5 rounded-md text-[9px] transition-colors mt-1.5"
-              style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1c1c2e)', color: 'var(--c-383858)', padding: '5px 9px' }}
+              style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1c1c2e)', color: 'var(--c-8888aa)', padding: '5px 9px' }}
             >
               <span style={{ width: '9px', height: '9px', borderRadius: '50%', border: '1px solid var(--c-3a3aaa)', flexShrink: 0 }} />
               <span style={{ flex: 1, textAlign: 'left' }}>ORBIT MAP</span>
@@ -1975,7 +1975,7 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
       <div style={{ width: '140px', flexShrink: 0 }}>
         <span style={{ fontSize: '11px', color: 'var(--c-c0c0d8)' }}>{domain}</span>
         {label && (
-          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: 'var(--c-2a2a5a)', color: 'var(--c-9090c0)', marginLeft: '5px' }}>{label}</span>
+          <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: 'var(--c-2a2a5a)', color: 'var(--c-c0c0e0)', marginLeft: '5px' }}>{label}</span>
         )}
       </div>
 
