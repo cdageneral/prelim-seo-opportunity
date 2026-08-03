@@ -1,3 +1,17 @@
+## v7.396 · Semrush and SerpAPI get a price — and the rate card stops trusting itself — 2026-08-03
+
+**Wayne asked two things: put Semrush and SerpAPI on the cost panel, and make it so any new source that costs money lands there automatically.** The first is a rate. The second is a design problem, because a literal auto-add has to invent a number for a provider it has never seen — and inventing numbers is the one thing this app does not do. So the second became the opposite: the rate card now **fails closed**.
+
+**Every provider, unit and model that reaches the ledger must resolve to an explicit registry entry** — either a real rate carrying its source and an as-of date, or a dated declaration that it is deliberately unpriced. There is no third state and no default rate. Anything else comes back `unregistered`, raises a visible alarm on the panel naming exactly what is missing, and fails the Article VIII gate. Detection is automatic; the number never is.
+
+**Writing the check for that found a live bug in the old rate card.** The v7.363 patterns matched by *family* — `/^claude-opus/i` — so the first day a new Opus shipped, its tokens would have been priced silently at the 4.6 rate and reported as fact. Matching is now pinned to the model *version*, and `MODELS_IN_USE` is asserted to resolve, so a release that adds a model without pricing it fails at build time instead of when the invoice arrives.
+
+**SerpAPI is priced; Semrush is honestly not.** SerpAPI runs on the Big Data plan — $275/mo ÷ 30,000 searches = **$0.0091667 per search** — which puts TD Bank's 5,981 recorded searches at **$54.83**, a real number that was reading as a blank before today. Semrush's 2,000,000-unit monthly package is confirmed, but Semrush publishes no per-unit price anywhere; it is quoted by sales, and that figure is not yet on file. Rather than borrow a number off a blog, it ships as a dated unpriced declaration, named on the panel with its real unit count. Adding it later is one registry entry.
+
+**Both of those are prepaid quotas, not pay-per-use, and the panel now says so.** The total splits in two — pay-per-use tokens versus plan allocations — because plan-fee ÷ included-quota is an *allocation* of a fixed subscription, not a marginal cost. Unused quota is allocated to no one, so those figures sum to **less than the invoice**. That sentence is on the panel, not just in this file.
+
+Files: `lib/usage/pricing.ts`, `app/api/usage/cost/route.ts`, `components/dashboard/UsageRollup.tsx`, `package.json`/`package-lock.json` (7.396.0). Constitution amended to **v0.21 (Art. I.5b)**. Verified: real-project `tsc --noEmit` clean (V.1a); retained suite **799 pass, 16 pre-existing failures identical to pristine base — zero new failures**, +45 new v7.396 checks including a dual-theme jsdom render in both the clean and the alarm state, and a real-scale replay asserting the three existing token lines still price to $38.38 / $13.47 / $0.95 unchanged.
+
 ## v7.395 · Step 1 at laptop width — a name is never cut — 2026-08-01
 
 **Caught on the v7.394 live check, and it was mine.** At a 1409px window the step row is still two-up, which leaves the Step 1 card about 460px wide — and the longest segment name rendered as **"The Financially Wak…"**. A count can shrink and a quote can go, but truncating a person's name in a panel whose entire job is telling you who these people are defeats the release that just shipped.
