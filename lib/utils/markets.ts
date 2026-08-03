@@ -20,13 +20,19 @@ export interface Market {
   serpGl:       string;   // SerpAPI gl (country of search)
   serpHl:       string;   // SerpAPI hl (interface language)
   googleDomain: string;   // SerpAPI google_domain
+  // v7.397 — DataForSEO addresses a market by NAME + language code, not by
+  // gl/google_domain. Kept on the SAME row so the file-header promise ("add one
+  // entry here and it appears in the dropdowns automatically — no other code
+  // changes needed") still holds now that there are two SERP providers.
+  dfsLocationName: string;   // DataForSEO `location_name`
+  dfsLanguageCode: string;   // DataForSEO `language_code`
 }
 
 export const MARKETS: Market[] = [
-  { code: 'us', label: 'United States',  flag: '🇺🇸', serpGl: 'us', serpHl: 'en', googleDomain: 'google.com' },
-  { code: 'ca', label: 'Canada',         flag: '🇨🇦', serpGl: 'ca', serpHl: 'en', googleDomain: 'google.ca' },
-  { code: 'uk', label: 'United Kingdom', flag: '🇬🇧', serpGl: 'uk', serpHl: 'en', googleDomain: 'google.co.uk' },
-  { code: 'au', label: 'Australia',      flag: '🇦🇺', serpGl: 'au', serpHl: 'en', googleDomain: 'google.com.au' },
+  { code: 'us', label: 'United States',  flag: '🇺🇸', serpGl: 'us', serpHl: 'en', googleDomain: 'google.com',    dfsLocationName: 'United States',  dfsLanguageCode: 'en' },
+  { code: 'ca', label: 'Canada',         flag: '🇨🇦', serpGl: 'ca', serpHl: 'en', googleDomain: 'google.ca',     dfsLocationName: 'Canada',         dfsLanguageCode: 'en' },
+  { code: 'uk', label: 'United Kingdom', flag: '🇬🇧', serpGl: 'uk', serpHl: 'en', googleDomain: 'google.co.uk',  dfsLocationName: 'United Kingdom', dfsLanguageCode: 'en' },
+  { code: 'au', label: 'Australia',      flag: '🇦🇺', serpGl: 'au', serpHl: 'en', googleDomain: 'google.com.au', dfsLocationName: 'Australia',      dfsLanguageCode: 'en' },
 ];
 
 /** Look up a market by Semrush database code; unknown codes fall back to US. */
