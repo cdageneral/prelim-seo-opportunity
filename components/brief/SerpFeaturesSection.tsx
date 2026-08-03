@@ -372,7 +372,7 @@ function CardActionButton({ a }: { a: CardStale }) {
           width: '100%', marginTop: '4px', padding: '7px 10px', borderRadius: '7px',
           fontSize: '11px', fontWeight: 600, border: 'none',
           background: a.running ? 'var(--c-1a1a2e)' : violet ? 'var(--c-6c63ff)' : 'var(--c-f59e0b)',
-          color: a.running ? 'var(--c-8888aa)' : violet ? 'var(--c-ffffff)' : 'var(--c-1a1205)',
+          color: a.running ? 'var(--c-8888aa)' : violet ? 'var(--on-fill-accent)' : 'var(--c-1a1205)',
           cursor: a.running ? 'wait' : 'pointer',
         }}
       >
@@ -786,7 +786,7 @@ function KeywordDrilldown({ keywords, clientDomain, clientName, competitors }: {
                             {kw.aioText}
                           </div>
                         ) : (
-                          <div style={{ background: 'var(--c-0a0a18)', border: '1px dashed var(--c-1e1e35)', borderRadius: '9px', padding: '12px 14px', fontSize: '11px', lineHeight: 1.55, color: 'var(--c-555570)' }}>
+                          <div style={{ background: 'var(--c-0a0a18)', border: '1px dashed var(--c-1e1e35)', borderRadius: '9px', padding: '12px 14px', fontSize: '11px', lineHeight: 1.55, color: 'var(--c-8888aa)' }}>
                             Answer text not captured for this keyword — scans before v7.126 stored citation links only. Re-scan this keyword to capture the actual AI Overview answer.
                           </div>
                         )}
@@ -1286,7 +1286,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                     padding: '10px 18px', borderRadius: '10px',
                     fontSize: '13px', fontWeight: 700, border: 'none',
                     background: serpScanRunning ? 'var(--c-1a1a2e)' : 'var(--c-6c63ff)',
-                    color:      serpScanRunning ? 'var(--c-8888aa)' : 'var(--c-ffffff)',
+                    color:      serpScanRunning ? 'var(--c-8888aa)' : 'var(--on-fill-accent)',
                     cursor:     serpScanRunning ? 'wait' : 'pointer',
                     boxShadow:  serpScanRunning ? 'none' : '0 2px 10px var(--ca-108-99-255-0_35)',
                     transition: 'background-color .15s',

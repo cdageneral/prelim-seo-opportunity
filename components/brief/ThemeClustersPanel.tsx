@@ -238,7 +238,7 @@ function ClusterCard({ cluster, clientDomain }: ClusterCardProps) {
         </div>
       ) : (
         <div style={{
-          fontSize: 10, color: 'var(--c-383858)', marginBottom: 12,
+          fontSize: 10, color: 'var(--c-8888aa)', marginBottom: 12,
           padding: '6px 10px', background: 'var(--c-0a0a14)', borderRadius: 6,
           border: '1px solid var(--c-141428)',
         }}>

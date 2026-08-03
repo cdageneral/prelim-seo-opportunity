@@ -736,7 +736,7 @@ function PosBadge({ pos }: { pos: number | null }) {
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: '32px', height: '22px', borderRadius: '5px',
         background: 'var(--ca-255-255-255-0_04)', border: '1px solid var(--ca-255-255-255-0_08)',
-        color: 'var(--c-444458)', fontSize: '11px', flexShrink: 0,
+        color: 'var(--c-8888aa)', fontSize: '11px', flexShrink: 0,
       }}>—</span>
     );
   }
@@ -1537,7 +1537,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
                   </span>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={runSerpPull}
-                      style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-6c63ff)', color: 'var(--c-f0f0ff)', border: '1px solid var(--c-6c63ff)' }}>
+                      style={{ fontSize: '11px', fontWeight: 600, padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', background: 'var(--c-6c63ff)', color: 'var(--on-fill-accent)', border: '1px solid var(--c-6c63ff)' }}>
                       Pull now (~{serpEstimate.totalUnits.toLocaleString()} units)
                     </button>
                     <button onClick={() => setSerpState('idle')}

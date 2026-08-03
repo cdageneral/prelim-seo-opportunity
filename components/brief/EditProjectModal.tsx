@@ -234,7 +234,7 @@ export default function EditProjectModal({
                 flex: 2, padding: '10px', borderRadius: '8px',
                 background: saving ? 'var(--c-3d3d8a)' : 'var(--c-6c63ff)',
                 border: 'none',
-                color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600,
+                color: 'var(--on-fill-accent)', fontSize: '13px', fontWeight: 600,
                 cursor: saving ? 'not-allowed' : 'pointer',
                 transition: 'background 0.12s',
                 opacity: (!clientName.trim() || !websiteUrl.trim()) ? 0.4 : 1,

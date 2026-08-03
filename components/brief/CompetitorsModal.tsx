@@ -628,7 +628,7 @@ export default function CompetitorsModal({
                   Cancel
                 </button>
                 <button type="button" disabled={!addDomain.trim() || adding} onClick={addCompetitor}
-                  style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: 'var(--c-ffffff)', background: 'var(--c-6c63ff)', border: 'none', padding: '7px', borderRadius: '7px', cursor: 'pointer', opacity: !addDomain.trim() || adding ? 0.4 : 1 }}>
+                  style={{ flex: 1, fontSize: '11px', fontWeight: 600, color: 'var(--on-fill-accent)', background: 'var(--c-6c63ff)', border: 'none', padding: '7px', borderRadius: '7px', cursor: 'pointer', opacity: !addDomain.trim() || adding ? 0.4 : 1 }}>
                   {adding ? 'Adding…' : 'Add'}
                 </button>
               </div>
@@ -678,7 +678,7 @@ export default function CompetitorsModal({
                             Cancel
                           </button>
                           <button type="button" disabled={!editDomain.trim() || editSaving} onClick={saveEdit}
-                            style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-ffffff)', background: 'var(--c-6c63ff)', border: 'none', padding: '5px 16px', borderRadius: '7px', cursor: 'pointer', opacity: !editDomain.trim() || editSaving ? 0.4 : 1 }}>
+                            style={{ fontSize: '11px', fontWeight: 600, color: 'var(--on-fill-accent)', background: 'var(--c-6c63ff)', border: 'none', padding: '5px 16px', borderRadius: '7px', cursor: 'pointer', opacity: !editDomain.trim() || editSaving ? 0.4 : 1 }}>
                             {editSaving ? 'Saving…' : 'Save'}
                           </button>
                         </div>
@@ -921,7 +921,7 @@ export default function CompetitorsModal({
                 {suggesting ? 'Suggesting…' : '✦ Suggest with AI'}
               </button>
               <button type="button" onClick={() => saveBrandTerms(terms)}
-                style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--on-fill-accent)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                 Save brand terms
               </button>
             </div>
@@ -986,7 +986,7 @@ export default function CompetitorsModal({
                 {exSuggesting ? 'Scanning…' : '✦ Suggest with AI'}
               </button>
               <button type="button" onClick={() => saveExcludedBrands(exTerms)}
-                style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--on-fill-accent)', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                 Save excluded brands
               </button>
             </div>
@@ -1004,7 +1004,7 @@ export default function CompetitorsModal({
         {/* ── Footer ── */}
         <div style={{ padding: '14px 22px', borderTop: '1px solid var(--c-1a1a2e)', flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
           <button type="button" onClick={onClose}
-            style={{ padding: '9px 26px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+            style={{ padding: '9px 26px', borderRadius: '8px', background: 'var(--c-6c63ff)', border: 'none', color: 'var(--on-fill-accent)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
             Done
           </button>
         </div>
