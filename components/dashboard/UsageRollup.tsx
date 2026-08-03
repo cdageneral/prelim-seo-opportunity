@@ -30,10 +30,11 @@ interface RateCard {
   unpriced: RateCardUnpriced[]; measured?: RateCardMeasured[]; planQuotaCaveat: string; sources: string[];
 }
 interface UnregisteredLine { provider: string; unit: string; endpoint: string; reason: string; }
+interface LedgerFailures { count: number; lastError: string | null; }
 interface CostPayload {
   grandTotalUSD: number; grandPayPerUseUSD: number; grandPlanQuotaUSD: number; grandMeasuredUSD?: number;
   pricingAsOf: string; basis: string; planQuotaCaveat: string; rateCard: RateCard;
-  registryOk: boolean; unregistered: UnregisteredLine[]; projects: ProjectCost[];
+  registryOk: boolean; unregistered: UnregisteredLine[]; ledgerFailures?: LedgerFailures; projects: ProjectCost[];
 }
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -168,6 +169,33 @@ export default function UsageRollup() {
               </div>
             ))}
           </div>
+
+          {/* Ledger-write alarm (v7.398) — a swallowed write is spend that vanishes
+              from every total with nothing on screen to say so. Say it. */}
+          {cost && (cost.ledgerFailures?.count ?? 0) > 0 && (
+            <div className="orbit-card p-4 mb-4 border border-orbit-red/40 bg-orbit-red/10">
+              <h3 className="text-orbit-red text-sm font-semibold mb-2 flex items-center gap-2">
+                <i className="ti ti-database-off" aria-hidden="true" />
+                Ledger writes are failing — these totals are understated
+              </h3>
+              <p className="text-orbit-secondary text-xs leading-relaxed">
+                <strong className="text-orbit-primary">{cost.ledgerFailures?.count}</strong> billable
+                {' '}{(cost.ledgerFailures?.count ?? 0) === 1 ? 'call' : 'calls'} could not be written to
+                the usage ledger on the server instance that answered this request, so their spend is
+                <strong className="text-orbit-primary"> missing from every figure below</strong>. Real
+                money was charged by the provider regardless.
+                {cost.ledgerFailures?.lastError && (
+                  <span className="block mt-1 text-orbit-tertiary">
+                    Last error: <code className="text-orbit-secondary">{cost.ledgerFailures.lastError}</code>
+                  </span>
+                )}
+                <span className="block mt-1 text-orbit-tertiary">
+                  Counted per server instance, so this is a floor, not a total. Run{' '}
+                  <code className="text-orbit-secondary">/api/usage/selftest</code> for the definitive check.
+                </span>
+              </p>
+            </div>
+          )}
 
           {/* Fail-closed registry alarm (v7.396) — a metered source with NO rate
               entry of either kind. Loud on purpose: this is also an Art. VIII FAIL. */}
