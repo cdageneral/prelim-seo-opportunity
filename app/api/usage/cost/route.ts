@@ -29,7 +29,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/db';
 import { apiUsage, projects } from '@/db/schema';
 import { sql, eq } from 'drizzle-orm';
-import { ensureUsageTable } from '@/lib/usage/record';
+import { ensureUsageTable, getLedgerFailures } from '@/lib/usage/record';
 import { priceLine, auditRegistry, RATE_CARD, PRICING_ASOF, PLAN_QUOTA_CAVEAT } from '@/lib/usage/pricing';
 
 export const dynamic = 'force-dynamic';
@@ -171,6 +171,9 @@ export async function GET() {
       grandMeasuredUSD,
       registryOk: unregistered.length === 0,
       unregistered,
+      // v7.398 — ledger writes that failed on THIS instance. A swallowed write is
+      // spend missing from every total, so it gets said out loud (Const I.5).
+      ledgerFailures: getLedgerFailures(),
       projects: projectsOut,
     });
   } catch (err) {
@@ -187,6 +190,7 @@ export async function GET() {
       grandMeasuredUSD: 0,
       registryOk: true,
       unregistered: [],
+      ledgerFailures: getLedgerFailures(),
       projects: [],
     });
   }
