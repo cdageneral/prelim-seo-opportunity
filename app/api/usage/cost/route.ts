@@ -45,13 +45,14 @@ interface UnpricedLine {
 }
 interface ProjectCost {
   projectId: string | null; projectName: string;
-  costUSD: number; payPerUseUSD: number; planQuotaUSD: number;
+  costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number;
   models: ModelCost[]; unpriced: UnpricedLine[];
 }
 
 const BASIS_NOTE =
   'Computed at registry rates on real recorded quantities (Const I.5a). Not the actual invoice — provider dashboards remain the billing source of truth; caching, batch, and negotiated discounts are not reflected. Token providers price per token at published list rates. ' +
-  PLAN_QUOTA_CAVEAT;
+  PLAN_QUOTA_CAVEAT +
+  ' DataForSEO is different again: it reports the real cost of every request in its own response, so those dollars are MEASURED, not estimated, and no rate is applied to them.';
 
 export async function GET() {
   try {
@@ -68,6 +69,8 @@ export async function GET() {
         inputTokens:  sql<number>`coalesce(sum((${apiUsage.meta} ->> 'inputTokens')::numeric), 0)`,
         outputTokens: sql<number>`coalesce(sum((${apiUsage.meta} ->> 'outputTokens')::numeric), 0)`,
         quantity:     sql<number>`coalesce(sum(${apiUsage.quantity}), 0)`,
+        // v7.397 — provider-reported dollars (DataForSEO). A real source row, not a rate.
+        measuredCost: sql<number>`coalesce(sum((${apiUsage.meta} ->> 'costUSD')::numeric), 0)`,
         calls:        sql<number>`count(*)`,
       })
       .from(apiUsage)
@@ -84,6 +87,7 @@ export async function GET() {
     let grandTotalUSD = 0;
     let grandPayPerUseUSD = 0;
     let grandPlanQuotaUSD = 0;
+    let grandMeasuredUSD = 0;
 
     for (const r of grouped) {
       const pid = r.projectId ?? '__unattributed__';
@@ -92,7 +96,7 @@ export async function GET() {
         entry = {
           projectId: r.projectId ?? null,
           projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
-          costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, models: [], unpriced: [],
+          costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, measuredUSD: 0, models: [], unpriced: [],
         };
         projMap.set(pid, entry);
       }
@@ -101,10 +105,11 @@ export async function GET() {
       const outputTokens = Number(r.outputTokens) || 0;
       const quantity     = Number(r.quantity)     || 0;
       const calls        = Number(r.calls)        || 0;
+      const measuredCost = Number(r.measuredCost) || 0;
 
       const priced = priceLine({
         provider: r.provider, endpoint: r.endpoint, unit: r.unit,
-        inputTokens, outputTokens, quantity,
+        inputTokens, outputTokens, quantity, measuredCostUSD: measuredCost,
       });
 
       if (priced.priced) {
@@ -118,6 +123,11 @@ export async function GET() {
         if (priced.basis === 'plan-quota') {
           entry.planQuotaUSD += priced.costUSD;
           grandPlanQuotaUSD += priced.costUSD;
+        } else if (priced.basis === 'measured') {
+          // v7.397 — kept in its own bucket so the panel never presents a measured
+          // figure and an estimated one as the same kind of number (Const I.5a).
+          entry.measuredUSD += priced.costUSD;
+          grandMeasuredUSD += priced.costUSD;
         } else {
           entry.payPerUseUSD += priced.costUSD;
           grandPayPerUseUSD += priced.costUSD;
@@ -158,6 +168,7 @@ export async function GET() {
       grandTotalUSD,
       grandPayPerUseUSD,
       grandPlanQuotaUSD,
+      grandMeasuredUSD,
       registryOk: unregistered.length === 0,
       unregistered,
       projects: projectsOut,
@@ -173,6 +184,7 @@ export async function GET() {
       grandTotalUSD: 0,
       grandPayPerUseUSD: 0,
       grandPlanQuotaUSD: 0,
+      grandMeasuredUSD: 0,
       registryOk: true,
       unregistered: [],
       projects: [],
