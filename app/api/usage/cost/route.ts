@@ -1,16 +1,26 @@
 /**
  * GET /api/usage/cost — USD cost rollup over the API-usage ledger (v7.363)
  *
- * Reads the REAL, measured input/output token counts recorded per call in
- * `api_usage.meta` and multiplies them by PUBLISHED provider list rates
- * (lib/usage/pricing.ts) to produce a per-project and grand-total USD figure.
+ * v7.396: prices Semrush + SerpAPI alongside the token providers, and reports
+ * the fail-closed registry audit (see lib/usage/pricing.ts).
  *
- * Constitution Art. I.5a: the token counts are real source rows; the multiplier
- * is a named, sourced list rate; the dollar figure is a LABELED computed
- * estimate at list price, NOT the actual invoice (provider dashboards remain
- * the billing source of truth — I.1/I.5). Plan-dependent providers (Semrush
- * units, SerpAPI searches) and count-only rows (OpenAI images) come back
- * UNPRICED with a reason rather than a guessed number.
+ * Reads the REAL, measured quantities recorded per call in `api_usage` and
+ * multiplies them by registry rates to produce per-project and grand-total USD.
+ *
+ * Constitution Art. I.5a: the quantities are real source rows; every multiplier
+ * is a named, sourced rate with an as-of date; the dollar figure is a LABELED
+ * computed estimate, NOT the actual invoice (provider dashboards remain the
+ * billing source of truth — I.1/I.5).
+ *
+ * TWO BASES are reported separately, because they mean different things:
+ *   • payPerUseUSD — Anthropic/OpenAI tokens at published list rates. Marginal.
+ *   • planQuotaUSD — SerpAPI/Semrush prepaid allowances allocated at
+ *     plan-price ÷ included-quota. NOT marginal; unused quota is unallocated,
+ *     so this sums to LESS than the invoice. Stated on-panel.
+ *
+ * FAIL-CLOSED: any provider+unit(+model) in the ledger with no registry entry
+ * comes back in `unregistered` with `registryOk: false` — the panel renders it
+ * loudly and the Article VIII release gate fails on it.
  *
  * Read-only. Fault-tolerant: an un-migrated table yields an empty rollup.
  */
@@ -20,26 +30,34 @@ import { db } from '@/db';
 import { apiUsage, projects } from '@/db/schema';
 import { sql, eq } from 'drizzle-orm';
 import { ensureUsageTable } from '@/lib/usage/record';
-import { priceLine, RATE_CARD, PRICING_ASOF } from '@/lib/usage/pricing';
+import { priceLine, auditRegistry, RATE_CARD, PRICING_ASOF, PLAN_QUOTA_CAVEAT } from '@/lib/usage/pricing';
 
 export const dynamic = 'force-dynamic';
 
 interface ModelCost {
   provider: string; endpoint: string; unit: string;
   inputTokens: number; outputTokens: number; quantity: number; calls: number;
-  priced: boolean; costUSD: number; rateLabel: string | null; reason?: string;
+  priced: boolean; costUSD: number; rateLabel: string | null; basis: string | null; reason?: string;
 }
-interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; }
+interface UnpricedLine {
+  provider: string; unit: string; quantity: number; calls: number;
+  reason: string; unregistered: boolean;
+}
 interface ProjectCost {
   projectId: string | null; projectName: string;
-  costUSD: number; models: ModelCost[]; unpriced: UnpricedLine[];
+  costUSD: number; payPerUseUSD: number; planQuotaUSD: number;
+  models: ModelCost[]; unpriced: UnpricedLine[];
 }
+
+const BASIS_NOTE =
+  'Computed at registry rates on real recorded quantities (Const I.5a). Not the actual invoice — provider dashboards remain the billing source of truth; caching, batch, and negotiated discounts are not reflected. Token providers price per token at published list rates. ' +
+  PLAN_QUOTA_CAVEAT;
 
 export async function GET() {
   try {
     await ensureUsageTable();
 
-    // One row per (project, provider, model, unit): real measured token sums.
+    // One row per (project, provider, model, unit): real measured sums.
     const grouped = await db
       .select({
         projectId:    apiUsage.projectId,
@@ -57,8 +75,15 @@ export async function GET() {
       .where(eq(apiUsage.kind, 'usage'))   // baselines carry no token split — exclude from cost math
       .groupBy(apiUsage.projectId, projects.clientName, apiUsage.provider, apiUsage.endpoint, apiUsage.unit);
 
+    // Fail-closed registry audit across everything the ledger actually carries.
+    const unregistered = auditRegistry(
+      grouped.map(r => ({ provider: r.provider, unit: r.unit, endpoint: r.endpoint })),
+    );
+
     const projMap = new Map<string, ProjectCost>();
     let grandTotalUSD = 0;
+    let grandPayPerUseUSD = 0;
+    let grandPlanQuotaUSD = 0;
 
     for (const r of grouped) {
       const pid = r.projectId ?? '__unattributed__';
@@ -67,7 +92,7 @@ export async function GET() {
         entry = {
           projectId: r.projectId ?? null,
           projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
-          costUSD: 0, models: [], unpriced: [],
+          costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, models: [], unpriced: [],
         };
         projMap.set(pid, entry);
       }
@@ -86,20 +111,33 @@ export async function GET() {
         entry.models.push({
           provider: r.provider, endpoint: r.endpoint, unit: r.unit,
           inputTokens, outputTokens, quantity, calls,
-          priced: true, costUSD: priced.costUSD, rateLabel: priced.rateLabel,
+          priced: true, costUSD: priced.costUSD, rateLabel: priced.rateLabel, basis: priced.basis,
         });
         entry.costUSD += priced.costUSD;
         grandTotalUSD += priced.costUSD;
+        if (priced.basis === 'plan-quota') {
+          entry.planQuotaUSD += priced.costUSD;
+          grandPlanQuotaUSD += priced.costUSD;
+        } else {
+          entry.payPerUseUSD += priced.costUSD;
+          grandPayPerUseUSD += priced.costUSD;
+        }
       } else {
         // Fold unpriced rows by provider+unit so the panel can show the honest gap.
         const key = `${r.provider}|${r.unit}`;
         let u = entry.unpriced.find(x => `${x.provider}|${x.unit}` === key);
         if (!u) {
-          u = { provider: r.provider, unit: r.unit, quantity: 0, calls: 0, reason: priced.reason ?? 'unpriced' };
+          u = {
+            provider: r.provider, unit: r.unit, quantity: 0, calls: 0,
+            reason: priced.reason ?? 'unpriced',
+            unregistered: priced.unregistered,
+          };
           entry.unpriced.push(u);
         }
         u.quantity += quantity;
         u.calls += calls;
+        // Any unregistered member makes the folded line unregistered.
+        if (priced.unregistered) u.unregistered = true;
       }
     }
 
@@ -114,9 +152,14 @@ export async function GET() {
     return NextResponse.json({
       asOf: new Date().toISOString(),
       pricingAsOf: PRICING_ASOF,
-      basis: 'Computed at published list rates on recorded input/output tokens (Const I.5a). Not the actual invoice — caching, batch, and negotiated discounts are not reflected; provider dashboards remain the billing source of truth. Semrush units, SerpAPI searches, and image generations are plan-dependent or count-only and are left unpriced.',
+      basis: BASIS_NOTE,
+      planQuotaCaveat: PLAN_QUOTA_CAVEAT,
       rateCard: RATE_CARD,
       grandTotalUSD,
+      grandPayPerUseUSD,
+      grandPlanQuotaUSD,
+      registryOk: unregistered.length === 0,
+      unregistered,
       projects: projectsOut,
     });
   } catch (err) {
@@ -125,8 +168,13 @@ export async function GET() {
       asOf: new Date().toISOString(),
       pricingAsOf: PRICING_ASOF,
       basis: 'Usage ledger is empty or not yet migrated. Cost populates as API calls are recorded.',
+      planQuotaCaveat: PLAN_QUOTA_CAVEAT,
       rateCard: RATE_CARD,
       grandTotalUSD: 0,
+      grandPayPerUseUSD: 0,
+      grandPlanQuotaUSD: 0,
+      registryOk: true,
+      unregistered: [],
       projects: [],
     });
   }
