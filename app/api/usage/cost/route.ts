@@ -27,8 +27,7 @@
 
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { apiUsage, projects } from '@/db/schema';
-import { sql, eq } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { ensureUsageTable, getLedgerFailures } from '@/lib/usage/record';
 import { priceLine, auditRegistry, RATE_CARD, PRICING_ASOF, PLAN_QUOTA_CAVEAT } from '@/lib/usage/pricing';
 
@@ -59,24 +58,32 @@ export async function GET() {
     await ensureUsageTable();
 
     // One row per (project, provider, model, unit): real measured sums.
-    const grouped = await db
-      .select({
-        projectId:    apiUsage.projectId,
-        projectName:  projects.clientName,
-        provider:     apiUsage.provider,
-        endpoint:     apiUsage.endpoint,
-        unit:         apiUsage.unit,
-        inputTokens:  sql<number>`coalesce(sum((${apiUsage.meta} ->> 'inputTokens')::numeric), 0)`,
-        outputTokens: sql<number>`coalesce(sum((${apiUsage.meta} ->> 'outputTokens')::numeric), 0)`,
-        quantity:     sql<number>`coalesce(sum(${apiUsage.quantity}), 0)`,
-        // v7.397 — provider-reported dollars (DataForSEO). A real source row, not a rate.
-        measuredCost: sql<number>`coalesce(sum((${apiUsage.meta} ->> 'costUSD')::numeric), 0)`,
-        calls:        sql<number>`count(*)`,
-      })
-      .from(apiUsage)
-      .leftJoin(projects, eq(projects.id, apiUsage.projectId))
-      .where(eq(apiUsage.kind, 'usage'))   // baselines carry no token split — exclude from cost math
-      .groupBy(apiUsage.projectId, projects.clientName, apiUsage.provider, apiUsage.endpoint, apiUsage.unit);
+    // v7.399 — RAW SQL for the same reason /api/usage was rewritten: a drizzle
+    // aggregate-alias select over neon-http silently returned stale totals here,
+    // so this panel showed $288.49 while the database already held newer rows.
+    // See the v7.373 precedent (neon-http + drizzle aggregate alias → use execute).
+    const raw: any = await db.execute(sql`
+      SELECT
+        u.project_id                                                          AS "projectId",
+        p.client_name                                                         AS "projectName",
+        u.provider                                                            AS "provider",
+        u.endpoint                                                            AS "endpoint",
+        u.unit                                                                AS "unit",
+        COALESCE(SUM((u.meta ->> 'inputTokens')::numeric), 0)                 AS "inputTokens",
+        COALESCE(SUM((u.meta ->> 'outputTokens')::numeric), 0)                AS "outputTokens",
+        COALESCE(SUM(u.quantity), 0)::bigint                                  AS "quantity",
+        COALESCE(SUM((u.meta ->> 'costUSD')::numeric), 0)                     AS "measuredCost",
+        COUNT(*)::int                                                         AS "calls"
+      FROM api_usage u
+      LEFT JOIN projects p ON p.id = u.project_id
+      WHERE u.kind = 'usage'
+      GROUP BY u.project_id, p.client_name, u.provider, u.endpoint, u.unit
+    `);
+    const grouped: Array<{
+      projectId: string | null; projectName: string | null; provider: string;
+      endpoint: string; unit: string; inputTokens: any; outputTokens: any;
+      quantity: any; measuredCost: any; calls: any;
+    }> = raw?.rows ?? raw ?? [];
 
     // Fail-closed registry audit across everything the ledger actually carries.
     const unregistered = auditRegistry(
