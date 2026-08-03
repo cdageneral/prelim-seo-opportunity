@@ -20,31 +20,32 @@ interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRo
 
 // Cost rollup (v7.363; registry rebuilt v7.396) — USD at registry rates (Const I.5a).
 interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; unregistered: boolean; }
-interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; unpriced: UnpricedLine[]; }
+interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number; unpriced: UnpricedLine[]; }
 interface RateCardModel { label: string; inputPerM: number; outputPerM: number; }
 interface RateCardUnit { label: string; usdPerUnit: number; plan: string; basis: string; source: string; asOf: string; }
 interface RateCardUnpriced { label: string; reason: string; asOf: string; }
+interface RateCardMeasured { label: string; note: string; crossCheckPerUnit: number; crossCheckNote: string; source: string; asOf: string; }
 interface RateCard {
   asOf: string; models: RateCardModel[]; units: RateCardUnit[];
-  unpriced: RateCardUnpriced[]; planQuotaCaveat: string; sources: string[];
+  unpriced: RateCardUnpriced[]; measured?: RateCardMeasured[]; planQuotaCaveat: string; sources: string[];
 }
 interface UnregisteredLine { provider: string; unit: string; endpoint: string; reason: string; }
 interface CostPayload {
-  grandTotalUSD: number; grandPayPerUseUSD: number; grandPlanQuotaUSD: number;
+  grandTotalUSD: number; grandPayPerUseUSD: number; grandPlanQuotaUSD: number; grandMeasuredUSD?: number;
   pricingAsOf: string; basis: string; planQuotaCaveat: string; rateCard: RateCard;
   registryOk: boolean; unregistered: UnregisteredLine[]; projects: ProjectCost[];
 }
 
 const PROVIDER_LABEL: Record<string, string> = {
   semrush: 'Semrush', serpapi: 'SerpAPI', profound: 'Profound',
-  anthropic: 'Anthropic (Claude)', openai: 'OpenAI',
+  anthropic: 'Anthropic (Claude)', openai: 'OpenAI', dataforseo: 'DataForSEO',
 };
 const UNIT_LABEL: Record<string, string> = {
   units: 'API units', searches: 'searches', calls: 'calls', tokens: 'tokens', images: 'images',
 };
 const PROVIDER_ICON: Record<string, string> = {
   semrush: 'ti-chart-bar', serpapi: 'ti-brand-google', profound: 'ti-robot',
-  anthropic: 'ti-sparkles', openai: 'ti-photo',
+  anthropic: 'ti-sparkles', openai: 'ti-photo', dataforseo: 'ti-database',
 };
 
 function fmt(n: number): string { return (n ?? 0).toLocaleString(); }
@@ -274,7 +275,12 @@ export default function UsageRollup() {
                 <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPayPerUseUSD)}</span> pay-per-use
                 (Anthropic &amp; OpenAI tokens, billed per token) +{' '}
                 <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPlanQuotaUSD)}</span> allocated from
-                prepaid plans ({(cost.rateCard?.units ?? []).map(u => u.label.replace(/ (search|API unit)$/, '')).join(' & ') || 'none configured'}) ={' '}
+                prepaid plans ({(cost.rateCard?.units ?? []).map(u => u.label.replace(/ (search|API unit)$/, '')).join(' & ') || 'none configured'})
+                {(cost.grandMeasuredUSD ?? 0) > 0 && (
+                  <> + <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandMeasuredUSD ?? 0)}</span>{' '}
+                  <strong className="text-orbit-secondary">measured</strong> (DataForSEO reports the real cost of every
+                  request, so those dollars are not an estimate at all)</>
+                )} ={' '}
                 <span className="text-orbit-accent tabular-nums">{fmtUSD(cost.grandTotalUSD)}</span>.
               </p>
 
