@@ -271,7 +271,7 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
                   padding: '9px 16px', borderRadius: '8px',
                   background: competitors.length >= 5 ? 'var(--c-1a1a30)' : 'var(--ca-108-99-255-0_15)',
                   border: `1px solid ${competitors.length >= 5 ? 'var(--c-1e1e35)' : 'var(--ca-108-99-255-0_45)'}`,
-                  color: competitors.length >= 5 ? 'var(--c-404060)' : 'var(--c-9b96ff)',
+                  color: competitors.length >= 5 ? 'var(--c-8888aa)' : 'var(--c-9b96ff)',
                   fontSize: '12px', cursor: competitors.length >= 5 ? 'not-allowed' : 'pointer',
                   flexShrink: 0,
                 }}
@@ -360,7 +360,7 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
               Cancel
             </button>
             <button type="submit" disabled={!canSubmit}
-              style={{ flex: 2, padding: '10px', borderRadius: '8px', background: canSubmit ? 'var(--c-6c63ff)' : 'var(--c-3d3d8a)', border: 'none', color: 'var(--c-ffffff)', fontSize: '13px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: !dataSource ? 0.4 : 1 }}>
+              style={{ flex: 2, padding: '10px', borderRadius: '8px', background: canSubmit ? 'var(--c-6c63ff)' : 'var(--c-3d3d8a)', border: 'none', color: 'var(--on-fill-accent)', fontSize: '13px', fontWeight: 600, cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: !dataSource ? 0.4 : 1 }}>
               {loading ? 'Creating...' : 'Create Project'}
             </button>
           </div>
