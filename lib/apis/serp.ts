@@ -14,8 +14,30 @@
 
 import { getMarket, type Market } from '@/lib/utils/markets';
 import { recordSerp } from '@/lib/usage/record';
+import { dfsBatchKeywordScan, dfsGetMapsListings, dfsGetLocalPack, dataForSeoEnabled } from './dataforseo';
 
 const SERP_BASE = 'https://serpapi.com/search';;
+
+// ─── SERP provider dispatch (v7.397) ─────────────────────────────────────────
+// This module is the SINGLE choke point every SERP call in OrbitIQ goes through,
+// so swapping providers happens here and nowhere else — no caller changes, no
+// per-panel forks (Const II.7). Both providers return byte-identical types.
+//
+// DEFAULT IS 'serpapi'. v7.397 ships as a ZERO behaviour change: DataForSEO only
+// runs when SERP_PROVIDER is explicitly set to 'dataforseo' AND its credentials
+// are present. If it is selected but not configured, we fall back to SerpAPI
+// rather than silently returning empty results (an empty scan would read as
+// "this client has no SERP presence", which is a lie — Const I.5).
+export type SerpProvider = 'serpapi' | 'dataforseo';
+
+export function serpProvider(): SerpProvider {
+  const want = (process.env.SERP_PROVIDER ?? '').trim().toLowerCase();
+  if (want === 'dataforseo') {
+    if (dataForSeoEnabled()) return 'dataforseo';
+    console.warn('[OrbitIQ serp] SERP_PROVIDER=dataforseo but DATAFORSEO_LOGIN/PASSWORD are not set — falling back to SerpAPI');
+  }
+  return 'serpapi';
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -353,6 +375,22 @@ export async function batchKeywordScan(
   limit = 5,
   market?: Market,   // v7.99: per-project market
 ): Promise<KeywordSerpData[]> {
+  if (serpProvider() === 'dataforseo') return dfsBatchKeywordScan(keywords, clientDomain, limit, market);   // v7.397
+  return serpApiBatchKeywordScan(keywords, clientDomain, limit, market);
+}
+
+/**
+ * The SerpAPI implementation, exported directly (v7.397) so the provider
+ * comparison route can run BOTH providers in one request regardless of which
+ * one SERP_PROVIDER currently selects. Application code should call
+ * `batchKeywordScan` and let the dispatch decide.
+ */
+export async function serpApiBatchKeywordScan(
+  keywords: string[],
+  clientDomain: string,
+  limit = 5,
+  market?: Market,
+): Promise<KeywordSerpData[]> {
   const batch = keywords.slice(0, limit);
   const out: Array<KeywordSerpData | undefined> = new Array(batch.length);
   let next = 0;
@@ -517,6 +555,7 @@ export async function getMapsListings(
   ll?: string,
   limit = 20,
 ): Promise<MapsPlace[]> {
+  if (serpProvider() === 'dataforseo') return dfsGetMapsListings(query, market, ll, limit);   // v7.397
   const API_KEY = process.env.SERP_API_KEY;
   if (!API_KEY) return [];
   const m = market ?? getMarket('us');
@@ -565,6 +604,7 @@ export async function getLocalPack(
   market?: Market,
   ll?: string,
 ): Promise<LocalPackResult> {
+  if (serpProvider() === 'dataforseo') return dfsGetLocalPack(keyword, market, ll);   // v7.397
   const API_KEY = process.env.SERP_API_KEY;
   if (!API_KEY) return { packPresent: false, places: [] };
   const m = market ?? getMarket('us');
