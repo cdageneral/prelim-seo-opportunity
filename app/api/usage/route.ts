@@ -12,8 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { apiUsage, projects } from '@/db/schema';
-import { sql, eq } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { ensureUsageTable } from '@/lib/usage/record';
 
 export const dynamic = 'force-dynamic';
@@ -38,20 +37,35 @@ function foldLine(map: Map<string, Line>, provider: string, unit: string, kind: 
 export async function GET() {
   try {
     await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
-    const grouped = await db
-      .select({
-        projectId:   apiUsage.projectId,
-        projectName: projects.clientName,
-        provider:    apiUsage.provider,
-        unit:        apiUsage.unit,
-        kind:        apiUsage.kind,
-        quantity:    sql<number>`coalesce(sum(${apiUsage.quantity}), 0)`,
-        calls:       sql<number>`count(*)`,
-        last:        sql<string | null>`max(${apiUsage.createdAt})`,
-      })
-      .from(apiUsage)
-      .leftJoin(projects, eq(projects.id, apiUsage.projectId))
-      .groupBy(apiUsage.projectId, projects.clientName, apiUsage.provider, apiUsage.unit, apiUsage.kind);
+
+    // v7.399 — RAW SQL, not a drizzle aggregate-alias select.
+    // This route reported serpapi stuck at exactly 23,920 and NO dataforseo line
+    // while the very same database held 7 fresh serpapi rows and 3 dataforseo
+    // rows (proved by /api/usage/selftest reading the table directly). The writes
+    // were never the problem — this READ was. It is the SAME failure v7.373 hit
+    // and recorded: `db.select({ n: sql`count(*)` }).from(...)` over neon-http
+    // returns wrong aggregates in some route bundles, and the fix there was the
+    // fix here — go through db.execute. Every figure below is now the database's
+    // own answer (Const I.1).
+    const raw: any = await db.execute(sql`
+      SELECT
+        u.project_id                                   AS "projectId",
+        p.client_name                                  AS "projectName",
+        u.provider                                     AS "provider",
+        u.unit                                         AS "unit",
+        u.kind                                         AS "kind",
+        COALESCE(SUM(u.quantity), 0)::bigint           AS "quantity",
+        COUNT(*)::int                                  AS "calls",
+        MAX(u.created_at)                              AS "last"
+      FROM api_usage u
+      LEFT JOIN projects p ON p.id = u.project_id
+      WHERE u.kind <> 'selftest'
+      GROUP BY u.project_id, p.client_name, u.provider, u.unit, u.kind
+    `);
+    const grouped: Array<{
+      projectId: string | null; projectName: string | null; provider: string;
+      unit: string; kind: string; quantity: any; calls: any; last: any;
+    }> = raw?.rows ?? raw ?? [];
 
     const projMap = new Map<string, { rollup: ProjectRollup; lines: Map<string, Line> }>();
     const grand = new Map<string, Line>();
