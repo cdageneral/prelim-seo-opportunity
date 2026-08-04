@@ -74,32 +74,49 @@ export function normSovDomain(d: string): string {
 // not competitor-relative share. The old definition divided the client's page-1
 // volume by the volume of whatever competitor rankings happened to be on file —
 // so a client with NO competitor data scored a meaningless 100% even while most of
-// its demand sat below page 1. The new metric answers "what share of the clicks
-// available on page 1 across this footprint is the client actually winning?":
-//   SoV = Σ(volume × CTR at client's position, pos ≤ 10)  ÷  Σ(volume × PAGE1_CTR_SUM)
-// Numerator = modeled clicks the client captures; denominator = all page-1 clicks
-// available across the SAME footprint the Google-Rank header counts (built via the
-// shared buildKwPool, so it reconciles with Total/Ranked/Pg-1 cards — Const II.7).
+// its demand sat below page 1.
+// v7.405 — DENOMINATOR REDEFINED (Wayne, 2026-08-04; Constitution amendment v0.23,
+// supersedes the v0.11 footprint denominator): the basis is now the FULL
+// NON-BRANDED KEYWORD LANDSCAPE — the union of the client footprint, every
+// competitor's uploaded keywords (the pool's gap rows), and the demand universe,
+// minus branded rows — so client and competitors are scored on the SAME keywords,
+// the same volumes, and the same curve (Wayne: "an even playing ground").
+//   SoV = Σ(landscape volume × CTR at the brand's position, pos ≤ 10) ÷ Σ(landscape volume × PAGE1_CTR_SUM)
+// Two deliberate consequences vs v7.245: competitor-only keywords now ENTER the
+// denominator (previously excluded as isGap), so adding a competitor CSV
+// legitimately grows the market and can LOWER the client % — the honest read, not
+// a bug; and the client's own BRANDED keywords LEAVE it (uncontested rankings no
+// longer inflate the share). The landscape stays a LIVE recomputed view over the
+// canonical pool (Const II.7 — Wayne rejected a stored pin, 2026-08-04); the
+// on-panel basis line states its size + volume date so growth is visible, never
+// silent. Built via the shared buildKwPool (Const II.7).
 // The CTR curve is a labeled model estimate (Art. IX); volumes/positions are real.
 export interface SovComputed {
   basis:           'capture' | 'empty';
   sovPct:          number;   // capturedClicks / availableClicks (0..1) — modeled
   capturedClicks:  number;   // monthly modeled clicks the client wins on page 1
-  availableClicks: number;   // monthly modeled total page-1 clicks across the footprint
+  availableClicks: number;   // monthly modeled total page-1 clicks across the landscape (v7.405)
   // real, measured inputs (Semrush rows) — surfaced for on-screen verifiability (I.1)
-  totalVolMonthly: number;
-  page1VolMonthly: number;
-  page1KwCount:    number;
-  totalKwCount:    number;
+  totalVolMonthly: number;   // v7.405: Σ volume of the non-branded landscape
+  page1VolMonthly: number;   // client page-1 volume on the landscape
+  page1KwCount:    number;   // landscape keywords the client ranks pg-1 for
+  totalKwCount:    number;   // v7.405: = landscapeKwCount (kept for existing readers)
+  // v7.405 — the basis line (Wayne's live-landscape choice): what the denominator
+  // is built from, so a moved number is explainable on sight.
+  landscapeKwCount: number;  // unique non-branded keywords in the landscape
+  brandsOnFile:     number;  // client + uploaded competitor domains with rows
+  volumesAsOf:      string | null;   // snapshot fetchedAt (when Semrush volumes were pulled)
   clientDisplay:   string;
   ctrSource:       string;
-  // v7.246 — competitor capture on the SAME footprint/denominator. Each competitor's
-  // slice = Σ(footprint-keyword volume × CTR at the competitor's position, pos ≤ 10)
-  // over the keywords it shares with the client footprint. Stable denominator means
-  // the client's own % does not move when a competitor is added; their slice eats
-  // into "open" instead. Competitors with rows but no usable page-1 overlap are
-  // surfaced as honest gaps (I.5), never given a modeled or zero slice as fact.
-  compEntries:     Array<{ domain: string; capturedClicks: number; pct: number; kwCount: number }>;
+  // v7.246 — competitor capture on the SAME denominator. v7.405: the shared basis
+  // is now the whole non-branded landscape, not just keywords shared with the
+  // client — a competitor's rank on any landscape keyword earns credit, and the
+  // overlap-only restriction is gone. `measuredKw` = landscape keywords we hold a
+  // real position for (any rank), i.e. this brand's rank-data coverage of the
+  // landscape — rendered so a thin upload reads as a DATA GAP, not a weak brand
+  // (I.5). Competitors with rows but no usable page-1 rank on the landscape are
+  // surfaced as honest gaps, never given a modeled or zero slice as fact.
+  compEntries:     Array<{ domain: string; capturedClicks: number; pct: number; kwCount: number; measuredKw?: number }>;   // measuredKw optional so serp-rival entries (which can't measure any-rank coverage) stay concat-compatible
   compGaps:        Array<{ domain: string; rows: number; hasPositions: boolean; minPos: number | null }>;
   // v7.322 — top SERP rivals on the client footprint by page-1 click capture. Same
   // basis/denominator as compEntries (Σ footprint-volume × CTR at the rival's real
@@ -122,10 +139,10 @@ export function computeSov(
   const clientDomain  = (snap.domain ?? '') as string;
   const clientDisplay = (clientLabel ?? '').trim() || snap.domain || 'Client';
 
-  // Build the SAME footprint pool the Google-Rank header + Keyword Landscape use,
-  // so SoV reconciles with the Total/Ranked/Pg-1 cards by construction (Const II.7).
-  // Thresholds 0 = full footprint (matches the panel's default render). Non-gap
-  // items carry the client's real ranking positions.
+  // Build the SAME canonical pool the Google-Rank header + Keyword Landscape use
+  // (Const II.7). Thresholds 0 = full footprint (matches the panel's default
+  // render). Non-gap items carry the client's real ranking positions; gap items
+  // are competitor-sourced keywords (their positions live on the dbKeywords rows).
   const pool = buildKwPool({
     semrushSnapshot:   snap,
     uploadedKeywords:  dbKeywords ?? [],
@@ -135,15 +152,24 @@ export function computeSov(
     competitorVolMin:  0,
     includeDemand:     true,   // v7.305: fold missing-demand volume into the SoV denominator (full-footprint parity)
   });
-  const ranked = pool.filter(i => !i.isGap);
+  // v7.405 — THE LANDSCAPE (Wayne, 2026-08-04): every non-branded keyword in the
+  // canonical pool, INCLUDING competitor-only gap rows (previously excluded) and
+  // EXCLUDING branded rows (previously included). One keyword, one volume, one
+  // entry — the shared denominator every brand is scored against. Branded rows of
+  // competitors never reach the pool at all (the §3/§4 brand guards), so filtering
+  // isBranded here removes exactly the CLIENT's brand terms.
+  const landscape = pool.filter(i => !i.isBranded);
 
   let totalVolMonthly = 0;
   let page1VolMonthly = 0;
   let page1KwCount    = 0;
   let capturedClicks  = 0;   // Σ volume × CTR(client position) for pos 1–10 — modeled
-  for (const i of ranked) {
+  for (const i of landscape) {
     const vol = i.searchVolume ?? 0;
     totalVolMonthly += vol;
+    // Client positions live on non-gap rows; gap rows carry position:null in the
+    // pool by design (v7.100 — a competitor's rank never leaks in as a client
+    // rank), so this loop naturally scores ONLY the client here.
     const p = i.position;
     if (p != null && p >= 1 && p <= 10) {
       page1VolMonthly += vol;
@@ -151,29 +177,34 @@ export function computeSov(
       capturedClicks  += vol * ctrAt(p);
     }
   }
-  // Denominator: all page-1 clicks available across the footprint (Wayne's chosen
-  // definition) = Σ(volume × PAGE1_CTR_SUM). Includes keywords ranking page-2+,
-  // so their uncaptured clicks correctly sit in "open demand", not the numerator.
+  // Denominator (v7.405, Wayne's landscape definition): all page-1 clicks
+  // available across the non-branded landscape = Σ(volume × PAGE1_CTR_SUM).
+  // Keywords nobody on file ranks page-1 for correctly sit in "open demand".
   const availableClicks = totalVolMonthly * PAGE1_CTR_SUM;
   const sovPct          = availableClicks > 0 ? capturedClicks / availableClicks : 0;
 
-  // ── v7.246: competitor capture on the SAME footprint + denominator ──────────
-  // A competitor's slice = Σ(footprint volume × CTR at competitor position, pos
-  // ≤ 10) over the keywords it shares with the client footprint. Volume is the
-  // footprint's measured value (one number per keyword, position-independent), so
-  // every player is scored on the same real volumes (Const I.1) and the same
-  // denominator (II.7). Competitor rankings are real uploaded rows (project_keywords
-  // with domain = competitor + a Position); a competitor with rows but no page-1
-  // overlap — or no positions at all — gets NO slice and is reported as an honest
-  // gap (I.5), never a modeled or silent-zero share.
-  const footprintVol = new Map<string, number>();
-  for (const i of ranked) {
+  // ── v7.246: competitor capture on the SAME denominator ──────────────────────
+  // v7.405: the shared basis is now the whole non-branded LANDSCAPE. A
+  // competitor's slice = Σ(landscape volume × CTR at competitor position, pos
+  // ≤ 10) over every landscape keyword it holds a page-1 rank for — the old
+  // "overlap with the client footprint only" restriction is gone (dated note:
+  // pre-v7.405 a competitor's rank on its own uploaded keywords earned nothing
+  // because those keywords weren't in the denominator; now they are). Volume is
+  // the landscape's measured value (one number per keyword), so every player is
+  // scored on the same real volumes (Const I.1) and the same denominator (II.7).
+  // A competitor with rows but no page-1 rank on the landscape — or no positions
+  // at all — gets NO slice and is reported as an honest gap (I.5).
+  const landscapeVol = new Map<string, number>();
+  for (const i of landscape) {
     const k = (i.keyword ?? '').toLowerCase().trim();
-    if (k) footprintVol.set(k, i.searchVolume ?? 0);
+    if (k) landscapeVol.set(k, i.searchVolume ?? 0);
   }
   const clientNorm = normSovDomain(clientDomain);
   const compCap = new Map<string, number>();   // domain → captured clicks
-  const compKw  = new Map<string, number>();    // domain → page-1 overlap kw count
+  const compKw  = new Map<string, number>();    // domain → page-1 landscape kw count
+  // v7.405: measuredKw = landscape keywords with ANY real position for the brand —
+  // its rank-data coverage of the landscape (the honest-gap guard for thin uploads).
+  const compMeasured = new Map<string, Set<string>>();
   const compDiag = new Map<string, { rows: number; withPos: number; minPos: number }>();
   for (const r of (dbKeywords ?? [])) {
     const dom = normSovDomain((r as any).domain ?? '');
@@ -182,11 +213,18 @@ export function computeSov(
     if (!d) { d = { rows: 0, withPos: 0, minPos: Infinity }; compDiag.set(dom, d); }
     d.rows++;
     const p = (r as any).position;
-    if (p != null) { d.withPos++; if (p < d.minPos) d.minPos = p; }
-    if (p == null || p < 1 || p > 10) continue;
     const k = ((r as any).keyword ?? '').toLowerCase().trim();
-    if (!footprintVol.has(k)) continue;   // overlap only — keeps the denominator stable
-    const vol = footprintVol.get(k) ?? 0;
+    if (p != null) {
+      d.withPos++; if (p < d.minPos) d.minPos = p;
+      if (landscapeVol.has(k)) {
+        let m = compMeasured.get(dom);
+        if (!m) { m = new Set(); compMeasured.set(dom, m); }
+        m.add(k);
+      }
+    }
+    if (p == null || p < 1 || p > 10) continue;
+    if (!landscapeVol.has(k)) continue;   // v7.405: landscape membership (branded/blocked/adjacent rows earn nothing)
+    const vol = landscapeVol.get(k) ?? 0;
     compCap.set(dom, (compCap.get(dom) ?? 0) + vol * ctrAt(p));
     compKw.set(dom,  (compKw.get(dom)  ?? 0) + 1);
   }
@@ -195,8 +233,9 @@ export function computeSov(
     .map(([domain, capturedClicks]) => ({
       domain,
       capturedClicks,
-      pct:     availableClicks > 0 ? capturedClicks / availableClicks : 0,
-      kwCount: compKw.get(domain) ?? 0,
+      pct:        availableClicks > 0 ? capturedClicks / availableClicks : 0,
+      kwCount:    compKw.get(domain) ?? 0,
+      measuredKw: compMeasured.get(domain)?.size ?? 0,
     }))
     .sort((a, b) => b.capturedClicks - a.capturedClicks);
   const sliced = new Set(compEntries.map(c => c.domain));
@@ -209,13 +248,14 @@ export function computeSov(
       minPos:       isFinite(d.minPos) ? d.minPos : null,
     }));
 
-  // ── v7.322: top SERP rivals on the SAME footprint + denominator ─────────────
-  // Each Semrush auto-discovered competitor's slice = Σ(live footprint volume × CTR at
-  // its real page-1 position) over keywords it shares with the client footprint —
-  // identical basis to the uploaded-competitor slices above, just sourced from the
-  // snapshot's `serpCompetitorPositions` (real positions already pulled for the gap
+  // ── v7.322: top SERP rivals on the SAME denominator ─────────────────────────
+  // Each Semrush auto-discovered competitor's slice = Σ(live landscape volume × CTR at
+  // its real page-1 position) over landscape keywords it ranks for (v7.405: the
+  // landscape, no longer client-footprint overlap) — identical basis to the
+  // uploaded-competitor slices above, just sourced from the snapshot's
+  // `serpCompetitorPositions` (real positions already pulled for the gap
   // analysis, zero extra Semrush units) instead of uploaded CSV rows. Applying the LIVE
-  // `footprintVol` keeps the denominator identical to the client's (Const II.7). A
+  // `landscapeVol` keeps the denominator identical to the client's (Const II.7). A
   // domain already shown as an uploaded competitor is skipped so the two sections never
   // double-list one site. Ranked desc, capped at SOV_SERP_TOP_N (Wayne: top 3 sites).
   const snapSerpPos     = (snap.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>;
@@ -230,8 +270,8 @@ export function computeSov(
         const p = pos.position;
         if (p == null || p < 1 || p > 10) continue;
         const k = (pos.keyword ?? '').toLowerCase().trim();
-        if (!footprintVol.has(k)) continue;              // live footprint overlap only — stable denominator
-        captured += (footprintVol.get(k) ?? 0) * ctrAt(p);
+        if (!landscapeVol.has(k)) continue;              // v7.405: landscape membership — same basis as every slice
+        captured += (landscapeVol.get(k) ?? 0) * ctrAt(p);
         kw++;
       }
       return captured > 0
@@ -265,6 +305,10 @@ export function computeSov(
       ]
     : [];
 
+  // v7.405 basis line: brands on file = client (when it has any rankable data)
+  // + every uploaded competitor domain with rows. Real counts, no estimate.
+  const brandsOnFile = (landscape.length > 0 ? 1 : 0) + compDiag.size;
+
   return {
     basis:           availableClicks > 0 ? 'capture' : 'empty',
     sovPct,
@@ -273,7 +317,10 @@ export function computeSov(
     totalVolMonthly,
     page1VolMonthly,
     page1KwCount,
-    totalKwCount:    ranked.length,
+    totalKwCount:     landscape.length,   // v7.405: the landscape count (label updated at every read site)
+    landscapeKwCount: landscape.length,
+    brandsOnFile,
+    volumesAsOf:      typeof snap.fetchedAt === 'string' && snap.fetchedAt ? snap.fetchedAt : null,
     clientDisplay,
     ctrSource:       CTR_SOURCE_LABEL,
     compEntries,
