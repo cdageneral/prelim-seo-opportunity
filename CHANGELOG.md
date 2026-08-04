@@ -1,3 +1,65 @@
+## v7.403 · "Analysis failed" on a run that was working fine — 2026-08-04
+
+Wayne, mid-run: *"when i am trying to run the analysis i am getting this error"* —
+**Analysis failed. Synthesis was interrupted (timeout).**
+
+The run was not failing. At the moment that banner was on screen the engine had
+finished **all 422 of 422 discovery batches** and was climbing through
+consolidation — 11 chunks when the investigation started, 20 a few minutes later.
+Nothing was lost and no API credits were re-spent. The panel simply stopped
+asking it to continue.
+
+**Why it gave up.** Each 300-second Vercel window ends in a timeout by design;
+the panel keeps re-POSTing `/api/synthesize` for as long as the run is
+advancing, and decides "advancing" from a progress poll. `pollProgress()`
+returns `null` whenever the reading is *unavailable* — endpoint error, network
+blip, a payload about a different run. The v7.343 loop folded that null into
+`nowDone = -1`, which can never exceed `lastDone`, so **an unreadable poll was
+counted as a stalled window** and two of them aborted the run. "I cannot see
+progress" is not "there was no progress", but the code could not tell the
+difference. Three windows in, a healthy run was declared failed.
+
+The rule now lives in `lib/synthesis/resumeDecision.ts` as a pure function, so it
+is tested directly instead of by grepping a 3,500-line component. Only a
+*readable* reading that did not move counts as a stall (still 2, unchanged). An
+unreadable one is counted separately and tolerated 5 times — a permanently blind
+loop is not evidence of health either, so it still ends, just not after two
+blinks. The exact incident sequence is a retained check.
+
+**And the poll really was lying.** The progress route had two variants of one
+SELECT: `WHERE id = $1` when the caller passed `?analysisId`, and `WHERE
+project_id = $1 ORDER BY triggered_at DESC` otherwise. Measured live against a
+project with exactly **one** analysis row — the same row for both:
+
+```
+?analysisId=dd902630…  →  { done: 0,   stage: 'categorizing'  }   ← wrong
+(no analysisId)        →  { done: 424, stage: 'consolidating' }   ← correct
+```
+
+The row genuinely held `doneStarts: 422` and `canon 20/40`, read back through the
+project API. The SELECT is not at fault: the exact drizzle template was run
+against a real Postgres with production-shaped data and returned 423/429. Six
+distinct cache-busted URLs all returned the stale figure, so it is not an HTTP
+cache either. **Why that by-id read returns a pre-checkpoint view of the row is
+not explained at the application layer, and this release does not pretend to have
+fixed it** — it retires the query instead. The project-scoped read is measured
+live-correct and is now the only one.
+
+The caller's `analysisId` becomes an **identity check** rather than a filter: the
+newest analysis of a project is the run the panel just triggered, and if it ever
+is not, the response says `matchesRequested: false` and the panel treats the
+reading as unknown rather than silently reporting another run's progress. The
+poll also carries `no-store` now — it had no cache header at all, and a progress
+reading served from any cache reads as a stall.
+
+**Verification.** `tsc --noEmit` clean; real `next build` clean. The retained
+suite runs the shipped resume rule through the incident sequence, and runs the
+progress query against a real Postgres (pglite) with a 422/422 + 20/40 row,
+asserting it reads **424, not 0**. 1036 pass / 16 pre-existing / zero delta, +26
+new checks. The v7.343 check that pinned the old inline `stalls >= 2` counter was
+amended in place with a dated note — the invariant it protects is unchanged and
+is now asserted behaviourally.
+
 ## v7.402 · Clear data, per domain — and a re-upload message that was lying — 2026-08-04
 
 Wayne cleared a project's data, went to upload the CSVs again, and the panel told
