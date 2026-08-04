@@ -529,7 +529,7 @@ export function execKeyInsights(a: {
   // values computeSov() hands the donut (Const II.6) — nothing is recomputed, and the modeled
   // click figures stay stamped with the CTR curve exactly as they were on the card.
   sovCapturedClicks?:  number | null;   // MODELED monthly page-1 clicks the client wins
-  sovAvailableClicks?: number | null;   // MODELED monthly page-1 clicks available across the footprint
+  sovAvailableClicks?: number | null;   // MODELED monthly page-1 clicks available across the non-branded landscape (v7.405)
   sovCompGaps?:        Array<{ domain: string; rows: number; hasPositions: boolean; minPos: number | null }>;
   landGrab?:           Insight | null;  // the G2 land-grab banner, adopted verbatim
 }): ExecKeyInsight[] {
@@ -650,7 +650,7 @@ export function execKeyInsights(a: {
     push({
       id: 'K7', cat: 'other', sev: a.sovPct < 10 ? 1 : 2, kicker: 'Modeled · Share of voice',
       parts: [seg('You capture an estimated '), seg(`${a.sovPct}%`, true),
-        seg(` of the page-1 clicks available across your footprint — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`),
+        seg(` of the page-1 clicks available across the non-branded keyword landscape (you + tracked competitors, v7.405) — ${Math.round((100 - a.sovPct) * 10) / 10}% is still open.`),
         ...(haveAbs
           ? [seg(` That is ~${Math.round(a.sovCapturedClicks as number).toLocaleString()} of ~${Math.round(a.sovAvailableClicks as number).toLocaleString()} page-1 clicks a month.`)]
           : [])],
@@ -768,7 +768,7 @@ export function execKeyInsights(a: {
     push({
       id: 'K17', cat: 'competitor', sev: 1, kicker: 'Modeled · Page-1 clicks',
       parts: [seg(top.domain, true), seg(' takes an estimated '), seg(`${top.pct}%`, true),
-        seg(` of the page-1 clicks across your footprint to your ${a.sovPct}%`),
+        seg(` of the page-1 clicks across the landscape to your ${a.sovPct}%`),
         seg(rivalsAhead.length > 1 ? ` — and ${rivalsAhead.length - 1} other tracked rival${rivalsAhead.length === 2 ? '' : 's'} sit ahead of you too.` : '.')],
       evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)',
     });
@@ -809,9 +809,9 @@ export function execKeyInsights(a: {
       parts: [seg(dom, true),
         seg(` has ${g.rows.toLocaleString()} keyword${g.rows === 1 ? '' : 's'} on file`),
         seg(g.hasPositions
-          ? ` — none rank page 1 on your footprint (best position ${g.minPos ?? '—'}), so it has no Share-of-Voice slice yet.`
+          ? ` — none rank page 1 on the landscape (best position ${g.minPos ?? '—'}), so it has no Share-of-Voice slice yet.`
           : ' — no ranking positions were uploaded, so its Share of Voice cannot be computed. Re-upload its CSV including a Position column.')],
-      evidence: 'competitor rows on file vs the canonical footprint · this scan', panel: 'Google Rank (06)',
+      evidence: 'competitor rows on file vs the non-branded keyword landscape · this scan', panel: 'Google Rank (06)',
     });
   }
 
@@ -940,7 +940,7 @@ export function execActionLanes(a: {
     if (ahead.length > 0 && a.sovPct !== null) {
       add(serp, { id: 'S4', lane: 'serp', title: `Close the page-1 click gap with ${ahead[0].domain}`,
         parts: [seg('Modeled, they take '), seg(`${ahead[0].pct}%`, true),
-          seg(` of the page-1 clicks across your footprint to your ${a.sovPct}%.`)],
+          seg(` of the page-1 clicks across the landscape to your ${a.sovPct}%.`)],
         evidence: `modeled estimate · ${a.ctrSourceLabel} applied to real volume + real positions`, panel: 'Google Rank (06)' });
     }
   }
