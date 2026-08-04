@@ -405,7 +405,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       barRow(r.domain, sov.availableClicks > 0 ? (r.capturedClicks / sov.availableClicks) * 100 : 0, p0(r.pct * 100), 'var(--violet)', '1.6in', '.7in')).join('');
     pages.push(pageWrap('SHARE OF VOICE', 'PART I · THE MARKET', `
       <h1 class="pg">${p0(openPct * 100)} of the clicks belong to no one yet.</h1>
-      <div class="lede">Of the ~${vol(sov.availableClicks)} page-1 clicks available each month on your footprint, you capture an estimated ${p0(sov.sovPct * 100)}. Your tracked competitors barely capture more — <b>${p0(openPct * 100)} of the clicks are open</b>, held by aggregators, publishers and nobody in particular.</div>
+      <div class="lede">Of the ~${vol(sov.availableClicks)} page-1 clicks available each month across the non-branded keyword landscape (you + tracked competitors), you capture an estimated ${p0(sov.sovPct * 100)}. Your tracked competitors barely capture more — <b>${p0(openPct * 100)} of the clicks are open</b>, held by aggregators, publishers and nobody in particular.</div>
       <div class="figtitle">Estimated page-1 click capture</div>
       <div class="figsub">Share of Voice — modeled from real volumes &amp; positions via ${esc(sov.ctrSource)} (the one labeled estimate in this report)</div>
       ${barRow('Open / unclaimed', openPct * 100, p0(openPct * 100), '#c9c8c1', '1.6in', '.7in')}
@@ -801,7 +801,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <table class="dt" style="margin-bottom:16px;">
       <tr><th style="width:1.8in;">Term</th><th>Definition as used in this report</th></tr>
       <tr><td><b>Page-1 capture</b></td><td>Volume-weighted share of tracked keywords where the client holds a position 1–10 ranking. Direct from scan rows.</td></tr>
-      <tr><td><b>Share of Voice (SoV)</b></td><td>Estimated share of available page-1 clicks, computed from real volumes and positions via a named, published click-through curve. The only modeled figure in the report; labeled at every appearance.</td></tr>
+      <tr><td><b>Share of Voice (SoV)</b></td><td>Estimated share of the page-1 clicks available across the shared non-branded keyword landscape (client + tracked competitors), computed from real volumes and positions via a named, published click-through curve. The only modeled figure in the report; labeled at every appearance.</td></tr>
       <tr><td><b>AI visibility</b></td><td>Share of scanned AI answers naming the brand. Direct count from the AI visibility dataset.</td></tr>
       <tr><td><b>Prompt coverage</b></td><td>Share of tracked buyer prompts where the brand appears in at least one engine's answer. Direct count.</td></tr>
       <tr><td><b>Owned citation</b></td><td>A cited source URL classified as client-owned in the citation landscape. Direct count from the citation-level dataset.</td></tr>

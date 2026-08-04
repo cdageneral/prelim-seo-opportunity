@@ -232,7 +232,7 @@ export function buildBriefHTML(analysis: any, computed?: PdfComputed): string {
       <div class="section-label">Competitor Gap</div>
       <div class="section-title">Share of Voice &mdash; page-1 click capture</div>
       ${sov ? `
-      <div style="font-size:8px;color:#8888AA;margin:-6px 0 8px">modeled clicks won &divide; all page-1 clicks available across the footprint</div>
+      <div style="font-size:8px;color:#8888AA;margin:-6px 0 8px">modeled clicks won &divide; all page-1 clicks available across the non-branded keyword landscape (client + tracked competitors, v7.405)</div>
       <div class="platform-row">
         <div class="platform-name" style="color:#F0F0FF;font-weight:600">${escapeHtml(sov.clientDisplay.replace(/^www\./, ''))}</div>
         <div class="platform-track"><div class="platform-fill" style="width:${Math.min(100, sov.sovPct * 100)}%;background:#6C63FF"></div></div>
@@ -249,14 +249,14 @@ export function buildBriefHTML(analysis: any, computed?: PdfComputed): string {
         <div class="platform-score" style="color:#8888AA">${pct(sovOpenPct)}</div>
       </div>
       <div style="font-size:8px;color:#8888AA;margin-top:6px">
-        Client wins ~${Math.round(sov.capturedClicks).toLocaleString()} of ~${Math.round(sov.availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint${sovSlices.length > 0 ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
+        Client wins ~${Math.round(sov.capturedClicks).toLocaleString()} of ~${Math.round(sov.availableClicks).toLocaleString()} page-1 clicks/mo available across the landscape${sovSlices.length > 0 ? '; competitor slices are page-1 clicks they take on the same landscape.' : '.'}
       </div>
       <div style="margin-top:6px;font-size:7.5px">
         <span style="display:inline-block;padding:1px 7px;border-radius:20px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);color:#F59E0B">modeled estimate</span>
         <span style="color:#555570;margin-left:5px">CTR curve: ${escapeHtml(sov.ctrSource)}</span>
       </div>
       <div style="font-size:7px;color:#555570;margin-top:4px">
-        data: ${sov.totalKwCount.toLocaleString()} footprint kws &middot; ${sov.page1KwCount.toLocaleString()} rank pg 1 &middot; volume &amp; position are measured Semrush rows; only the CTR multiplier is modeled.
+        data: ${sov.totalKwCount.toLocaleString()} landscape kws (non-branded) &middot; ${sov.page1KwCount.toLocaleString()} client pg 1 &middot; volume &amp; position are measured Semrush rows; only the CTR multiplier is modeled.
       </div>` : `
       <div style="font-size:9px;color:#8888AA">No page-1 keyword data available to compute Share of Voice for this analysis. Re-run the analysis (or upload keyword rankings) to populate this section.</div>`}
       ${narrative.competitiveReality ? `<div class="narrative" style="margin-top:8px"><p>${escapeHtml(narrative.competitiveReality)}</p></div>` : ''}
