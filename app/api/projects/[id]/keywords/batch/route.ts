@@ -35,6 +35,11 @@ import { and, eq, sql, or, isNull, inArray, ne }   from 'drizzle-orm';
 // character of divergence would make "Clear data" match nothing while reporting
 // success.
 import { normalizeFootprintDomain, isClientFootprintDomain } from '@/lib/keywords/footprintDomains';
+// v7.405: duplicate rows for the SAME keyword+domain now collapse BEST-position-
+// wins (max volume, URL follows the winning position) instead of last-occurrence-
+// wins — row order in an export must never decide which rank is stored. One shared
+// pure rule, tested directly by the retained suite.
+import { mergeFootprintFacts } from '@/lib/keywords/footprintMerge';
 
 async function ensureTable() {
   try {
@@ -173,8 +178,17 @@ export async function POST(
   const payloadKws = Array.from(new Set(
     keywords.map((k: any) => (k?.keyword ?? '').trim().toLowerCase()).filter((s: string) => s.length > 0),
   ));
+  // v7.405: also pull position/volume/url so the best-position rule spans CHUNKS —
+  // a keyword whose best rank arrived in an earlier batch keeps it when a later
+  // batch re-lists the keyword at a worse rank (same reason serp_features are read).
   const existing = payloadKws.length === 0 ? [] : await db
-    .select({ keyword: projectKeywords.keyword, serpFeatures: projectKeywords.serpFeatures })
+    .select({
+      keyword:      projectKeywords.keyword,
+      serpFeatures: projectKeywords.serpFeatures,
+      position:     projectKeywords.position,
+      searchVolume: projectKeywords.searchVolume,
+      url:          projectKeywords.url,
+    })
     .from(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, projectId),
@@ -184,6 +198,13 @@ export async function POST(
     ));
   const existingSet  = new Set(existing.map((r: any) => r.keyword));
   const existingFeat = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.serpFeatures ?? null]));
+  const existingFacts = new Map<string, { position: number | null; searchVolume: number; url: string | null }>(
+    existing.map((r: any) => [r.keyword, {
+      position:     r.position ?? null,
+      searchVolume: r.searchVolume ?? 0,
+      url:          r.url ?? null,
+    }]),
+  );
 
   // Build valid rows (dedupe within the payload itself; UNION serp-features across duplicates)
   const byKw = new Map<string, any>();
@@ -205,17 +226,31 @@ export async function POST(
     const kurl = typeof k.url === 'string' && k.url.trim().length > 0
       ? k.url.trim().slice(0, 500)
       : null;
+    // v7.405: BEST-position-wins across duplicate rows — prior state is the earlier
+    // occurrence in THIS payload, or (first time seen here) the stored row from a
+    // previous chunk/upload. Until now this was last-occurrence-wins: an export
+    // listing a keyword once per ranking URL stored whichever position happened to
+    // be LAST in the file — i.e. row order, not rank, decided the stored data. The
+    // merged facts keep the best real rank, the max volume, and the URL of the page
+    // that actually holds the winning rank (mergeFootprintFacts, shared + suite-tested).
+    const prior = byKw.has(kw)
+      ? { position: byKw.get(kw).position, searchVolume: byKw.get(kw).searchVolume, url: byKw.get(kw).url }
+      : (existingFacts.get(kw) ?? null);
+    const merged = prior
+      ? mergeFootprintFacts(prior, { position: pos, searchVolume: vol, url: kurl })
+      : { position: pos, searchVolume: vol, url: kurl };
     byKw.set(kw, {
       projectId,
       keyword:      kw,
-      searchVolume: vol,
-      position:     pos,
+      searchVolume: merged.searchVolume,
+      position:     merged.position,
       serpFeatures: feats,
-      url:          kurl,
+      url:          merged.url,
       // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
       // Competitor rows are ALWAYS 'gap' — their position is the competitor's
       // rank, kept for Share of Voice, not a client ranking.
-      type:         isClientUpload && pos !== null && pos <= 100 ? 'ranked' : 'gap',
+      // v7.405: judged on the MERGED best position, not the last row's.
+      type:         isClientUpload && merged.position !== null && merged.position <= 100 ? 'ranked' : 'gap',
       branded:      false,
       source,
       // v7.143: store client rows under ONE canonical tag (blank domain) so the
