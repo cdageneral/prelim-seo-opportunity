@@ -273,7 +273,7 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
     positionDistribution: positionDist ?? null,
     shareOfVoice: sov && sov.basis === 'capture' ? {
       modeled: true,
-      metric: 'Page-1 click-capture Share of Voice',
+      metric: 'Page-1 click-capture Share of Voice (non-branded landscape basis, v7.405)',
       model: sov.ctrSource ?? 'CTR-by-position curve (labeled model estimate)',
       note: 'Modeled estimate: volumes + real SERP positions are real source rows; only the CTR multiplier is modeled (Const I.5a). Never treat as measured data.',
       sovPct: sov.sovPct ?? null,
