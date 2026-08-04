@@ -1,3 +1,68 @@
+## v7.402 · Clear data, per domain — and a re-upload message that was lying — 2026-08-04
+
+Wayne cleared a project's data, went to upload the CSVs again, and the panel told
+him *"these 5,589 keywords are already loaded for nyulangone.org — nothing
+re-imported (no duplicates)."* Two separate problems were hiding behind that one
+sentence.
+
+**The message was not true.** The batch route has UPSERTED since v7.92: every
+keyword already present gets deleted and re-inserted with the values from the
+file being uploaded. So a changed export *did* overwrite volumes, positions and
+SERP features — `inserted: 0` means "nothing was NEW", not "nothing happened".
+What an upsert genuinely cannot do is remove rows the new export no longer
+contains, which is the one case that needs a real clear. Telling Wayne nothing
+was imported sent him hunting for a clear button the panel did not have. The
+note now says what actually occurred: *"no new keywords for nyulangone.org —
+5,589 existing rows were refreshed with this file's values. Rows this file no
+longer contains are still stored; use Clear data on this row first for a clean
+replace."* A successful import with new rows now reports its real counts too,
+instead of silently saying nothing at all.
+
+**The panel could not see the database.** It tracked only what the current
+browser session had uploaded. Open a project whose CSVs were already stored and
+every row read "Click to upload", the Run button stayed locked, and the only way
+to discover the data was there was to upload a file and get told it was a
+duplicate. A new `GET /api/projects/[id]/keywords/footprint` returns the real
+per-domain row counts straight from `project_keywords` — one grouped read, no
+estimate — so each row now shows "5,589 keyword rows stored", and stored rows
+unlock Run without a pointless re-upload.
+
+**Clear data, per row.** Each domain in the upload list gets its own control. It
+appears only when that domain actually has rows to delete, and it is a two-step
+inline confirm — click *Clear data*, then a red *Delete 5,589* / *Cancel* pair —
+rather than a blocking browser dialog. `POST /api/projects/[id]/keywords/footprint`
+genuinely DELETEs that domain's uploaded CSV rows (never hides them), reports the
+real number deleted, and leaves manually added keywords alone, saying how many it
+kept. The row then reverts to "Click to upload" so the changed export can go in
+clean.
+
+**One bucket rule, one function.** The client's footprint is stored under a blank
+domain tag, with legacy rows carrying NULL or the literal client domain — three
+tags wide — while each competitor has its own normalised domain. The uploader
+decided that inline; a deleter that normalised even slightly differently would
+have matched zero rows while cheerfully reporting success, which is the worst
+possible failure for a control whose whole job is deleting data. Both sides now
+import `normalizeFootprintDomain` / `isClientFootprintDomain` from
+`lib/keywords/footprintDomains.ts`, and the retained suite asserts the shared
+function is byte-identical to the expression the uploader used before this
+release across a table of protocol, www, path and empty-input cases.
+
+**Colour.** The informational/error split on the message strip no longer depends
+on matching the substring "already loaded" in the sentence — rewording a notice
+would have silently turned it error-red. It follows an explicit kind flag now.
+The new controls are token-styled and were measured in a real browser in both
+themes: 8.19:1 / 5.09:1 for the Clear label, 9.62:1 / 6.51:1 for the destructive
+confirm, 8.19:1 / 4.82:1 for the stored-row count. The first drafts of the count
+and "Clearing…" inks used `--c-707090` and measured 3.77:1 in dark; the render
+gate caught them before the build.
+
+**Verification.** Project `tsc --noEmit` clean, a real `next build` clean (the
+new route registers as `ƒ /api/projects/[id]/keywords/footprint`), and the
+retained regression suite run A/B against the pristine v7.401 base: the same 16
+pre-existing failures, zero delta, plus 43 new checks. The two v7.344 checks that
+asserted the old wording were updated in place with dated notes — the unlock
+invariant they protect is unchanged — never deleted.
+
 ## v7.401 · Client Projects: a list view, and a way to find a client — 2026-08-04
 
 Seven clients fit on the tile grid. Twenty will not, and by then finding one
