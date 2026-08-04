@@ -28,8 +28,20 @@ import ApiUsageSection        from '@/components/brief/ApiUsageSection';
 import GoogleRankAuthoritySection from '@/components/brief/GoogleRankAuthoritySection';   // v7.367
 import AuthorityCalculatorSection from '@/components/brief/AuthorityCalculatorSection';    // v7.370
 import { getMarket } from '@/lib/utils/markets';
+import { normalizeFootprintDomain } from '@/lib/keywords/footprintDomains';   // v7.402
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
+
+// v7.402: real stored-row counts for the uploaded footprint, per domain bucket
+// (GET /api/projects/[id]/keywords/footprint). Lets the pre-run Data Source panel
+// show what is ACTUALLY in the database instead of only what this browser
+// session happened to upload.
+interface FootprintBucket { csvRows: number; otherRows: number; lastUploadedAt: string | null }
+interface FootprintResponse {
+  clientDomain: string;
+  client:       FootprintBucket;
+  byDomain:     Record<string, FootprintBucket>;
+}
 interface Analysis {
   id:                  string;
   status:              string;
@@ -231,6 +243,13 @@ export default function ProjectBriefPage() {
   const [uploadedDomains,  setUploadedDomains]  = useState<Set<string>>(new Set());
   const [uploadingDomain,  setUploadingDomain]  = useState<string | null>(null);
   const [uploadError,      setUploadError]      = useState<string | null>(null);
+  // v7.402: the message strip carries both failures and confirmations now
+  // ("cleared N rows", "already loaded"). Colour follows THIS flag, not a
+  // substring match on the sentence — a reworded message can't silently turn
+  // an informational notice red again.
+  const [uploadMsgKind,    setUploadMsgKind]    = useState<'error' | 'info'>('error');
+  const [footprint,        setFootprint]        = useState<FootprintResponse | null>(null);
+  const [clearingDomain,   setClearingDomain]   = useState<string | null>(null);
   const fileInputRefs      = useRef<Record<string, HTMLInputElement | null>>({});
 
   // Refresh modal state
@@ -672,6 +691,98 @@ export default function ProjectBriefPage() {
     }
   }
 
+  // ── v7.402: stored keyword-footprint state (real counts, per domain) ───────
+  //
+  // The pre-run Data Source panel used to know only what the CURRENT browser
+  // session had uploaded. So a project whose CSVs were already in the database
+  // rendered as "nothing uploaded", the Run button stayed locked, and the only
+  // way to discover the data was there was to re-upload a file and be told
+  // "these 5,589 keywords are already loaded". Reading the counts fixes both the
+  // display and the lock, and gives the per-row Clear control something honest
+  // to act on.
+
+  const fetchFootprint = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords/footprint`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data: FootprintResponse = await res.json();
+      setFootprint(data);
+    } catch { /* panel falls back to session-only state */ }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId || hasResults) return;
+    fetchFootprint();
+  }, [projectId, hasResults, kwVersion, fetchFootprint]);
+
+  // Stored CSV rows keyed by the domain string the panel renders (the client's
+  // display domain and each competitor's configured domain), so a row can show
+  // its own count without re-deriving the bucket rule in the view.
+  const footprintRows = useMemo(() => {
+    const out: Record<string, number> = {};
+    if (!footprint || !project) return out;
+    out[project.websiteUrl.replace(/^https?:\/\/(www\.)?/, '')] = footprint.client.csvRows;
+    for (const c of project.competitors ?? []) {
+      out[c.domain] = footprint.byDomain[normalizeFootprintDomain(c.domain)]?.csvRows ?? 0;
+    }
+    return out;
+  }, [footprint, project]);
+
+  // Domains with rows already in the database count as uploaded — this is what
+  // unlocks Run without forcing a pointless re-upload.
+  useEffect(() => {
+    const stored = Object.entries(footprintRows).filter(([, n]) => n > 0).map(([d]) => d);
+    if (stored.length === 0) return;
+    setUploadedDomains(prev => {
+      if (stored.every(d => prev.has(d))) return prev;
+      return new Set([...Array.from(prev), ...stored]);
+    });
+  }, [footprintRows]);
+
+  // ── v7.402: per-domain "Clear data" ───────────────────────────────────────
+  // Genuinely DELETEs that domain's uploaded CSV rows so a changed export can be
+  // imported clean. Needed because a plain re-upload is an UPSERT: it refreshes
+  // every keyword the new file contains but leaves behind rows the new file
+  // dropped, so the stored footprint would be a merge of both exports.
+  async function handleClearDomain(domain: string) {
+    setClearingDomain(domain);
+    setUploadError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords/footprint`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ domain }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => null);
+        setUploadMsgKind('error');
+        setUploadError(d?.error ?? `Could not clear the stored data for ${domain}.`);
+        return;
+      }
+      const { deleted, remainingOtherRows } = await res.json();
+      setUploadedDomains(prev => {
+        const next = new Set(Array.from(prev));
+        next.delete(domain);
+        return next;
+      });
+      setUploadMsgKind('info');
+      setUploadError(
+        `${domain}: deleted ${Number(deleted).toLocaleString()} uploaded CSV keyword rows` +
+        (Number(remainingOtherRows) > 0
+          ? ` (${Number(remainingOtherRows).toLocaleString()} manually added rows kept)`
+          : '') +
+        '. Upload a fresh file for this domain.',
+      );
+      await fetchFootprint();
+      setKwVersion(v => v + 1);
+    } catch {
+      setUploadMsgKind('error');
+      setUploadError(`Could not clear the stored data for ${domain} — network error.`);
+    } finally {
+      setClearingDomain(null);
+    }
+  }
+
   // ── File upload handler ───────────────────────────────────────────────────
 
   async function handleFileUpload(file: File, domain: string) {
@@ -682,6 +793,7 @@ export default function ProjectBriefPage() {
       const keywords = parseCsvText(text);
 
       if (keywords.length === 0) {
+        setUploadMsgKind('error');
         setUploadError(`No valid keywords found in ${file.name}. Expected columns: keyword, search_volume`);
         return;
       }
@@ -694,23 +806,45 @@ export default function ProjectBriefPage() {
 
       if (!res.ok) {
         const d = await res.json();
+        setUploadMsgKind('error');
         setUploadError(d?.error ?? 'Upload failed');
         return;
       }
 
-      const { inserted } = await res.json();
+      const { inserted, updated } = await res.json();
       // v7.344: inserted === 0 means every row ALREADY EXISTS for this domain —
       // that is SUCCESS (the data is loaded), not an error. The old code showed a
       // red error and never unlocked the Run button, dead-ending Wayne with fully
       // loaded data (the de-dupe itself is correct — it protects counts, I.3).
+      //
+      // v7.402 CORRECTION: "nothing re-imported" was not true. The batch route
+      // UPSERTS — every keyword already present is deleted and re-inserted with
+      // the values from THIS file, so a changed export DID overwrite volumes,
+      // positions and SERP features. What an upsert cannot do is remove rows the
+      // new export no longer contains, which is the one case that needs Clear.
+      // Saying "nothing was imported" sent Wayne looking for a clear that the
+      // panel did not have; the message now states exactly what happened.
       if (inserted === 0) {
-        setUploadError(`${file.name}: these ${keywords.length.toLocaleString()} keywords are already loaded for ${domain} — nothing re-imported (no duplicates). You can run the analysis.`);
+        const n = Number(updated ?? 0);
+        setUploadMsgKind('info');
+        setUploadError(
+          `${file.name}: no new keywords for ${domain} — ${n.toLocaleString()} existing rows were refreshed with this file's values. ` +
+          `Rows this file no longer contains are still stored; use Clear data on this row first for a clean replace.`,
+        );
         setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
+        await fetchFootprint();
         return;
       }
 
+      setUploadMsgKind('info');
+      setUploadError(
+        `${file.name}: imported ${Number(inserted).toLocaleString()} new keywords for ${domain}` +
+        (Number(updated ?? 0) > 0 ? ` · ${Number(updated).toLocaleString()} existing rows refreshed` : '') + '.',
+      );
       setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
+      await fetchFootprint();
     } catch (err) {
+      setUploadMsgKind('error');
       setUploadError('Upload failed — check file format and try again.');
     } finally {
       setUploadingDomain(null);
@@ -1578,6 +1712,10 @@ export default function ProjectBriefPage() {
                 uploadedDomains={uploadedDomains}
                 uploadingDomain={uploadingDomain}
                 uploadError={uploadError}
+                uploadMsgKind={uploadMsgKind}
+                footprintRows={footprintRows}
+                clearingDomain={clearingDomain}
+                onClearDomain={handleClearDomain}
                 fileInputRefs={fileInputRefs}
                 onFileSelect={handleFileUpload}
                 onRun={() => requestAnalysisWithEstimate('full')}
@@ -1821,6 +1959,10 @@ interface DataSourceCardProps {
   uploadedDomains: Set<string>;
   uploadingDomain: string | null;
   uploadError:     string | null;
+  uploadMsgKind:   'error' | 'info';                    // v7.402
+  footprintRows:   Record<string, number>;              // v7.402: real stored CSV rows per domain
+  clearingDomain:  string | null;                       // v7.402
+  onClearDomain:   (domain: string) => void;            // v7.402
   fileInputRefs:   React.MutableRefObject<Record<string, HTMLInputElement | null>>;
   onFileSelect:    (file: File, domain: string) => void;
   onRun:           () => void;
@@ -1828,7 +1970,9 @@ interface DataSourceCardProps {
 
 function DataSourceCard({
   clientDomain, competitors, dataSource, onSelectSource,
-  uploadedDomains, uploadingDomain, uploadError, fileInputRefs, onFileSelect, onRun,
+  uploadedDomains, uploadingDomain, uploadError, uploadMsgKind,
+  footprintRows, clearingDomain, onClearDomain,
+  fileInputRefs, onFileSelect, onRun,
 }: DataSourceCardProps) {
   // All domains that need uploads: client + each competitor
   const allDomains = [clientDomain, ...competitors.map(c => c.domain)];
@@ -1913,6 +2057,9 @@ function DataSourceCard({
               label="client"
               uploaded={uploadedDomains.has(clientDomain)}
               uploading={uploadingDomain === clientDomain}
+              storedRows={footprintRows[clientDomain] ?? 0}
+              clearing={clearingDomain === clientDomain}
+              onClear={() => onClearDomain(clientDomain)}
               onTrigger={() => triggerFileInput(clientDomain)}
               inputRef={el => { fileInputRefs.current[clientDomain] = el; }}
               onFileChange={f => onFileSelect(f, clientDomain)}
@@ -1923,6 +2070,9 @@ function DataSourceCard({
                 domain={c.domain}
                 uploaded={uploadedDomains.has(c.domain)}
                 uploading={uploadingDomain === c.domain}
+                storedRows={footprintRows[c.domain] ?? 0}
+                clearing={clearingDomain === c.domain}
+                onClear={() => onClearDomain(c.domain)}
                 onTrigger={() => triggerFileInput(c.domain)}
                 inputRef={el => { fileInputRefs.current[c.domain] = el; }}
                 onFileChange={f => onFileSelect(f, c.domain)}
@@ -1936,8 +2086,10 @@ function DataSourceCard({
             )}
           </div>
           {uploadError && (
-            // v7.344: "already loaded" is informational (data present, run unlocked) — amber, not error-red
-            <p style={{ fontSize: '11px', color: uploadError.includes('already loaded') ? 'var(--amber)' : 'var(--c-f87171)', marginTop: '8px' }}>{uploadError}</p>
+            // v7.344: an "already loaded" result is informational (data present, run
+            // unlocked) — amber, not error-red. v7.402: the caller now sets the kind
+            // explicitly, so rewording a notice can't flip it back to red.
+            <p style={{ fontSize: '11px', color: uploadMsgKind === 'info' ? 'var(--amber)' : 'var(--c-f87171)', marginTop: '8px' }}>{uploadError}</p>
           )}
         </div>
       )}
@@ -1959,16 +2111,27 @@ function DataSourceCard({
 // ── Upload zone sub-component ─────────────────────────────────────────────────
 
 interface UploadZoneProps {
-  domain:    string;
-  label?:    string;
-  uploaded:  boolean;
-  uploading: boolean;
+  domain:     string;
+  label?:     string;
+  uploaded:   boolean;
+  uploading:  boolean;
+  storedRows: number;          // v7.402: rows actually in the DB for this domain (0 = nothing stored)
+  clearing:   boolean;         // v7.402
+  onClear:    () => void;      // v7.402
   onTrigger: () => void;
   inputRef:  (el: HTMLInputElement | null) => void;
   onFileChange: (file: File) => void;
 }
 
-function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, onFileChange }: UploadZoneProps) {
+function UploadZone({
+  domain, label, uploaded, uploading, storedRows, clearing, onClear,
+  onTrigger, inputRef, onFileChange,
+}: UploadZoneProps) {
+  // v7.402: two-step confirm, inline. Deliberately NOT window.confirm — a native
+  // modal blocks the page and reads as a browser alert rather than part of the app.
+  const [confirming, setConfirming] = useState(false);
+  const hasStored = storedRows > 0;
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
       {/* Domain label */}
@@ -1976,6 +2139,12 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
         <span style={{ fontSize: '11px', color: 'var(--c-c0c0d8)' }}>{domain}</span>
         {label && (
           <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '10px', background: 'var(--c-2a2a5a)', color: 'var(--c-c0c0e0)', marginLeft: '5px' }}>{label}</span>
+        )}
+        {/* v7.402: what is actually stored right now — real count from the DB */}
+        {hasStored && (
+          <p style={{ fontSize: '9px', color: 'var(--c-8080b0)', margin: '2px 0 0' }}>
+            {storedRows.toLocaleString()} keyword rows stored
+          </p>
         )}
       </div>
 
@@ -2003,6 +2172,54 @@ function UploadZone({ domain, label, uploaded, uploading, onTrigger, inputRef, o
           </span>
         )}
       </button>
+
+      {/* v7.402: per-row Clear data — DELETES this domain's uploaded CSV rows so a
+          changed export can be re-imported clean. Only offered when there is
+          something stored to delete. */}
+      <div style={{ width: '132px', flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: '5px' }}>
+        {clearing ? (
+          <span style={{ fontSize: '10px', color: 'var(--c-8080b0)' }}>Clearing…</span>
+        ) : !hasStored ? (
+          null
+        ) : confirming ? (
+          <>
+            <button
+              onClick={() => { setConfirming(false); onClear(); }}
+              title={`Permanently delete the ${storedRows.toLocaleString()} stored CSV keyword rows for ${domain}`}
+              style={{
+                fontSize: '10px', fontWeight: 500, cursor: 'pointer',
+                background: 'var(--c-2b0d0d)', color: 'var(--c-f87171)',
+                border: '1px solid var(--c-f87171)', borderRadius: '6px', padding: '4px 8px',
+              }}
+            >
+              Delete {storedRows.toLocaleString()}
+            </button>
+            <button
+              onClick={() => setConfirming(false)}
+              style={{
+                fontSize: '10px', cursor: 'pointer',
+                background: 'var(--c-0f0f1e)', color: 'var(--c-8080b0)',
+                border: '1px solid var(--c-2a2a4a)', borderRadius: '6px', padding: '4px 8px',
+              }}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setConfirming(true)}
+            title={`Clear the stored CSV footprint for ${domain} so a changed export can be re-uploaded`}
+            style={{
+              fontSize: '10px', cursor: 'pointer',
+              background: 'var(--c-0f0f1e)', color: 'var(--c-8080b0)',
+              border: '1px solid var(--c-2a2a4a)', borderRadius: '6px', padding: '4px 8px',
+              display: 'flex', alignItems: 'center', gap: '4px',
+            }}
+          >
+            <i className="ti ti-trash" style={{ fontSize: '11px' }} aria-hidden="true" /> Clear data
+          </button>
+        )}
+      </div>
 
       {/* Hidden file input */}
       <input
