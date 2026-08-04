@@ -36,14 +36,20 @@ import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { computeSynthProgress, type SynthProgressRow } from '@/lib/synthesis/progressMath';
 
-export const dynamic = 'force-dynamic';
+export const dynamic    = 'force-dynamic';
+export const revalidate = 0;
 
-// SQL column list reused by both the by-id and latest-in-project queries. Each
-// expression pulls only a scalar out of the (possibly multi-MB) jsonb column —
-// Postgres resolves the path server-side and ships nothing but the small result.
+// v7.403: the poll had no cache header at all. Progress that can be served from
+// any cache is worse than no progress — it reads as a stall.
+const NO_STORE = { 'Cache-Control': 'no-store, no-transform' } as const;
+
+// SQL column list. Each expression pulls only a scalar out of the (possibly
+// multi-MB) jsonb column — Postgres resolves the path server-side and ships
+// nothing but the small result.
 const cp  = sql`semrush_snapshot->'_synthCheckpoint'`;
 const cbp = sql`semrush_snapshot->'_synthCheckpoint'->'cbProgress'`;
 const SELECT_COLS = sql`
+  id::text AS id,
   status AS status,
   (${cbp}->>'batchTotal')::int                                                AS batch_total,
   jsonb_array_length(COALESCE(${cbp}->'doneStarts','[]'::jsonb))              AS disc_done,
@@ -58,18 +64,53 @@ const SELECT_COLS = sql`
   (semrush_snapshot IS NOT NULL)                                             AS has_snap
 `;
 
+// ── v7.403: ONE query — the project's newest analysis ────────────────────────
+// The old handler had TWO variants of the same SELECT: `WHERE id = $1` when the
+// caller passed ?analysisId, and `WHERE project_id = $1 ORDER BY triggered_at
+// DESC` otherwise. Measured live on 2026-08-04 against a project with exactly
+// ONE analysis row — the same row for both — they disagreed:
+//
+//   ?analysisId=dd902630…  → { done: 0,   stage: 'categorizing'  }   ← WRONG
+//   (no analysisId)        → { done: 424, stage: 'consolidating' }   ← correct
+//
+// The row genuinely held doneStarts=422 and canon 20/40 (read back through the
+// project API), and the SELECT itself is correct — the exact drizzle template
+// was run against a real Postgres with production-shaped data and returned
+// 423/429. Only the by-id variant reads a stale, pre-checkpoint view of the row,
+// and six distinct cache-busted URLs all returned it, so it is not an HTTP
+// cache. WHY that read is stale is NOT explained at the application layer and is
+// deliberately not guessed at here (Const I.1). What IS established is that the
+// project-scoped read is live-correct, so it is now the only query.
+//
+// The caller's analysisId becomes an IDENTITY CHECK rather than a filter: the
+// newest analysis of a project IS the run the panel just triggered, and if it
+// somehow is not, `matchesRequested: false` says so instead of silently
+// answering about a different run.
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const analysisId = req.nextUrl.searchParams.get('analysisId');
 
-    const res: any = analysisId
-      ? await db.execute(sql`SELECT ${SELECT_COLS} FROM analyses WHERE id = ${analysisId} LIMIT 1`)
-      : await db.execute(sql`SELECT ${SELECT_COLS} FROM analyses WHERE project_id = ${params.id} ORDER BY triggered_at DESC LIMIT 1`);
+    const res: any = await db.execute(
+      sql`SELECT ${SELECT_COLS} FROM analyses WHERE project_id = ${params.id} ORDER BY triggered_at DESC LIMIT 1`,
+    );
 
-    const row: SynthProgressRow | null = res?.rows?.[0] ?? res?.[0] ?? null;
-    return NextResponse.json(computeSynthProgress(row));
+    const row: (SynthProgressRow & { id?: unknown }) | null = res?.rows?.[0] ?? res?.[0] ?? null;
+    const rowId = row?.id != null ? String(row.id) : null;
+
+    return NextResponse.json(
+      {
+        ...computeSynthProgress(row),
+        analysisId:       rowId,
+        // null = the caller did not name a run, so there is nothing to disagree with
+        matchesRequested: analysisId ? (rowId === analysisId) : null,
+      },
+      { headers: NO_STORE },
+    );
   } catch (err) {
     // Honest fallback — the screen shows elapsed time instead (Const I.5).
-    return NextResponse.json({ status: null, done: null, total: null, stage: null });
+    return NextResponse.json(
+      { status: null, done: null, total: null, stage: null, analysisId: null, matchesRequested: null },
+      { headers: NO_STORE },
+    );
   }
 }
