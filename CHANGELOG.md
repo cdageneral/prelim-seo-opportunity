@@ -1,3 +1,73 @@
+## v7.401 · Client Projects: a list view, and a way to find a client — 2026-08-04
+
+Seven clients fit on the tile grid. Twenty will not, and by then finding one
+means reading a wall of cards. Wayne asked for two things: a toggle between the
+tile view and an alphabetical list, and a search bar.
+
+**The toggle.** A two-segment control next to the search box switches the same
+project list between tiles and rows. The choice is remembered per browser
+(`orbitiq:dashboard:view`), so the dashboard opens the way it was left. The
+first render is always tiles regardless of what is stored — the stored value is
+applied in an effect — because a server render that disagrees with the client is
+a hydration mismatch, and this is the cheap way to not have one. A blocked or
+unavailable localStorage falls back to tiles instead of throwing.
+
+**The list.** Alphabetical by client name, case-insensitive, via `localeCompare`
+with base sensitivity, so "one main financial" files under O rather than being
+banished below the capitals. The column headers — Client, Industry, Status,
+Updated — are clickable: the same header flips direction, a new header starts
+ascending. Rows tied on a non-name column fall back to the client name so the
+order does not shuffle between renders. Sorting never mutates the array the API
+returned, and **the tile view is never re-sorted** — it keeps the server's
+most-recently-updated order exactly as before.
+
+**The search.** One box, filtering live over client name, the full URL, the bare
+domain, the industry chip and the status. Typing `usbank.com` finds US Bank
+Deposits even though the stored URL is `https://www.usbank.com`; typing
+`fintech` finds every Finance / Fintech client; case does not matter. A count
+("3 of 7") appears while a query is active, an ✕ clears the box, Escape clears
+it too, and a query that matches nothing gets a proper no-matches state instead
+of a blank page. The Add Client tile hides while a search is running, because an
+add affordance inside a filtered result set reads as a match.
+
+**One menu, not two.** The ⋯ actions (Rename / Open / Delete) were living inside
+`ProjectCard`. Rather than copy sixty lines of markup into the row, they moved
+into a shared `ProjectMenu` that both views mount — so the two views cannot
+drift apart on what a project can do.
+
+**Two contrast fixes carried over from v7.400.** The status ink was
+`text-green-400`, a raw Tailwind palette colour. Raw palette classes do not
+follow `[data-theme]`: on the light surface that green measures ~1.8:1, which is
+why "active" was barely there in Wayne's own screenshot. It is now
+`text-orbit-green`, the theme-aware token — 5.56:1 in light, 7.89:1 in dark. The
+same applied to the delete button (`bg-red-500` → `bg-orbit-red`) and to the
+industry chip, whose `bg-orbit-muted` fill left its label at 4.11:1 in dark; at
+`/50` it clears at 4.70:1.
+
+**Where the logic lives.** Filtering, sorting and the stored-view helpers are in
+`lib/dashboard/projectList.ts`, not in `page.tsx`. A route file may only export
+its default component — a named export there fails the real `next build` — and
+pure functions in a lib module can be exercised directly by the regression
+suite. There is now a retained check asserting the page keeps exactly one
+export, so nobody rediscovers that the hard way.
+
+**Verification.** Real `next build` compiles clean (not just an isolated `tsc`).
+The retained suite runs **967 pass / 16 pre-existing / zero delta**, with 48 new
+checks: the sort and search invariants above, the structural rules, and a
+real-Chromium dual-theme render of every new control. The render composites
+semi-transparent bands the way the browser paints them rather than reading a
+`/40` tint as an opaque fill, and it lifts class strings out of the source
+rather than retyping them. Two pre-existing dark-theme pairings (the
+`text-orbit-tertiary` placeholder and domain line, both already shipping in the
+tile card) are allowlisted by `item|theme` key, counted out loud, and fail the
+build if they ever start passing. The light theme carries zero allowlisted debt,
+asserted separately.
+
+Files: `app/dashboard/page.tsx`, `components/dashboard/ProjectCard.tsx`,
+`components/dashboard/ProjectMenu.tsx` (new),
+`components/dashboard/ProjectRow.tsx` (new),
+`lib/dashboard/projectList.ts` (new), `package.json`.
+
 ## v7.400 · Light mode: the CTA buttons you could not read — 2026-08-03
 
 Wayne sent a screenshot of the SERP Features panel in light mode. The "Scan all
