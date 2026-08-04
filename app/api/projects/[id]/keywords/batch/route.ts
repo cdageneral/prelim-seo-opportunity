@@ -30,6 +30,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db }              from '@/db';
 import { projectKeywords, projects } from '@/db/schema';
 import { and, eq, sql, or, isNull, inArray, ne }   from 'drizzle-orm';
+// v7.402: the writer (here) and the counter/deleter (/keywords/footprint) MUST
+// bucket domains identically — one rule, one shared function, no drift. A single
+// character of divergence would make "Clear data" match nothing while reporting
+// success.
+import { normalizeFootprintDomain, isClientFootprintDomain } from '@/lib/keywords/footprintDomains';
 
 async function ensureTable() {
   try {
@@ -108,7 +113,7 @@ export async function POST(
   }
 
   const projectId = params.id;
-  const domainNorm = domain.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  const domainNorm = normalizeFootprintDomain(domain);
 
   // v7.100: determine whether this upload is the CLIENT's footprint or a
   // COMPETITOR's. Competitor rows must NEVER be type 'ranked' — 'ranked' means
@@ -117,9 +122,8 @@ export async function POST(
   // rows showed up as 36,281 ranked / 0 gap). The competitor's position is
   // still stored (needed for page-1 Share of Voice) — only the type changes.
   const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
-  const clientDomainNorm = (project?.websiteUrl ?? '')
-    .trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
-  const isClientUpload = domainNorm === '' || domainNorm === clientDomainNorm;
+  const clientDomainNorm = normalizeFootprintDomain(project?.websiteUrl ?? '');
+  const isClientUpload = isClientFootprintDomain(domainNorm, clientDomainNorm);
 
   // v7.100 auto-repair: flip pre-existing COMPETITOR rows that the old logic
   // stored as 'ranked' back to 'gap'. Competitor rows = domain set and not the
