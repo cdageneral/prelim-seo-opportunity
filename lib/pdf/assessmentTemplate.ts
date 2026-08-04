@@ -260,7 +260,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // cover PROVIDED BY block, the governance "proprietary to iQuanti" line and the
   // appendix endbrand "An iQuanti product" stay iQuanti-only, so the statement of
   // who is accountable for the numbers is never split. This amends the v7.377
-  // iQuanti-only rule, which stands everywhere else (and McKinsey stays absent).
+  // iQuanti-only rule, which stands everywhere else in the report. (The removed
+  // partner name is deliberately not repeated here — a source-level grep for it
+  // must stay clean, and comments count.)
   const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${name}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
