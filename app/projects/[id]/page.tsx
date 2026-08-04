@@ -29,6 +29,7 @@ import GoogleRankAuthoritySection from '@/components/brief/GoogleRankAuthoritySe
 import AuthorityCalculatorSection from '@/components/brief/AuthorityCalculatorSection';    // v7.370
 import { getMarket } from '@/lib/utils/markets';
 import { normalizeFootprintDomain } from '@/lib/keywords/footprintDomains';   // v7.402
+import { initialResumeState, nextResumeState } from '@/lib/synthesis/resumeDecision';   // v7.403
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 
@@ -558,15 +559,21 @@ export default function ProjectBriefPage() {
       // polls real batch counts for the analyzing screen. Stops only when the
       // run stalls twice in a row or a hard cap is hit.
       const MAX_ATTEMPTS = 15;    // absolute safety cap (~75 min of 300s windows)
+      // v7.403: the stop/continue rule lives in lib/synthesis/resumeDecision.ts
+      // so it is directly testable. It separates a READABLE-but-unmoved poll
+      // (a real stall) from an UNREADABLE one (no evidence either way) —
+      // conflating them is what aborted a healthy run on 2026-08-04.
+      let   resumeState  = initialResumeState();
       let   lastErr      = '';
       let   done         = false;
-      let   lastDone     = -1;
-      let   stalls       = 0;
 
       const pollProgress = async (): Promise<{ done: number; total: number; stage: string } | null> => {
         try {
           const r = await fetch(`/api/projects/${projectId}/synthesis-progress?analysisId=${analysisId}`, { cache: 'no-store' });
           const d = await r.json().catch(() => null);
+          // v7.403: a reading about a DIFFERENT run is not a reading about this
+          // one — treat it as unknown rather than as this run's progress.
+          if (d?.matchesRequested === false) return null;
           if (d && typeof d.done === 'number' && typeof d.total === 'number') {
             setSynthProgress({ done: d.done, total: d.total, stage: d.stage ?? 'categorizing' });
             return { done: d.done, total: d.total, stage: d.stage ?? 'categorizing' };
@@ -593,12 +600,32 @@ export default function ProjectBriefPage() {
           }
           if (done || cancelRequestedRef.current) break;
           // Resume only while the checkpoint is ADVANCING (fresh read, not the timer's).
+          //
+          // v7.403 — THE BUG THAT KILLED A HEALTHY RUN. `pollProgress()` returns
+          // null whenever the reading is UNAVAILABLE (endpoint error, network
+          // blip, a payload about another run). The old code folded that into
+          // `nowDone = -1`, which is never > lastDone, so it counted as a stall —
+          // and two of them aborted the run. "I cannot see progress" is not
+          // "there was no progress": on 2026-08-04 the poll returned 0 every
+          // time while the engine really was at 422/422 discovery and climbing
+          // through consolidation, so a fine run died after 3 windows with
+          // "Analysis failed" on screen.
+          //
+          // Now only a READABLE reading can register a stall. An unreadable one
+          // is counted separately, so a blind loop still ends (it is not
+          // evidence of health either) — just not after two blinks.
           const p = await pollProgress();
-          const nowDone = p?.done ?? -1;
-          if (nowDone > lastDone) { stalls = 0; lastDone = nowDone; }
-          else stalls++;
-          if (stalls >= 2) break;   // two attempts with zero forward progress → real failure
-          console.log(`[OrbitIQ] Synthesis window ended at batch ${nowDone >= 0 ? nowDone : '?'} — auto-resuming (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
+          const verdict = nextResumeState(resumeState, p);
+          resumeState = verdict.state;
+          if (verdict.action === 'stop') {
+            if (verdict.reason === 'blind') {
+              lastErr = 'Synthesis progress could not be read for several windows in a row.';
+            }
+            break;
+          }
+          console.log(
+            `[OrbitIQ] Synthesis window ended (${verdict.reason}${p ? ` at batch ${p.done} of ${p.total}` : ''}) — auto-resuming (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+          );
           await new Promise(r => setTimeout(r, 4000));
         }
       } finally {
