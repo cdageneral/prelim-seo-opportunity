@@ -107,7 +107,34 @@ export interface JourneyTopicLike {
   pageUrl?:    string;
   stage:       CanonStage;
   totalVolume: number;
-  keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }>;
+  // v7.404: `url` (the client's ranking URL for this keyword) is now carried
+  // through. It was always present on KwItem but dropped by this slice, so the
+  // report could not count the existing URLs behind a position band. Optional —
+  // pre-v7.404 scans stored '' for every row (see the semrush.ts `Url` fix).
+  keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; url?: string; origin?: 'footprint' | 'demand' }>;
+}
+
+// ── v7.404: real per-keyword SERP feature rows (AI Overview + People Also Ask) ──
+// Shape mirrors the stored analyses.serpApiSnapshot, flattened by the PDF route
+// and declared locally so this server module never imports a client component.
+// Every field is a direct scan row: no value here is modeled or estimated.
+export interface SerpFeatureKeyword {
+  keyword:        string;
+  clientRank:     number | null;   // client's position on this SERP (null = not found)
+  clientUrl:      string | null;   // resolved from organicResults at the route
+  searchVolume:   number | null;   // joined from the shared pool at the route
+  hasAIO:         boolean;
+  aioClientCited: boolean;
+  hasPAA:         boolean;
+  paaClientCited: boolean;
+}
+export interface SerpFeatureSnapshot {
+  scanned:        number;
+  withAIO:        number;
+  aioClientCited: number;
+  withPAA:        number;
+  paaClientCited: number;
+  keywords:       SerpFeatureKeyword[];
 }
 
 export interface AssessmentData {
@@ -123,6 +150,7 @@ export interface AssessmentData {
   segments?: SegmentLike[] | null;          // v7.376: stored _audienceSegments rows
   journeyTopics?: JourneyTopicLike[] | null; // v7.376: canonical topics (same build the panels run)
   problemSeeds?: string[];                   // v7.376: deep-journey problem seeds (lane rule)
+  serpFeatures?: SerpFeatureSnapshot | null; // v7.404: real AIO/PAA scan rows (absent = section omitted, Const I.5)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -227,7 +255,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const segAttributedN = hasSeg && hasJourney ? jTotal - segSharedN : 0;
   const topSeg = segAgg[0] ?? null;
 
-  const footLeft = `OrbitIQ Assessment · Provided by iQuanti · ${name}`;
+  // v7.404 (Wayne 2026-08-04): the PAGE FOOTER now also names the platform —
+  // "Provided by iQuanti, Powered by iQ.Impact". Scope is the footer ONLY: the
+  // cover PROVIDED BY block, the governance "proprietary to iQuanti" line and the
+  // appendix endbrand "An iQuanti product" stay iQuanti-only, so the statement of
+  // who is accountable for the numbers is never split. This amends the v7.377
+  // iQuanti-only rule, which stands everywhere else (and McKinsey stays absent).
+  const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${name}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
   const offPage1Monthly = Math.max(0, m.totalMonthly - m.page1Monthly);
