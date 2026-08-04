@@ -10,7 +10,7 @@ import { eq }      from 'drizzle-orm';
 // capture from buildKwPool/computeVolumeMetrics, SoV from computeSov, and the
 // AI answer-layer sections from the stored Profound panel metrics
 // (projects.profound_data — the panel's own aggregate of real CSV rows, v7.318).
-import { buildAssessmentHTML, type ProfoundMetrics } from '@/lib/pdf/assessmentTemplate';
+import { buildAssessmentHTML, type ProfoundMetrics, type SerpFeatureSnapshot } from '@/lib/pdf/assessmentTemplate';
 // v7.335 (QC audit B2, Const I.5a/II.7): the PDF computes the SAME page-1
 // capture + Share-of-Voice the app renders, instead of the stored pre-v7.245 model.
 import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot';
@@ -119,6 +119,60 @@ export async function POST(req: NextRequest) {
     console.error('[PDF v7.376] canonical topic build FAILED — journey sections omitted:', err);
   }
 
+  // ── v7.404: real AI Overview + People Also Ask rows, flattened for the report ──
+  // Both are already scanned per keyword (lib/apis/serp.ts) and stored on
+  // analyses.serp_api_snapshot, but nothing ever passed them to this report. The
+  // client's ranking URL is resolved from the SAME organicResults the scan stored
+  // (registrable-domain match), and volume is joined from the shared pool above —
+  // no value here is modeled. Absent snapshot => null => the section is omitted
+  // entirely rather than rendering a placeholder (Const I.5).
+  const serpFeatures: SerpFeatureSnapshot | null = (() => {
+    const sp: any = (analysis as any).serpApiSnapshot;
+    const rows: any[] = Array.isArray(sp?.keywords) ? sp.keywords : [];
+    if (rows.length === 0) return null;
+
+    const reg = (h: string) => h.replace(/^www\./i, '').toLowerCase();
+    const hostOf = (u: string) => { try { return reg(new URL(u).hostname); } catch { return ''; } };
+    const clientHost = hostOf(clientDomain) || reg(String(clientDomain || '').split('/')[0] || '');
+    const isClient = (u: string) => {
+      const h = hostOf(u);
+      return !!h && !!clientHost && (h === clientHost || h.endsWith(`.${clientHost}`));
+    };
+
+    const volByKw = new Map<string, number>();
+    for (const k of pool as any[]) {
+      const key = String(k?.keyword ?? '').toLowerCase();
+      if (key) volByKw.set(key, Number(k?.searchVolume ?? 0));
+    }
+
+    const keywords = rows.map(k => {
+      const organic: any[] = Array.isArray(k?.organicResults) ? k.organicResults : [];
+      const own = organic.find(r => isClient(String(r?.url ?? '')));
+      const aioSrc: any[] = Array.isArray(k?.aioSources) ? k.aioSources : [];
+      const paaQs: any[] = Array.isArray(k?.paaQuestions) ? k.paaQuestions : [];
+      const kw = String(k?.keyword ?? '');
+      return {
+        keyword:        kw,
+        clientRank:     typeof k?.clientRank === 'number' ? k.clientRank : null,
+        clientUrl:      own ? String(own.url) : null,
+        searchVolume:   volByKw.has(kw.toLowerCase()) ? (volByKw.get(kw.toLowerCase()) as number) : null,
+        hasAIO:         !!k?.hasAIO,
+        aioClientCited: aioSrc.some(s => isClient(String(s?.link ?? s?.url ?? ''))),
+        hasPAA:         paaQs.length > 0,
+        paaClientCited: !!k?.paaClientCited,
+      };
+    });
+
+    return {
+      scanned:        keywords.length,
+      withAIO:        keywords.filter(k => k.hasAIO).length,
+      aioClientCited: keywords.filter(k => k.hasAIO && k.aioClientCited).length,
+      withPAA:        keywords.filter(k => k.hasPAA).length,
+      paaClientCited: keywords.filter(k => k.hasPAA && k.paaClientCited).length,
+      keywords,
+    };
+  })();
+
   const html = buildAssessmentHTML({
     clientName:   project.clientName ?? 'Client',
     websiteUrl:   project.websiteUrl ?? '',
@@ -132,6 +186,7 @@ export async function POST(req: NextRequest) {
     segments:     (((snap as any)?._audienceSegments) ?? null),
     journeyTopics,
     problemSeeds: (((snap as any)?._demandUniverse?.problemSeeds) ?? []) as string[],
+    serpFeatures,
   });
   let pdfBuffer: Buffer;
 
