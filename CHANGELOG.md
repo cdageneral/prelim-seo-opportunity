@@ -1,3 +1,70 @@
+## v7.404 · Every Semrush ranking URL had been silently blank — 2026-08-04
+
+Building the new Recommended Program pages, the report needed one number nobody
+had asked it for before: how many existing URLs sit in positions 4–20. The answer
+came back zero, on a project with 1,429 tracked keywords.
+
+`lib/apis/semrush.ts` asks Semrush for the ranking URL correctly —
+`export_columns: 'Ph,Po,Nq,Ur,Cp,Co,Fl'`. But the mapper read **`row['URL']`**,
+and Semrush's CSV header for `Ur` is **`Url`**. `parseSemrushCSV` preserves
+Semrush's exact header casing, so the lookup was always `undefined` and the
+`?? ''` fallback wrote an empty string on every row. No error, no warning — just a
+column that had been blank since the day it was first requested.
+
+It was a typo, not a decision: line ~284 of the same file (`domain_organic_unique`)
+already read `row['Url'] ?? row['URL'] ?? ''`. Line 236 never got the same
+treatment. They match now.
+
+**The blast radius is wider than the report.** `Topic.pageUrl` derives from
+`kws.find(k => k.position !== null && k.url)?.url`, so it has been `undefined`
+project-wide — which means the **"Existing URL" column in the delivery-package
+export has been shipping blank for every client**, and no per-URL rollup was
+possible anywhere in the app.
+
+**The fix does not backfill.** Rows already stored keep `url: ''`. Each project
+has to be re-scanned before its URLs appear.
+
+### Also in this release
+
+**Real AI Overview and People Also Ask rows reach the assessment report.** Both are
+already scanned per keyword (`lib/apis/serp.ts` — `hasAIO`, `aioSources`,
+`paaQuestions`, `paaClientCited`, and since v7.117 the full `paaSources` set), and
+both were stored on `analyses.serp_api_snapshot`, but nothing ever passed them to
+this report. The PDF route now flattens them into `serpFeatures`: per-keyword
+presence and citation, the client's ranking URL resolved from the SAME
+`organicResults` the scan stored (registrable-domain match), and volume joined from
+the shared `buildKwPool`. An absent snapshot yields `null`, so the section is
+omitted entirely rather than rendering a placeholder (Const I.5).
+
+`JourneyTopicLike` now carries `url` through to the report. It was present on
+`KwItem` all along and dropped by that slice.
+
+**Footer attribution** reads **"Provided by iQuanti, Powered by iQ.Impact"** (Wayne,
+this session). Scope is the page footer ONLY — the cover PROVIDED BY block, the
+governance "proprietary to iQuanti" line and the appendix endbrand "An iQuanti
+product" stay iQuanti-only, so the statement of who is accountable for the numbers
+is never split. This amends the v7.377 iQuanti-only rule, which stands everywhere
+else.
+
+### Verification
+
+Real-project `tsc --noEmit` clean under the project tsconfig with no `target`
+override (V.1a) **and a real `next build`**. Retained suite A/B against pristine
+base via `git stash`: **902 pass / 19 pre-existing / zero regression delta**,
+identical failure sets. **13 new v404 checks**, none deleted.
+
+Two of those checks earned their keep immediately. The v374/v375 brand checks
+substring-match `'iQuanti'` — the new footer contains that string, so they waved
+the change straight through and could never have caught a footer regression. The
+v404 checks pin the exact wording and assert the platform name appears exactly as
+many times as there are footers, which is what actually enforces footer-only scope.
+
+A third caught a defect in this release's own comments at live-verify: the removed
+partner's name had been written into a template comment. Rendered output was clean,
+so every rendered-HTML check passed; only a source-level grep found it. Fixed in a
+follow-up commit — source greps catch comments, so that name stays out of this file
+entirely, even in prose that says it is absent.
+
 ## v7.403 · "Analysis failed" on a run that was working fine — 2026-08-04
 
 Wayne, mid-run: *"when i am trying to run the analysis i am getting this error"* —
