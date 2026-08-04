@@ -233,7 +233,14 @@ export async function getOrganicKeywords(
         keyword:      row['Keyword']   ?? '',
         position:     parseInt(row['Position'] ?? '0'),
         searchVolume: parseInt(row['Search Volume'] ?? '0'),
-        url:          row['URL']       ?? '',
+        // v7.404: Semrush's domain_organic CSV header for `Ur` is `Url`, not `URL`.
+        // parseSemrushCSV preserves Semrush's exact header casing, so row['URL']
+        // was always undefined and the `?? ''` fallback silently wrote an empty
+        // string — every ranking URL has been dropped since this column was first
+        // requested. Line ~284 already reads `Url` first; this now matches it.
+        // Knock-on: Topic.pageUrl derives from k.url, so the "Existing URL" export
+        // column and every per-URL rollup were blank too.
+        url:          row['Url'] ?? row['URL'] ?? '',
         cpc:          parseFloat(row['CPC'] ?? '0'),
         competition:  parseFloat(row['Competition'] ?? '0'),
         triggersLocalPack: sf === undefined ? undefined : serpFeaturesHasLocalPack(sf),
