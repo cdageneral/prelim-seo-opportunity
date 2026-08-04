@@ -283,6 +283,55 @@ export default function CompetitorsModal({
     return map;
   }, [kwRows]);
 
+  // ── v7.405: footprint coverage probe (Const I.5) ──────────────────────────
+  // Under the landscape SoV every brand is scored on the shared keyword set, so
+  // a filtered/truncated competitor export reads as a WEAK BRAND unless the
+  // coverage gap is visible. The probe compares each competitor's REAL Semrush
+  // footprint size (domain_ranks, ~10 API units per domain — disclosed on the
+  // button, Const I.5b) against the rows actually uploaded. Result persists
+  // server-side with its timestamp (Const IV.5).
+  interface CovEntry { semrushKeywords: number; uploadedRows: number; checkedAt: string }
+  const [coverage,    setCoverage]    = useState<{ checkedAt: string | null; perDomain: Record<string, CovEntry> } | null>(null);
+  const [covRunning,  setCovRunning]  = useState(false);
+  const [covProgress, setCovProgress] = useState<{ current: number; total: number; domain: string } | null>(null);
+  const [covError,    setCovError]    = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/projects/${projectId}/competitor-coverage`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive && d) setCoverage({ checkedAt: d.checkedAt ?? null, perDomain: d.perDomain ?? {} }); })
+      .catch(() => { /* probe data is optional — the modal works without it */ });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  async function runCoverageCheck() {
+    const targets = competitors.map(c => normDomain(c.domain)).filter(Boolean);
+    if (targets.length === 0 || covRunning) return;
+    setCovRunning(true); setCovError('');
+    let failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      setCovProgress({ current: i + 1, total: targets.length, domain: targets[i] });
+      try {
+        const r = await fetch(`/api/projects/${projectId}/competitor-coverage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain: targets[i] }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d?.error || 'probe failed');
+        setCoverage(prev => ({
+          checkedAt: d.checkedAt,
+          perDomain: { ...(prev?.perDomain ?? {}), [d.domain]: { semrushKeywords: d.semrushKeywords, uploadedRows: d.uploadedRows, checkedAt: d.checkedAt } },
+        }));
+      } catch (e: any) {
+        failed++;
+        setCovError(String(e?.message ?? e));
+      }
+    }
+    setCovProgress(null); setCovRunning(false);
+    if (failed === 0) setCovError('');
+  }
+
   // ── Add competitor ──
   const [showAdd,   setShowAdd]   = useState(false);
   const [addDomain, setAddDomain] = useState('');
@@ -604,6 +653,27 @@ export default function CompetitorsModal({
             </button>
           </div>
 
+          {/* v7.405: coverage probe — CTA lives where the data lives (Const IV.4) */}
+          {competitors.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', margin: '-6px 0 12px' }}>
+              <button type="button" onClick={runCoverageCheck} disabled={covRunning}
+                style={{ fontSize: '10px', color: 'var(--c-8b85ff)', background: 'none', border: '1px solid var(--ca-108-99-255-0_35)', borderRadius: '7px', padding: '4px 10px', cursor: covRunning ? 'default' : 'pointer', opacity: covRunning ? 0.5 : 1 }}>
+                {covRunning ? 'Checking…' : `Check footprint coverage (~10 Semrush units × ${competitors.length})`}
+              </button>
+              {covProgress && (
+                <span style={{ fontSize: '10px', color: 'var(--c-8080a0)' }}>
+                  {covProgress.current} of {covProgress.total} — {covProgress.domain}
+                </span>
+              )}
+              {!covRunning && coverage?.checkedAt && (
+                <span style={{ fontSize: '10px', color: 'var(--c-8080a0)' }}>
+                  last checked {new Date(coverage.checkedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+              )}
+              {covError && <span style={{ fontSize: '10px', color: 'var(--c-f87171)' }}>{covError}</span>}
+            </div>
+          )}
+
           {/* Add form */}
           {showAdd && (
             <div style={{ background: 'var(--c-10101e)', border: '1px solid var(--c-222240)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
@@ -708,6 +778,20 @@ export default function CompetitorsModal({
                               /* v7.106: always show the count, even at zero */
                               <span><span style={{ color: 'var(--c-8888b0)', fontWeight: 600 }}>0 kws uploaded</span> — no CSV; auto-discover on next full analysis</span>
                             )}
+                            {/* v7.405: real Semrush footprint size vs uploaded rows — a shortfall is a
+                                DATA GAP to close, not a weak brand (Const I.5). */}
+                            {(() => {
+                              const cov = coverage?.perDomain?.[nd];
+                              if (!cov) return null;
+                              const missing = Math.max(0, cov.semrushKeywords - cov.uploadedRows);
+                              return (
+                                <span style={{ color: missing > 0 ? 'var(--c-f59e0b)' : 'var(--c-4ade80)' }}>
+                                  {' '}· Semrush: {cov.semrushKeywords.toLocaleString()} kws{missing > 0
+                                    ? ` — ${missing.toLocaleString()} not in the upload; SOV scores them 0 until uploaded`
+                                    : ' — upload covers the full footprint'}
+                                </span>
+                              );
+                            })()}
                             {kwError && <span style={{ color: 'var(--c-f87171)' }}> (keyword stats unavailable)</span>}
                           </p>
                         </div>

@@ -832,8 +832,15 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
   const {
     basis, rawEntries, total, sovPct, capturedClicks, availableClicks,
     totalVolMonthly, page1VolMonthly, page1KwCount, totalKwCount, clientDisplay, ctrSource,
-    compEntries, compGaps,
+    compEntries, compGaps, landscapeKwCount, brandsOnFile, volumesAsOf,
   } = computeSov({ analysis, competitors, dbKeywords, clientLabel });
+  // v7.405: the landscape basis line (Wayne's live-landscape choice, 2026-08-04) —
+  // states what the denominator is built from, so a moved % is explainable on sight.
+  const volumesAsOfLabel = (() => {
+    if (!volumesAsOf) return null;
+    const t = Date.parse(volumesAsOf);
+    return isNaN(t) ? null : new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  })();
 
   // Honest-gap empty state (Const I.5) — no footprint volume to compute over.
   if (basis === 'empty' || availableClicks <= 0) {
@@ -879,7 +886,13 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <div>
         <p className="text-orbit-secondary text-xs font-medium">{title ?? 'Share of Voice'}</p>
         <p style={{ fontSize: '9px', color: 'var(--c-4a4a70)', marginTop: 2 }}>
-          {isExec ? 'page-1 click capture' : 'page-1 click capture — modeled clicks won ÷ all page-1 clicks available across the footprint'}
+          {/* v7.405: denominator = the shared non-branded landscape, no longer the client footprint */}
+          {isExec ? 'page-1 click capture' : 'page-1 click capture — modeled clicks won ÷ all page-1 clicks available across the non-branded keyword landscape'}
+        </p>
+        {/* v7.405 basis line — every brand is scored against this same landscape (Wayne's
+            even-playing-ground definition); live view, so growth is visible, never silent. */}
+        <p style={{ fontSize: '9px', color: 'var(--c-8080a0)', marginTop: 2 }}>
+          landscape: {landscapeKwCount.toLocaleString()} non-branded keyword{landscapeKwCount === 1 ? '' : 's'} · {brandsOnFile} brand{brandsOnFile === 1 ? '' : 's'} on file{volumesAsOfLabel ? ` · volumes from analysis ${volumesAsOfLabel}` : ''}
         </p>
       </div>
 
@@ -887,7 +900,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
         {/* Donut SVG — group rotated -90° so the arc path starts at 12 o'clock */}
         <div style={{ flexShrink: 0 }}>
           <svg width={svgPx} height={svgPx} viewBox="0 0 144 144" role="img"
-            aria-label={`Page-1 Share of Voice. Client captures an estimated ${sovDisplay}% of the page-1 clicks available across its footprint.`}>
+            aria-label={`Page-1 Share of Voice. Client captures an estimated ${sovDisplay}% of the page-1 clicks available across the non-branded keyword landscape.`}>
             <title>Page-1 Share of Voice (modeled)</title>
             <g transform="rotate(-90, 72, 72)">
               {arcs.map(arc => arc.dash > 0 ? (
@@ -925,6 +938,16 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
                 {serpArcs.length > 0 ? 'Tracked competitors (page-1 capture)' : 'Competitors (page-1 capture)'}
               </p>
               {compArcs.map(a => <LegendRow key={a.domain} arc={a} bump={legendBump} />)}
+              {/* v7.405 coverage guard (Const I.5): how much of the landscape we hold real
+                  rank data for, per brand — so a thin upload reads as a DATA GAP, not a
+                  genuinely weak brand. Real counts from the same computeSov() call. */}
+              {compEntries.length > 0 && (
+                <p style={{ fontSize: '9px', color: 'var(--c-8080a0)', lineHeight: 1.5, margin: '2px 0 0' }}>
+                  rank data held: {compEntries.map(c =>
+                    `${c.domain.replace(/^www\./, '')} ${(c.measuredKw ?? 0).toLocaleString()}/${landscapeKwCount.toLocaleString()} kws`
+                  ).join(' \u00b7 ')}
+                </p>
+              )}
             </>
           )}
 
@@ -937,7 +960,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
               </p>
               {serpArcs.map(a => <LegendRow key={a.domain} arc={a} bump={legendBump} />)}
               <p style={{ fontSize: '9px', color: 'var(--c-55557a)', lineHeight: 1.5, margin: '3px 0 0' }}>
-                largest organic rivals on your footprint &middot; real page-1 positions, same denominator
+                largest organic rivals on the landscape &middot; real page-1 positions, same denominator
               </p>
             </>
           )}
@@ -953,8 +976,8 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
           {!isExec && (
           <p style={{ fontSize: '10px', color: 'var(--c-6a6a90)', lineHeight: 1.5, margin: '6px 0 0' }}>
             Client wins <span style={{ color: 'var(--c-9b96ff)', fontWeight: 600 }}>~{Math.round(capturedClicks).toLocaleString()}</span> of
-            {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the footprint
-            {anyCompArcs ? '; competitor slices are page-1 clicks they take on shared keywords.' : '.'}
+            {' '}~{Math.round(availableClicks).toLocaleString()} page-1 clicks/mo available across the landscape
+            {anyCompArcs ? '; competitor slices are page-1 clicks they take on the same landscape.' : '.'}
           </p>
           )}
         </div>
@@ -995,7 +1018,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
             <p key={g.domain} style={{ fontSize: '10px', color: 'var(--c-d9a23f)', lineHeight: 1.5, margin: 0 }}>
               <span style={{ fontWeight: 600 }}>{g.domain.replace(/^www\./, '')}</span>: {g.rows.toLocaleString()} keyword{g.rows === 1 ? '' : 's'} on file
               {g.hasPositions
-                ? ` — none rank page 1 on your footprint (best position ${g.minPos ?? '—'}), so no Share-of-Voice slice yet.`
+                ? ` — none rank page 1 on the landscape (best position ${g.minPos ?? '—'}), so no Share-of-Voice slice yet.`
                 : ' — no ranking positions uploaded, so its Share-of-Voice cannot be computed. Re-upload its CSV including a Position column.'}
             </p>
           ))}
@@ -1024,7 +1047,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       {/* Underlying REAL inputs (Const I.1 verifiability) — volume & position are
           measured Semrush rows; only the CTR multiplier is modeled. */}
       <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
-        data: {clientDisplay.replace(/^www\./, '')} · {totalKwCount.toLocaleString()} footprint kws · {page1KwCount.toLocaleString()} rank pg 1 · {fmtAnnual(page1VolMonthly)} pg-1 vol / {fmtAnnual(totalVolMonthly)} total vol·yr
+        data: {clientDisplay.replace(/^www\./, '')} · {totalKwCount.toLocaleString()} landscape kws (non-branded) · {page1KwCount.toLocaleString()} client pg 1 · {fmtAnnual(page1VolMonthly)} pg-1 vol / {fmtAnnual(totalVolMonthly)} total vol·yr
       </p>
       <p style={{ fontSize: '9px', color: 'var(--c-44446a)', margin: 0, lineHeight: 1.5 }}>
         SoV = &Sigma;(volume &times; CTR at client position, pos 1&ndash;10) &divide; &Sigma;(volume &times; {PAGE1_CTR_SUM.toFixed(3)} page-1 CTR sum). Volume &amp; position are measured; CTR is the labeled model curve.
@@ -1093,7 +1116,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       const n = d.rivalsFound ?? 0;
       setSerpMsg(n > 0
         ? `Added ${n} SERP rival${n === 1 ? '' : 's'}.`
-        : ((d.warnings && d.warnings[0]) || 'Competitors pulled, but none rank page 1 on your footprint yet.'));
+        : ((d.warnings && d.warnings[0]) || 'Competitors pulled, but none rank page 1 on the landscape yet.'));
       setSerpState('done');
     } catch (e: any) { setSerpMsg(String(e?.message ?? e)); setSerpState('error'); }
   }

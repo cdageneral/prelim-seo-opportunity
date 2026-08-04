@@ -489,9 +489,10 @@ export default function ExecutiveSummarySection({
   // ── Share of Voice (page-1 click capture) ─────────────────────────────────
   // v7.245 — Sourced from the SAME computeSov() the Google-Rank donut (SovPanel,
   // nav 06) renders and the SovPanel shown right below in this exec, so the hero
-  // figure and the donut reconcile by construction (Const II.6/II.7). SoV is now
-  // page-1 click CAPTURE (clicks the client wins ÷ all page-1 clicks available
-  // across its footprint), not competitor-relative share — see SovComputed note.
+  // figure and the donut reconcile by construction (Const II.6/II.7). SoV is
+  // page-1 click CAPTURE; v7.405 (Wayne 2026-08-04): the denominator is the full
+  // NON-BRANDED KEYWORD LANDSCAPE (client + competitor keywords, branded rows
+  // excluded) — see the SovComputed note in lib/sov/model.ts.
   // The old competitor-share derivations (topComp / gapVsTop) were removed with
   // that redefinition; competitor presence for the readiness checklist is now read
   // directly from the configured/auto-discovered competitor lists, not from SoV.
