@@ -11,6 +11,9 @@ import { eq }      from 'drizzle-orm';
 // AI answer-layer sections from the stored Profound panel metrics
 // (projects.profound_data — the panel's own aggregate of real CSV rows, v7.318).
 import { buildAssessmentHTML, type ProfoundMetrics, type SerpFeatureSnapshot } from '@/lib/pdf/assessmentTemplate';
+// v7.405: Part V counts — computed off the SAME pool the capture metrics use, so
+// the ladder reconciles with the rest of the report (Const II.6/II.7).
+import { buildProgramData } from '@/lib/pdf/programData';
 // v7.335 (QC audit B2, Const I.5a/II.7): the PDF computes the SAME page-1
 // capture + Share-of-Voice the app renders, instead of the stored pre-v7.245 model.
 import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot';
@@ -173,6 +176,18 @@ export async function POST(req: NextRequest) {
     };
   })();
 
+  // ── v7.405: the Recommended Program counts ────────────────────────────────
+  // The pool already carries the client's real ranking URL per keyword: §1 takes
+  // it from the Semrush footprint and §2 backfills it from the uploaded CSV when
+  // the footprint row entered URL-less (buildKwPool v7.254). So this works on
+  // upload-sourced projects with no re-scan. Null => the ladder falls back to the
+  // legacy step cards rather than printing an empty table (Const I.5).
+  const program = buildProgramData(
+    pool as any,
+    (journeyTopics ?? null) as any,
+    (serpFeatures?.keywords ?? null) as any,
+  );
+
   const html = buildAssessmentHTML({
     clientName:   project.clientName ?? 'Client',
     websiteUrl:   project.websiteUrl ?? '',
@@ -187,6 +202,7 @@ export async function POST(req: NextRequest) {
     journeyTopics,
     problemSeeds: (((snap as any)?._demandUniverse?.problemSeeds) ?? []) as string[],
     serpFeatures,
+    program,
   });
   let pdfBuffer: Buffer;
 
