@@ -51,7 +51,10 @@ export async function buildSnapshotFromUploads(
     keyword:      r.keyword,
     position:     r.position ?? 999,
     searchVolume: r.searchVolume,
-    url:          '',
+    // v7.405: the uploaded CSV's real ranking URL (project_keywords.url, v7.251)
+    // was being discarded here, so every upload-sourced snapshot stored a blank
+    // URL — which blanked Topic.pageUrl and the "Existing URL" export column.
+    url:          r.url ?? '',
     cpc:          0,
     competition:  0,
   })).sort((a, b) => b.searchVolume - a.searchVolume);
