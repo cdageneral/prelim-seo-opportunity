@@ -459,8 +459,20 @@ export async function POST(
             return;
           }
 
-          // v7.410: take a BOUNDED slice of the pending offices for this request.
-          const slice: LocalListing[] = offices.slice(0, REVIEW_MAX_PER_REQUEST);
+          // v7.412: the slice is chosen by POSITION in prior.locations, and the merge
+          // writes back by that same position. v7.410 keyed the merge on
+          // `placeId || title` — but the worker itself does `if (pick.placeId)
+          // l.placeId = pick.placeId`, stamping Google's real place id onto an office
+          // that came from the client KML with placeId ''. So the map was keyed by the
+          // NEW id while prior.locations was still keyed by title: zero of 150 rows
+          // matched, every completed lookup was silently dropped before the write, and
+          // the pending count stayed at exactly 1045 forever. An index cannot be
+          // mutated by anything the worker does to the row.
+          const priorLocs: LocalListing[] = prior.locations ?? [];
+          const pendingIdx: number[] = [];
+          priorLocs.forEach((l, i) => { if (l.isClient && !l.reviewsFetchedAt) pendingIdx.push(i); });
+          const sliceIdx = pendingIdx.slice(0, REVIEW_MAX_PER_REQUEST);
+          const slice: LocalListing[] = sliceIdx.map(i => priorLocs[i]);
           const deadline = Date.now() + REVIEW_TIME_BUDGET_MS;
           send({ type: 'start', total: slice.length, pending: offices.length, totalOffices: allOffices.length });
           const updated: LocalListing[] = slice.map(l => ({ ...l }));   // clone so we mutate copies
@@ -469,13 +481,13 @@ export async function POST(
           // Persist whatever has been fetched so far. Called at every checkpoint AND at
           // the end, so a kill can never throw away completed lookups again.
           const persist = async (): Promise<LocalScan> => {
-            const doneRows = updated.filter(l => l.reviewsFetchedAt);
-            const doneById = new Map(doneRows.map(l => [l.placeId || l.title, l]));
-            const merged = (prior.locations ?? []).map(l => {
-              if (!l.isClient) return l;
-              const u = doneById.get(l.placeId || l.title);
-              return u ? u : l;
-            });
+            // v7.412: merge BY POSITION. Only rows actually attempted this pass are
+            // written back; everything else in prior.locations is left byte-identical,
+            // including its original order.
+            const merged: LocalListing[] = priorLocs.slice();
+            for (let k = 0; k < sliceIdx.length; k++) {
+              if (updated[k]?.reviewsFetchedAt) merged[sliceIdx[k]] = updated[k];
+            }
             const ls: LocalScan = {
               ...prior,
               locations: merged,
