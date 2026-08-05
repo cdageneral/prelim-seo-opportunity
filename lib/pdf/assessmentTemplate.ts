@@ -44,6 +44,10 @@ import {
   SHARED_BUCKET, type SegmentLike,
 } from '@/lib/journey/segments';
 import { JOURNEY_ORDER, JOURNEY_LABELS, type JourneyStage as CanonStage } from '@/lib/clusters/canonical';
+// v7.405: the Part V counts (striking-distance set, Pareto cut, AIO/PAA on that
+// same keyword set) — pure functions over the shared pool, so the report and the
+// panels cannot drift (Const II.6/II.7).
+import type { ProgramData } from '@/lib/pdf/programData';
 
 // ── Profound panel metrics (shape persisted verbatim by /api/projects/[id]/profound;
 //    declared locally so this server module never imports from a client component) ──
@@ -151,6 +155,7 @@ export interface AssessmentData {
   journeyTopics?: JourneyTopicLike[] | null; // v7.376: canonical topics (same build the panels run)
   problemSeeds?: string[];                   // v7.376: deep-journey problem seeds (lane rule)
   serpFeatures?: SerpFeatureSnapshot | null; // v7.404: real AIO/PAA scan rows (absent = section omitted, Const I.5)
+  program?: ProgramData | null;              // v7.405: Part V counts (null = legacy step cards, Const I.5)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -263,6 +268,10 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // iQuanti-only rule, which stands everywhere else in the report. (The removed
   // partner name is deliberately not repeated here — a source-level grep for it
   // must stay clean, and comments count.)
+  // v7.405: null when the footprint holds no 4–20 ranks — the ladder then falls
+  // back to the legacy step cards rather than rendering an empty table.
+  const prog = d.program ?? null;
+
   const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${name}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
@@ -405,7 +414,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       barRow(r.domain, sov.availableClicks > 0 ? (r.capturedClicks / sov.availableClicks) * 100 : 0, p0(r.pct * 100), 'var(--violet)', '1.6in', '.7in')).join('');
     pages.push(pageWrap('SHARE OF VOICE', 'PART I · THE MARKET', `
       <h1 class="pg">${p0(openPct * 100)} of the clicks belong to no one yet.</h1>
-      <div class="lede">Of the ~${vol(sov.availableClicks)} page-1 clicks available each month across the non-branded keyword landscape (you + tracked competitors), you capture an estimated ${p0(sov.sovPct * 100)}. Your tracked competitors barely capture more — <b>${p0(openPct * 100)} of the clicks are open</b>, held by aggregators, publishers and nobody in particular.</div>
+      <div class="lede">Of the ~${vol(sov.availableClicks)} page-1 clicks available each month on your footprint, you capture an estimated ${p0(sov.sovPct * 100)}. Your tracked competitors barely capture more — <b>${p0(openPct * 100)} of the clicks are open</b>, held by aggregators, publishers and nobody in particular.</div>
       <div class="figtitle">Estimated page-1 click capture</div>
       <div class="figsub">Share of Voice — modeled from real volumes &amp; positions via ${esc(sov.ctrSource)} (the one labeled estimate in this report)</div>
       ${barRow('Open / unclaimed', openPct * 100, p0(openPct * 100), '#c9c8c1', '1.6in', '.7in')}
@@ -744,25 +753,207 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="src">Source: journey map over canonical topic clusters — counts and volumes are real rows; stage and segment links are model-inferred, labeled.${jPreN === 0 ? ' The pre-product (life-events) lane joins this map once that journey build runs.' : ''}</div>`));
   }
 
-  // Program
-  const steps: string[] = [];
-  if (pf && pfBridgeSum > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--good);"><div class="stepk" style="color:var(--good);">STEP 1</div><div class="figtitle">Convert mentions → citations</div><p>Outreach to the ${n0(pfBridgeSum)} existing brand mentions on ${pfBridge.map(h => esc(h.hostname)).join(', ')} — hosts the engines already cite at scale. No new content required.</p></div>`);
-  if (pf && (pf.gaps || []).length > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 2</div><div class="figtitle">Win the winnable prompts</div><p>The ${n0(pf.gaps.length)} tracked prompts where rivals appear and you do not${leaderRows.length > 0 ? ` — ${leaderRows.slice(0, 2).map(([l, n]) => `${n0(n)} led by ${esc(l)}`).join(', ')}` : ''}. Each is itemized in the app with its incumbent.</p></div>`);
-  const worstTopics = pf ? pf.topics.filter(t => t.runs >= 6 && t.hits / t.runs <= 0.02).sort((a, b) => b.runs - a.runs).slice(0, 3) : [];
-  if (worstTopics.length > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--yellow);"><div class="stepk" style="color:#8a5a00;">STEP 3</div><div class="figtitle">Build into verified whitespace</div><p>Net-new answer-ready content aimed at the proven vacuums: ${worstTopics.map(t => `${esc(t.topic)} (${p1((t.hits / Math.max(1, t.runs)) * 100)})`).join(' · ')}.</p></div>`);
-  if (steps.length === 0 && sov) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 1</div><div class="figtitle">Claim the open clicks</div><p>${p0(openPct * 100)} of modeled page-1 clicks on this footprint are unclaimed by any tracked competitor — the opportunity queue in the app itemizes them by demand.</p></div>`);
-  if (steps.length > 0) {
-    const running: string[] = [];
-    if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating}&#9733; reputation gate` : ''}.`);
-    if (auth) running.push(`<b>Authority compounding</b> — every earned placement also lands a high-authority referring domain, the tier of the link profile where gains matter most.`);
-    if (hasJourney && jBuild > 0 && jTopStage) running.push(`<b>The journey map</b> — ${n0(jTotal)} topics tracked by funnel stage; the ${n0(jBuild)} net-new builds (${n0(jTopStage.builds)} at ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()}) feed the build queue in priority order.`);
-    running.push(`<b>Engine steer &amp; sentiment guard</b> — visibility and tone tracked on every refresh, so a souring theme is caught at the source level.`);
+  // ── Program (v7.405) ───────────────────────────────────────────────────────
+  // Part V is now a workstream ladder plus a detail page per workstream, built
+  // from real counts (lib/pdf/programData.ts). Every row is conditional on its
+  // own data source: a client with no location estate simply has no local row,
+  // and a footprint with no 4–20 ranks falls back to the legacy step cards
+  // rather than printing an empty ladder (Const I.5).
+  const gaugeE = (n: number) => `<div class="gauge">${Array.from({ length: 5 }, (_, i) => `<i class="pip${i < n ? ' e' : ''}"></i>`).join('')}</div>`;
+  const gaugeI = (n: number) => `<div class="gauge">${Array.from({ length: 5 }, (_, i) => `<i class="pip${i < n ? ' i' : ''}"></i>`).join('')}</div>`;
+  // Impact is the real quantity the row can move against its OWN tracked universe.
+  // Published bins: HIGH >=25% - MEDIUM 5-24% - LOW <5%. Never a judgement call.
+  const impactBin = (part: number, whole: number): { pips: number; label: string } => {
+    const share = whole > 0 ? (part / whole) * 100 : 0;
+    if (share >= 25) return { pips: 5, label: 'HIGH' };
+    if (share >= 5)  return { pips: 3, label: 'MEDIUM' };
+    return { pips: 2, label: 'LOW' };
+  };
+
+  if (prog) {
+    interface WsRow { tier: 'p1' | 'p2' | 'p3' | 'run'; title: string; tactics: string[];
+      ePips: number; eLabel: string; eNote: string; iPips: number; iLabel: string; iNote: string; proof: string; sub: string }
+    const ws: WsRow[] = [];
+
+    ws.push({ tier: 'p1', title: 'Close the 4–20 gap on existing URLs',
+      tactics: [
+        `<b>${n0(prog.kw4to20)}</b> keywords rank 4–20 across <b>${n0(prog.urls4to20)}</b> existing URLs${prog.topics4to20 > 0 ? ` and ${n0(prog.topics4to20)} topics` : ''} — <b>${vol(prog.demand4to20)}</b> monthly demand already in reach`,
+        `Pareto cut, not the whole set: <b>${n0(prog.paretoUrls)} URLs carry ${p0(prog.paretoSharePct)}</b> of that demand and lead the queue`,
+      ],
+      ePips: 3, eLabel: 'MEDIUM', eNote: `optimize existing<br>${n0(prog.paretoUrls)} pages · 0 new`,
+      iPips: 5, iLabel: 'HIGH', iNote: `${p0(prog.paretoSharePct)} of ${vol(prog.demand4to20)}`,
+      proof: '&sect; The 4–20 set', sub: 'position and volume rows, per URL' });
+
+    if (lp) {
+      const packMiss = Math.max(0, 100 - lp.pack.presenceRate);
+      ws.push({ tier: 'p1', title: 'Close the map-pack presence gap across the location estate',
+        tactics: [
+          `Listing completeness and category alignment across <b>${n0(lp.clientLocs.length)} locations</b> — no new content, and it shares no assets with the page work, so it runs in parallel`,
+          `Presence before reputation — a location absent from the pack earns nothing from its rating${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, so coverage is fixed before a review dollar is spent against the <b>${lp.reviews.avgRating}&#9733;</b> gate` : ''}`,
+        ],
+        ePips: 4, eLabel: 'HIGH', eNote: `bulk record pass<br>${n0(lp.clientLocs.length)} locations`,
+        iPips: packMiss >= 25 ? 5 : 3, iLabel: packMiss >= 25 ? 'HIGH' : 'MEDIUM', iNote: `${p0(packMiss)} of pack-eligible queries absent`,
+        proof: '&sect; Local search — the map pack', sub: 'real pack and listing rows' });
+    }
+
+    const aioOpen = (prog.aioShown ?? 0) - (prog.aioCited ?? 0);
+    const paaOpen = (prog.paaShown ?? 0) - (prog.paaCited ?? 0);
+    if (prog.aioShown !== null && (prog.aioShown > 0 || (prog.paaShown ?? 0) > 0)) {
+      const uni = (prog.aioShown ?? 0) + (prog.paaShown ?? 0);
+      const b = impactBin(aioOpen + paaOpen, uni);
+      ws.push({ tier: 'p2', title: 'Take AIO and PAA coverage on the Priority-1 pages',
+        tactics: [
+          `Scoped to the Priority-1 URLs only — <b>${n0(prog.aioShown ?? 0)}</b> render an AI Overview, <b>${n0(prog.paaShown ?? 0)}</b> a People Also Ask box`,
+          `You are cited on <b>${n0(prog.aioCited ?? 0)}</b> and <b>${n0(prog.paaCited ?? 0)}</b> — the rest is coverage on pages already being edited`,
+        ],
+        ePips: 2, eLabel: 'LOW–MED', eNote: 'same pages as WS 1<br>no additional URLs',
+        iPips: b.pips, iLabel: b.label, iNote: `${n0(aioOpen + paaOpen)} of ${n0(uni)} boxes open`,
+        proof: '&sect; AIO &amp; PAA coverage', sub: 'per-keyword feature scan rows' });
+    }
+
+    if (pf && (pf.gaps || []).length > 0) {
+      const b = impactBin(pf.gaps.length, Math.max(pf.promptN || 0, pf.gaps.length));
+      ws.push({ tier: 'p2', title: 'Map the open prompts onto those same URLs',
+        tactics: [
+          `<b>${n0(pf.gaps.length)}</b> tracked prompts have a rival in the answer and not you${pf.promptN ? ` — of ${n0(pf.promptN)} prompts tracked` : ''}`,
+          leaderRows.length > 0 ? `Incumbents named per prompt — ${leaderRows.slice(0, 2).map(([l, n]) => `<b>${n0(n)} ${esc(l)}-led</b>`).join(', ')}` : 'Each prompt is itemized in the app with its incumbent',
+        ],
+        ePips: 2, eLabel: 'LOW–MED', eNote: `same pages as WS 1<br>${n0(pf.gaps.length)} prompts`,
+        iPips: b.pips, iLabel: b.label, iNote: `${n0(pf.gaps.length)} of ${n0(pf.promptN || pf.gaps.length)} prompts`,
+        proof: '&sect; Prompt coverage', sub: 'per-prompt rows with incumbents' });
+    }
+
+    if (hasJourney && jBuild > 0) {
+      const b = impactBin(jBuild, jTotal);
+      ws.push({ tier: 'p3', title: 'Build into proven journey and demand gaps',
+        tactics: [
+          `<b>${n0(jBuild)} net-new builds</b> on the ${n0(jTotal)}-topic map${jTopStage ? `; <b>${n0(jTopStage.builds)} at ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()}</b>, so the format follows the stage` : ''}`,
+          `Qualifies on a proven gap — a journey hole, or search <i>and</i> prompt demand with no page`,
+        ],
+        ePips: 5, eLabel: 'HIGH', eNote: `net-new assets<br>${n0(jBuild)} pages to build`,
+        iPips: b.pips, iLabel: b.label, iNote: `${n0(jBuild)} of ${n0(jTotal)} mapped topics`,
+        proof: '&sect; The build queue', sub: 'journey stage + dual-demand rows' });
+    }
+
+    if (pf && pfBridgeSum > 0) {
+      const uni = Math.max(pf.citeMentions || 0, pfBridgeSum);
+      const b = impactBin(pfBridgeSum, uni);
+      ws.push({ tier: 'run', title: 'Convert citations and compound authority',
+        tactics: [
+          `<b>${n0(pfBridgeSum)} brand mentions</b> on ${pfBridge.map(h => esc(h.hostname)).join(', ')} convert to links, no new content`,
+          `Each conversion also lands a high-authority referring domain — the widest measured gap`,
+        ],
+        ePips: 1, eLabel: 'LOW', eNote: `outreach only<br>${n0(pfBridge.length)} hosts · 0 pages`,
+        iPips: b.pips, iLabel: b.label, iNote: `${n0(pfBridgeSum)} of ${n0(uni)} mentions`,
+        proof: '&sect; Citation supply chain', sub: 'mention-source rows, per host' });
+    }
+
+    let wsN = 0;
+    const rowHTML = (r: WsRow) => {
+      wsN += 1;
+      return `<tr>
+      <td><div class="rank">WS&nbsp;${wsN}</div></td>
+      <td><div class="rec">${r.title}</div></td>
+      <td><ul class="tac">${r.tactics.map(t => `<li>${t}</li>`).join('')}</ul></td>
+      <td>${gaugeE(r.ePips)}<div class="glab">${r.eLabel}</div><span class="gnum">${r.eNote}</span></td>
+      <td>${gaugeI(r.iPips)}<div class="glab">${r.iLabel}</div><span class="gnum">${r.iNote}</span></td>
+      <td class="proof"><b>${r.proof}</b>${r.sub}</td></tr>`;
+    };
+    const lane = (k: string, txt: string, grey = false) =>
+      `<tr class="lane${grey ? ' run' : ''}"><td colspan="6"><div class="lanek${grey ? ' g' : ''}">${k} &nbsp;<span>— ${txt}</span></div></td></tr>`;
+
+    const p1 = ws.filter(r => r.tier === 'p1'), p2 = ws.filter(r => r.tier === 'p2');
+    const p3 = ws.filter(r => r.tier === 'p3'), rn = ws.filter(r => r.tier === 'run');
+    const ladder = [
+      p1.length ? lane('PRIORITY 1', `what you already own · no new content${p1.length > 1 ? ' · these run in parallel' : ''}`) + p1.map(rowHTML).join('') : '',
+      p2.length ? lane('PRIORITY 2', 'the same pages, on the answer surfaces') + p2.map(rowHTML).join('') : '',
+      p3.length ? lane('PRIORITY 3', 'net-new content, only where a real gap is proven') + p3.map(rowHTML).join('') : '',
+      rn.length ? lane('RUNNING UNDERNEATH', 'starts with Priority 1, never stops', true) + rn.map(rowHTML).join('') : '',
+    ].join('');
+
     pages.push(pageWrap('THE RECOMMENDED PROGRAM', partOpp, `
-      <h1 class="pg">Sequenced by cost of entry, not by habit.</h1>
-      <div class="lede">The work is ordered by what each win costs: conversions of existing assets come before optimization, and optimization comes before net-new builds. Every step below is backed by the counts on the preceding pages.</div>
-      <div style="display:grid; grid-template-columns:repeat(${Math.min(3, steps.length)},1fr); gap:14px; margin-bottom:16px;">${steps.join('')}</div>
-      <div class="panelbox" style="margin-bottom:14px;"><div class="figtitle">Running throughout</div><p style="margin-top:6px; font-size:10px;">${running.join(' ')}</p></div>
-      <div class="callout"><div class="t">WHY THIS ORDER</div><p>Step 1 costs outreach and zero content. Later steps build on the citation trust the earlier ones create, so new content enters AI answers faster. Reversing the order means publishing into a surface that doesn't yet cite you.</p></div>`));
+      <h1 class="pg sm">Start with the pages you already own.</h1>
+      <div class="lede">This is the opening phase, not the whole program. Priority 1 is the work that needs no new content: <b>the pages already ranking 4–20</b>${lp ? ', and <b>the location estate</b>' : ''}. Priority 2 takes the answer surfaces on those same pages. Priority 3 and the citation track reach past that set once it is underway.</div>
+      <table class="prog">
+        <colgroup><col style="width:.52in"><col style="width:1.42in"><col style="width:2.14in"><col style="width:.86in"><col style="width:.86in"><col style="width:1.26in"></colgroup>
+        <tr><th></th><th>Workstream</th><th>What we actually do</th><th>Effort</th><th>Impact</th><th>Backed by</th></tr>
+        ${ladder}
+      </table>
+      <div class="src" style="margin-top:8px;"><b style="color:var(--ink2);">EFFORT</b> is rated by the kind of work — LOW = outreach only, no asset produced &middot; MEDIUM = optimizing assets that already exist &middot; HIGH = net-new asset creation, or a bulk pass over 1,000+ records. <b style="color:var(--ink2);">IMPACT</b> is the real quantity the row can move against its own tracked universe — HIGH &ge;25% &middot; MEDIUM 5–24% &middot; LOW &lt;5%.</div>
+      <div class="src">Source: every figure is a count over real scanned rows — positions, volumes and ranking URLs from the shared keyword pool, topic counts from the canonical map, AI Overview and People Also Ask presence from per-keyword scan rows. A workstream whose data source is absent does not appear at all; nothing is zeroed or estimated.</div>`));
+
+    // ── WS1 detail: the 4–20 set ─────────────────────────────────────────────
+    const bandRows = prog.bands.map(b => `<tr><td><b>${b.label}</b></td><td class="n">${n0(b.kws)}</td><td class="n">${n0(b.urls)}</td><td class="n">${vol(b.vol)}</td><td>${b.lo === 4 ? 'On-page and internal-link work only — these move on intent match and entity completeness, rarely on new links' : b.lo === 6 ? 'Same on-page work plus the citation lift from the outreach track — the band where authority starts to bind' : 'Needs content depth as well as structure. Highest volume, longest payback — sequenced after the two bands above'}</td></tr>`).join('');
+    const urlRows = prog.topUrls.map(u => `<tr><td style="word-break:break-all;">${esc(u.url.replace(/^https?:\/\/(www\.)?/, ''))}</td><td class="n">${n0(u.kws)}</td><td class="n">${n0(u.bestPos)}</td><td class="n">${vol(u.vol)}</td><td class="n">${p0(u.cumPct)}</td></tr>`).join('');
+    pages.push(pageWrap('WORKSTREAM 1 &middot; THE 4–20 SET', partOpp, `
+      <h1 class="pg sm">The demand you are already one page from.</h1>
+      <div class="lede">Positions 4–20 are the cheapest demand on this footprint: the page exists, the topic is already understood, and the ranking is proof the domain can compete there. <b>This set defines the URLs every Priority-2 workstream then works.</b></div>
+      <div class="funnel c5">
+        <div class="fstep on"><div class="fk">KEYWORDS 4–20</div><div class="fv">${n0(prog.kw4to20)}</div><div class="fd">Tracked keywords ranking 4–20</div></div>
+        <div class="fstep"><div class="fk">EXISTING URLS</div><div class="fv">${n0(prog.urls4to20)}</div><div class="fd">Distinct pages behind them</div></div>
+        <div class="fstep"><div class="fk">TOPICS</div><div class="fv">${n0(prog.topics4to20)}</div><div class="fd">Canonical topics touched</div></div>
+        <div class="fstep"><div class="fk">MONTHLY DEMAND</div><div class="fv">${vol(prog.demand4to20)}</div><div class="fd">Real volume behind the set</div></div>
+        <div class="fstep cut"><div class="fk">THE 80% CUT</div><div class="fv">${n0(prog.paretoUrls)}</div><div class="fd">URLs carrying ${p0(prog.paretoSharePct)} of that demand</div></div>
+      </div>
+      <div class="figtitle">Where the set sits, by position band</div>
+      <div class="figsub">Closer bands convert faster; the 11–20 band is where the volume usually hides</div>
+      <table class="dt" style="font-size:9.3px;">
+        <tr><th style="width:1.0in;">Band</th><th style="width:.8in;">Keywords</th><th style="width:.8in;">URLs</th><th style="width:1.0in;">Monthly demand</th><th>What the work is</th></tr>
+        ${bandRows}
+      </table>
+      ${prog.topUrls.length > 0 ? `<div class="figtitle" style="margin-top:15px;">The Pareto cut — what actually enters the queue</div>
+      <div class="figsub">URLs by the real monthly demand behind their 4–20 keywords &middot; top ${n0(prog.topUrls.length)} of ${n0(prog.urls4to20)}</div>
+      <table class="dt" style="font-size:9.3px;">
+        <tr><th style="width:2.5in;">URL</th><th style="width:.7in;">Keywords</th><th style="width:.8in;">Best position</th><th style="width:.9in;">Monthly demand</th><th>Cumulative share</th></tr>
+        ${urlRows}
+        <tr><td colspan="5" style="color:var(--muted); font-style:italic;">… list continues to the URL where cumulative share crosses 80% — ${n0(prog.paretoUrls)} URLs queued, ${n0(prog.excludedUrls)} tracked but not queued this cycle.</td></tr>
+      </table>` : ''}
+      <div class="callout"><div class="t">HOW THE 80/20 CUT IS COMPUTED</div><p>URLs are sorted by the real monthly demand behind their 4–20 keywords, then taken in order until cumulative demand crosses <b>80%</b> of the set total. The cut is data-driven, not a fixed number of pages — a concentrated footprint yields a short queue, a long-tail one a longer queue. Both the queued and excluded counts appear above.</p></div>
+      <div class="src">Source: positions, ranking URLs and monthly volumes are real rows on the shared keyword pool; topic assignment is the canonical cluster map. The 80% threshold is a stated editorial cut applied to those real rows — no value is estimated.</div>`));
+
+    // ── WS AIO/PAA + prompts detail ──────────────────────────────────────────
+    if (prog.aioShown !== null || (pf && (pf.gaps || []).length > 0)) {
+      const gapRows = pf ? (pf.gaps || []).slice(0, 6).map(g => `<tr><td>${esc(g.prompt)}</td><td>${esc(g.topic || '—')}</td><td>${esc(g.leader || '—')}</td><td class="n">${n0(g.rivalMentions || 0)}</td></tr>`).join('') : '';
+      pages.push(pageWrap('THE SAME PAGES, MORE SURFACES', partOpp, `
+        <h1 class="pg sm">One page set. More than one place to win on it.</h1>
+        <div class="lede">Everything here is scoped to the <span class="anchor">PRIORITY-1 URL SET</span> — no new pages enter. The same URLs that move in the organic ranking are also sitting under an AI Overview, a People Also Ask box, and a set of prompts they do not yet answer.</div>
+        ${prog.aioShown !== null ? `<div class="figtitle">AI Overview and People Also Ask coverage</div>
+        <div class="figsub">Counted only on keywords belonging to the Priority-1 URLs &middot; ${n0(prog.featureScanned ?? 0)} of them carry a feature scan</div>
+        <table class="dt" style="font-size:9.3px;">
+          <tr><th style="width:1.4in;">Surface</th><th style="width:.8in;">Boxes shown</th><th style="width:.8in;">You cited</th><th style="width:.7in;">Open</th><th>What the fix is, and why it is cheap here</th></tr>
+          <tr><td><b>AI Overview</b></td><td class="n">${n0(prog.aioShown ?? 0)}</td><td class="n">${n0(prog.aioCited ?? 0)}</td><td class="n">${n0(aioOpen)}</td><td>Answer-first opening, entity completeness, an extractable table. The page already ranks, so this is a formatting gap, not an authority gap</td></tr>
+          <tr><td><b>People Also Ask</b></td><td class="n">${n0(prog.paaShown ?? 0)}</td><td class="n">${n0(prog.paaCited ?? 0)}</td><td class="n">${n0(paaOpen)}</td><td>Every PAA question is captured verbatim with the source currently answering it — the on-page addition is a known question, not a guess</td></tr>
+        </table>
+        <p style="font-size:9px; margin-top:7px;"><b style="color:var(--ink);">Why these are prioritized together:</b> both surfaces sit on top of a ranking the Priority-1 work is already improving. A page edited once can take the rank, the AI Overview citation and the PAA answer in the same pass — three wins for one production cycle.</p>` : ''}
+        ${gapRows ? `<div class="figtitle" style="margin-top:16px;">The open prompts those pages should be answering</div>
+        <div class="figsub">Top ${n0(Math.min(6, (pf!.gaps || []).length))} of ${n0((pf!.gaps || []).length)} — every one has a rival in the answer and no mention of you</div>
+        <table class="dt" style="font-size:9.3px;">
+          <tr><th style="width:3.0in;">Prompt</th><th style="width:1.1in;">Topic</th><th style="width:1.1in;">Incumbent</th><th style="width:.7in;">Rival mentions</th></tr>
+          ${gapRows}
+        </table>` : ''}
+        <div class="src">Source: AI Overview and PAA presence and citation are real per-keyword feature-scan rows, counted only on the Priority-1 keyword set; prompt rows and their incumbents are real per-prompt records.</div>`));
+    }
+  } else {
+    // Program
+    const steps: string[] = [];
+    if (pf && pfBridgeSum > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--good);"><div class="stepk" style="color:var(--good);">STEP 1</div><div class="figtitle">Convert mentions → citations</div><p>Outreach to the ${n0(pfBridgeSum)} existing brand mentions on ${pfBridge.map(h => esc(h.hostname)).join(', ')} — hosts the engines already cite at scale. No new content required.</p></div>`);
+    if (pf && (pf.gaps || []).length > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 2</div><div class="figtitle">Win the winnable prompts</div><p>The ${n0(pf.gaps.length)} tracked prompts where rivals appear and you do not${leaderRows.length > 0 ? ` — ${leaderRows.slice(0, 2).map(([l, n]) => `${n0(n)} led by ${esc(l)}`).join(', ')}` : ''}. Each is itemized in the app with its incumbent.</p></div>`);
+    const worstTopics = pf ? pf.topics.filter(t => t.runs >= 6 && t.hits / t.runs <= 0.02).sort((a, b) => b.runs - a.runs).slice(0, 3) : [];
+    if (worstTopics.length > 0) steps.push(`<div class="panelbox" style="border-top:4px solid var(--yellow);"><div class="stepk" style="color:#8a5a00;">STEP 3</div><div class="figtitle">Build into verified whitespace</div><p>Net-new answer-ready content aimed at the proven vacuums: ${worstTopics.map(t => `${esc(t.topic)} (${p1((t.hits / Math.max(1, t.runs)) * 100)})`).join(' · ')}.</p></div>`);
+    if (steps.length === 0 && sov) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 1</div><div class="figtitle">Claim the open clicks</div><p>${p0(openPct * 100)} of modeled page-1 clicks on this footprint are unclaimed by any tracked competitor — the opportunity queue in the app itemizes them by demand.</p></div>`);
+    if (steps.length > 0) {
+      const running: string[] = [];
+      if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating}&#9733; reputation gate` : ''}.`);
+      if (auth) running.push(`<b>Authority compounding</b> — every earned placement also lands a high-authority referring domain, the tier of the link profile where gains matter most.`);
+      if (hasJourney && jBuild > 0 && jTopStage) running.push(`<b>The journey map</b> — ${n0(jTotal)} topics tracked by funnel stage; the ${n0(jBuild)} net-new builds (${n0(jTopStage.builds)} at ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()}) feed the build queue in priority order.`);
+      running.push(`<b>Engine steer &amp; sentiment guard</b> — visibility and tone tracked on every refresh, so a souring theme is caught at the source level.`);
+      pages.push(pageWrap('THE RECOMMENDED PROGRAM', partOpp, `
+        <h1 class="pg">Sequenced by cost of entry, not by habit.</h1>
+        <div class="lede">The work is ordered by what each win costs: conversions of existing assets come before optimization, and optimization comes before net-new builds. Every step below is backed by the counts on the preceding pages.</div>
+        <div style="display:grid; grid-template-columns:repeat(${Math.min(3, steps.length)},1fr); gap:14px; margin-bottom:16px;">${steps.join('')}</div>
+        <div class="panelbox" style="margin-bottom:14px;"><div class="figtitle">Running throughout</div><p style="margin-top:6px; font-size:10px;">${running.join(' ')}</p></div>
+        <div class="callout"><div class="t">WHY THIS ORDER</div><p>Step 1 costs outreach and zero content. Later steps build on the citation trust the earlier ones create, so new content enters AI answers faster. Reversing the order means publishing into a surface that doesn't yet cite you.</p></div>`));
+    }
   }
 
   // Scorecard
@@ -801,7 +992,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <table class="dt" style="margin-bottom:16px;">
       <tr><th style="width:1.8in;">Term</th><th>Definition as used in this report</th></tr>
       <tr><td><b>Page-1 capture</b></td><td>Volume-weighted share of tracked keywords where the client holds a position 1–10 ranking. Direct from scan rows.</td></tr>
-      <tr><td><b>Share of Voice (SoV)</b></td><td>Estimated share of the page-1 clicks available across the shared non-branded keyword landscape (client + tracked competitors), computed from real volumes and positions via a named, published click-through curve. The only modeled figure in the report; labeled at every appearance.</td></tr>
+      <tr><td><b>Share of Voice (SoV)</b></td><td>Estimated share of available page-1 clicks, computed from real volumes and positions via a named, published click-through curve. The only modeled figure in the report; labeled at every appearance.</td></tr>
       <tr><td><b>AI visibility</b></td><td>Share of scanned AI answers naming the brand. Direct count from the AI visibility dataset.</td></tr>
       <tr><td><b>Prompt coverage</b></td><td>Share of tracked buyer prompts where the brand appears in at least one engine's answer. Direct count.</td></tr>
       <tr><td><b>Owned citation</b></td><td>A cited source URL classified as client-owned in the citation landscape. Direct count from the citation-level dataset.</td></tr>
@@ -874,6 +1065,33 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   .panelbox{border:1px solid var(--grid); border-radius:8px; padding:14px 16px; background:var(--surface);}
   .stepk{font-size:9px; font-weight:800; letter-spacing:.1em; margin-bottom:6px;}
   .endbrand{display:flex; justify-content:space-between; align-items:flex-end; border-top:2px solid var(--ink); padding-top:14px;}
+  .rank{font-size:9px; font-weight:800; color:var(--muted); letter-spacing:.06em; line-height:1.2;}
+  .rec{font-size:10.5px; font-weight:800; color:var(--ink); line-height:1.3; margin-bottom:4px;}
+  table.prog{width:100%; border-collapse:collapse; table-layout:fixed;}
+  table.prog th{font-size:8px; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); font-weight:700; text-align:left; border-bottom:1.5px solid var(--baseline); padding:6px 7px;}
+  table.prog td{padding:4px 7px; border-bottom:1px solid var(--grid); vertical-align:top;}
+  table.prog tr.lane td{background:#f5f8fd; border-bottom:1px solid #dce7f6; padding:4px 7px;}
+  table.prog tr.lane.run td{background:#f6f5f1; border-bottom:1px solid var(--grid);}
+  .lanek{font-size:8px; font-weight:800; letter-spacing:.11em; color:var(--blue-550);} .lanek.g{color:#6b6a64;}
+  .lanek span{color:var(--muted); font-weight:700; letter-spacing:.04em;}
+  ul.tac{list-style:none; margin:0; padding:0;}
+  ul.tac li{font-size:8.9px; line-height:1.26; color:var(--ink2); padding-left:9px; position:relative; margin-bottom:1.5px;}
+  ul.tac li:before{content:"·"; position:absolute; left:1px; color:var(--muted); font-weight:800;}
+  ul.tac li b{color:var(--ink); font-weight:700;}
+  .gauge{margin-bottom:3px; display:flex; gap:2px;}
+  .pip{height:7px; flex:1; border-radius:1.5px; background:#eceae4;}
+  .pip.e{background:#c98f14;} .pip.i{background:var(--blue);}
+  .glab{font-size:8.5px; font-weight:800; letter-spacing:.06em; color:var(--ink); line-height:1.2;}
+  .gnum{font-size:8.5px; color:var(--muted); line-height:1.35; margin-top:2px; display:block; overflow-wrap:anywhere;}
+  .proof{font-size:8.5px; color:var(--ink2); line-height:1.4;}
+  .proof b{display:block; color:var(--ink); font-weight:700; font-size:8.5px;}
+  .funnel{display:grid; gap:8px; margin-bottom:13px;} .funnel.c5{grid-template-columns:repeat(5,1fr);}
+  .fstep{border:1px solid var(--grid); border-radius:8px; background:var(--surface); padding:10px 12px;}
+  .fstep .fk{font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:5px;}
+  .fstep .fv{font-size:19px; font-weight:800; letter-spacing:-.02em; line-height:1;}
+  .fstep .fd{font-size:8.2px; color:var(--ink2); margin-top:5px; line-height:1.4;}
+  .fstep.on{border-top:3px solid var(--blue);} .fstep.cut{border-top:3px solid var(--good);}
+  .anchor{display:inline-block; font-size:7.5px; font-weight:800; letter-spacing:.07em; background:#e7effc; color:#184f95; border:1px solid #b7d3f6; border-radius:3px; padding:1px 6px; vertical-align:1px;}
   .cover{background:#0e1a2b; color:#fff; display:flex; flex-direction:column;}
   .cbrand{font-size:11px; letter-spacing:.22em; font-weight:700; color:#7fa8dc;}
   .cmid{margin-top:2.1in;}
