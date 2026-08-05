@@ -314,7 +314,7 @@ function CitedBadge({ cited }: { cited: boolean }) {
 function ScanStatusBadge({ status, cited, provenance }: { status: 'scanned' | 'unscanned'; cited?: boolean; provenance?: 'semrush' | 'scan' }) {
   if (status === 'unscanned') {
     return (
-      <span title="Confirmed via uploaded Semrush SERP-feature data — not yet SerpAPI-scanned, so who's cited is unknown." style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-8888aa)', whiteSpace: 'nowrap' }}>
+      <span title="Confirmed via uploaded Semrush SERP-feature data — not yet live-scanned, so who's cited is unknown." style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-8888aa)', whiteSpace: 'nowrap' }}>
         ○ Not yet scanned
       </span>
     );
@@ -969,6 +969,16 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
     return [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...fresh];
   }, [serpSnap.keywords, extraScanned, externalScanned]);
   const scanned  = scannedKws.length;
+
+  // v7.413 — the UI does not name the SERP vendor at all (Wayne, 2026-08-05:
+  // "no need to name the api in the UI. just call it an api call - which allows us
+  // flexibility to change down the road if need be"). Operational copy says "API
+  // calls", so switching providers can never leave a sentence asserting the wrong
+  // vendor, and there is no client-side provider state to keep in sync.
+  // NOTE: the per-row provenance badge and the XLSX provenance column still record
+  // WHICH provider produced each row — that is the audit trail (Const I.1), not
+  // operational copy, and it is what lets a client report say where a number came from.
+  const API_UNIT = 'API calls';
   const scanDate = serpSnap.fetchedAt ? new Date(serpSnap.fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : null;
 
   const clientDomain = normDomain(serpSnap.domain ?? websiteUrl ?? '');
@@ -1239,7 +1249,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   const aioExpand: CardStale | null = (!projectId || uploadFeat.aio === 0) ? null : {
     tone:     'violet',
     reason:   `${uploadFeat.aio.toLocaleString()} of your ${aioAvail.toLocaleString()} available AIOs aren't citation-verified yet`,
-    label:    `Verify all ${aioAvail.toLocaleString()} AIOs · ~${uploadFeat.aio.toLocaleString()} credits`,
+    label:    `Verify all ${aioAvail.toLocaleString()} AIOs · ~${uploadFeat.aio.toLocaleString()} ${API_UNIT}`,
     onClick:  scanAioKeywords,
     running:  aioScan.running,
     progress: aioScan.running ? `${aioScan.done}/${aioScan.total}` : null,
@@ -1291,7 +1301,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                 <button
                   onClick={onStartSerpScan}
                   disabled={!!serpScanRunning}
-                  title="Scans every unscanned keyword automatically, 25 at a time, until coverage is full. 1 SerpAPI credit each. Already-scanned keywords are never re-scanned. The scan keeps running while you browse other panels."
+                  title={`Scans every unscanned keyword automatically, 25 at a time, until coverage is full. 1 API call each. Already-scanned keywords are never re-scanned. The scan keeps running while you browse other panels.`}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: '8px',
                     padding: '10px 18px', borderRadius: '10px',
@@ -1316,7 +1326,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
                   ) : (
                     <>
                       <span style={{ fontSize: '15px', lineHeight: 1 }}>⚡</span>
-                      Scan all {serpCoverage.remaining.toLocaleString()} remaining · ~{serpCoverage.remaining.toLocaleString()} credits
+                      Scan all {serpCoverage.remaining.toLocaleString()} remaining · ~{serpCoverage.remaining.toLocaleString()} {API_UNIT}
                     </>
                   )}
                 </button>
@@ -1382,7 +1392,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
       {uploadFeat.rowsWithFeatureData > 0 && (
         <div style={{ padding: '8px 14px', borderRadius: '8px', background: 'var(--c-0f0f1e)', border: '1px solid var(--c-1e1e35)' }}>
           <p style={{ fontSize: '10px', color: 'var(--c-555570)', margin: 0 }}>
-            Availability combines {scanned} SerpAPI-scanned keyword{scanned !== 1 ? 's' : ''} with {uploadFeat.rowsWithFeatureData.toLocaleString()} uploaded keywords carrying Semrush SERP-feature data (deduped). Semrush&apos;s SERP-feature data is treated as the source of truth for whether a feature exists on a keyword you haven&apos;t scanned yet — a scanned keyword&apos;s own live result always wins. Captured/citation metrics require knowing WHO is cited on each SERP — Semrush can&apos;t provide that, so those stay scanned-keyword-only; keywords below marked &ldquo;Not yet scanned&rdquo; have a confirmed feature but an unverified citation status.
+            Availability combines {scanned} live-scanned keyword{scanned !== 1 ? 's' : ''} with {uploadFeat.rowsWithFeatureData.toLocaleString()} uploaded keywords carrying Semrush SERP-feature data (deduped). Semrush&apos;s SERP-feature data is treated as the source of truth for whether a feature exists on a keyword you haven&apos;t scanned yet — a scanned keyword&apos;s own live result always wins. Captured/citation metrics require knowing WHO is cited on each SERP — Semrush can&apos;t provide that, so those stay scanned-keyword-only; keywords below marked &ldquo;Not yet scanned&rdquo; have a confirmed feature but an unverified citation status.
           </p>
         </div>
       )}
@@ -1430,7 +1440,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               {/* v7.121 (Wayne): ONE citation rate, his definition — client's
                   citations ÷ citations available. Citations are countable only
                   on scanned AIOs; the scan CTA below extends the denominator to
-                  the full footprint with real SerpAPI data, never estimates. */}
+                  the full footprint with real scanned data, never estimates. */}
               <KpiCard label="Citation Rate" value={`${(aio.citationShare * 100).toFixed(1)}%`} sub={`${aio.clientStats?.citationSlots ?? 0} of ${aio.totalSlots.toLocaleString()} citations available across the ${aio.totalAios} citation-verified AIOs${staleSets.confirmedSourceless > 0 ? ` · ${staleSets.confirmedSourceless} AIO${staleSets.confirmedSourceless !== 1 ? 's' : ''} expose no citation links (scan-confirmed)` : ''}`} accent={aio.clientStats?.citationSlots ? 'var(--c-6c63ff)' : 'var(--c-ef4444)'} wide actions={[citeStale, aioExpand]} />
               <KpiCard label="Avg Citation Position" value={aio.avgCitationPosition !== null ? aio.avgCitationPosition.toFixed(1) : '—'} sub="avg rank in the source list of scanned AIOs citing you" actions={[citeStale]} />
               {aio.topCompetitor && (
@@ -1442,8 +1452,8 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           </div>
 
           {/* v7.124: persistent progress indicators — visible whenever any scan runs */}
-          {aioScan.running && <ScanProgress label="Verifying AIO citations via SerpAPI" done={aioScan.done} total={aioScan.total} />}
-          {rescan.key !== null && <ScanProgress label="Refreshing stale scan data via SerpAPI" done={rescan.done} total={rescan.total} />}
+          {aioScan.running && <ScanProgress label="Verifying AIO citations" done={aioScan.done} total={aioScan.total} />}
+          {rescan.key !== null && <ScanProgress label="Refreshing stale scan data" done={rescan.done} total={rescan.total} />}
 
           {/* v7.123: the standalone AIO-scan banner is GONE — Wayne hit the
               in-card refresh thinking it was this. The expand-coverage action
@@ -1515,7 +1525,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               totalSlots={paaLand.totalSlots}
               footprintAvail={paaAvail}
               staleNotice={paaLand.hasSourceData ? null : STALE_MSG('PAA answer')}
-              staleAction={paaLand.hasSourceData ? null : mkStale('paa', staleSets.missingPaa, '', `Refresh required — re-scan ${staleSets.missingPaa.length} keyword${staleSets.missingPaa.length !== 1 ? 's' : ''} (~${staleSets.missingPaa.length} credits)`)}
+              staleAction={paaLand.hasSourceData ? null : mkStale('paa', staleSets.missingPaa, '', `Refresh required — re-scan ${staleSets.missingPaa.length} keyword${staleSets.missingPaa.length !== 1 ? 's' : ''} (~${staleSets.missingPaa.length} ${API_UNIT})`)}
             />
           )}
 
@@ -1560,7 +1570,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
               totalSlots={videoLand.totalSlots}
               footprintAvail={videoAvail}
               staleNotice={videoLand.hasSourceData ? null : STALE_MSG('video carousel')}
-              staleAction={videoLand.hasSourceData ? null : mkStale('video', staleSets.missingVideo, '', `Refresh required — re-scan ${staleSets.missingVideo.length} keyword${staleSets.missingVideo.length !== 1 ? 's' : ''} (~${staleSets.missingVideo.length} credits)`)}
+              staleAction={videoLand.hasSourceData ? null : mkStale('video', staleSets.missingVideo, '', `Refresh required — re-scan ${staleSets.missingVideo.length} keyword${staleSets.missingVideo.length !== 1 ? 's' : ''} (~${staleSets.missingVideo.length} ${API_UNIT})`)}
             />
           )}
 
