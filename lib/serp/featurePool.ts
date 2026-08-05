@@ -102,9 +102,14 @@ export interface FeaturePoolRow {
   isScanned:   boolean;
   cited:       boolean | null; // null = never scanned, citation status unknown
   volume:      number;         // v7.333: real monthly search volume, for the card download
+  // v7.408: WHICH SERP provider produced this row's scan. Only meaningful when
+  // isScanned — undefined for upload-only rows. A scanned row whose stored
+  // scannedBy is absent predates v7.408, when SerpAPI was the only provider
+  // that ever ran, so the reader resolves absent ⇒ 'serpapi' as fact (Const I.1).
+  scannedBy?:  'serpapi' | 'dataforseo';
 }
 
-export function buildFeaturePool<K extends { keyword: string }>(
+export function buildFeaturePool<K extends { keyword: string; scannedBy?: 'serpapi' | 'dataforseo' }>(
   uploadRows:     UploadKwRow[],
   scannedKws:     K[],
   bucketKey:      string,
@@ -130,6 +135,7 @@ export function buildFeaturePool<K extends { keyword: string }>(
       isScanned:   !!scannedKw,
       cited:       scannedKw ? citedFn(scannedKw) : null,
       volume:      Number(r.searchVolume) || 0,
+      scannedBy:   scannedKw ? (scannedKw.scannedBy ?? 'serpapi') : undefined,
     });
   }
   // Scanned keywords with no matching upload row (e.g. an ad-hoc single-keyword
@@ -141,7 +147,7 @@ export function buildFeaturePool<K extends { keyword: string }>(
     const kwLow = (k.keyword ?? '').trim().toLowerCase();
     if (!kwLow || seen.has(kwLow)) continue;
     seen.add(kwLow);
-    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k), volume: 0 });
+    out.push({ keyword: k.keyword, hasFeature: scanHasFeature(k), fromSemrush: false, isScanned: true, cited: citedFn(k), volume: 0, scannedBy: k.scannedBy ?? 'serpapi' });
   }
   return out;
 }
