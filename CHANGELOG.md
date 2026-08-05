@@ -1,3 +1,25 @@
+## v7.408 — DataForSEO becomes the active SERP provider; provider identity is now I.1 data (2026-08-05)
+
+**Wayne:** *"is Orbit using serp api or dataforseo api for the aios and paas"* → *"yes flip the switch"* → (after the parity run came back dirty) *"Flip anyway — cost wins."*
+
+**Numbered v7.408, not v7.406.** This work was prepared while a parallel session shipped v7.406 and v7.407. It was rebased onto `7d30e11` before packaging; `app/api/analyze/route.ts` was the one overlapping file and its edits were re-applied on top of the v7.407 version rather than overwritten from the older base — the same whole-file-revert trap the v7.406 commit message describes, avoided by re-deriving instead of copying.
+
+**What was measured before flipping** (live prod, `/api/serp-compare`, real NYP keywords vs nyp.org, three runs 2026-08-05 00:03–00:06Z). Client rank agreed 100% on comparable keywords; PAA presence agreed 100% — but **that PAA number is not evidence of depth parity**: every keyword returned exactly 4 questions from both providers, so the cap makes presence-agreement trivially true. **AI Overview citation counts differed on 5 of 13 keywords, DataForSEO returning 7.3% fewer overall (123 → 114). `lupus` came back 16 vs 10 (−38%) and REPRODUCED 76 seconds later** — not scrape volatility. DataForSEO also returned nothing at all for one keyword in one run and returned it normally on re-run (a **transient silent empty**), and is **3.7× slower** (2.66 s/kw vs 0.72), extrapolating to ~200 s for a 75-keyword batch against Vercel's hard 300 s cap. It is 4.6–4.9× cheaper. Wayne accepted these deltas deliberately; they are recorded in Constitution v0.24 so the tradeoff stays defendable rather than forgotten.
+
+**The rule this release adds.** A provider is a **data-provenance fact**, so Const I.1 now covers the NAME as well as the number. Prompted by finding ~30 user-facing strings hardcoding "SerpAPI" — including the client-facing XLSX provenance column, the panel's provenance badge, and remediation messages sending the operator to serpapi.com to debug a DataForSEO failure.
+
+- **`serpProvider()` now THROWS on misconfiguration** instead of silently falling back to SerpAPI. The old fallback was invisible: you believed the switch was made, every panel still read "SerpAPI", and the SerpAPI bill kept running. A thrown scan is handled by callers as "SERP data unavailable, keep prior data" — a gap, not a fabrication (I.5). An unrecognised `SERP_PROVIDER` value also throws rather than silently meaning serpapi.
+- **One place spells a provider for a user** (II.7): `providerLabel` / `providerBalanceUrl` / `providerUnitLabel` / `activeProviderLabel` in `lib/apis/serp.ts`.
+- **Provenance travels PER ROW.** New `KeywordSerpData.scannedBy`, stamped by each provider's own scanner and carried through `FeaturePoolRow` to the badge and the XLSX column. A row scanned before v7.408 carries no `scannedBy` — SerpAPI was the only provider that had ever run at that point, so **absent ⇒ `serpapi` is a fact, not a guess**, and a provider switch never retroactively relabels history (I.1).
+- **Remediation messages name the ACTIVE provider.** `serp-scan` and `analyze` no longer hardcode SerpAPI or serpapi.com.
+- **README documents `SERP_PROVIDER`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`** — none of the three was documented before — and warns that the flag switches **three** call paths (keyword scans, Maps listings, Local Pack) while only the AIO/PAA path has been parity-tested.
+
+**Known gap, stated (I.5):** Maps listings and Local Pack also switch with `SERP_PROVIDER` and are NOT parity-tested; `/api/serp-compare` does not cover them.
+
+**No I.5b change needed** — v7.397 had already registered DataForSEO as a **measured** cost entry (the real per-task `cost` it reports), still the only measured source in the ledger.
+
+**Verified against the rebased base `7d30e11`:** real project `tsc --noEmit` clean and a real `next build` clean (V.1a); retained suite **955 pass / 19 pre-existing / zero regression delta** with **19 new v7.408 checks** (pristine base runs 935/39 — the extra 20 are this release's own checks plus the amended one, failing as expected against code that isn't there yet); dual-theme jsdom render of the provenance tag (V.5). The one v7.397 check describing the old silent-fallback behavior was **amended with a dated note, never deleted** (V.6). Constitution amended to **v0.24** (DataForSEO admitted to I.1; provenance-naming rule + Art. VIII gate line added).
+
 ## v7.407 · The Authority table follows the competitor list again; local search stops falling out of the report (2026-08-05)
 
 **Why (Wayne):** "why is the old competitor list still showing and not the new ones?" and "I dont see any of the local insights coming through the report." Neither was a rendering fault. Both were a read site pointing at the wrong data.

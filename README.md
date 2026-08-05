@@ -62,6 +62,29 @@ Fill in `.env.local` with your actual keys:
 | `ANTHROPIC_API_KEY`               | https://console.anthropic.com → API Keys        |
 | `BLOB_READ_WRITE_TOKEN`           | Vercel dashboard → Storage → Blob               |
 
+#### SERP provider selection (optional)
+
+OrbitIQ reads AI Overviews, People Also Ask, Maps listings and the Local Pack
+through ONE provider, chosen by `SERP_PROVIDER`. SerpAPI is the default; leave
+these unset to stay on it.
+
+| Variable                | Source / values                                                  |
+|-------------------------|------------------------------------------------------------------|
+| `SERP_PROVIDER`         | `serpapi` (default) or `dataforseo`. Any other value throws.      |
+| `DATAFORSEO_LOGIN`      | https://app.dataforseo.com → API Dashboard → API Access           |
+| `DATAFORSEO_PASSWORD`   | https://app.dataforseo.com → API Dashboard → API Access           |
+
+Setting `SERP_PROVIDER=dataforseo` **without both credentials throws** rather
+than falling back to SerpAPI. The fallback existed until v7.405 and was
+invisible: you believed you had switched, every panel still read "SerpAPI", and
+the SerpAPI bill kept running. A provider is a data-provenance fact, so failing
+loudly is the honest outcome.
+
+`SERP_PROVIDER` switches **three** call paths at once — keyword scans
+(AIO/PAA), Maps listings, and the Local Pack. Only the AIO/PAA path has been
+parity-tested against SerpAPI; see `/api/serp-compare` to run that comparison
+yourself on real keywords.
+
 ### 3. Push the database schema
 
 ```bash
@@ -126,6 +149,14 @@ SEMRUSH_API_KEY
 SERP_API_KEY
 PROFOUND_API_KEY
 ANTHROPIC_API_KEY
+```
+
+Optional, to run SERP calls through DataForSEO instead of SerpAPI:
+
+```
+SERP_PROVIDER=dataforseo
+DATAFORSEO_LOGIN
+DATAFORSEO_PASSWORD
 ```
 
 ### 6. Run database migration on production
