@@ -362,7 +362,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return clientLocations.filter(l => [l.title, l.address, l.city, l.phone].some(v => String(v ?? '').toLowerCase().indexOf(q) >= 0));
   }, [clientLocations, locQuery]);
   // v7.307: offices still awaiting a real Google rating (drives the Fetch-reviews button label).
-  const pendingReviews = useMemo(() => clientLocations.filter(l => l.rating == null).length, [clientLocations]);
+  // v7.410: PENDING means never looked up. Counting `rating == null` also counted every
+  // office that HAS been looked up and genuinely has no Google Business Profile, so the
+  // count could never reach zero, the button always said "pending", and each pass re-billed
+  // those offices forever. `reviewsFetchedAt` records the attempt, so this strictly drains.
+  const pendingReviews = useMemo(() => clientLocations.filter(l => !l.reviewsFetchedAt).length, [clientLocations]);
+  const noProfileCount = useMemo(() => clientLocations.filter(l => l.reviewsFetchedAt && l.rating == null).length, [clientLocations]);
   // v7.308 — review-coverage summary: % of locations carrying >=1 REAL Google review, plus a
   // breakdown of the reviewed locations by review-count band. Real SerpAPI counts only (Const I.1) —
   // every figure is a count/ratio over the fetched rows, nothing modeled.
@@ -460,10 +465,26 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     } catch (e) { setRevError(String((e as any)?.message ?? e)); }
   }, [projectId]);
 
+  // v7.410 — AUTO-CONTINUE. The server takes a bounded slice per request (time-budgeted
+  // so it always returns before Vercel's 300s cap) and reports how many offices are still
+  // pending. This loops until that reaches 0. Before v7.410 the whole job ran in ONE
+  // request and only wrote to the DB at the very end, so a large location set could never
+  // finish — the function was killed and every completed lookup, and the SerpAPI credits
+  // it cost, were thrown away. Each pass now commits its own work, so progress only ever
+  // moves forward and a failure mid-way costs one slice, not the whole run.
   const runReviewFetch = useCallback(async () => {
     setRevPlan(null); setRevError(null); setRevFetching(true);
     setRevProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    // Safety stop: the server marks every office it ATTEMPTS, so pending strictly
+    // decreases and this cannot spin. The cap is a belt-and-braces guard against a
+    // server that stops marking (a bug would burn credits in a loop otherwise).
+    const MAX_PASSES = 40;
+    let passes = 0;
+    let carriedDone = 0;      // offices completed in EARLIER passes this session
+    let sessionTotal = 0;     // total pending when the run started
     try {
+      for (;;) {
+      passes++;
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reviewsMode: true }),
@@ -476,6 +497,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let doneEv: any = null;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -487,17 +509,39 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
           if (!line) continue;
           let ev: any; try { ev = JSON.parse(line); } catch { continue; }
           if (ev.type === 'start') {
-            setRevProgress(p => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+            // v7.410: show progress across the WHOLE backlog, not just this slice.
+            if (sessionTotal === 0) sessionTotal = ev.pending ?? ev.total ?? 0;
+            setRevProgress(p => ({ done: carriedDone, total: sessionTotal, seed: '', startedAt: p?.startedAt ?? Date.now() }));
           } else if (ev.type === 'progress') {
-            setRevProgress(p => ({ done: ev.done ?? p?.done ?? 0, total: ev.total ?? p?.total ?? 0, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+            setRevProgress(p => ({ done: carriedDone + (ev.done ?? 0), total: sessionTotal || (ev.total ?? p?.total ?? 0), seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
           } else if (ev.type === 'error') {
             setRevError(ev.error ?? 'Fetch failed');
-          } else if (ev.type === 'done' && ev.localScan) {
-            setScan(ev.localScan);
-            setScanOrigin('snapshot');   // v7.407 — see the note on the scan handler above
-            try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
+          } else if (ev.type === 'done') {
+            if (ev.localScan) {
+              setScan(ev.localScan);
+              setScanOrigin('snapshot');   // v7.407 — see the note on the scan handler above
+              try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
+            }
+            doneEv = ev;
           }
         }
+      }
+
+      // ── decide whether another pass is needed (v7.410) ──
+      const remaining = Number(doneEv?.remaining ?? 0);
+      carriedDone += Number(doneEv?.completed ?? 0);
+      if (!doneEv) {
+        // The stream ended without a done event — the function was almost certainly
+        // killed. Whatever it checkpointed IS saved, so say so plainly and let the
+        // operator resume rather than implying the work was lost (Const I.5).
+        setRevError('The fetch was interrupted before this batch reported back. Progress up to the last checkpoint has been saved — click Fetch reviews again to continue from there.');
+        break;
+      }
+      if (remaining <= 0) break;
+      if (passes >= MAX_PASSES) {
+        setRevError(`Stopped after ${passes} batches with ${remaining} locations still pending — click Fetch reviews again to continue.`);
+        break;
+      }
       }
     } catch (e) { setRevError(String((e as any)?.message ?? e)); }
     finally { setRevFetching(false); setRevProgress(null); }
@@ -892,7 +936,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                         </button>
                       )}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count from Google Business Profiles (via SerpAPI). <b>Pending</b> = not fetched yet (the website carries no review data) — click <b>Fetch reviews</b> to run a per-office Google lookup; a blank rating is never shown as a zero.</div>
+                    <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginBottom: 10 }}>Real Google rating + review count from Google Business Profiles (via SerpAPI). <b>Pending</b> = not looked up yet — click <b>Fetch reviews</b>; large location sets run in batches and continue automatically, and every batch is saved as it completes, so you can stop and resume without losing work or re-spending credits. <b>No profile</b> = looked up, and Google returned no Business Profile for that office — a real finding, not missing data. A blank rating is never shown as a zero.</div>
 
                     {/* v7.307 — review-fetch confirm + progress (mirrors the scan flow: estimate → confirm → stream) */}
                     {revPlan && !revFetching && (
@@ -933,7 +977,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                               <td style={{ fontWeight: 600 }}>{l.city || l.title}</td>
                               <td>{l.rating != null ? <><span style={{ color: 'var(--c-f6c061)' }}>★</span> {l.rating}</> : '—'}</td>
                               <td style={{ textAlign: 'right' }}>{l.rating != null ? fmt(l.reviews) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
-                              <td>{l.rating == null ? <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }} title="Google rating not fetched yet — click Fetch reviews to run a per-office Google lookup">Pending</span> : l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
+                              <td>{l.rating == null && !l.reviewsFetchedAt ? <span className="ipill" style={{ background: 'var(--ca-6-182-212-0_13)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-6-182-212-0_25)' }} title="Google rating not fetched yet — click Fetch reviews to run a per-office Google lookup">Pending</span> : l.rating == null ? <span className="ipill" style={{ background: 'var(--ca-136-136-170-0_12)', color: 'var(--c-8888aa)', border: '1px solid var(--ca-136-136-170-0_12)' }} title={`Looked up on ${new Date(l.reviewsFetchedAt as string).toLocaleDateString()} — Google returned no Business Profile for this office. A real finding, not missing data: an unclaimed or unlisted location cannot rank in the map pack.`}>No profile</span> : l.rating >= 4.5 ? <span className="ipill" style={{ background: 'var(--ca-34-197-94-0_15)', color: 'var(--c-5ee68f)' }}>Strong</span> : l.rating != null && l.rating >= 4.0 ? <span className="ipill" style={{ background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>OK</span> : <span className="ipill" style={{ background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }}>Weak</span>}</td>
                             </tr>
                           ))}
                         </tbody>
