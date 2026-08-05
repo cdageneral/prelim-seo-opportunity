@@ -80,10 +80,22 @@ invisible: you believed you had switched, every panel still read "SerpAPI", and
 the SerpAPI bill kept running. A provider is a data-provenance fact, so failing
 loudly is the honest outcome.
 
-`SERP_PROVIDER` switches **three** call paths at once — keyword scans
-(AIO/PAA), Maps listings, and the Local Pack. Only the AIO/PAA path has been
-parity-tested against SerpAPI; see `/api/serp-compare` to run that comparison
-yourself on real keywords.
+`SERP_PROVIDER` selects the provider for **keyword scans only** — the AI
+Overview / People Also Ask path. That is the only path parity-tested against
+DataForSEO; run the comparison yourself on real keywords via
+`/api/serp-compare`.
+
+**Local search stays on SerpAPI.** Google Maps listings and the local 3-pack are
+pinned to SerpAPI in `lib/apis/serp.ts` (`LOCAL_SERP_PROVIDER`) and do NOT follow
+`SERP_PROVIDER` (v7.409). Until v7.408 the one flag moved all three paths, so
+switching AIO/PAA to DataForSEO silently moved the Local Search panel onto a
+source nobody had compared. It is a constant rather than an env var on purpose:
+a flag would let local move to an untested provider without the comparison being
+run, and the Local panel's copy still names SerpAPI in several places — true
+while it stays pinned, false the moment a flag moved it. Moving local is a
+deliberate release: extend `/api/serp-compare` to cover Maps + Local Pack, run
+it, then change the constant and make the panel's labels dynamic in the same
+commit.
 
 ### 3. Push the database schema
 
