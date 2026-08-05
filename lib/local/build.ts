@@ -32,6 +32,13 @@ export interface LocalListing {
   verified:     boolean;         // heuristic: has rating + reviews + address (Google verified signal proxy)
   healthFlags:  string[];        // e.g. ['no rating', 'few reviews', 'low rating']
   pageUrl?:     string;          // the client's location page URL (from sitemap/KML) (v7.179)
+  // v7.410: WHEN this office's Google Business Profile lookup was last ATTEMPTED.
+  // Absent = never looked up ("Pending"). Set on every attempt even when no profile
+  // is found, so an office that genuinely has no GBP is not re-billed on every pass
+  // and is not shown as "Pending" forever. `rating == null` alone cannot express the
+  // difference between "not looked up yet" and "looked up, no profile exists" — the
+  // second is a real finding, not a gap (Const I.5), and must never print as a zero.
+  reviewsFetchedAt?: string;
 }
 
 export interface LocalPackMember {
