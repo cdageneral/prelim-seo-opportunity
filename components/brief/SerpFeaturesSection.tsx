@@ -75,6 +75,14 @@ type KwFilter    = 'aio' | 'missing' | 'won' | 'unscanned' | 'all';
 // the UploadKwRow/FeaturePoolRow types now live in the shared lib (imported above) so the
 // exec roll-up computes the same numbers. Moved verbatim — no behavior change here.
 
+// v7.408: the ONE place a scanned row's provider is spelled for a user. A row
+// stored before v7.408 carries no scannedBy — SerpAPI was the only provider
+// that had ever run at that point, so resolving absent ⇒ SerpAPI states a fact
+// rather than relabelling history after a provider switch (Const I.1).
+function scanSourceLabel(scannedBy?: 'serpapi' | 'dataforseo'): 'SerpAPI scan' | 'DataForSEO scan' {
+  return scannedBy === 'dataforseo' ? 'DataForSEO scan' : 'SerpAPI scan';
+}
+
 // v7.333: rows for the per-card Excel download (AI Overviews / People Also Ask /
 // Video Carousel summary cards). Filters to hasFeature — the same "available"
 // set the card's own count and its FeaturePoolList show — so the download
@@ -90,7 +98,10 @@ function buildFeatureExportRows(pool: FeaturePoolRow[], featureLabel: string): S
       volume:     r.volume,
       scanStatus: r.isScanned ? 'Scanned' as const : 'Not yet scanned' as const,
       cited:      !r.isScanned ? 'Unknown' as const : (r.cited ? 'Yes' as const : 'No' as const),
-      source:     r.fromSemrush ? 'Semrush upload' as const : 'SerpAPI scan' as const,
+      // v7.408: name the provider that ACTUALLY produced this row, not a
+      // hardcoded "SerpAPI" — an exported provenance column that names the
+      // wrong source is a false data claim (Const I.1).
+      source:     r.fromSemrush ? 'Semrush upload' as const : scanSourceLabel(r.scannedBy),
     }));
 }
 
@@ -311,10 +322,10 @@ function ScanStatusBadge({ status, cited, provenance }: { status: 'scanned' | 'u
   return <CitedBadge cited={!!cited} />;
 }
 
-function ProvenanceTag({ fromSemrush }: { fromSemrush: boolean }) {
+function ProvenanceTag({ fromSemrush, scannedBy }: { fromSemrush: boolean; scannedBy?: 'serpapi' | 'dataforseo' }) {
   return (
     <span style={{ fontSize: '9px', padding: '1px 6px', borderRadius: '8px', background: 'var(--c-12121e)', border: '1px solid var(--c-1e1e35)', color: 'var(--c-555570)', flexShrink: 0 }}>
-      {fromSemrush ? 'Semrush' : 'SerpAPI scan'}
+      {fromSemrush ? 'Semrush' : scanSourceLabel(scannedBy)}
     </span>
   );
 }
@@ -923,7 +934,7 @@ function FeaturePoolList({ pool, featureLabel, presentLabel }: {
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1000)', border: '1px solid var(--c-f59e0b44)', color: 'var(--c-f59e0b)' }}>{presentLabel}</span>
                   <ScanStatusBadge status={r.isScanned ? 'scanned' : 'unscanned'} cited={r.cited === true} />
-                  <ProvenanceTag fromSemrush={r.fromSemrush} />
+                  <ProvenanceTag fromSemrush={r.fromSemrush} scannedBy={r.scannedBy} />
                 </div>
               ) : (
                 <span style={{ padding: '1px 7px', borderRadius: '4px', fontSize: '10px', fontWeight: 600, background: 'var(--c-1a1a1a)', border: '1px solid var(--c-2a2a2a)', color: 'var(--c-555570)', flexShrink: 0 }}>No {featureLabel}</span>
