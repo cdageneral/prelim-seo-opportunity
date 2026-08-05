@@ -60,6 +60,16 @@ const MAX_MAX_SEEDS     = 10;     // v7.284: hard cap of 10 primary services per
 const DEFAULT_MAX_LOC   = 25;     // Wayne sets this per run; default covers the top metros
 const MAX_MAX_LOC       = 200;    // enough for every location of a large brand
 const CONCURRENCY       = 5;
+// v7.410 — the review fetch is RESUMABLE. Before this, all offices were fetched in ONE
+// request and written to the DB once at the very end, so a client with enough locations
+// could never finish: the run hit Vercel's hard 300s cap, the function was killed, and
+// every completed lookup was discarded along with the SerpAPI credits already spent.
+// Retrying restarted from zero and died at the same place, forever (Wayne, 1,045 offices).
+// Now each request takes a bounded slice, checkpoints as it goes, and reports what is
+// left so the panel can continue automatically.
+const REVIEW_MAX_PER_REQUEST  = 150;      // hard cap on offices per request
+const REVIEW_TIME_BUDGET_MS   = 200_000;  // stop + persist well before the 300s cap
+const REVIEW_CHECKPOINT_EVERY = 25;       // persist partial progress this often
 const KW_CONCURRENCY    = 10;     // v7.299: keyword map-pack scan = 1 search each (no AI 2nd call) → safe at higher concurrency
 const MAX_SCAN_KEYWORDS = 300;    // v7.299: runtime ceiling so one streamed request stays under the 300s Vercel cap (NOT a data cap)
 const ENRICH_BUDGET_MS  = 120_000; // v7.303: wall-clock cap for fetching office detail pages (keeps the request under 300s)
@@ -428,7 +438,12 @@ export async function POST(
         // office count + estimated credits. Real SerpAPI data only (Const I.1) — never modeled.
         if (reviewsMode) {
           const prior = (analysis.semrushSnapshot as any)?._localScan as LocalScan | undefined;
-          const offices: LocalListing[] = (prior?.locations ?? []).filter(l => l.isClient);
+          const allOffices: LocalListing[] = (prior?.locations ?? []).filter(l => l.isClient);
+          // v7.410: PENDING = never attempted. Using `rating == null` here would re-fetch
+          // (and re-bill) every office that has no Google Business Profile on every pass,
+          // and with auto-continue the panel would loop forever because the pending count
+          // could never reach zero.
+          const offices: LocalListing[] = allOffices.filter(l => !l.reviewsFetchedAt);
           if (!prior || offices.length === 0) {
             if (dryRun) {
               send({ type: 'done', dryRun: true, plan: { model: 'reviews', offices: 0, estCalls: 0, source: prior?.source ?? 'none' } });
@@ -439,16 +454,45 @@ export async function POST(
             return;
           }
           if (dryRun) {
-            send({ type: 'done', dryRun: true, plan: { model: 'reviews', offices: offices.length, estCalls: offices.length, source: prior.source ?? 'none' } });
+            send({ type: 'done', dryRun: true, plan: { model: 'reviews', offices: offices.length, estCalls: offices.length, source: prior.source ?? 'none', totalOffices: allOffices.length, chunk: Math.min(offices.length, REVIEW_MAX_PER_REQUEST) } });
             controller.close();
             return;
           }
 
-          send({ type: 'start', total: offices.length });
-          const updated: LocalListing[] = offices.map(l => ({ ...l }));   // clone so we mutate copies
+          // v7.410: take a BOUNDED slice of the pending offices for this request.
+          const slice: LocalListing[] = offices.slice(0, REVIEW_MAX_PER_REQUEST);
+          const deadline = Date.now() + REVIEW_TIME_BUDGET_MS;
+          send({ type: 'start', total: slice.length, pending: offices.length, totalOffices: allOffices.length });
+          const updated: LocalListing[] = slice.map(l => ({ ...l }));   // clone so we mutate copies
           let rNext = 0, rDone = 0, reviewCalls = 0;
+
+          // Persist whatever has been fetched so far. Called at every checkpoint AND at
+          // the end, so a kill can never throw away completed lookups again.
+          const persist = async (): Promise<LocalScan> => {
+            const doneRows = updated.filter(l => l.reviewsFetchedAt);
+            const doneById = new Map(doneRows.map(l => [l.placeId || l.title, l]));
+            const merged = (prior.locations ?? []).map(l => {
+              if (!l.isClient) return l;
+              const u = doneById.get(l.placeId || l.title);
+              return u ? u : l;
+            });
+            const ls: LocalScan = {
+              ...prior,
+              locations: merged,
+              builtAt:   new Date().toISOString(),
+              callsUsed: (prior.callsUsed ?? 0) + reviewCalls,
+            };
+            await db.update(analyses)
+              .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: ls } as any })
+              .where(eq(analyses.id, analysis.id));
+            return ls;
+          };
+
           const reviewWorker = async (): Promise<void> => {
             while (rNext < updated.length) {
+              // Stop cleanly when the time budget is spent — the remaining offices stay
+              // pending and the next request picks them up (v7.410).
+              if (Date.now() > deadline) return;
               const l = updated[rNext++];
               const city = l.city || cityFromAddress(l.address) || '';
               const q = [brandQuery, city].filter(Boolean).join(' ').trim() || brandQuery;
@@ -475,26 +519,27 @@ export async function POST(
                 if (pick.reviews < 25) flags.push('few reviews');
                 l.healthFlags = flags;
               }
+              // v7.410: stamp the ATTEMPT regardless of whether a profile was found, so a
+              // location with no GBP resolves instead of staying pending and re-billing.
+              l.reviewsFetchedAt = new Date().toISOString();
               rDone++;
               send({ type: 'progress', done: rDone, total: updated.length, seed: l.city || l.title });
+              if (rDone % REVIEW_CHECKPOINT_EVERY === 0) {
+                try { await persist(); } catch (e) { console.error('[OrbitIQ] review checkpoint failed:', e); }
+              }
             }
           };
           await Promise.all(Array.from({ length: Math.min(CONCURRENCY, updated.length) }, () => reviewWorker()));
 
-          // Merge: keep any non-client rows untouched, replace the client offices with the
-          // freshly-fetched ones. Preserve every other field of the prior scan (keywords, model…).
-          const nonClient = (prior.locations ?? []).filter(l => !l.isClient);
-          const localScan: LocalScan = {
-            ...prior,
-            locations:  nonClient.concat(updated),
-            builtAt:    new Date().toISOString(),
-            callsUsed:  (prior.callsUsed ?? 0) + reviewCalls,
-          };
-          await db.update(analyses)
-            .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: localScan } as any })
-            .where(eq(analyses.id, analysis.id));
-          console.log(`[OrbitIQ] Per-office review fetch: ${updated.length} offices, ${reviewCalls} credits`);
-          send({ type: 'done', localScan });
+          // v7.410: final persist through the SAME helper the checkpoints use, so the
+          // committed shape is identical whether the run finished or was cut short by the
+          // time budget. It also preserves the original location ORDER — the previous
+          // `nonClient.concat(updated)` silently reshuffled the table on every fetch.
+          const localScan = await persist();
+          const completed = updated.filter(l => l.reviewsFetchedAt).length;
+          const remaining = Math.max(0, offices.length - completed);
+          console.log(`[OrbitIQ] Per-office review fetch: ${completed}/${offices.length} offices this pass, ${reviewCalls} credits, ${remaining} still pending`);
+          send({ type: 'done', localScan, completed, remaining, totalOffices: allOffices.length });
           controller.close();
           return;
         }
