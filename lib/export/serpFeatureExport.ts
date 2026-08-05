@@ -15,7 +15,10 @@ export interface SerpFeatureKeywordRow {
   volume:     number;               // monthly search volume
   scanStatus: 'Scanned' | 'Not yet scanned';
   cited:      'Yes' | 'No' | 'Unknown';
-  source:     'SerpAPI scan' | 'Semrush upload';
+  // v7.408: the scan provider is named PER ROW. DataForSEO became selectable
+  // via SERP_PROVIDER, so a hardcoded 'SerpAPI scan' would put a false source
+  // in a client deliverable (Const I.1).
+  source:     'SerpAPI scan' | 'DataForSEO scan' | 'Semrush upload';
 }
 
 // Excel forbids : \ / ? * [ ] in sheet names, and caps them at 31 chars.
