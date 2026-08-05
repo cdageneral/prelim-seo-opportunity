@@ -24,7 +24,7 @@ import { buildCategoryModel } from '@/lib/category/categoryModel';
 import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: mirror the Keyword panel's local-pack product lines
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298: competitor-brand guard (Const III.1a)
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
-import InsightBanner, { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
+import { InsightPanel } from './InsightBanner';   // v7.366: insight-sentence layer · v7.415: one card, no accent slabs
 import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
@@ -759,7 +759,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 .filter(k => k.packPresent && k.clientBestRank == null && k.packLeader)
                 .slice().sort((a, b) => (b.searchVolume || 0) - (a.searchVolume || 0))[0];
               return (
-                <InsightStack style={{ marginTop: 8 }} insights={[
+                <InsightPanel style={{ marginTop: 8 }} title="What the local scan says" insights={[
                   localDiagnosisInsight({
                     withPack: roll.pack.withPack,
                     present: roll.pack.inPack,
@@ -1150,7 +1150,7 @@ function EmptyScan({ onRun, scanning, teaser }: { onRun: () => void; scanning: b
           when ≥20 pack-triggering keywords exist; honest no-signal otherwise). */}
       {teaser && (
         <div style={{ textAlign: 'left', marginBottom: 16 }}>
-          <InsightBanner insight={teaser} />
+          <InsightPanel insights={[teaser]} />
         </div>
       )}
       <div style={{ fontSize: 28, marginBottom: 8 }}>🗺️</div>
