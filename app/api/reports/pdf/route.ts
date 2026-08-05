@@ -17,7 +17,11 @@ import { buildProgramData } from '@/lib/pdf/programData';
 // v7.335 (QC audit B2, Const I.5a/II.7): the PDF computes the SAME page-1
 // capture + Share-of-Voice the app renders, instead of the stored pre-v7.245 model.
 import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot';
-import { buildKwPool, computeVolumeMetrics }  from '@/lib/utils/kwVolume';
+// v7.407: buildLocalPackKeywordSet is the SAME local-intent signal the Keyword
+// panel badges and the Local panel's picker gates on (Const II.7) — the report
+// uses it to tell "this brand has no local component" apart from "this brand
+// competes locally but the scan is missing", so the second case can say so.
+import { buildKwPool, computeVolumeMetrics, buildLocalPackKeywordSet } from '@/lib/utils/kwVolume';
 import { computeSov }                          from '@/lib/sov/model';
 // v7.376: the report's audience-segment + journey sections run the SAME canonical
 // topic build and attribution the panels do — the chain moved to lib/ this release
@@ -197,7 +201,13 @@ export async function POST(req: NextRequest) {
     sov,
     profound,
     authority:    ((project as any).authoritySnapshot ?? null),
+    // v7.407: the authority snapshot is frozen at scan time; passing the live
+    // competitor list lets the template drop rivals that have since been removed
+    // and name the ones added since the crawl (Const I.5). Same list the SoV
+    // section above already uses, so one report can no longer print two rival sets.
+    competitorDomains,
     localScan:    (((snap as any)?._localScan) ?? null),
+    hasLocalIntent: buildLocalPackKeywordSet(snap, kwRows).size > 0,
     segments:     (((snap as any)?._audienceSegments) ?? null),
     journeyTopics,
     problemSeeds: (((snap as any)?._demandUniverse?.problemSeeds) ?? []) as string[],

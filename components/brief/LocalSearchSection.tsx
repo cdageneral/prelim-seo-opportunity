@@ -45,13 +45,26 @@ interface Props {
 type Tab = 'loc' | 'pack' | 'rev' | 'kw' | 'comp' | 'opp';
 
 // ─── cache (snapshot-first → localStorage) ──────────────────────────────────────
+// v7.407 — the browser cache is kept (it is what makes a just-finished scan appear
+// instantly), but it is no longer allowed to MASK a server-side absence. Before
+// this, a scan that never reached the analysis row the report reads still rendered
+// here off localStorage, so the panel looked healthy while the PDF had no local
+// data at all and dropped the section without a trace (Wayne, 2026-08-05). The
+// read now reports WHERE the scan came from, and a browser-only scan says so on
+// screen with a re-run CTA (Const I.5 — the gap is named, not hidden).
 const cacheKey = (a: any): string => `orbitiq-local-${a?.id ?? 'none'}`;
-function readLocalScan(a: any): LocalScan | null {
+export type LocalScanOrigin = 'snapshot' | 'browser-only' | 'none';
+function readLocalScanSourced(a: any): { scan: LocalScan | null; origin: LocalScanOrigin } {
   const fromSnap = (a?.semrushSnapshot as any)?._localScan ?? null;
-  if (fromSnap) return fromSnap;
-  if (typeof window === 'undefined' || !a?.id) return null;
-  try { const c = window.localStorage.getItem(cacheKey(a)); return c ? JSON.parse(c) : null; } catch { return null; }
+  if (fromSnap) return { scan: fromSnap, origin: 'snapshot' };
+  if (typeof window === 'undefined' || !a?.id) return { scan: null, origin: 'none' };
+  try {
+    const c = window.localStorage.getItem(cacheKey(a));
+    const parsed = c ? JSON.parse(c) : null;
+    return parsed ? { scan: parsed, origin: 'browser-only' } : { scan: null, origin: 'none' };
+  } catch { return { scan: null, origin: 'none' }; }
 }
+function readLocalScan(a: any): LocalScan | null { return readLocalScanSourced(a).scan; }
 
 // v7.284 — curated primary-service list. Wayne can delete a service and add one
 // from the client's own service-category catalog. The picks PERSIST per project
@@ -125,6 +138,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [dbKeywords, setDbKeywords] = useState<any[]>([]);
   const [dbLoaded, setDbLoaded]     = useState(false);
   const [scan, setScan]             = useState<LocalScan | null>(() => readLocalScan(analysis));
+  // v7.407: 'browser-only' means this scan exists in this browser but NOT on the
+  // analysis row the report reads — so it will not appear in the PDF or the
+  // delivery package. Surfaced below rather than silently papered over.
+  const [scanOrigin, setScanOrigin] = useState<LocalScanOrigin>(() => readLocalScanSourced(analysis).origin);
   const [tab, setTab]               = useState<Tab>('kw');
   const [scanning, setScanning]     = useState(false);
   const [progress, setProgress]     = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
@@ -143,7 +160,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [revError, setRevError]       = useState<string | null>(null);
 
   // hydrate scan on analysis change (snapshot → cache)
-  useEffect(() => { setScan(readLocalScan(analysis)); }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const r = readLocalScanSourced(analysis);
+    setScan(r.scan); setScanOrigin(r.origin);
+  }, [analysis?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // fetch uploaded keywords (for the client-side pool)
   const fetchDb = useCallback(async () => {
@@ -411,6 +431,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             setScanError(ev.error ?? 'Scan failed');
           } else if (ev.type === 'done' && ev.localScan) {
             setScan(ev.localScan);
+            // v7.407: the route now writes to the row this page displays, so a
+            // completed scan IS on the snapshot. Marked as such so the
+            // browser-only warning does not fire on a scan that just landed.
+            setScanOrigin('snapshot');
             setTab('pack');
             try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
           }
@@ -470,6 +494,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             setRevError(ev.error ?? 'Fetch failed');
           } else if (ev.type === 'done' && ev.localScan) {
             setScan(ev.localScan);
+            setScanOrigin('snapshot');   // v7.407 — see the note on the scan handler above
             try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
           }
         }
@@ -588,6 +613,19 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             </div>
           )}
           {scanError && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f08a8a)' }}>{scanError}</div>}
+          {/* v7.407 — this scan lives in this browser but not on the analysis row
+              the report reads, so it will NOT appear in the PDF or the delivery
+              package. Say so instead of rendering as if all were well. */}
+          {scanOrigin === 'browser-only' && scan && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-orbit-amber/40 bg-orbit-amber/10 px-3 py-2">
+              <i className="ti ti-alert-triangle text-orbit-amber mt-[1px]" aria-hidden="true" />
+              <span className="text-[11.5px] text-orbit-secondary">
+                <b className="text-orbit-primary">This scan is only in your browser.</b>{' '}
+                It is not stored on the analysis this project is displaying, so it will not appear in the
+                PDF assessment or the delivery package. Re-run the scan to store it.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Detection banner / trigger */}

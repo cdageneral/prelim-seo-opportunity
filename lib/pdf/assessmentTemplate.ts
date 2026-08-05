@@ -48,6 +48,10 @@ import { JOURNEY_ORDER, JOURNEY_LABELS, type JourneyStage as CanonStage } from '
 // same keyword set) — pure functions over the shared pool, so the report and the
 // panels cannot drift (Const II.6/II.7).
 import type { ProgramData } from '@/lib/pdf/programData';
+// v7.407: the authority snapshot freezes the competitor list at scan time, so it
+// is reconciled against the project's CURRENT competitors before anything
+// renders — one shared reconciler, four read sites (Const II.6/II.7).
+import { reconcileAuthoritySnapshot } from '@/lib/authority/reconcile';
 
 // ── Profound panel metrics (shape persisted verbatim by /api/projects/[id]/profound;
 //    declared locally so this server module never imports from a client component) ──
@@ -150,7 +154,17 @@ export interface AssessmentData {
   sov: SovComputed | null;
   profound: ProfoundMetrics | null;
   authority?: AuthoritySnapshot | null;
+  // v7.407: the project's CURRENT competitor domains. The authority snapshot is
+  // frozen at scan time, so this is what decides which of its rows are still in
+  // scope. null/undefined = the caller has no live list and the snapshot passes
+  // through unfiltered (pre-v7.407 behaviour, byte-for-byte).
+  competitorDomains?: string[] | null;
   localScan?: LocalScan | null;
+  // v7.407: does this project have a local component at all (configured
+  // locations / a local footprint)? Used ONLY to decide whether the absence of a
+  // local scan is an honest gap worth naming (Const I.5) or simply not
+  // applicable. It never fabricates local data.
+  hasLocalIntent?: boolean;
   segments?: SegmentLike[] | null;          // v7.376: stored _audienceSegments rows
   journeyTopics?: JourneyTopicLike[] | null; // v7.376: canonical topics (same build the panels run)
   problemSeeds?: string[];                   // v7.376: deep-journey problem seeds (lane rule)
@@ -198,10 +212,16 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const sov = d.sov && d.sov.basis === 'capture' ? d.sov : null;
   const pf  = d.profound && (d.profound.totalRuns > 0 || (d.profound.citeTotal || 0) > 0) ? d.profound : null;
 
-  // authority: render only when the snapshot holds a client row with real overview counts
+  // authority: render only when the snapshot holds a client row with real overview counts.
+  // v7.407 — the snapshot's competitor list is frozen at scan time, so it is first
+  // reconciled against the project's CURRENT competitors: rivals that have since been
+  // removed are dropped from every view, and rivals added since the last scan have no
+  // crawled row to show and are named as an honest gap (Const I.5) instead of appearing
+  // as a blank or zeroed line. No value is estimated and no scan is triggered.
   const authDomains = (d.authority?.domains ?? []).filter(x => x && x.overview && x.overview.refDomains > 0);
-  const authClient = authDomains.find(x => x.role === 'client') ?? null;
-  const authComps = authDomains.filter(x => x.role !== 'client').slice().sort((a, b) => (b.overview!.refDomains) - (a.overview!.refDomains));
+  const authRec = reconcileAuthoritySnapshot(authDomains, d.competitorDomains ?? null);
+  const authClient = authRec.client;
+  const authComps = authRec.comps.slice().sort((a, b) => (b.overview!.refDomains) - (a.overview!.refDomains));
   const auth = authClient && authComps.length > 0 ? { client: authClient, comps: authComps } : null;
 
   // local: render only when the scan holds real pack rows or listings
@@ -459,10 +479,12 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     pages.push(pageWrap('AUTHORITY SIGNALS', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">${behind ? 'Where your link authority stands — and where the gap is.' : 'Your link authority leads the tracked field.'}</h1>
       <div class="lede">Real crawled backlink signals for ${esc(c.domain)} against ${auth.comps.length} tracked rival${auth.comps.length === 1 ? '' : 's'}: referring domains, the high-authority tier, follow share, and brand demand. Counts are facts about the crawled index; Authority Score is the index's modeled composite and is labeled as such.</div>
-      <table class="dt" style="margin-bottom:16px;">
+      <table class="dt" style="margin-bottom:${authRec.missing.length ? '8px' : '16px'};">
         <tr><th>Domain</th><th style="width:.95in;">Authority Score <span style="font-weight:400; text-transform:none;">(modeled)</span></th><th style="width:.95in;">Referring domains</th><th style="width:.9in;">High-authority RDs (AS&ge;50)</th><th style="width:.75in;">Follow share</th><th style="width:1in;">Brand demand /mo</th></tr>
         ${tableRows}
       </table>
+      ${authRec.missing.length ? `<div class="gapblock" style="margin-bottom:16px;"><div class="t">NOT YET CRAWLED</div>
+        <p>${authRec.missing.length === 1 ? '<b>One tracked competitor</b> was' : `<b>${n0(authRec.missing.length)} tracked competitors</b> were`} added after the last authority crawl, so ${authRec.missing.length === 1 ? 'it has' : 'they have'} no backlink profile on file yet and ${authRec.missing.length === 1 ? 'is' : 'are'} left out of this table rather than shown as a blank row: ${authRec.missing.map(x => esc(x)).join(', ')}. Re-running the authority scan adds ${authRec.missing.length === 1 ? 'it' : 'them'}.</p></div>` : ''}
       ${tiles.length ? `<div class="tiles c3" style="margin-bottom:16px;">${tiles.slice(0, 3).join('')}</div>` : ''}
       <div class="two">
         <div class="panelbox"><div class="figtitle">What the profile says</div>
@@ -518,6 +540,19 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${l2 ? insightHTML(l1, 'DIAGNOSIS') : ''}
       ${insightHTML(l3, 'FINDING · REVIEW DEFICIT', 'red')}
       <div class="src">Source: live local scan — pack presence, pack leaders, listings and Google ratings are real scanned rows; volumes are real per-keyword rows.</div>`));
+  } else if (d.hasLocalIntent) {
+    // v7.407 (Wayne, 2026-08-05: "I dont see any of the local insights coming
+    // through the report"). Before this, a project WITH a local footprint but no
+    // scan on the analysis row this report was built from dropped the local page
+    // and eight further local fragments with no trace at all — the section simply
+    // vanished, which reads as a rendering bug rather than missing data. It is now
+    // an honest gap that names itself (Const I.5). Projects with no local
+    // component are unaffected: hasLocalIntent is false and nothing is emitted.
+    pages.push(pageWrap('LOCAL SEARCH — THE MAP PACK', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg">This brand competes locally. The map pack is not measured yet.</h1>
+      <div class="lede">The footprint carries a local component — locations and map-pack demand — but no local scan is attached to the analysis this report was built from, so every local figure is omitted rather than estimated.</div>
+      ${gapBlock('Local map-pack data', 'Run the local scan on the Local Search panel and regenerate this report — the assessment expands with map-pack presence and average pack rank by position band, share of local voice against the rivals actually holding the pack, the location estate and its review reputation, and a Local workstream in the recommended program.')}
+      <div class="src">Source: none — no local scan rows exist on this analysis. Nothing on this page is estimated, and no local figure appears anywhere else in this report.</div>`));
   }
 
   // AI answer layer

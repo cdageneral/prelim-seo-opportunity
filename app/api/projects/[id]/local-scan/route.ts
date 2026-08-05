@@ -48,6 +48,9 @@ import { crawlLocations } from '@/lib/local/crawl';
 import type { LocalListing, LocalKeywordScan, LocalPackMember, LocalScan, ScanSeed } from '@/lib/local/build';
 import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocationsForScan, type LocationOrder } from '@/lib/local/seeds';
 import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
+// v7.407: the shared "which analysis is this project showing" rule — the same one
+// the project page uses, so the scan target and the report's read target cannot drift.
+import { pickDisplayAnalysis } from '@/lib/analysis/displayAnalysis';
 
 export const maxDuration = 300;
 
@@ -341,14 +344,30 @@ export async function POST(
   });
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
+  // v7.407 — write to the SAME row the project page (and therefore the PDF)
+  // reads. This used to take the newest row that merely HAD a snapshot, which is
+  // not the same rule: a new analysis writes its snapshot in Phase 1 and only
+  // becomes `completed` in Phase 2, so an interrupted run leaves a newer running
+  // row above the completed one the report renders. The scan then stored
+  // `_localScan` on a row the report never opens — local silently vanished from
+  // the PDF while the panel still showed it from its own browser cache. Both
+  // sides now share pickDisplayAnalysis (Const II.7).
   const recent = await db.query.analyses.findMany({
     where:   eq(analyses.projectId, projectId),
     orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
     limit:   5,
   });
-  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  const analysis = pickDisplayAnalysis(recent as any[]) as any;
   if (!analysis) {
-    return NextResponse.json({ error: 'No analysis with keyword data found. Run an analysis first.' }, { status: 400 });
+    return NextResponse.json({ error: 'No analysis found. Run an analysis first.' }, { status: 400 });
+  }
+  if (analysis.semrushSnapshot == null) {
+    // Deliberately an error, not a silent hop to a different row: writing the
+    // scan somewhere the report does not read is the exact failure this release
+    // removes (Const I.5 — say so rather than half-succeed).
+    return NextResponse.json({
+      error: 'The current analysis has no keyword data yet. Let the analysis finish, then run the local scan — otherwise the scan would be stored on a run this project is not displaying.',
+    }, { status: 400 });
   }
 
   const clientDomain = normalizeDomain((project as any).websiteUrl ?? (analysis.semrushSnapshot as any)?.domain ?? '');

@@ -142,6 +142,9 @@ export async function POST(req: NextRequest) {
       sov,
       profound: ((project as any).profoundData ?? null),
       authority: ((project as any).authoritySnapshot ?? null),
+      // v7.407: the live list, so the frozen authority snapshot is scoped to the
+      // competitors actually tracked today (same list the SoV block above uses).
+      competitorDomains,
       localScan: (((snap as any)?._localScan) ?? null),
       umbrellaScope: (((snap as any)?._categoryBreakdown?.umbrellaScope) ?? null),
       positionDist: (((snap as any)?.positionDist) ?? null),

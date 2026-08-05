@@ -42,6 +42,10 @@ import {
   buildSegTokens, buildCanonTopicSegmentMap, canonTopicState, isPreProductTopic, SHARED_BUCKET,
 } from '@/lib/journey/segments';
 import type { Insight } from '@/lib/insights';
+// v7.407: the authority snapshot freezes the competitor list at scan time, so the
+// package reconciles it against the project's CURRENT competitors before export —
+// same reconciler the panel and the PDF use (Const II.6/II.7).
+import { reconcileAuthoritySnapshot } from '@/lib/authority/reconcile';
 
 export const DELIVERY_SCHEMA_VERSION = '1.0';
 
@@ -58,6 +62,9 @@ export interface DeliveryInput {
   sov:         any | null;                // computeSov(...) — modeled SoV, labeled
   profound:    any | null;                // ProfoundMetrics (persisted CSV aggregates)
   authority:   any | null;                // projects.authority_snapshot
+  // v7.407: the project's CURRENT competitor domains. null = caller has no live
+  // list and the frozen snapshot exports unfiltered (pre-v7.407 behaviour).
+  competitorDomains?: string[] | null;
   localScan:   any | null;                // _localScan
   umbrellaScope: Record<string, string> | null;   // _categoryBreakdown.umbrellaScope (core|adjacent)
   positionDist:  any | null;              // semrushSnapshot.positionDist
@@ -115,6 +122,20 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
     journeyTopics, plan, segments, problemSeeds, metrics, sov, profound, authority, localScan,
     umbrellaScope, positionDist, contentPlanSelections, scopeSelections, insights,
   } = input;
+
+  // v7.407 — reconcile the frozen authority snapshot against the live competitor
+  // list before ANY authority value is exported. Rows are real crawled index rows
+  // and are never altered; rivals that have since been removed are simply out of
+  // scope, and rivals added since the crawl have no row yet and are reported as an
+  // honest gap (Const I.5) rather than exported as blanks.
+  const authRec = reconcileAuthoritySnapshot(
+    (authority?.domains ?? []) as Array<{ domain: string; role: 'client' | 'competitor' }>,
+    input.competitorDomains ?? null,
+  );
+  const authorityScoped = authority
+    ? { ...authority, domains: [...(authRec.client ? [authRec.client] : []), ...authRec.comps],
+        ...(authRec.missing.length ? { notCrawledYet: authRec.missing } : {}) }
+    : null;
 
   const planSel  = new Set(contentPlanSelections);
   const scopeSel = new Set(scopeSelections);
@@ -311,7 +332,7 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
     aiVisibility: profound && (profound.totalRuns > 0 || (profound.citeTotal || 0) > 0)
       ? { promptRuns: profound.totalRuns ?? 0, clientHits: profound.clientHits ?? 0, ownedCitationShare: profound.citeOwnedShare ?? null }
       : null,
-    authority: authority?.domains?.some((d: any) => d?.role === 'client' && d?.overview?.refDomains > 0)
+    authority: (authorityScoped?.domains ?? []).some((d: any) => d?.role === 'client' && d?.overview?.refDomains > 0)
       ? { hasData: true } : null,
   };
 
@@ -337,7 +358,7 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
     rank,
     aiVisibility: summary.aiVisibility ? profound : null,
     llmVisibility: (profound && typeof profound.overallScore === 'number') ? { overallScore: profound.overallScore } : null,
-    authority: summary.authority ? authority : null,
+    authority: summary.authority ? authorityScoped : null,
     localSearch: localScan && ((localScan.keywords?.length ?? 0) > 0 || (localScan.locations?.length ?? 0) > 0) ? localScan : null,
     insights: (insights ?? []).map(i => ({ id: i.id, tone: i.tone, kicker: i.kicker, finding: insightSentence(i), evidence: i.evidence })),
     contentPlan,

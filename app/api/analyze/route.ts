@@ -525,9 +525,25 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // v7.407: carry the local scan forward too. `serpApiSnapshot` has been carried
+    // across a re-analysis since v7.82, but `_localScan` — which lives INSIDE the
+    // semrush snapshot blob rather than in its own column — was not, so every new
+    // analysis orphaned the local scan and the Local page silently dropped out of
+    // the report (Wayne, 2026-08-05). Real scanned rows, carried verbatim: nothing
+    // is recomputed or estimated. A fresh scan on the new run overwrites it.
+    const prevLocal: any = recentAnalyses
+      .find((a: any) => a.id !== analysis.id && (a.semrushSnapshot as any)?._localScan)
+      ?.semrushSnapshot?._localScan ?? null;
+    const semrushOut: any = prevLocal && !(semrush as any)?._localScan
+      ? { ...(semrush as any), _localScan: prevLocal }
+      : semrush;
+    if (prevLocal && semrushOut !== semrush) {
+      console.log(`[OrbitIQ] Local scan carried forward (${(prevLocal.locations ?? []).length} listings, ${(prevLocal.keywords ?? []).length} grid cells)`);
+    }
+
     await db.update(analyses)
       .set({
-        semrushSnapshot:  semrush  as any,
+        semrushSnapshot:  semrushOut as any,
         serpApiSnapshot:  serp     as any,
         profoundSnapshot: previousProbe as any,
       })

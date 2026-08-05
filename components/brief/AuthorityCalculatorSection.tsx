@@ -24,6 +24,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+// v7.407: same read-time reconciliation the Authority panel, the PDF and the
+// delivery package apply — the stored snapshot freezes the competitor list at
+// scan time (Const II.6/II.7).
+import { reconcileAuthoritySnapshot } from '@/lib/authority/reconcile';
 
 interface CompetitorLite { id: string; domain: string; name: string | null; }
 
@@ -110,8 +114,16 @@ export default function AuthorityCalculatorSection({
   }, [projectId]);
   useEffect(() => { load(); }, [load]);
 
-  const client = useMemo(() => snapshot?.domains.find(d => d.role === 'client') ?? null, [snapshot]);
-  const rivals = useMemo(() => (snapshot?.domains ?? []).filter(d => d.role === 'competitor'), [snapshot]);
+  // v7.407 — the `competitors` prop was declared here and never used: the
+  // benchmark rivals came straight off the frozen snapshot, so a competitor
+  // removed from the project kept driving the campaign math. Reconciled now, on
+  // the same helper every other authority read site uses.
+  const authRec = useMemo(
+    () => reconcileAuthoritySnapshot(snapshot?.domains ?? [], competitors.map(c => c.domain)),
+    [snapshot, competitors],
+  );
+  const client = authRec.client;
+  const rivals = authRec.comps;
   const pages  = useMemo(() => snapshot?.pages ?? [], [snapshot]);
 
   /** The transparent bridge math [MODELED — Wayne's stated campaign yield, editable]. */

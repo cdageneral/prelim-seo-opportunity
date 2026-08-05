@@ -22,6 +22,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+// v7.407: the stored snapshot freezes the competitor list at scan time. This panel,
+// the Authority Calculator, the PDF and the delivery package all reconcile it
+// against the live list through this one helper (Const II.6/II.7).
+import { reconcileAuthoritySnapshot } from '@/lib/authority/reconcile';
 
 interface CompetitorLite { id: string; domain: string; name: string | null; }
 
@@ -208,8 +212,21 @@ export default function GoogleRankAuthoritySection({
     finally { setScanning(false); setProgress(null); }
   }, [projectId, anchorsLimit, categoriesLimit]);
 
-  const client = useMemo(() => snapshot?.domains.find(d => d.role === 'client') ?? null, [snapshot]);
-  const rows   = useMemo(() => snapshot?.domains ?? [], [snapshot]);
+  // v7.407 (Wayne, 2026-08-05: "why is the old competitor list still showing and
+  // not the new ones?"). The snapshot's competitor list is whatever was configured
+  // when the scan ran — adding a rival never added a row and deleting one never
+  // removed it. Reconcile at READ time: crawled rows are untouched (Const I.1),
+  // rivals no longer tracked drop out of the table, and rivals added since the
+  // crawl have no row to show and are named below as an honest gap (Const I.5).
+  const authRec = useMemo(
+    () => reconcileAuthoritySnapshot(snapshot?.domains ?? [], competitors.map(c => c.domain)),
+    [snapshot, competitors],
+  );
+  const client = authRec.client;
+  const rows   = useMemo(
+    () => [...(authRec.client ? [authRec.client] : []), ...authRec.comps],
+    [authRec],
+  );
 
   return (
     <div>
@@ -221,7 +238,7 @@ export default function GoogleRankAuthoritySection({
             Google Rank Authority
           </h2>
           <p className="text-orbit-secondary text-xs mt-1 max-w-2xl">
-            Real backlink-authority signals for {projectName} vs {competitors.length} competitor{competitors.length === 1 ? '' : 's'} —
+            Real backlink-authority signals for {projectName} vs {authRec.comps.length} competitor{authRec.comps.length === 1 ? '' : 's'} —
             referring domains, authority distribution, anchor profile, topical relevance, and brand demand.
             Every count is a crawled Semrush index row from the scan date below. Feeds the Authority Calculator.
           </p>
@@ -387,6 +404,21 @@ export default function GoogleRankAuthoritySection({
                   const ratio = r.overview!.refDomains / Math.max(1, client.overview!.refDomains);
                   return `${r.domain} ${ratio >= 1 ? `${ratio.toFixed(2)}× ahead` : `${(1 / ratio).toFixed(2)}× behind`}`;
                 }).join(' · ')}
+              </p>
+            )}
+            {authRec.missing.length > 0 && (
+              <p className="text-[11px] text-orbit-tertiary mt-2 flex items-start gap-1.5">
+                <i className="ti ti-alert-circle text-orbit-amber mt-[1px]" aria-hidden="true" />
+                <span>
+                  <b className="text-orbit-secondary">
+                    {authRec.missing.length} competitor{authRec.missing.length === 1 ? '' : 's'}
+                  </b>{' '}
+                  {authRec.missing.length === 1 ? 'was' : 'were'} added after the last crawl, so{' '}
+                  {authRec.missing.length === 1 ? 'it has' : 'they have'} no backlink profile on file yet and{' '}
+                  {authRec.missing.length === 1 ? 'is' : 'are'} left out of this table rather than shown blank:{' '}
+                  {authRec.missing.join(', ')}. Re-run the authority scan to add{' '}
+                  {authRec.missing.length === 1 ? 'it' : 'them'}.
+                </span>
               </p>
             )}
           </div>

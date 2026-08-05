@@ -30,6 +30,7 @@ import AuthorityCalculatorSection from '@/components/brief/AuthorityCalculatorSe
 import { getMarket } from '@/lib/utils/markets';
 import { normalizeFootprintDomain } from '@/lib/keywords/footprintDomains';   // v7.402
 import { initialResumeState, nextResumeState } from '@/lib/synthesis/resumeDecision';   // v7.403
+import { pickDisplayAnalysis } from '@/lib/analysis/displayAnalysis';
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 
@@ -322,8 +323,10 @@ export default function ProjectBriefPage() {
   // newest row only when nothing has completed yet (true first run / in-progress).
   // `latestAnalysis` (newest row, any status) is kept for the resume/checkpoint
   // logic, which must target the interrupted run, not the last good one.
+  // v7.407: the rule itself is unchanged, but it now lives in one shared function
+  // so the local-scan route writes to exactly the row this page reads (Const II.7).
   const latestAnalysis = project?.analyses?.[0] ?? null;
-  const analysis   = project?.analyses?.find((a: any) => a.status === 'completed') ?? latestAnalysis;
+  const analysis   = pickDisplayAnalysis(project?.analyses as any[]);
   const isRunning  = triggering;
   const hasResults = analysis?.status === 'completed';
   // v7.337 (B4-proper): the page-level /keywords rows — moved up from the canonical-topics
