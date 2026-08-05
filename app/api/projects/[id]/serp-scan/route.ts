@@ -21,7 +21,7 @@ import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import { batchKeywordScan, buildSnapshotFromKeywordData } from '@/lib/apis/serp';
+import { batchKeywordScan, buildSnapshotFromKeywordData, activeProviderLabel, providerBalanceUrl, serpProvider } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import type { KeywordSerpData } from '@/lib/apis/serp';
 import { buildKwPool } from '@/lib/utils/kwVolume';
@@ -207,10 +207,15 @@ export async function POST(
   const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase));   // v7.99: market-aware scan
 
   // v7.86: every keyword in the batch failed → almost certainly an account-level
-  // problem (out of SerpAPI search credits or rate-limited), not keyword-level.
+  // problem (out of search credits or rate-limited), not keyword-level.
+  // v7.408: name the ACTIVE provider. This message used to hardcode SerpAPI and
+  // send the operator to serpapi.com — under SERP_PROVIDER=dataforseo that is
+  // the wrong vendor, the wrong dashboard, and a wasted debugging session.
   if (results.length === 0) {
+    const label = activeProviderLabel();
+    const where = (() => { try { return providerBalanceUrl(serpProvider()); } catch { return 'your SERP provider'; } })();
     return NextResponse.json(
-      { error: 'SerpAPI returned no results for this batch — your SerpAPI account is likely out of search credits or rate-limited. Check your balance at serpapi.com, then retry; nothing was saved or double-charged.' },
+      { error: `${label} returned no results for this batch — the account is likely out of credits or rate-limited. Check your balance at ${where}, then retry; nothing was saved or double-charged.` },
       { status: 502 }
     );
   }
