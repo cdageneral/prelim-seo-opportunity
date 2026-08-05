@@ -37,6 +37,37 @@ const SERP_BASE = 'https://serpapi.com/search';;
 // keep prior data, which is a gap, not a fabrication.
 export type SerpProvider = 'serpapi' | 'dataforseo';
 
+/**
+ * v7.409 — PROVIDER SELECTION IS PER CAPABILITY, NOT GLOBAL.
+ *
+ * `SERP_PROVIDER` selects the provider for KEYWORD scans only — the AI Overview
+ * and People Also Ask path. That is the ONLY path that was parity-tested against
+ * DataForSEO (2026-08-05, `/api/serp-compare`, real client keywords).
+ *
+ * LOCAL — Google Maps listings and the local 3-pack — stays on SerpAPI, pinned
+ * here rather than following `SERP_PROVIDER`. Until v7.408 the one flag switched
+ * all three call paths at once, so flipping to DataForSEO for AIO/PAA silently
+ * moved the Local Search panel onto an unverified source too (Wayne, 2026-08-05:
+ * *"if Local panel still needs to use SERPAPI - then use that. We can use both
+ * APIs."*). Serving a panel from a source nobody has compared is exactly the
+ * unverified-data case Const I.1 exists to prevent.
+ *
+ * This is deliberately a CONSTANT, not another env var. An env flag would let
+ * local be switched to an untested provider without anyone running the
+ * comparison first, and the Local panel's own copy still says "SerpAPI" in
+ * several places — which is TRUE while this stays pinned, and would become a
+ * false provenance claim the moment a flag moved it (Const I.1, v0.24 naming
+ * rule). Moving local to DataForSEO is a deliberate release: extend
+ * `/api/serp-compare` to cover Maps + Local Pack, run it, then change this line
+ * and make the panel's provider labels dynamic in the same commit.
+ */
+const LOCAL_SERP_PROVIDER: SerpProvider = 'serpapi';
+
+/** The provider serving Maps listings + the local 3-pack. Pinned — see above. */
+export function localSerpProvider(): SerpProvider {
+  return LOCAL_SERP_PROVIDER;
+}
+
 export function serpProvider(): SerpProvider {
   const want = (process.env.SERP_PROVIDER ?? '').trim().toLowerCase();
   if (want === 'dataforseo') {
@@ -608,7 +639,9 @@ export async function getMapsListings(
   ll?: string,
   limit = 20,
 ): Promise<MapsPlace[]> {
-  if (serpProvider() === 'dataforseo') return dfsGetMapsListings(query, market, ll, limit);   // v7.397
+  // v7.409: LOCAL follows localSerpProvider(), NOT SERP_PROVIDER — Maps has never
+  // been parity-tested against DataForSEO, so it stays on SerpAPI (Const I.1).
+  if (localSerpProvider() === 'dataforseo') return dfsGetMapsListings(query, market, ll, limit);
   const API_KEY = process.env.SERP_API_KEY;
   if (!API_KEY) return [];
   const m = market ?? getMarket('us');
@@ -657,7 +690,9 @@ export async function getLocalPack(
   market?: Market,
   ll?: string,
 ): Promise<LocalPackResult> {
-  if (serpProvider() === 'dataforseo') return dfsGetLocalPack(keyword, market, ll);   // v7.397
+  // v7.409: LOCAL follows localSerpProvider(), NOT SERP_PROVIDER — the local
+  // 3-pack has never been parity-tested against DataForSEO (Const I.1).
+  if (localSerpProvider() === 'dataforseo') return dfsGetLocalPack(keyword, market, ll);
   const API_KEY = process.env.SERP_API_KEY;
   if (!API_KEY) return { packPresent: false, places: [] };
   const m = market ?? getMarket('us');
