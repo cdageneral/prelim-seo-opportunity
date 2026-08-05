@@ -205,6 +205,77 @@ function gapBlock(what: string, how: string): string {
     <p><b>${esc(what)}</b> has not been loaded for this project, so this section is omitted rather than estimated. ${esc(how)}</p></div>`;
 }
 
+// ── v7.414: star ratings, the index donut, and the local finding cards ───────
+//
+// WHY THE STAR IS AN SVG PATH AND NOT `&#9733;` (Wayne, 2026-08-05: "show the
+// avg star rating rather than just saying 3"):
+// the report has printed `&#9733;` beside the local review rating since v7.374,
+// and it has NEVER rendered. The PDF is rasterised by @sparticuz/chromium inside
+// the Vercel lambda, whose bundled font set does not carry U+2605, and with no
+// fallback face the glyph resolves to nothing at all — not even a tofu box. Four
+// separate sites therefore printed a rating with an invisible star, which is
+// exactly why the reputation card read as a bare "3". A vector path depends on no
+// font, so it renders identically in the lambda, in a local browser and in print.
+// Any future rating glyph in this template MUST use this helper for the same
+// reason. (The app's own panels keep the character — a real browser has the face.)
+const STAR_PATH = 'M12 2.6l2.94 5.96 6.58.96-4.76 4.64 1.12 6.55L12 17.62 6.12 20.71l1.12-6.55-4.76-4.64 6.58-.96z';
+function svgStar(px: number, fill: string): string {
+  return `<svg width="${px}" height="${px}" viewBox="0 0 24 24" style="display:inline-block; vertical-align:-${(px * 0.13).toFixed(1)}px;" aria-hidden="true"><path d="${STAR_PATH}" fill="${fill}"/></svg>`;
+}
+/** A 5-star row filled to `rating`/5, clipped at the fractional star. Real value only. */
+function starRow(rating: number, px = 13): string {
+  const pct = Math.max(0, Math.min(100, (rating / 5) * 100));
+  const row = (fill: string) => Array.from({ length: 5 }, () => svgStar(px, fill)).join('');
+  return `<span class="stars" role="img" aria-label="${rating.toFixed(1)} out of 5 stars">
+    <span class="sback">${row('#dcdbd4')}</span>
+    <span class="sfill" style="width:${pct.toFixed(2)}%;">${row('#b07d10')}</span></span>`;
+}
+
+/** Index donut: an arc of `score`/`max`, score printed in the well. Pure encoding of one real number. */
+function donut(score: number, max: number, tone: string): string {
+  const R = 27, SW = 9, C = 2 * Math.PI * R;
+  const on = C * Math.max(0, Math.min(1, score / max));
+  return `<svg width="78" height="78" viewBox="0 0 78 78" role="img" aria-label="Local Visibility Index ${score} out of ${max}">
+    <circle cx="39" cy="39" r="${R}" fill="none" stroke="#eceae4" stroke-width="${SW}"/>
+    <circle cx="39" cy="39" r="${R}" fill="none" stroke="${tone}" stroke-width="${SW}" stroke-linecap="round"
+      stroke-dasharray="${on.toFixed(2)} ${(C - on).toFixed(2)}" transform="rotate(-90 39 39)"/>
+    <text x="39" y="37" text-anchor="middle" dominant-baseline="central" style="font-size:22px; font-weight:800; fill:var(--ink);">${n0(score)}</text>
+    <text x="39" y="52" text-anchor="middle" style="font-size:7px; font-weight:700; fill:var(--muted); letter-spacing:.07em;">OF ${n0(max)}</text>
+  </svg>`;
+}
+
+/** One weighted input of the Local Visibility Index — its own 0–100 score plus the weight it carries. */
+function idxPart(label: string, weight: string, score: number): string {
+  return `<div class="prow">
+    <span class="pl">${esc(label)} <span class="pw">${esc(weight)}</span></span>
+    <div class="ptrack"><div class="pfill" style="width:${clampW(score).toFixed(1)}%;"></div></div>
+    <span class="pv">${n0(score)}</span></div>`;
+}
+
+/** Review-count bucket: a count of LOCATIONS, labeled as such (Wayne, 2026-08-05). */
+function bucketRow(label: string, widthPct: number, count: number, color: string): string {
+  return `<div class="brow">
+    <span class="bl">${esc(label)}</span>
+    <div class="btrack"><div class="bfill" style="width:${clampW(widthPct).toFixed(1)}%; background:${color};"></div></div>
+    <span class="bv">${n0(count)} location${count === 1 ? '' : 's'}</span></div>`;
+}
+
+/**
+ * A local finding as a card in a row, replacing the stacked callout stack.
+ * The sentence and its evidence line come from lib/insights.ts verbatim (II.7).
+ * The date guard is belt-and-braces: this report never passes `scanDate`, but a
+ * future caller that did would otherwise put a date on a page that forbids them.
+ */
+function findCard(ins: Insight | null, title: string, tone: 'blue' | 'red' = 'blue'): string {
+  if (!ins) return '';
+  const body = ins.parts.map(s => (s.em ? `<b>${esc(s.t)}</b>` : esc(s.t))).join('')
+    .replace(/★/g, svgStar(10, '#b07d10'));
+  const ev = String(ins.evidence ?? '').replace(/\s*·\s*\d{1,2}\/\d{1,2}\/\d{2,4}/g, '');
+  return `<div class="find${tone === 'red' ? ' red' : ''}">
+    <div class="fk">${esc(title)}</div><p>${body}</p>
+    ${ev ? `<div class="fsrc">${esc(ev)}</div>` : ''}</div>`;
+}
+
 // ── the document ─────────────────────────────────────────────────────────────
 export function buildAssessmentHTML(d: AssessmentData): string {
   const name = esc(d.clientName || 'Client');
@@ -504,6 +575,16 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     }
     const distMax = Math.max(1, dist.big, dist.mid, dist.small);
     const withAnyReview = dist.big + dist.mid + dist.small;
+    // v7.410 made `rating == null` mean either "never looked up" or "looked up, no
+    // profile exists". buildReviewRollup counts only rated locations, so the rating
+    // card must say WHICH population it describes rather than implying the whole
+    // estate carries a Google rating (Const I.5). Identical counts collapse to one number.
+    const ratedOfAll = lp.reviews.locationCount === 0
+      ? ''
+      : lp.reviews.locationCount === lp.clientLocs.length
+        ? (lp.clientLocs.length === 1 ? 'its single location' : `all ${n0(lp.clientLocs.length)} locations`)
+        : `${n0(lp.reviews.locationCount)} of ${n0(lp.clientLocs.length)} locations`;
+    const rateLow = lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4;
     const solvTop = lp.solv.slice(0, 5);
     const solvMax = Math.max(1, ...solvTop.map(r => r.appearances));
     const solvBars = solvTop.map(r =>
@@ -511,23 +592,42 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     pages.push(pageWrap('LOCAL SEARCH — THE MAP PACK', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">${lp.pack.presenceRate < 50 ? `Where you show up, you ${lp.pack.avgRank > 0 && lp.pack.avgRank <= 2 ? 'win' : 'compete'}. You show up ${p0(lp.pack.presenceRate)} of the time.` : `You appear in ${p0(lp.pack.presenceRate)} of your map packs.`}</h1>
       <div class="lede">The local scan checked <b>${n0(lp.pack.scanned)} local-intent keywords</b> against your <b>${n0(lp.clientLocs.length)} location${lp.clientLocs.length === 1 ? '' : 's'}</b>: ${n0(lp.pack.withPack)} returned a Google map pack, and you appear in ${n0(lp.pack.inPack)} of them${lp.pack.avgRank > 0 ? ` — at an average rank of <b>${lp.pack.avgRank}</b> when you do` : ''}.</div>
-      <div class="tiles c3" style="margin-bottom:14px;">
-        ${tile('Local Visibility Index', String(lp.index.score), 'Blended index: pack presence 40% · rank quality 25% · reviews 20% · listing completeness 15% — each input a real scanned row.')}
-        ${tile('Map-pack presence', `${p0(lp.pack.presenceRate)} <small>${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)}</small>`, 'Packs on your keywords where any of your locations appears.', lp.pack.presenceRate < 50 ? 'bad' : '')}
-        ${tile('Rank when present', lp.pack.avgRank > 0 ? String(lp.pack.avgRank) : '—', 'Average position inside the 3-pack when you appear.')}
-      </div>
-      <div class="two" style="margin-bottom:14px;">
-        <div class="panelbox"${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? ' style="border-top:3px solid var(--critical);"' : ''}>
-          <div class="figtitle">The reputation gate</div>
-          <div class="figsub">Google reviews across ${n0(lp.reviews.locationCount)} rated locations</div>
-          <div style="display:flex; gap:14px; align-items:baseline; margin-bottom:10px;">
-            <span style="font-size:26px; font-weight:800; color:${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? 'var(--critical)' : 'var(--ink)'};">${lp.reviews.avgRating > 0 ? `${lp.reviews.avgRating}&#9733;` : '—'}</span>
-            <span style="font-size:10px; color:var(--ink2);">average across <b>${n0(lp.reviews.totalReviews)} reviews</b>${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? ' — below the ~4.0 bar that gates pack rank' : ''}</span>
+      <div class="lgrid" style="margin-bottom:13px;">
+        <div class="panelbox">
+          <div class="figtitle">Local Visibility Index</div>
+          <div class="figsub">A fixed 40/25/20/15 blend of four measured ratios — an editorial weighting, not a hidden model. Each bar is that input's own 0–100 score.</div>
+          <div class="lidx">
+            ${donut(lp.index.score, 100, lp.index.score < 50 ? 'var(--critical)' : 'var(--blue)')}
+            <div class="lparts">
+              ${idxPart('Map-pack presence', '40%', lp.index.parts.presence)}
+              ${idxPart('Rank quality', '25%', lp.index.parts.rankQuality)}
+              ${idxPart('Review rating', '20%', lp.index.parts.reviews)}
+              ${idxPart('Listing completeness', '15%', lp.index.parts.listings)}
+            </div>
           </div>
-          ${barRow('100+ reviews', (dist.big / distMax) * 100, n0(dist.big), 'var(--blue)', '1.1in', '.6in')}
-          ${barRow('25–99 reviews', (dist.mid / distMax) * 100, n0(dist.mid), 'var(--blue)', '1.1in', '.6in')}
-          ${barRow('1–24 reviews', (dist.small / distMax) * 100, n0(dist.small), 'var(--blue)', '1.1in', '.6in')}
-          <p style="font-size:9px; color:var(--muted); margin-top:8px;">${withAnyReview > 0 && lp.clientLocs.length > 0 ? `${p0((withAnyReview / lp.clientLocs.length) * 100)} of locations have at least one review.` : ''}</p>
+        </div>
+        <div class="lstats">
+          ${tile('Map-pack presence', `${p0(lp.pack.presenceRate)} <small>${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)}</small>`, 'Packs on your keywords where any of your locations appears.', lp.pack.presenceRate < 50 ? 'bad' : '')}
+          ${tile('Rank when present', lp.pack.avgRank > 0 ? String(lp.pack.avgRank) : '—', 'Average position inside the 3-pack when you appear.')}
+        </div>
+      </div>
+      <div class="two" style="margin-bottom:13px;">
+        <div class="panelbox"${rateLow ? ' style="border-top:3px solid var(--critical);"' : ''}>
+          <div class="figtitle">Review rating — the reputation gate</div>
+          <div class="figsub">${ratedOfAll
+            ? `Google star rating and review volume across ${esc(ratedOfAll)}`
+            : `No Google rating has been returned for any of these ${n0(lp.clientLocs.length)} locations yet`}</div>
+          ${lp.reviews.avgRating > 0 ? `<div class="ratrow">
+            <div class="ratbig" style="color:${rateLow ? 'var(--critical)' : 'var(--ink)'};">${lp.reviews.avgRating.toFixed(1)}<span class="ratmax">/ 5</span></div>
+            <div class="ratside">
+              ${starRow(lp.reviews.avgRating)}
+              <div class="ratnote">weighted by review count across <b>${n0(lp.reviews.totalReviews)} reviews</b>${rateLow ? ' — below the ~4.0 bar that gates pack rank' : ''}</div>
+            </div>
+          </div>` : '<p class="figsub">No Google rating has been returned for these locations yet.</p>'}
+          ${withAnyReview > 0 ? `${bucketRow('100+ reviews', (dist.big / distMax) * 100, dist.big, 'var(--blue-550)')}
+          ${bucketRow('25–99 reviews', (dist.mid / distMax) * 100, dist.mid, 'var(--blue)')}
+          ${bucketRow('1–24 reviews', (dist.small / distMax) * 100, dist.small, '#4a86cd')}
+          <p style="font-size:9px; color:var(--muted); margin-top:8px;">${lp.clientLocs.length > 0 ? `${p0((withAnyReview / lp.clientLocs.length) * 100)} of locations have at least one review.` : ''}</p>` : ''}
         </div>
         <div class="panelbox">
           <div class="figtitle">Who holds the pack slots</div>
@@ -536,9 +636,19 @@ export function buildAssessmentHTML(d: AssessmentData): string {
           <p style="font-size:9px; color:var(--muted); margin-top:8px;">The full local opportunity queue is itemized in the app.</p>
         </div>
       </div>
-      ${insightHTML(l2 ?? l1, l2 ? 'FINDING · WHO OWNS YOUR MAP PACK' : 'DIAGNOSIS', l2 ? 'red' : 'blue')}
-      ${l2 ? insightHTML(l1, 'DIAGNOSIS') : ''}
-      ${insightHTML(l3, 'FINDING · REVIEW DEFICIT', 'red')}
+      ${(() => {
+        // v7.414 — the three local findings move from a stack of full-width callouts
+        // into one row of cards (Wayne: "visually display them better than just
+        // stacked boxes"). Cards are emitted only for insights that actually fired,
+        // and the row's column count follows that number, so one finding never
+        // renders as a third of a row (Const I.5 — no placeholder card).
+        const cards = [
+          findCard(l2, 'FINDING · WHO OWNS YOUR MAP PACK', 'red'),
+          findCard(l1, l1?.kicker ? l1.kicker.toUpperCase() : 'DIAGNOSIS', 'blue'),
+          findCard(l3, 'FINDING · REVIEW DEFICIT', 'red'),
+        ].filter(Boolean);
+        return cards.length > 0 ? `<div class="finds c${cards.length}">${cards.join('')}</div>` : '';
+      })()}
       <div class="src">Source: live local scan — pack presence, pack leaders, listings and Google ratings are real scanned rows; volumes are real per-keyword rows.</div>`));
   } else if (d.hasLocalIntent) {
     // v7.407 (Wayne, 2026-08-05: "I dont see any of the local insights coming
@@ -824,7 +934,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ws.push({ tier: 'p1', title: 'Close the map-pack presence gap across the location estate',
         tactics: [
           `Listing completeness and category alignment across <b>${n0(lp.clientLocs.length)} locations</b> — no new content, and it shares no assets with the page work, so it runs in parallel`,
-          `Presence before reputation — a location absent from the pack earns nothing from its rating${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, so coverage is fixed before a review dollar is spent against the <b>${lp.reviews.avgRating}&#9733;</b> gate` : ''}`,
+          `Presence before reputation — a location absent from the pack earns nothing from its rating${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, so coverage is fixed before a review dollar is spent against the <b>${lp.reviews.avgRating.toFixed(1)}${svgStar(9,'#b07d10')}</b> gate` : ''}`,
         ],
         ePips: 4, eLabel: 'HIGH', eNote: `bulk record pass<br>${n0(lp.clientLocs.length)} locations`,
         iPips: packMiss >= 25 ? 5 : 3, iLabel: packMiss >= 25 ? 'HIGH' : 'MEDIUM', iNote: `${p0(packMiss)} of pack-eligible queries absent`,
@@ -978,7 +1088,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     if (steps.length === 0 && sov) steps.push(`<div class="panelbox" style="border-top:4px solid var(--blue);"><div class="stepk" style="color:var(--blue-550);">STEP 1</div><div class="figtitle">Claim the open clicks</div><p>${p0(openPct * 100)} of modeled page-1 clicks on this footprint are unclaimed by any tracked competitor — the opportunity queue in the app itemizes them by demand.</p></div>`);
     if (steps.length > 0) {
       const running: string[] = [];
-      if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating}&#9733; reputation gate` : ''}.`);
+      if (lp) running.push(`<b>The local layer</b> — listing coverage and review reputation across ${n0(lp.clientLocs.length)} locations: presence first (${p0(lp.pack.presenceRate)} today)${lp.reviews.avgRating > 0 && lp.reviews.avgRating < 4 ? `, then the ${lp.reviews.avgRating.toFixed(1)}${svgStar(9,'#b07d10')} reputation gate` : ''}.`);
       if (auth) running.push(`<b>Authority compounding</b> — every earned placement also lands a high-authority referring domain, the tier of the link profile where gains matter most.`);
       if (hasJourney && jBuild > 0 && jTopStage) running.push(`<b>The journey map</b> — ${n0(jTotal)} topics tracked by funnel stage; the ${n0(jBuild)} net-new builds (${n0(jTopStage.builds)} at ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()}) feed the build queue in priority order.`);
       running.push(`<b>Engine steer &amp; sentiment guard</b> — visibility and tone tracked on every refresh, so a souring theme is caught at the source level.`);
@@ -1005,7 +1115,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   }
   if (lp) {
     scoreRows.push(`<tr><td><b>Map-pack presence</b></td><td class="n">${p0(lp.pack.presenceRate)} (${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)})</td><td>Listing coverage across ${n0(lp.clientLocs.length)} locations lifts presence first</td></tr>`);
-    if (lp.reviews.avgRating > 0) scoreRows.push(`<tr><td><b>Review reputation</b></td><td class="n">${lp.reviews.avgRating}&#9733; (${n0(lp.reviews.totalReviews)} reviews)</td><td>${lp.reviews.avgRating < 4 ? 'Crossing the ~4.0 gate unlocks pack rank the listings already earn' : 'Held above the ~4.0 pack-rank gate'}</td></tr>`);
+    if (lp.reviews.avgRating > 0) scoreRows.push(`<tr><td><b>Review reputation</b></td><td class="n">${lp.reviews.avgRating.toFixed(1)}${svgStar(9,'#b07d10')} (${n0(lp.reviews.totalReviews)} reviews)</td><td>${lp.reviews.avgRating < 4 ? 'Crossing the ~4.0 gate unlocks pack rank the listings already earn' : 'Held above the ~4.0 pack-rank gate'}</td></tr>`);
   }
   if (hasJourney) scoreRows.push(`<tr><td><b>Journey coverage</b></td><td class="n">${p0(jCoverage)} (${n0(jOpt)} of ${n0(jTotal)})</td><td>Topics with existing content to optimize; ${n0(jBuild)} net-new builds remain</td></tr>`);
   if (hasSeg && hasJourney) scoreRows.push(`<tr><td><b>Audience segments</b></td><td class="n">${n0(segs.length)}</td><td>${n0(segAttributedN)} journey topics attributed + ${n0(segSharedN)} shared across all (modeled attribution)</td></tr>`);
@@ -1098,6 +1208,40 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   .legend .sw{display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px;}
   .two{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
   .panelbox{border:1px solid var(--grid); border-radius:8px; padding:14px 16px; background:var(--surface);}
+  /* v7.414 — Local Search page: index donut + composition, star rating, finding cards */
+  .lgrid{display:grid; grid-template-columns:1.62fr 1fr; gap:14px; align-items:stretch;}
+  .lgrid>.panelbox{display:flex; flex-direction:column;}
+  .lstats{display:grid; grid-template-rows:1fr 1fr; gap:12px;}
+  .lstats .tile{display:flex; flex-direction:column; justify-content:center;}
+  .lidx{display:flex; gap:15px; align-items:center; flex:1;}
+  .lparts{flex:1; min-width:0;}
+  .prow{display:grid; grid-template-columns:1.6in 1fr .26in; align-items:center; gap:8px; margin-bottom:8px;}
+  .prow:last-child{margin-bottom:0;}
+  .prow .pl{font-size:8.8px; font-weight:600; color:var(--ink2); line-height:1.2; white-space:nowrap;}
+  .prow .pw{font-size:7.5px; font-weight:800; color:var(--muted); letter-spacing:.04em;}
+  .prow .pv{font-size:9px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums;}
+  .ptrack{height:7px; background:#f1f0ec; border-radius:3.5px;}
+  .pfill{height:100%; border-radius:3.5px; background:var(--blue); min-width:2px;}
+  .ratrow{display:flex; gap:13px; align-items:center; margin-bottom:11px;}
+  .ratbig{font-size:29px; font-weight:800; letter-spacing:-.02em; line-height:1;}
+  .ratbig .ratmax{font-size:12px; font-weight:700; color:var(--muted); margin-left:2px;}
+  .ratside{flex:1; min-width:0;}
+  .ratnote{font-size:9.2px; color:var(--ink2); line-height:1.4; margin-top:4px;}
+  .stars{position:relative; display:inline-block; white-space:nowrap; line-height:0; font-size:0;}
+  .stars .sfill{position:absolute; left:0; top:0; overflow:hidden; white-space:nowrap;}
+  .brow{display:grid; grid-template-columns:.92in 1fr .8in; align-items:center; gap:9px; margin-bottom:7px;}
+  .brow .bl{font-size:9.2px; font-weight:600; text-align:right;}
+  .brow .bv{font-size:9px; font-weight:700; font-variant-numeric:tabular-nums;}
+  .btrack{height:11px; background:#f1f0ec; border-radius:4px;}
+  .bfill{height:100%; border-radius:4px; min-width:2px;}
+  .finds{display:grid; gap:11px;}
+  .finds.c1{grid-template-columns:1fr;} .finds.c2{grid-template-columns:1fr 1fr;} .finds.c3{grid-template-columns:repeat(3,1fr);}
+  .find{border:1px solid var(--grid); border-top:3px solid var(--blue); border-radius:8px; background:var(--surface); padding:11px 12px;}
+  .find.red{border-top-color:var(--critical);}
+  .find .fk{font-size:7.5px; font-weight:800; letter-spacing:.085em; color:var(--blue-550); margin-bottom:5px; line-height:1.3;}
+  .find.red .fk{color:#9c2b2b;}
+  .find p{font-size:9px; line-height:1.45;}
+  .find .fsrc{font-size:7.5px; color:var(--muted); margin-top:7px; padding-top:5px; border-top:1px solid var(--grid);}
   .stepk{font-size:9px; font-weight:800; letter-spacing:.1em; margin-bottom:6px;}
   .endbrand{display:flex; justify-content:space-between; align-items:flex-end; border-top:2px solid var(--ink); padding-top:14px;}
   .rank{font-size:9px; font-weight:800; color:var(--muted); letter-spacing:.06em; line-height:1.2;}
