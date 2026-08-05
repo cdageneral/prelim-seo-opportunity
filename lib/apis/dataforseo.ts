@@ -279,6 +279,7 @@ export async function dfsBatchKeywordScan(
       videoSources,
       clientRank:       clientEntry ? clientEntry.position : null,
       scannedAt:        new Date().toISOString(),
+      scannedBy:        'dataforseo' as const,   // v7.408: provenance travels WITH the row (Const I.1)
     };
   }
 

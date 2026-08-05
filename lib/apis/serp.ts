@@ -23,20 +23,71 @@ const SERP_BASE = 'https://serpapi.com/search';;
 // so swapping providers happens here and nowhere else — no caller changes, no
 // per-panel forks (Const II.7). Both providers return byte-identical types.
 //
-// DEFAULT IS 'serpapi'. v7.397 ships as a ZERO behaviour change: DataForSEO only
-// runs when SERP_PROVIDER is explicitly set to 'dataforseo' AND its credentials
-// are present. If it is selected but not configured, we fall back to SerpAPI
-// rather than silently returning empty results (an empty scan would read as
-// "this client has no SERP presence", which is a lie — Const I.5).
+// DEFAULT IS 'serpapi'. DataForSEO runs only when SERP_PROVIDER is explicitly
+// set to 'dataforseo' AND its credentials are present.
+//
+// v7.408 — MISCONFIGURATION NOW THROWS. Until v7.405 this fell back to SerpAPI
+// with a console.warn when SERP_PROVIDER=dataforseo but the credentials were
+// missing. That fallback was invisible: the operator believed the switch had
+// been made, every panel still said "SerpAPI", and the SerpAPI bill kept
+// running. A provider is a DATA PROVENANCE fact (Const I.1) — silently serving
+// data from a different source than the one configured makes every provenance
+// label in the app a lie. Failing loudly is the honest outcome (Const I.5):
+// callers already treat a thrown scan as "SERP data unavailable this run" and
+// keep prior data, which is a gap, not a fabrication.
 export type SerpProvider = 'serpapi' | 'dataforseo';
 
 export function serpProvider(): SerpProvider {
   const want = (process.env.SERP_PROVIDER ?? '').trim().toLowerCase();
   if (want === 'dataforseo') {
     if (dataForSeoEnabled()) return 'dataforseo';
-    console.warn('[OrbitIQ serp] SERP_PROVIDER=dataforseo but DATAFORSEO_LOGIN/PASSWORD are not set — falling back to SerpAPI');
+    throw new Error(
+      'SERP_PROVIDER=dataforseo but DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD are not set. ' +
+      'Refusing to silently fall back to SerpAPI — that would bill SerpAPI while every ' +
+      'panel reported the configured provider. Set the credentials, or unset SERP_PROVIDER ' +
+      'to run on SerpAPI deliberately.',
+    );
+  }
+  if (want && want !== 'serpapi') {
+    throw new Error(
+      `SERP_PROVIDER="${want}" is not a known provider. Valid values are "serpapi" (default) or "dataforseo".`,
+    );
   }
   return 'serpapi';
+}
+
+/**
+ * The human-readable name of a provider — the ONE place a provider is spelled
+ * for a user (Const II.7). Every user-facing message, badge, export column and
+ * remediation hint must read its provider name from here rather than hardcoding
+ * "SerpAPI", so that flipping SERP_PROVIDER can never leave the UI asserting a
+ * source the data did not come from.
+ */
+export function providerLabel(p: SerpProvider): string {
+  return p === 'dataforseo' ? 'DataForSEO' : 'SerpAPI';
+}
+
+/** Where an operator checks the balance/credits for a provider. */
+export function providerBalanceUrl(p: SerpProvider): string {
+  return p === 'dataforseo' ? 'app.dataforseo.com' : 'serpapi.com';
+}
+
+/**
+ * The billing unit each provider meters in, for cost-estimate copy.
+ * SerpAPI sells prepaid "searches"/credits; DataForSEO bills per task in USD.
+ */
+export function providerUnitLabel(p: SerpProvider): string {
+  return p === 'dataforseo' ? 'DataForSEO SERP tasks' : 'SerpAPI credits';
+}
+
+/** The active provider's label, for callers that just need the current name. */
+export function activeProviderLabel(): string {
+  try {
+    return providerLabel(serpProvider());
+  } catch {
+    // Misconfigured: name nothing rather than assert the wrong source.
+    return 'the configured SERP provider';
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -88,6 +139,7 @@ export interface KeywordSerpData {
   videoSources?:    VideoSource[];   // v7.117: every video carousel entry (absent on pre-v7.117 scans)
   clientRank:       number | null;   // Client's position on this SERP (null = not found)
   scannedAt?:       string;          // v7.122: ISO timestamp of THIS keyword's scan (absent on older scans) — powers per-card scan-age staleness
+  scannedBy?:       SerpProvider;    // v7.408: WHICH provider produced this row. Absent on pre-v7.408 scans, which were all SerpAPI by construction (DataForSEO was never the active provider before v7.408), so absent ⇒ 'serpapi' is a fact, not a guess (Const I.1).
 }
 
 export interface SerpApiSnapshot {
@@ -347,6 +399,7 @@ async function parseKeywordSerp(keyword: string, data: any, clientDomain: string
     videoSources,
     clientRank,
     scannedAt: new Date().toISOString(),   // v7.122: per-keyword scan timestamp
+    scannedBy: 'serpapi' as SerpProvider,  // v7.408: provenance travels WITH the row
   };
 }
 
