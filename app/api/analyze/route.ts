@@ -27,13 +27,27 @@ import { db }      from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
-import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan }  from '@/lib/apis/serp';
+import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan, activeProviderLabel, providerBalanceUrl, providerUnitLabel, serpProvider }  from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
+
+// v7.408: every user-facing sentence naming the SERP vendor resolves it at call
+// time from SERP_PROVIDER. These used to hardcode "SerpAPI" and "serpapi.com";
+// once DataForSEO became selectable that sent the operator to the wrong vendor's
+// dashboard to debug a failure the other vendor caused. Wrapped in try/catch
+// because serpProvider() now THROWS on misconfiguration, and a warning string
+// must never be the thing that takes a run down.
+function serpName(): string { return activeProviderLabel(); }
+function serpWhere(): string {
+  try { return providerBalanceUrl(serpProvider()); } catch { return 'your SERP provider dashboard'; }
+}
+function serpUnit(): string {
+  try { return providerUnitLabel(serpProvider()); } catch { return 'SERP credits'; }
+}
 
 const AnalyzeSchema = z.object({
   projectId: z.string().uuid(),
@@ -184,7 +198,7 @@ export async function POST(req: NextRequest) {
         if (topKws.length > 0) {
           rescanList = topKws;
           usedFallback = true;
-          warnings.push(`No previously scanned SERP keywords found — scanned your top ${topKws.length} keywords by volume instead (${topKws.length} SerpAPI credits). Use "Scan SERP features" in the Keywords panel to extend coverage.`);
+          warnings.push(`No previously scanned SERP keywords found — scanned your top ${topKws.length} keywords by volume instead (${topKws.length} ${serpUnit()}). Use "Scan SERP features" in the Keywords panel to extend coverage.`);
         }
       }
 
@@ -199,15 +213,15 @@ export async function POST(req: NextRequest) {
           console.log(`[OrbitIQ] Data refresh: re-scanned ${freshKws.length} keywords, ${carried.length} carried forward`);
 
           // Diagnostic (v7.112): an AI Overview virtually always cites sources.
-          // hasAIO with zero sources means SerpAPI's citation payload was
+          // hasAIO with zero sources means the provider's citation payload was
           // missing (token follow-up failed / expired) — surface it instead of
           // letting it silently read as "client not cited".
           const emptyAIOs = freshKws.filter(k => k.hasAIO && (k.aioSources?.length ?? 0) === 0).length;
           if (emptyAIOs > 0) {
-            warnings.push(`${emptyAIOs} AI Overview${emptyAIOs !== 1 ? 's' : ''} returned no citation sources from SerpAPI (token follow-up may have failed). Citation metrics for ${emptyAIOs !== 1 ? 'these keywords' : 'this keyword'} are unverifiable this run — re-run the data refresh to retry.`);
+            warnings.push(`${emptyAIOs} AI Overview${emptyAIOs !== 1 ? 's' : ''} returned no citation sources from ${serpName()} (the citation follow-up may have failed). Citation metrics for ${emptyAIOs !== 1 ? 'these keywords' : 'this keyword'} are unverifiable this run — re-run the data refresh to retry.`);
           }
         } catch (err) {
-          warnings.push(`SerpAPI re-scan failed (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
+          warnings.push(`${serpName()} re-scan failed (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your ${serpName()} credit balance at ${serpWhere()}.`);
         }
       } else {
         warnings.push('No keywords available to scan — the reused footprint has no keywords. Run a full analysis or upload a footprint first.');
@@ -393,10 +407,10 @@ export async function POST(req: NextRequest) {
             const carried  = ((serp?.keywords ?? []) as any[])
               .filter((k: any) => k?.keyword && !freshLow.has(k.keyword.toLowerCase()));
             serp = buildSnapshotFromKeywordData(domain, [...fresh.keywords, ...carried]);
-            console.log(`[OrbitIQ] SerpAPI (gap): +${fresh.keywords.length} fresh, ${carried.length} carried forward`);
+            console.log(`[OrbitIQ] ${serpName()} (gap): +${fresh.keywords.length} fresh, ${carried.length} carried forward`);
           } catch (err) {
-            console.error(`[OrbitIQ] SerpAPI (gap) failed (keeping previous SERP data):`, err);
-            warnings.push(`SerpAPI scan failed for the new keywords (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
+            console.error(`[OrbitIQ] ${serpName()} (gap) failed (keeping previous SERP data):`, err);
+            warnings.push(`${serpName()} scan failed for the new keywords (previous SERP data kept): ${String((err as any)?.message ?? err)}. Check your ${serpName()} credit balance at ${serpWhere()}.`);
           }
         }
 
@@ -480,8 +494,8 @@ export async function POST(req: NextRequest) {
     const topKeywords = semrush.topKeywords.slice(0, 50).map(k => k.keyword);
     console.log(`[OrbitIQ] SerpAPI: SERP_API_KEY set=${!!process.env.SERP_API_KEY}, scanning ${Math.min(topKeywords.length, 5)} of ${topKeywords.length} keywords`);
     let serp: any = await getSerpApiSnapshot(domain, topKeywords, market).catch(err => {
-      console.error(`[OrbitIQ] SerpAPI failed (skipping SERP data):`, err);
-      warnings.push(`SerpAPI scan failed — SERP features (AIO/PAA/Video) are unavailable for this run: ${String((err as any)?.message ?? err)}. Check your SerpAPI credit balance at serpapi.com.`);
+      console.error(`[OrbitIQ] ${serpName()} failed (skipping SERP data):`, err);
+      warnings.push(`${serpName()} scan failed — SERP features (AIO/PAA/Video) are unavailable for this run: ${String((err as any)?.message ?? err)}. Check your ${serpName()} credit balance at ${serpWhere()}.`);
       return {
         domain, keywords: [],
         aioSummary:         { total: 0, withAIO: 0, clientCited: 0, aioRate: 0, clientAIORate: 0 },
