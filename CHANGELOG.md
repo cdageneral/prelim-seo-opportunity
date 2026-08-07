@@ -1,3 +1,36 @@
+## v7.416 — Search demand: the whole prompt, paged, and copyable
+
+The "Search demand — top prompts" card rendered each prompt through the shared `<Bar>` row,
+whose label is a fixed 160px `truncate` cell. Prompts are whole sentences, so every row showed
+about five words and an ellipsis — "How can I use savings acco…". The card named the top
+questions buyers ask and then hid what they were.
+
+Three changes, all in `components/brief/ProfoundVisibilitySection.tsx`:
+
+- **The prompt gets its own line.** A dedicated row (`DemandPromptList`) puts the full prompt on
+  a wrapping, full-width line with its share on the right, and moves the bar beneath it with the
+  topic label. Nothing truncates. There is no nested scroller: paging bounds the card's height
+  and the page provides the one vertical scroller (Const IV.1) — an inner `max-h` scroll context
+  clipped rows mid-sentence, which is the defect this release exists to fix.
+- **Paging.** The card opens at 12 rows exactly as before, then offers "Show N more" (12 at a
+  time) and "Show less". A footer states "Showing X of Y", and says plainly when the stored set
+  is a subset of the export. The metrics blob previously kept only the top 12 prompts, so a
+  load-more control would have had nothing to load; it now stores up to `DEMAND_PROMPT_STORE_CAP`
+  = 200, still a direct unrounded tally of the uploaded prompt-volume export (Const I.1).
+  Analyses saved before this release carry 12 rows and say so honestly rather than pretending
+  to hold more.
+- **Copy to clipboard.** An icon button in the card's top-right corner (new optional `action`
+  prop on `Panel`; panels that pass no action keep their exact previous markup) copies every
+  loaded prompt as TSV — rank, prompt, share, topic — with the shares exactly as parsed, nothing
+  re-rounded. Inline SVG, not a glyph font. `navigator.clipboard` with a `execCommand` fallback,
+  and the button reports success or failure back to the reader.
+
+Verified: project `tsc --noEmit` clean under the repo tsconfig; retained regression suite
+1030 PASS with zero delta against the pristine v7.415 base (21 pre-existing failures unchanged),
+plus 31 new v7.416 checks driving the real compiled component in jsdom — paging forward,
+collapsing, exhausting the set, the clipboard payload, and dual-theme colour parity. Rendered
+in light and dark.
+
 ## v7.415 — The local insights become one panel instead of three striped boxes (2026-08-05)
 
 **Wayne, looking at the Local page:** *"can we clean up the insights into a single box and remove the harsh vertical color bars, but make it all look visually appealing"*
