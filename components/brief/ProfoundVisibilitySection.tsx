@@ -67,6 +67,11 @@ interface ThemeStat { theme: string; pos: number; neg: number; }
 interface DomainStat { domain: string; count: number; isClient: boolean; isCompetitor: boolean; }
 interface DemandTopic { topic: string; share: number; prompts: number; }
 interface DemandPrompt { prompt: string; share: number; topic: string; }
+// v7.416 — how many demand prompts the metrics blob carries, and how many the card reveals
+// per click. The store cap keeps the persisted snapshot bounded; the page size keeps the card
+// the same height it has always been until the reader asks for more.
+const DEMAND_PROMPT_STORE_CAP = 200;
+const DEMAND_PROMPT_PAGE = 12;
 interface SentBrand { brand: string; pos: number; neg: number; isClient: boolean; }
 interface MentionSent { brand: string; pos: number; neutral: number; neg: number; total: number; isClient: boolean; }
 // Step 5 — Citation Landscape (citations_data.csv)
@@ -896,7 +901,11 @@ async function computeAll(
   const demandTopics: DemandTopic[] = Object.keys(demandTopicShare)
     .map((t) => ({ topic: t, share: Math.round(demandTopicShare[t] * 10) / 10, prompts: demandTopicCount[t] }))
     .sort((a, b) => b.share - a.share);
-  const demandPrompts = demandPromptsArr.slice().sort((a, b) => b.share - a.share).slice(0, 12);
+  // v7.416: the panel used to keep only the top 12 prompts, so a "load more" control would have
+  // had nothing left to load. Store up to DEMAND_PROMPT_STORE_CAP rows — still a direct, unrounded
+  // tally of the uploaded prompt-volume export (Const I.1) — and let the card page through them.
+  // The card states plainly whenever the cap trimmed the list.
+  const demandPrompts = demandPromptsArr.slice().sort((a, b) => b.share - a.share).slice(0, DEMAND_PROMPT_STORE_CAP);
 
   // ── Citation-landscape finalise ──
   const ownedDomainsSorted = Object.keys(ownedDomainCite).sort((a, b) => ownedDomainCite[b] - ownedDomainCite[a]);
@@ -1377,10 +1386,12 @@ function Analysis({ m }: { m: Metrics }) {
           ))}
         </Panel>
         {m.demandPrompts.length > 0 ? (
-          <Panel title="Search demand — top prompts" sub={`Highest-volume questions buyers ask (of ${fmt(m.demandPromptTotal)} prompts; share of volume)`}>
-            {m.demandPrompts.map((d, i) => (
-              <Bar key={i} label={d.prompt} valueLabel={`${d.share}%`} frac={d.share / maxDemand} color="bg-violet-400" sub={d.topic} small />
-            ))}
+          <Panel
+            title="Search demand — top prompts"
+            sub={`Highest-volume questions buyers ask (of ${fmt(m.demandPromptTotal)} prompts; share of volume)`}
+            action={<CopyButton label="Copy every prompt in this card (tab-separated)" text={demandPromptsTsv(m.demandPrompts)} />}
+          >
+            <DemandPromptList prompts={m.demandPrompts} total={m.demandPromptTotal} max={maxDemand} />
           </Panel>
         ) : (
           <Panel title="Search demand — top prompts" sub="Upload prompt-volume-report.csv (Step 4) to unlock demand">
@@ -1531,13 +1542,132 @@ function Analysis({ m }: { m: Metrics }) {
 }
 
 // ─── Chart primitives (CSS bars; theme-safe via orbit-* + 500/600 shades) ─────────
-function Panel({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
+// v7.416: `action` renders in the card's top-right corner (used for the demand copy button).
+// Panels that pass no action keep exactly the markup they had before.
+function Panel({ title, sub, action, children }: { title: string; sub?: string; action?: ReactNode; children: ReactNode }) {
   return (
     <div className="bg-orbit-surface border border-orbit-border rounded-xl p-4">
-      <p className="text-orbit-primary text-sm font-semibold">{title}</p>
-      {sub && <p className="text-orbit-tertiary text-[11px] mt-0.5 mb-3">{sub}</p>}
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-orbit-primary text-sm font-semibold">{title}</p>
+          {sub && <p className="text-orbit-tertiary text-[11px] mt-0.5 mb-3">{sub}</p>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
       <div className="space-y-1.5">{children}</div>
     </div>
+  );
+}
+
+// ─── v7.416 — copy-to-clipboard control ──────────────────────────────────────────
+// Inline SVG, not a glyph font: the icon must render wherever this markup lands.
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+export function CopyButton({ text, label }: { text: string; label: string }) {
+  const [state, setState] = useState<'idle' | 'ok' | 'err'>('idle');
+  useEffect(() => {
+    if (state === 'idle') return;
+    const t = setTimeout(() => setState('idle'), 2000);
+    return () => clearTimeout(t);
+  }, [state]);
+  const tone = state === 'ok'
+    ? 'border-emerald-500/50 text-emerald-500'
+    : state === 'err'
+      ? 'border-rose-500/50 text-rose-500'
+      : 'border-orbit-border text-orbit-tertiary hover:text-orbit-primary hover:border-orbit-accent';
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={async () => { setState((await copyTextToClipboard(text)) ? 'ok' : 'err'); }}
+      className={`flex items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-medium leading-none transition-colors ${tone}`}
+    >
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {state === 'ok'
+          ? <polyline points="20 6 9 17 4 12" />
+          : <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>}
+      </svg>
+      {state !== 'idle' && <span>{state === 'ok' ? 'Copied' : 'Copy failed'}</span>}
+    </button>
+  );
+}
+
+// ─── v7.416 — demand prompts: full text, paged, copyable ─────────────────────────
+// The old row was a <Bar>, whose fixed-width label truncated every prompt to ~40px of
+// text. Prompts are whole sentences, so the text now owns a full-width wrapping line
+// and the bar sits beneath it. Nothing here rounds or reweights a share — the values
+// are the export's own, exactly as parsed (Const I.1).
+
+export function demandPromptsTsv(prompts: DemandPrompt[]): string {
+  return ['Rank\tPrompt\tShare of volume\tTopic']
+    .concat(prompts.map((d, i) => `${i + 1}\t${d.prompt}\t${d.share}%\t${d.topic}`))
+    .join('\n');
+}
+
+export function DemandPromptList({ prompts, total, max }: { prompts: DemandPrompt[]; total: number; max: number }) {
+  const [shown, setShown] = useState(DEMAND_PROMPT_PAGE);
+  const visible = prompts.slice(0, shown);
+  const more = Math.min(DEMAND_PROMPT_PAGE, prompts.length - visible.length);
+  const btn = 'rounded-md border border-orbit-border px-2 py-1 text-[10px] font-medium text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent transition-colors';
+  return (
+    <>
+      {/* No nested scroller. Paging is what bounds this card's height; a second scroll context
+          inside it clipped a row mid-sentence, which is the exact defect this release fixes.
+          Const IV.1 — one working vertical scroller, which here is the page's. */}
+      <div data-oiq-demand-rows>
+        {visible.map((d, i) => (
+          <div key={`${i}-${d.prompt}`} className="py-2 border-t border-orbit-border first:border-t-0">
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 text-orbit-tertiary text-[10px] tabular-nums">{i + 1}.</span>
+              <p className="flex-1 min-w-0 text-orbit-secondary text-[11px] leading-snug break-words">{d.prompt}</p>
+              <span className="shrink-0 text-orbit-primary text-[11px] font-medium tabular-nums">{d.share}%</span>
+            </div>
+            <div className="flex items-center gap-2 mt-1 pl-7">
+              <div className="flex-1 h-2 bg-orbit-muted rounded overflow-hidden">
+                <div className="h-full bg-violet-400 rounded" style={{ width: `${Math.max(1.5, Math.min(100, (d.share / max) * 100))}%` }} />
+              </div>
+              {d.topic && <span className="shrink-0 max-w-[8rem] truncate text-orbit-tertiary text-[10px]" title={d.topic}>{d.topic}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-orbit-border">
+        <span className="text-orbit-tertiary text-[10px]">
+          Showing {visible.length} of {prompts.length}
+          {total > prompts.length ? ` (this card holds the top ${prompts.length} of ${total} by share)` : ''}
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {visible.length > DEMAND_PROMPT_PAGE && (
+            <button type="button" className={btn} onClick={() => setShown(DEMAND_PROMPT_PAGE)}>Show less</button>
+          )}
+          {more > 0 && (
+            <button type="button" className={btn} onClick={() => setShown((s) => s + DEMAND_PROMPT_PAGE)}>Show {more} more</button>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
