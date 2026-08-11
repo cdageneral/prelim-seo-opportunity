@@ -1,3 +1,56 @@
+## v7.418 — user groups: grant projects to a team in one move
+
+**Wayne:** *"In the orbit admin panel I need to be able to add a group and then assign members to
+that group. Then when I create a new project I need to be able to allow that project to be seen by
+a group, a user or multiple users and groups."* — Both halves ship in this release.
+
+### Groups in the admin panel
+
+* **New Groups tab** in Admin → Users & Access: create a group by name, then open its Manage drawer
+  to rename it, toggle members on and off, toggle which projects the group can open, or delete it.
+  Deleting a group never touches the members' accounts or any direct grants they hold — they only
+  lose the access the group provided.
+* **A group carries no role of its own.** Membership widens *which* projects a user can see; what
+  they can do there still comes from their individual editor/viewer role. Owners and admins see
+  every project regardless, so grants (direct or via group) only ever matter for editors and viewers.
+* **The Users tab now shows group membership** — a user's row lists their direct project chips and,
+  alongside them, a chip for each group they belong to, so access is legible in one place.
+* **Every group change is a real audit event** (`group.create` / `group.update` / `group.delete`)
+  and the Activity Log renders them by name.
+
+### Access at project creation
+
+* The **New Project modal grows a "Who can see this project" section** (admins only — it hides
+  itself for anyone whose roster request is refused): toggle chips for each group and each
+  grantable editor/viewer. Selections are applied server-side immediately after the project row is
+  created, additively — nothing existing is ever removed by creating a project.
+* **The creator keeps their own project.** When enforcement is on and an editor creates a project,
+  they are auto-granted access to it — previously the project would have vanished from their own
+  dashboard the moment it was created.
+* Access for an existing project stays editable any time: per-user in the Users tab drawer
+  (unchanged) and per-group in the new Groups tab drawer.
+
+### How the access wall reads groups
+
+* The project list and the per-project access check now honor **direct grants ∪ group grants** —
+  a project granted to any group you belong to opens exactly as if it were granted to you.
+* Admin per-user grant edits still diff against **direct grants only**, so saving a user's toggles
+  can never silently strip access they hold through a group.
+* Three new tables (`user_groups`, `user_group_members`, `project_group_access`) are created at
+  runtime exactly like the other auth tables — idempotent `CREATE TABLE IF NOT EXISTS`, unique
+  indexes against duplicate rows, `ON DELETE CASCADE` from users, groups and projects. No manual
+  migration step; behaviour with the auth flag off is unchanged (open access).
+
+### Verification
+
+Real project `tsc --noEmit` clean and a real `next build` clean. Retained regression suite re-run
+A/B against the pristine v7.417 base: **zero regression delta** (PASS and FAIL sets byte-identical;
+the 19 failures are the documented pre-existing suite bit-rot), plus **38 new v7.418 checks** all
+passing. Dual-theme render executed in real Chromium against the project's own compiled Tailwind:
+26 contrast checks across the Groups tab, the user-row group chips and the modal access section,
+0 failures — 4 sub-threshold dark pairings are byte-identical reuses of pairings that already ship
+at the base commit (recorded in a keyed allowlist with HEAD proofs, per the v7.400/v7.417 pattern).
+
 ## v7.417 — the AI Answer panel reads Profound's new sentiment column
 
 **Wayne:** *"I am uploading the sentiment csv file for the AI answer panel and it says it shows
