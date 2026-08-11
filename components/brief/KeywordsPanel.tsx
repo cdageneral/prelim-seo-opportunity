@@ -7,6 +7,7 @@ import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: 
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';   // v7.337 (QC audit B12): ONE shared path-tree builder (also consumed by lib/local/serviceLines)
+import { normSovDomain } from '@/lib/sov/model';   // v7.419: ONE domain normalizer (same as SoV) for the per-category brand ladder
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
 import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
@@ -30,6 +31,25 @@ const RANK_BUCKETS = [
   { id: 'p3p'  as const, label: 'Page 3+',        color: 'var(--c-ef4444)' },
   { id: 'unr'  as const, label: 'Unranked / gap', color: 'var(--c-2e2e48)' },
 ];
+
+// v7.419: ONE grid template for the Category Breakdown table (header, rows, overall) —
+// checkbox · Category · Annual Demand · 1–3 · Page 1 · Page 2 · Page 3+ · Keywords.
+// Share + Avg Pos columns removed (Wayne 2026-08-11); the four rank-band volume columns
+// read straight off the same cat.vol[] rollup the stacked bar renders (Const I.1).
+const CAT_GRID = '26px 1fr 100px 78px 82px 78px 78px 96px';
+
+// v7.419: per-category brand ladder entry — MEASURED page-1 volume (positions ≤ 10) per
+// brand within one category. Sources: client = the panel's own rows (real client ranks),
+// tracked = uploaded competitor CSV rows (their real positions), rival = the snapshot's
+// serpCompetitorPositions (Semrush auto-discovered organic competitors — untracked). Same
+// sources as the SoV panel (Const II.7); volume-share only, no CTR model applied.
+interface CatBrandEntry {
+  domain:     string;
+  kind:       'client' | 'tracked' | 'rival';
+  p1Vol:      number;   // monthly volume where this brand ranks 1–10 on the category's keywords
+  p1Kw:       number;   // category keywords the brand holds a page-1 position for
+  measuredKw: number;   // category keywords we hold ANY real rank for this brand (coverage — I.5)
+}
 
 function bucketIndexOf(position: number | null): number {
   if (position === null) return 4;
@@ -1160,6 +1180,65 @@ export default function KeywordsPanel({
     }
     await fetchDb();
     onKeywordsChanged?.();   // refresh dependent panels (single source of truth, Const II.7)
+  }
+
+  // ── v7.419: category SOFT-HIDE (Wayne 2026-08-11) ───────────────────────────
+  // "Deleting" a category from the Category Breakdown hides it from every panel and
+  // every total WITHOUT touching the stored taxonomy or any keyword→category
+  // association (Const II.8) — fully restorable from the hidden list. Both writes are
+  // serialized read-modify-writes against fresh server state (the v7.372 pattern), so
+  // two quick hides — or a hide racing a restore — never clobber each other.
+  async function hideCategories(entries: Array<{ name: string; key?: string; kwCount: number }>) {
+    if (entries.length === 0) return;
+    const r = await fetch(`/api/projects/${projectId}/hidden-categories`, { cache: 'no-store' });
+    const d = r.ok ? await r.json() : { hidden: [] };
+    const cur: any[] = Array.isArray(d.hidden) ? d.hidden : [];
+    const have = new Set(cur.map((h: any) => String(h?.key ?? h?.name ?? '').toLowerCase().trim()));
+    const now = new Date().toISOString();
+    const next = cur.concat(
+      entries
+        .filter(e => !have.has(String(e.key ?? e.name).toLowerCase().trim()))
+        .map(e => (e.key ? { name: e.name, key: e.key, kwCount: e.kwCount, hiddenAt: now } : { name: e.name, kwCount: e.kwCount, hiddenAt: now })),
+    );
+    const pr = await fetch(`/api/projects/${projectId}/hidden-categories`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hidden: next }),
+    });
+    if (!pr.ok) throw new Error('hide failed');
+    onScopeChanged?.();   // refetch the project → new _hiddenCategories → every panel re-filters
+  }
+
+  async function restoreHiddenCategory(ident: string) {
+    const r = await fetch(`/api/projects/${projectId}/hidden-categories`, { cache: 'no-store' });
+    const d = r.ok ? await r.json() : { hidden: [] };
+    const cur: any[] = Array.isArray(d.hidden) ? d.hidden : [];
+    const idLow = ident.toLowerCase().trim();
+    const next = cur.filter((h: any) => String(h?.key ?? h?.name ?? '').toLowerCase().trim() !== idLow);
+    if (next.length === cur.length) { onScopeChanged?.(); return; }   // already restored elsewhere
+    const pr = await fetch(`/api/projects/${projectId}/hidden-categories`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hidden: next }),
+    });
+    if (!pr.ok) throw new Error('restore failed');
+    onScopeChanged?.();
+  }
+
+  // ── v7.419: move selected categories into the Content Plan ──────────────────
+  // Adds the given canonical topic ids to the shared content-plan selection via the
+  // v7.372 serialized READ-MODIFY-WRITE (fresh GET → apply ONLY this add-delta → PUT),
+  // so selections made in other panels are never clobbered. Returns how many ids were
+  // actually new (real count — the feedback line states exactly what happened, I.1).
+  async function moveTopicsToPlan(topicIds: string[]): Promise<number> {
+    if (topicIds.length === 0) return 0;
+    const gr = await fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' });
+    const gd = gr.ok ? await gr.json() : { selections: [] };
+    const server = new Set<string>(Array.isArray(gd.selections) ? gd.selections : []);
+    let added = 0;
+    for (const id of topicIds) { if (!server.has(id)) { server.add(id); added++; } }
+    if (added === 0) return 0;   // everything already in the plan — no write needed
+    const pr = await fetch(`/api/projects/${projectId}/content-plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(server) }),
+    });
+    if (!pr.ok) throw new Error('move failed');
+    return added;
   }
 
   // ── CSV upload ──
@@ -2325,6 +2404,14 @@ export default function KeywordsPanel({
             categoryModel={categoryModel}
             localPackKw={localPackKw}
             onDeleteRows={deleteRows}
+            dbKeywords={dbKeywords}
+            serpPositions={((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>}
+            clientDomain={clientDomain}
+            clientName={clientName}
+            hiddenList={(Array.isArray((analysis?.semrushSnapshot as any)?._hiddenCategories) ? (analysis!.semrushSnapshot as any)._hiddenCategories : []) as Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>}
+            onHideCategories={hideCategories}
+            onRestoreCategory={restoreHiddenCategory}
+            onMoveToPlan={moveTopicsToPlan}
           />
         )}
 
@@ -2878,6 +2965,14 @@ function KwCategorySection({
   categoryModel,
   localPackKw,
   onDeleteRows,
+  dbKeywords = [],
+  serpPositions = {},
+  clientDomain = '',
+  clientName = 'client',
+  hiddenList = [],
+  onHideCategories,
+  onRestoreCategory,
+  onMoveToPlan,
 }: {
   cb:            KwCategoryBreakdown;
   rows:          KeywordRow[];
@@ -2888,6 +2983,15 @@ function KwCategorySection({
   categoryModel: CategoryModel;     // v7.227: canonical categories + stored membership (shared source)
   localPackKw?:  Set<string>;       // v7.286: lowercased keywords whose SERP shows a Local Pack
   onDeleteRows?: (rows: KeywordRow[]) => Promise<void>;   // v7.271: destructive delete of a node's / a keyword's rows
+  // ── v7.419: brand ladder + category actions ──
+  dbKeywords?:    DbKeyword[];      // uploaded rows — tracked competitors' real positions live here
+  serpPositions?: Record<string, Array<{ keyword: string; position: number }>>;   // Semrush serpCompetitorPositions (untracked SERP rivals)
+  clientDomain?:  string;
+  clientName?:    string;
+  hiddenList?:    Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>;   // soft-hidden categories (restorable)
+  onHideCategories?:  (entries: Array<{ name: string; key?: string; kwCount: number }>) => Promise<void>;
+  onRestoreCategory?: (ident: string) => Promise<void>;
+  onMoveToPlan?:      (topicIds: string[]) => Promise<number>;
 }) {
   // ── Expand/collapse state — collapsed by default (parents only). Hooks run
   //    unconditionally before any early return (rules of hooks). ──
@@ -2898,6 +3002,17 @@ function KwCategorySection({
   // v7.339: merge-log disclosure (Const III.1e — auto-applied merges stay visible).
   const [showMergeLog, setShowMergeLog] = useState(false);
   const mergeLog = Array.isArray(cb?.mergeLog) ? cb.mergeLog : [];
+  // ── v7.419: category selection + bulk actions (hide / Excel / Content Plan) ──
+  const [selected,    setSelected]    = useState<Set<string>>(() => new Set());   // top-level node ids
+  const [confirmHide, setConfirmHide] = useState(false);
+  const [hideBusy,    setHideBusy]    = useState(false);
+  const [moveBusy,    setMoveBusy]    = useState(false);
+  const [actionNote,  setActionNote]  = useState<string | null>(null);   // real outcome of the last action (I.1)
+  // v7.419: hidden-categories restore strip
+  const [showHidden,  setShowHidden]  = useState(false);
+  const [restoreBusy, setRestoreBusy] = useState<string | null>(null);
+  // v7.419: per-category brand-ladder disclosure (winner chip → full ladder)
+  const [brandOpen,   setBrandOpen]   = useState<Set<string>>(() => new Set());
   const runDelete = async (id: string, rowsToDelete: KeywordRow[]) => {
     if (!onDeleteRows || rowsToDelete.length === 0) { setConfirmId(null); return; }
     setBusyId(id);
@@ -2909,7 +3024,7 @@ function KwCategorySection({
   //    procedure categories into derived families. Every metric rolls up
   //    arithmetically (aggregateCatNode) so a parent === the exact sum of its
   //    descendants — defensible, nothing modeled. ──
-  const { procedureTop, navTop, otherTop } = useMemo(() => {
+  const { procedureTop, navTop, otherTop, topicByKw } = useMemo(() => {
     // v7.227: types + membership come from the shared canonical model (same source as the
     // Cluster/Journey/Content panels). demand/problem parent types render as procedure.
     const typeByName: Record<string, 'procedure' | 'brand' | 'location'> = {};
@@ -2960,10 +3075,92 @@ function KwCategorySection({
       ? buildPathTree(procRows, categoryModel.keywordPaths)
       : buildProductLines(procLeaves, categoryModel.parentForCategory).sort((a, b) => b.totVol - a.totVol);
     navLeaves.sort((a, b) => b.totVol - a.totVol);
-    return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves };
+    // v7.419: topicByKw is also returned — "Move to Content Plan" maps a category's
+    // keywords to their canonical topic ids (Topic.id IS the ContentTopic.id the plan
+    // is keyed by — same identity the Cluster/Journey/Content panels toggle, Const II.7).
+    return { procedureTop: proc, navTop: navLeaves, otherTop: otherLeaves, topicByKw };
   }, [rows, categoryModel, dropCategoryNames]);
 
-  const allTop = procedureTop.concat(navTop, otherTop);
+  // v7.419: memoized so the brand-ladder memo below doesn't recompute every render.
+  const allTop = useMemo(() => procedureTop.concat(navTop, otherTop), [procedureTop, navTop, otherTop]);
+
+  // ── v7.419: per-keyword brand rank maps (tracked competitors + untracked SERP rivals) ──
+  // Same two sources the SoV panel reads (Const II.7): uploaded competitor rows carry that
+  // competitor's REAL position; the snapshot's serpCompetitorPositions carry Semrush
+  // auto-discovered organic rivals' REAL positions. Best (lowest) position wins per
+  // keyword+domain. Hooks run before any early return (rules of hooks).
+  const clientNorm = normSovDomain(clientDomain);
+  const brandRankData = useMemo(() => {
+    const perKw    = new Map<string, Map<string, number>>();   // kwLower → domain → best pos
+    const tracked  = new Set<string>();
+    for (const r of dbKeywords) {
+      if ((r as any).source === 'blocked') continue;
+      const dom = normSovDomain((r as any).domain ?? '');
+      if (!dom || dom === clientNorm) continue;
+      const p = (r as any).position;
+      if (p == null || p < 1) continue;
+      tracked.add(dom);
+      const k = String((r as any).keyword ?? '').toLowerCase().trim();
+      if (!k) continue;
+      let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
+      const prev = m.get(dom);
+      if (prev === undefined || p < prev) m.set(dom, p);
+    }
+    const rivals = new Set<string>();
+    for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
+      const dom = normSovDomain(rawDom);
+      if (!dom || dom === clientNorm || tracked.has(dom)) continue;
+      for (const pos of (positions ?? [])) {
+        const p = pos?.position;
+        if (p == null || p < 1) continue;
+        const k = String(pos?.keyword ?? '').toLowerCase().trim();
+        if (!k) continue;
+        rivals.add(dom);
+        let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
+        const prev = m.get(dom);
+        if (prev === undefined || p < prev) m.set(dom, p);
+      }
+    }
+    return { perKw, tracked, rivals };
+  }, [dbKeywords, serpPositions, clientNorm]);
+
+  // Per top-level category: MEASURED page-1 volume per brand (positions ≤ 10 on the
+  // category's own keywords; volume = the canonical row's Semrush volume — one volume
+  // per keyword, every brand scored on the same numbers). No CTR model — pure share of
+  // category demand held at page 1 (Const I.1: nothing modeled).
+  const brandLadders = useMemo(() => {
+    const out = new Map<string, { entries: CatBrandEntry[]; catKw: number }>();
+    const { perKw, tracked } = brandRankData;
+    for (const node of allTop) {
+      const kws = collectOwnKeywords(node);
+      const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number }>();
+      let clientP1Vol = 0, clientP1Kw = 0;
+      for (const row of kws) {
+        const vol   = row.searchVolume || 0;
+        const kwLow = row.keyword.toLowerCase().trim();
+        if (row.position !== null && row.position >= 1 && row.position <= 10) { clientP1Vol += vol; clientP1Kw++; }
+        const m = perKw.get(kwLow);
+        if (!m) continue;
+        m.forEach((p, dom) => {
+          let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0 }; byDom.set(dom, e); }
+          e.measuredKw++;
+          if (p >= 1 && p <= 10) { e.p1Vol += vol; e.p1Kw++; }
+        });
+      }
+      const entries: CatBrandEntry[] = [];
+      if (clientP1Vol > 0) {
+        entries.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: kws.length });
+      }
+      byDom.forEach((e, dom) => {
+        if (e.p1Vol <= 0) return;   // no page-1 hold on this category — no entry (honest gap, I.5)
+        entries.push({ domain: dom, kind: tracked.has(dom) ? 'tracked' : 'rival', p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
+      });
+      entries.sort((a, b) => b.p1Vol - a.p1Vol);
+      out.set(node.id, { entries, catKw: kws.length });
+    }
+    return out;
+  }, [allTop, brandRankData, clientNorm]);
+
   if (allTop.length === 0) return null;
 
   // v7.235: how many of the shown keywords the LLM flagged low-confidence (Const III.7).
@@ -2981,13 +3178,127 @@ function KwCategorySection({
     return next;
   });
 
+  // ── v7.419: selection + bulk-action helpers ─────────────────────────────────
+  const nodeById = new Map<string, CatNode>();
+  for (const n of allTop) nodeById.set(n.id, n);
+  const selectedNodes   = Array.from(selected).map(id => nodeById.get(id)).filter((n): n is CatNode => !!n);
+  const selectedKwCount = selectedNodes.reduce((s, n) => s + n.totKw, 0);
+  const toggleSelect = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allSelected = allTop.length > 0 && allTop.every(n => selected.has(n.id));
+  const toggleSelectAll = () => setSelected(allSelected ? new Set() : new Set(allTop.map(n => n.id)));
+  const toggleBrand = (id: string) => setBrandOpen(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // A top-level node → the hidden-list entries that hide exactly it. Path nodes store the
+  // STORED path key (prefix match survives display collapse); flat brand/location/Other
+  // nodes store the membership name; a pre-path synthetic family hides each member leaf.
+  const hiddenEntriesFor = (node: CatNode): Array<{ name: string; key?: string; kwCount: number }> => {
+    if (node.id.startsWith('path:')) return [{ name: node.name, key: node.id.slice(5), kwCount: node.totKw }];
+    if (node.id.startsWith('cat:'))  return [{ name: node.name, kwCount: node.totKw }];
+    return node.children.map(c => ({ name: c.name, kwCount: c.totKw }));
+  };
+
+  const runHide = async () => {
+    if (!onHideCategories || selectedNodes.length === 0) { setConfirmHide(false); return; }
+    setHideBusy(true);
+    try {
+      const entries = selectedNodes.flatMap(hiddenEntriesFor);
+      await onHideCategories(entries);
+      setActionNote(`${entries.length} categor${entries.length === 1 ? 'y' : 'ies'} hidden from every panel and total — restore anytime from the hidden list above.`);
+      setSelected(new Set());
+    } catch {
+      setActionNote('Hide failed — nothing was changed. Try again.');
+    } finally { setHideBusy(false); setConfirmHide(false); }
+  };
+
+  const runMoveToPlan = async () => {
+    if (!onMoveToPlan || selectedNodes.length === 0) return;
+    setMoveBusy(true);
+    try {
+      const ids = new Set<string>();
+      let unmapped = 0;
+      for (const n of selectedNodes) {
+        for (const row of collectOwnKeywords(n)) {
+          const t = topicByKw.get(row.keyword.toLowerCase().trim());
+          if (t) ids.add(t.key); else unmapped++;
+        }
+      }
+      if (ids.size === 0) {
+        setActionNote('No canonical topics found for the selected categories — nothing was moved (an honest gap: the cluster build has not covered these keywords yet).');
+        return;
+      }
+      const added = await onMoveToPlan(Array.from(ids));
+      const already = ids.size - added;
+      setActionNote(
+        (added > 0
+          ? `${added} topic${added === 1 ? '' : 's'} added to the Content Plan${already > 0 ? ` (${already} already there)` : ''}.`
+          : `All ${ids.size} matching topics were already in the Content Plan.`)
+        + (unmapped > 0 ? ` ${unmapped.toLocaleString()} keyword${unmapped === 1 ? ' has' : 's have'} no canonical topic yet.` : ''),
+      );
+    } catch {
+      setActionNote('Move failed — the Content Plan was not changed. Try again.');
+    } finally { setMoveBusy(false); }
+  };
+
+  const runExcel = async () => {
+    if (selectedNodes.length === 0) return;
+    const data: any[] = [];
+    for (const n of selectedNodes) {
+      const kws = collectOwnKeywords(n).slice().sort((a, b) => b.searchVolume - a.searchVolume);
+      for (const row of kws) {
+        data.push({
+          Category:          n.name,
+          Keyword:           row.keyword,
+          'Monthly Volume':  row.searchVolume,
+          'Annual Volume':   row.searchVolume * 12,
+          'Client Position': row.position ?? '',
+          'Rank Band':       RANK_BUCKETS[bucketIndexOf(row.position)].label,
+          Origin:            row.origin,
+          Branded:           row.branded ? 'yes' : 'no',
+          Competitor:        row.competitor ?? '',
+        });
+      }
+    }
+    const XLSX = await import('xlsx');
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = [{ wch: 30 }, { wch: 42 }, { wch: 14 }, { wch: 13 }, { wch: 13 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 22 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Categories');
+    XLSX.writeFile(wb, `${(clientName || 'client').replace(/\s+/g, '-')}-categories-${selectedNodes.length}.xlsx`);
+    setActionNote(`${data.length.toLocaleString()} keyword rows from ${selectedNodes.length} categor${selectedNodes.length === 1 ? 'y' : 'ies'} downloaded as Excel.`);
+  };
+
+  const runRestore = async (ident: string) => {
+    if (!onRestoreCategory) return;
+    setRestoreBusy(ident);
+    try { await onRestoreCategory(ident); }
+    catch { setActionNote('Restore failed — nothing was changed. Try again.'); }
+    finally { setRestoreBusy(null); }
+  };
+
   // ── Overall rollup (respects rank filter). Summing the TOP-LEVEL nodes counts
   //    each keyword exactly once (families already sum their members). ──
   let tKw = 0, tVol = 0, tP1 = 0;
+  // v7.419: full band totals for the 1–3 / Page 2 / Page 3+ columns — inherently
+  // band-scoped, so they are NOT re-filtered by the rank-bucket filter (the filter
+  // dims the non-selected band columns instead; Annual Demand + Keywords stay
+  // bucket-aware exactly as before).
+  let t13 = 0, tP2 = 0, tP3 = 0, tP1Full = 0;
   for (const c of allTop) {
     tKw  += selIdx === null ? c.totKw  : c.kw[selIdx];
     tVol += selIdx === null ? c.totVol : c.vol[selIdx];
     tP1  += selIdx === null ? c.vol[0] + c.vol[1] : (selIdx <= 1 ? c.vol[selIdx] : 0);
+    t13     += c.vol[0];
+    tP1Full += c.vol[0] + c.vol[1];
+    tP2     += c.vol[2];
+    tP3     += c.vol[3];
   }
   const overallShare = tVol > 0 ? (tP1 / tVol) * 100 : 0;
   const balanced     = selIdx === null && tKw === expectedCount;
@@ -3028,6 +3339,12 @@ function KwCategorySection({
         onAskConfirm={(id: string) => setConfirmId(id)}
         onCancelConfirm={() => setConfirmId(null)}
         onConfirmDelete={runDelete}
+        selectable={n.depth === 0}
+        checked={selected.has(n.id)}
+        onToggleSelect={() => toggleSelect(n.id)}
+        brand={n.depth === 0 ? (brandLadders.get(n.id) ?? null) : null}
+        brandExpanded={brandOpen.has(n.id)}
+        onToggleBrand={() => toggleBrand(n.id)}
       />
     ));
   };
@@ -3064,6 +3381,17 @@ function KwCategorySection({
               {mergeLog.length.toLocaleString()} merged {showMergeLog ? '▾' : '▸'}
             </button>
           )}
+          {/* v7.419: soft-hidden categories — restorable anytime; the stored taxonomy and
+              every keyword→category association stay untouched (Const II.8). */}
+          {hiddenList.length > 0 && (
+            <button
+              onClick={() => setShowHidden(v => !v)}
+              title="Categories hidden from every panel and total. Keyword–category associations stay stored — restore brings a category back exactly as it was."
+              style={{ fontSize: '9px', padding: '1px 7px', borderRadius: 20, background: 'var(--ca-245-158-11-0_12, rgba(245,158,11,0.12))', border: '1px solid var(--amber)', color: 'var(--amber)', cursor: 'pointer' }}
+            >
+              {hiddenList.length.toLocaleString()} hidden {showHidden ? '▾' : '▸'}
+            </button>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {RANK_BUCKETS.map(b => (
@@ -3074,6 +3402,93 @@ function KwCategorySection({
           ))}
         </div>
       </div>
+
+      {/* v7.419: hidden-categories restore strip — each entry shows the kw count recorded
+          AT HIDE TIME (a real count, labeled as of the hide — never recomputed as current). */}
+      {showHidden && hiddenList.length > 0 && (
+        <div style={{ margin: '2px 20px 6px', maxHeight: 170, overflowY: 'auto', border: '1px solid var(--c-111120)', borderRadius: 6, background: 'var(--c-07070f)' }}>
+          {hiddenList.map((h, i) => {
+            const ident = h.key ?? h.name;
+            const busy  = restoreBusy === ident;
+            return (
+              <div key={ident} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 10px', borderBottom: i < hiddenList.length - 1 ? '1px solid var(--c-0e0e1e)' : 'none' }}>
+                <span style={{ fontSize: '11px', color: 'var(--c-b0b0d8)', flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{h.name}</span>
+                <span style={{ fontSize: '9px', color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                  {h.kwCount.toLocaleString()} kw at hide · {h.hiddenAt ? new Date(h.hiddenAt).toLocaleDateString() : '—'}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => runRestore(ident)}
+                  style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--c-34d399)', background: 'transparent', border: '1px solid var(--c-34d399)', borderRadius: 5, padding: '2px 8px', cursor: busy ? 'default' : 'pointer', flexShrink: 0 }}
+                >
+                  {busy ? 'Restoring…' : 'Restore'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* v7.419: bulk-action bar — appears once ≥1 category is checked. Hide is the
+          soft delete (restorable); Excel exports the selected categories' real rows;
+          Move pushes their canonical topics into the shared Content Plan selection. */}
+      {selected.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '2px 20px 6px', padding: '7px 12px', borderRadius: 8, background: 'var(--ca-108-99-255-0_1)', border: '1px solid var(--ca-108-99-255-0_25)' }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-c8c8f0)' }}>
+            {selectedNodes.length} categor{selectedNodes.length === 1 ? 'y' : 'ies'} · {selectedKwCount.toLocaleString()} keywords selected
+          </span>
+          {!confirmHide ? (
+            <>
+              <button type="button" disabled={moveBusy} onClick={() => void runMoveToPlan()}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '10.5px', fontWeight: 700, color: 'var(--c-8b85ff)', background: 'transparent', border: '1px solid var(--c-6c63ff)', borderRadius: 6, padding: '4px 10px', cursor: moveBusy ? 'default' : 'pointer' }}>
+                <i className={`ti ${moveBusy ? 'ti-loader-2' : 'ti-map-plus'}`} style={{ fontSize: 11 }} aria-hidden="true" />
+                {moveBusy ? 'Moving…' : 'Move to Content Plan'}
+              </button>
+              <button type="button" onClick={() => void runExcel()}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '10.5px', fontWeight: 700, color: 'var(--c-34d399)', background: 'transparent', border: '1px solid var(--c-34d399)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+                <i className="ti ti-file-spreadsheet" style={{ fontSize: 11 }} aria-hidden="true" />
+                Download Excel
+              </button>
+              <button type="button" onClick={() => setConfirmHide(true)}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '10.5px', fontWeight: 700, color: 'var(--c-f87171)', background: 'transparent', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+                <i className="ti ti-eye-off" style={{ fontSize: 11 }} aria-hidden="true" />
+                Delete (hide)
+              </button>
+              <button type="button" onClick={() => setSelected(new Set())}
+                style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+                Clear
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-f87171)' }}>
+                Hide {selectedNodes.length} categor{selectedNodes.length === 1 ? 'y' : 'ies'} from every panel and total? Keyword–category associations stay stored — restore anytime.
+              </span>
+              <button type="button" disabled={hideBusy} onClick={() => void runHide()}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '10.5px', fontWeight: 700, color: 'var(--c-f87171)', background: 'transparent', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 10px', cursor: hideBusy ? 'default' : 'pointer' }}>
+                <i className={`ti ${hideBusy ? 'ti-loader-2' : 'ti-eye-off'}`} style={{ fontSize: 11 }} aria-hidden="true" />
+                {hideBusy ? 'Hiding…' : 'Hide categories'}
+              </button>
+              <button type="button" disabled={hideBusy} onClick={() => setConfirmHide(false)}
+                style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* v7.419: outcome of the last bulk action — a real statement of what happened (I.1). */}
+      {actionNote && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 20px 6px' }}>
+          <span style={{ fontSize: '10.5px', color: 'var(--c-8080c0)' }}>{actionNote}</span>
+          <button type="button" onClick={() => setActionNote(null)} aria-label="Dismiss"
+            style={{ fontSize: '10px', color: 'var(--c-55557a)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* v7.339: merge log — every auto-applied taxonomy merge, inspectable (Const III.1e) */}
       {showMergeLog && mergeLog.length > 0 && (
@@ -3091,14 +3506,26 @@ function KwCategorySection({
         </div>
       )}
 
-      {/* Table header */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', padding: '4px 20px 4px', borderBottom: '1px solid var(--c-0e0e1e)' }}>
+      {/* Table header — v7.419: Share + Avg Pos removed; rank-band volume columns added
+          (1–3 · Page 1 · Page 2 · Page 3+), plus the select-all checkbox (Wayne 2026-08-11). */}
+      <div style={{ display: 'grid', gridTemplateColumns: CAT_GRID, padding: '4px 20px 4px', borderBottom: '1px solid var(--c-0e0e1e)', alignItems: 'center' }}>
+        <span style={{ display: 'flex', alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            aria-label="Select all categories"
+            title="Select every category"
+            checked={allSelected}
+            onChange={toggleSelectAll}
+            style={{ width: 13, height: 13, accentColor: 'var(--c-6c63ff)', cursor: 'pointer' }}
+          />
+        </span>
         {[
           { label: 'Category',       align: 'left'   },
           { label: 'Annual Demand',  align: 'right'  },
+          { label: '1–3',            align: 'right'  },
           { label: 'Page 1',         align: 'right'  },
-          { label: 'Share',          align: 'right'  },
-          { label: 'Avg Pos',        align: 'right'  },
+          { label: 'Page 2',         align: 'right'  },
+          { label: 'Page 3+',        align: 'right'  },
           { label: 'Keywords',       align: 'center' },
         ].map(h => (
           <span key={h.label} style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-404060)', textTransform: 'uppercase' as const, letterSpacing: '.06em', textAlign: h.align as any }}>
@@ -3126,15 +3553,17 @@ function KwCategorySection({
       {/* Other / uncategorized — always last */}
       {renderTree(otherTop, true)}
 
-      {/* Overall rollup */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 105px 80px 52px 60px 100px', alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid var(--c-111120)' }}>
+      {/* Overall rollup — v7.419: same band columns as the rows (exact sums, Const I.1) */}
+      <div style={{ display: 'grid', gridTemplateColumns: CAT_GRID, alignItems: 'center', padding: '6px 20px 8px', borderTop: '1px solid var(--c-111120)' }}>
+        <span />
         <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-a0a0c8)' }}>
           Overall{selIdx !== null && <span style={{ fontWeight: 400, color: 'var(--c-55557a)' }}> · {RANK_BUCKETS[selIdx].label} only</span>}
         </span>
         <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-a0a0c8)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tVol > 0 ? fmtKwAnn(tVol) : '—'}</span>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-8b85ff)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{tP1 > 0 ? fmtKwAnn(tP1) : '—'}</span>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-6c63ff)', textAlign: 'right' }}>{tVol > 0 ? `${overallShare.toFixed(1)}%` : '—'}</span>
-        <span />
+        <span style={{ fontSize: '11px', fontWeight: 600, color: RANK_BUCKETS[0].color, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 0 ? 0.35 : 1 }}>{t13 > 0 ? fmtKwAnn(t13) : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-8b85ff)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx > 1 ? 0.35 : 1 }}>{tP1Full > 0 ? fmtKwAnn(tP1Full) : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: RANK_BUCKETS[2].color, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 2 ? 0.35 : 1 }}>{tP2 > 0 ? fmtKwAnn(tP2) : '—'}</span>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: RANK_BUCKETS[3].color, textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 3 ? 0.35 : 1 }}>{tP3 > 0 ? fmtKwAnn(tP3) : '—'}</span>
         <span style={{ textAlign: 'center' }}>
           <span style={{ fontSize: '11px', fontWeight: 600, color: balanced ? 'var(--c-34d399)' : 'var(--c-8080c0)', fontVariantNumeric: 'tabular-nums' }}>
             {tKw.toLocaleString()}{balanced ? ' ✓' : ''}
@@ -3175,6 +3604,12 @@ function KwCatRow({
   onAskConfirm,
   onCancelConfirm,
   onConfirmDelete,
+  selectable = false,
+  checked = false,
+  onToggleSelect,
+  brand = null,
+  brandExpanded = false,
+  onToggleBrand,
 }: {
   cat:               CatNode;
   selIdx:            number | null;   // null = all ranks; 0–3 = selected bucket
@@ -3193,6 +3628,13 @@ function KwCatRow({
   onAskConfirm?:     (id: string) => void;
   onCancelConfirm?:  () => void;
   onConfirmDelete?:  (id: string, rows: KeywordRow[]) => void;
+  // ── v7.419: category checkbox + brand ladder (top-level rows only) ──
+  selectable?:       boolean;
+  checked?:          boolean;
+  onToggleSelect?:   () => void;
+  brand?:            { entries: CatBrandEntry[]; catKw: number } | null;
+  brandExpanded?:    boolean;
+  onToggleBrand?:    () => void;
 }) {
   const clickable = hasChildren || canRevealKeywords;
   // v7.271: every keyword held under this node (own + all descendants) — the rows a
@@ -3200,20 +3642,20 @@ function KwCatRow({
   const nodeKeywords = canDelete ? collectOwnKeywords(cat) : [];
   const confirming   = confirmId === cat.id;
   const deleting     = busyId === cat.id;
+  // v7.419: Share + Avg Pos columns removed (Wayne 2026-08-11) — the four rank-band
+  // volume columns below read straight off cat.vol[] (the same exact rollup the
+  // stacked bar renders). Page 1 stays the 1–3 + 4–10 sum, unchanged convention.
   const p1Vol   = cat.vol[0] + cat.vol[1];
   const dispKw  = selIdx === null ? cat.totKw  : cat.kw[selIdx];
   const dispVol = selIdx === null ? cat.totVol : cat.vol[selIdx];
-  const p1Disp  = selIdx === null ? p1Vol : (selIdx <= 1 ? cat.vol[selIdx] : 0);
-  const share   = cat.totVol > 0 && dispVol > 0 ? ((selIdx === null ? p1Vol : dispVol) / cat.totVol) * 100 : 0;
-
-  // Average position — weighted across ranked buckets (or selected bucket only)
-  let posSum = 0, posKw = 0;
-  if (selIdx === null) {
-    for (let i = 0; i < 4; i++) { posSum += cat.posSum[i]; posKw += cat.kw[i]; }
-  } else {
-    posSum = cat.posSum[selIdx]; posKw = cat.kw[selIdx];
-  }
-  const avgPos = posKw > 0 ? posSum / posKw : null;
+  // v7.419: the winner chip — the brand holding the largest measured page-1 volume on
+  // this category's keywords (client included; tracked = uploaded competitor, rival =
+  // Semrush-discovered SERP competitor).
+  const winner  = brand && brand.entries.length > 0 ? brand.entries[0] : null;
+  const winnerStyle = winner === null ? null
+    : winner.kind === 'client'  ? { color: 'var(--c-8b85ff)', border: 'var(--ca-108-99-255-0_25)', bg: 'var(--ca-108-99-255-0_1)' }
+    : winner.kind === 'tracked' ? { color: 'var(--c-46cce0)', border: 'var(--ca-6-182-212-0_25)', bg: 'var(--ca-6-182-212-0_13)' }
+    :                             { color: 'var(--amber)',    border: 'var(--amber)',             bg: 'var(--ca-245-158-11-0_12, rgba(245,158,11,0.12))' };
 
   // Stacked bar: length = category demand vs largest category; segments = rank mix
   const barW = Math.max((cat.totVol / maxVol) * 100, 2);
@@ -3237,7 +3679,7 @@ function KwCatRow({
       onClick={clickable ? onToggle : undefined}
       style={{
         display: 'grid',
-        gridTemplateColumns: '1fr 105px 80px 52px 60px 100px',
+        gridTemplateColumns: CAT_GRID,
         alignItems: 'center',
         padding: '5px 20px',
         borderBottom: '1px solid var(--ca-255-255-255-0_03)',
@@ -3247,6 +3689,18 @@ function KwCatRow({
         background: depth > 0 ? 'var(--ca-255-255-255-0_02)' : 'transparent',
       }}
     >
+      {/* v7.419: selection checkbox — top-level categories only */}
+      <span style={{ display: 'flex', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
+        {selectable && (
+          <input
+            type="checkbox"
+            aria-label={`Select ${cat.name}`}
+            checked={checked}
+            onChange={() => onToggleSelect?.()}
+            style={{ width: 13, height: 13, accentColor: 'var(--c-6c63ff)', cursor: 'pointer' }}
+          />
+        )}
+      </span>
       {/* Disclosure chevron + category name + stacked rank-bucket bar */}
       <div style={{ minWidth: 0, paddingRight: 10, paddingLeft: depth * 16, display: 'flex', alignItems: 'center', gap: 6 }}>
         {clickable ? (
@@ -3270,6 +3724,20 @@ function KwCatRow({
             {hasChildren
               ? <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.children.length}</span>
               : (canRevealKeywords && <span style={{ fontSize: '9px', fontWeight: 500, color: 'var(--c-55557a)', marginLeft: 6 }}>{cat.own.length} kw</span>)}
+            {/* v7.419: winning-brand chip — largest MEASURED page-1 volume on this category's
+                keywords (real positions: client rows, uploaded competitor CSVs, Semrush SERP
+                rivals — same sources as SoV, Const II.7; no CTR model). Click for the ladder. */}
+            {winner && winnerStyle && cat.totVol > 0 && (
+              <button
+                type="button"
+                onClick={e => { e.stopPropagation(); onToggleBrand?.(); }}
+                title={`${winner.kind === 'client' ? 'Your site' : winner.kind === 'tracked' ? 'Tracked competitor' : 'Untracked SERP rival'} holds the most page-1 volume in this category — click for the full brand ladder`}
+                style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '.02em', color: winnerStyle.color, background: winnerStyle.bg, border: `1px solid ${winnerStyle.border}`, borderRadius: 4, padding: '1px 6px', marginLeft: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                <i className="ti ti-trophy" style={{ fontSize: 9, marginRight: 3 }} aria-hidden="true" />
+                {winner.kind === 'client' ? 'You' : winner.domain} · {((winner.p1Vol / cat.totVol) * 100).toFixed(1)}% {brandExpanded ? '▾' : '▸'}
+              </button>
+            )}
           </span>
           <div style={{ marginTop: '4px', height: '5px', width: `${barW}%`, background: 'var(--c-111120)', borderRadius: '2px', overflow: 'hidden', display: 'flex' }}>
             {cat.vol.map((v, i) => {
@@ -3296,17 +3764,20 @@ function KwCatRow({
       <span style={{ fontSize: '11px', color: 'var(--c-7070a0)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
         {dispVol > 0 ? fmtKwAnn(dispVol) : '—'}
       </span>
-      {/* Page 1 (bucket-aware) */}
-      <span style={{ fontSize: '11px', fontWeight: p1Disp > 0 ? 600 : 400, color: p1Disp > 0 ? (dimmed ? 'var(--c-505070)' : 'var(--c-8b85ff)') : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        {p1Disp > 0 ? fmtKwAnn(p1Disp) : '—'}
+      {/* v7.419: rank-band volume columns — 1–3 · Page 1 (1–10) · Page 2 · Page 3+.
+          Each reads its own cat.vol[] band (exact rollup, Const I.1); an active
+          rank-bucket filter dims the non-selected bands instead of re-filtering them. */}
+      <span style={{ fontSize: '11px', fontWeight: cat.vol[0] > 0 ? 600 : 400, color: cat.vol[0] > 0 ? (dimmed ? 'var(--c-505070)' : RANK_BUCKETS[0].color) : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 0 ? 0.35 : 1 }}>
+        {cat.vol[0] > 0 ? fmtKwAnn(cat.vol[0]) : '—'}
       </span>
-      {/* Share of category demand */}
-      <span style={{ fontSize: '12px', fontWeight: 600, color: share > 0 ? (dimmed ? 'var(--c-505070)' : 'var(--c-e0e0ff)') : 'var(--c-333350)', textAlign: 'right' }}>
-        {share > 0 ? `${share.toFixed(1)}%` : '—'}
+      <span style={{ fontSize: '11px', fontWeight: p1Vol > 0 ? 600 : 400, color: p1Vol > 0 ? (dimmed ? 'var(--c-505070)' : 'var(--c-8b85ff)') : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx > 1 ? 0.35 : 1 }}>
+        {p1Vol > 0 ? fmtKwAnn(p1Vol) : '—'}
       </span>
-      {/* Avg position */}
-      <span style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: avgPos === null ? 'var(--c-333350)' : avgPos <= 3 ? 'var(--c-6c63ff)' : avgPos <= 10 ? 'var(--c-06b6d4)' : avgPos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-ef4444)' }}>
-        {avgPos !== null ? avgPos.toFixed(1) : '—'}
+      <span style={{ fontSize: '11px', fontWeight: cat.vol[2] > 0 ? 600 : 400, color: cat.vol[2] > 0 ? (dimmed ? 'var(--c-505070)' : RANK_BUCKETS[2].color) : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 2 ? 0.35 : 1 }}>
+        {cat.vol[2] > 0 ? fmtKwAnn(cat.vol[2]) : '—'}
+      </span>
+      <span style={{ fontSize: '11px', fontWeight: cat.vol[3] > 0 ? 600 : 400, color: cat.vol[3] > 0 ? (dimmed ? 'var(--c-505070)' : RANK_BUCKETS[3].color) : 'var(--c-333350)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: selIdx !== null && selIdx !== 3 ? 0.35 : 1 }}>
+        {cat.vol[3] > 0 ? fmtKwAnn(cat.vol[3]) : '—'}
       </span>
       {/* Keyword count (bucket-aware) + v7.271 delete affordance */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
@@ -3317,7 +3788,10 @@ function KwCatRow({
         ) : (
           <span style={{ fontSize: '10px', color: 'var(--c-282838)' }}>—</span>
         )}
-        {canDelete && nodeKeywords.length > 0 && !confirming && (
+        {/* v7.419: the destructive trash moved off TOP-LEVEL rows — category-level "delete"
+            is now the checkbox → Delete (hide) flow, which never touches stored membership.
+            Sub-nodes keep the v7.271 destructive delete (fine-grained keyword removal). */}
+        {canDelete && depth > 0 && nodeKeywords.length > 0 && !confirming && (
           <button
             type="button"
             title={`Delete this ${depth === 0 ? 'category' : 'sub-category'} and its ${nodeKeywords.length} keyword${nodeKeywords.length === 1 ? '' : 's'}`}
@@ -3333,6 +3807,45 @@ function KwCatRow({
         )}
       </div>
     </div>
+
+    {/* v7.419: brand ladder — who holds this category's page-1 volume. MEASURED share
+        (real positions × real volumes), no CTR model; coverage stated per brand so a
+        thin upload reads as a DATA GAP, not a weak brand (Const I.5). */}
+    {brandExpanded && brand && brand.entries.length > 0 && (
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ padding: '6px 20px 8px', paddingLeft: depth * 16 + 46, background: 'var(--ca-255-255-255-0_02)', borderBottom: '1px solid var(--ca-255-255-255-0_03)' }}
+      >
+        {brand.entries.slice(0, 6).map((e, i) => {
+          const kindMeta = e.kind === 'client'
+            ? { tag: 'You',        color: 'var(--c-8b85ff)' }
+            : e.kind === 'tracked'
+            ? { tag: 'Tracked',    color: 'var(--c-46cce0)' }
+            : { tag: 'SERP rival', color: 'var(--amber)' };
+          const pct = cat.totVol > 0 ? (e.p1Vol / cat.totVol) * 100 : 0;
+          return (
+            <div key={e.domain} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '2px 0', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '10px', color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums', width: 14, flexShrink: 0 }}>{i + 1}.</span>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-c8c8f0)', minWidth: 0 }}>{e.kind === 'client' ? `${e.domain} (you)` : e.domain}</span>
+              <span style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' as const, color: kindMeta.color }}>{kindMeta.tag}</span>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: kindMeta.color, fontVariantNumeric: 'tabular-nums' }}>{fmtKwAnn(e.p1Vol)}</span>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-e0e0ff)', fontVariantNumeric: 'tabular-nums' }}>{pct.toFixed(1)}%</span>
+              <span style={{ fontSize: '9px', color: 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>
+                {e.kind === 'rival'
+                  ? `page-1 on ${e.p1Kw} kw · Semrush SERP positions`
+                  : e.kind === 'tracked'
+                  ? `rank data: ${e.measuredKw}/${brand.catKw} kw`
+                  : `page-1 on ${e.p1Kw}/${brand.catKw} kw`}
+              </span>
+            </div>
+          );
+        })}
+        <div style={{ fontSize: '8.5px', color: 'var(--c-404060)', marginTop: 4 }}>
+          Measured page-1 volume (positions 1–10) ÷ category annual demand — real Semrush volumes and real positions, no CTR model.
+          Tracked = uploaded competitor CSVs · SERP rival = Semrush-discovered organic competitor. Low rank-data coverage means a data gap, not a weak brand.
+        </div>
+      </div>
+    )}
 
     {/* v7.271: destructive-delete confirm strip for this category / sub-category. */}
     {canDelete && confirming && (

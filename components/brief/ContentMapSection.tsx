@@ -1200,6 +1200,15 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   const [savingIds,   setSavingIds]   = useState<Set<string>>(new Set());
   const selRef = useRef<Set<string>>(new Set());
   useEffect(() => { selRef.current = selectedIds; }, [selectedIds]);
+  // v7.419: orphan-heal guards (the 2026-08-01 wipe incident — a heal that can reach zero
+  // is a delete with a friendly name). healSigRef = last-seen canonTopics signature: the
+  // heal only acts once the SAME topic set has been observed on two consecutive runs (a
+  // first non-empty build whose inputs — claudeAssigns / competitors — are still arriving
+  // yields a different id set moments later, which made every saved id look orphaned).
+  // healNotice surfaces an above-floor prune instead of persisting it.
+  const healSigRef = useRef<string>('');
+  const healRanRef = useRef<boolean>(false);
+  const [healNotice, setHealNotice] = useState<{ saved: number; matching: number } | null>(null);
 
   // Load the saved selection from the project on mount / project change.
   useEffect(() => {
@@ -1390,18 +1399,57 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
   // persist the healed selection so the count is honest here, in the Content Plan, and in
   // Scope (scope ⊆ plan, pruned by the same PUT route). Never runs while canonTopics is
   // still empty (would wipe a valid selection).
+  // v7.419 REBUILT (the 2026-08-01 wipe incident — TD Bank went 33 → 0 selections with no
+  // user action; every project on file read 0). Three guards the v7.362 version lacked:
+  //  1. SETTLE: only heal once the same canonTopics id set has been seen on two consecutive
+  //     runs — "non-empty" is not "settled" (claudeAssigns/competitors arriving on a later
+  //     tick regenerate every id, making the whole saved selection look orphaned).
+  //  2. FLOOR: a heal may never persist a prune that removes more than 20% of the selection,
+  //     and never one that reaches zero. Above the floor: correct NOTHING, surface it
+  //     (healNotice) — a self-healing write that can reach zero is a delete.
+  //  3. READ-MODIFY-WRITE: the write re-reads the server set and removes ONLY the orphaned
+  //     ids (the v7.372 pattern) — never a blind PUT of a locally-derived set.
+  // The PUT route additionally retains one backup generation (content_plan_selections_prev).
   useEffect(() => {
     if (!projectId || canonTopics.length === 0) return;
     const valid = new Set<string>(canonTopics.map((t: any) => String(t.id)));
+    // Settle check — cheap stable signature of the current topic-id set.
+    const idsSorted = Array.from(valid).sort();
+    const sig = valid.size + '|' + idsSorted[0] + '|' + idsSorted[idsSorted.length - 1] + '|' + idsSorted[Math.floor(idsSorted.length / 2)];
+    if (sig !== healSigRef.current) { healSigRef.current = sig; healRanRef.current = false; return; }
+    if (healRanRef.current) return;
     const cur = selRef.current;
-    if (cur.size === 0) return;
-    const pruned = new Set<string>(Array.from(cur).filter((id) => valid.has(id)));
-    if (pruned.size === cur.size) return;   // nothing orphaned
-    selRef.current = pruned;
-    setSelectedIds(pruned);
-    fetch(`/api/projects/${projectId}/content-plan`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(pruned) }),
-    }).catch(() => { /* best-effort heal — the UI is already corrected */ });
+    if (cur.size === 0) { setHealNotice(null); return; }
+    const orphaned = Array.from(cur).filter((id) => !valid.has(id));
+    if (orphaned.length === 0) { setHealNotice(null); return; }
+    const matching = cur.size - orphaned.length;
+    if (matching === 0 || orphaned.length / cur.size > 0.2) {
+      // Above the floor — a re-analysis likely regenerated the ids. Never persist; surface.
+      setHealNotice({ saved: cur.size, matching });
+      return;
+    }
+    healRanRef.current = true;
+    (async () => {
+      try {
+        const gr = await fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' });
+        const gd = gr.ok ? await gr.json() : { selections: [] };
+        const server = new Set<string>(Array.isArray(gd.selections) ? gd.selections : []);
+        let changed = false;
+        for (const id of orphaned) { if (server.delete(id)) changed = true; }
+        if (!changed) return;   // another writer already resolved it
+        const pr = await fetch(`/api/projects/${projectId}/content-plan`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(server) }),
+        });
+        if (!pr.ok) throw new Error('save failed');
+        const pd = await pr.json();
+        const saved = new Set<string>(Array.isArray(pd.selections) ? pd.selections : Array.from(server));
+        selRef.current = saved;
+        setSelectedIds(saved);
+        setHealNotice(null);
+      } catch {
+        healRanRef.current = false;   // honest gap — nothing persisted, UI unchanged (I.5)
+      }
+    })();
   }, [projectId, canonTopics, selectedIds]);
 
   // v7.353: audience-segment lens — same attribution as the Journey panel (Const II.7).
@@ -1503,6 +1551,18 @@ export default function ContentMapSection({ projectId, kwVersion, analysis, comp
       {/* v7.176: the redesigned, journey-fed content experience leads the panel. */}
       {plan && (
         <div style={{ marginBottom: 26 }}>
+          {/* v7.419: above-floor orphan notice — the heal corrected nothing (see the rebuilt
+              heal effect); the mismatch is stated instead of silently pruned (Const I.5). */}
+          {healNotice && (
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', padding: '8px 14px', marginBottom: 12, borderRadius: 8, background: 'var(--ca-245-158-11-0_12, rgba(245,158,11,0.12))', border: '1px solid var(--amber)' }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--amber)' }}>
+                {healNotice.saved - healNotice.matching} of {healNotice.saved} saved Content-Plan selections don&rsquo;t match the current topics
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--c-9090b8)' }}>
+                A re-analysis likely regenerated topic ids. Nothing was changed automatically — {healNotice.matching} still match; re-pick the rest from the map below.
+              </span>
+            </div>
+          )}
           {/* v7.353: segment lens — same attribution as the Audience Journeys panel;
               Shared topics show under every segment. Chip counts are real row counts. */}
           {/* v7.391: Step 1 is no longer rendered above the explorer — it is handed in as the
