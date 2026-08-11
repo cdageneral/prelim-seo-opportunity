@@ -49,6 +49,13 @@ export const projects = pgTable('projects', {
   // at runtime via the ADD COLUMN IF NOT EXISTS pattern — no manual db:push.
   contentPlanSelections:          jsonb('content_plan_selections').$type<string[]>(),
   contentPlanSelectionsUpdatedAt: timestamp('content_plan_selections_updated_at'),
+  // v7.419: the PREVIOUS content-plan selection, written by the PUT route before every
+  // replace. The 2026-08-01 wipe incident (v7.362 orphan-heal PUT [] over real selections)
+  // had no recovery path of any kind — the full-set-replace kept no history. One backup
+  // generation is enough to undo the last write, whatever wrote it. Never read by any
+  // panel as data; purely a recovery copy.
+  contentPlanSelectionsPrev:      jsonb('content_plan_selections_prev').$type<string[]>(),
+  contentPlanSelectionsPrevAt:    timestamp('content_plan_selections_prev_at'),
   // v7.267: Scope "spec sheet" — the running cart of content topics the user pushed in via
   // "Add to Scope" on the Content Plan panel, stored as an array of ContentTopic.id
   // (Const II.7: a view over one source of truth, not a copy). The View Scope panel
@@ -73,6 +80,20 @@ export const projects = pgTable('projects', {
   // migrated at runtime via ADD COLUMN IF NOT EXISTS — no manual db:push.
   scopeOverrides:            jsonb('scope_overrides').$type<Record<string, 'core' | 'adjacent'>>(),
   scopeOverridesUpdatedAt:   timestamp('scope_overrides_updated_at'),
+  // v7.419: SOFT-HIDDEN Category Breakdown categories (Wayne, 2026-08-11 — "delete" a
+  // category without losing any stored keyword→category association). Each entry records
+  // the category's top-level name plus the kw count AT HIDE TIME (a real count, labeled
+  // as of the hide — never recomputed as fact). Hiding is applied at READ time as a
+  // filter in buildKwPool (the III.1d single-chokepoint pattern), so every panel and
+  // every rollup drop the category at once while the stored taxonomy, keywordPaths and
+  // membership stay byte-for-byte untouched — restoring an entry brings the category
+  // back exactly as it was. Auto-migrated via ADD COLUMN IF NOT EXISTS.
+  // `key` = the stored taxonomy path key (' › ' joined) for path-tree nodes, so a hide
+  // matches by STORED path prefix even when the display row is a collapsed survivor whose
+  // name differs from path[0]; absent for flat brand/location/Other categories (matched by
+  // stored flat membership name).
+  hiddenCategories:          jsonb('hidden_categories').$type<Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>>(),
+  hiddenCategoriesUpdatedAt: timestamp('hidden_categories_updated_at'),
   // v7.358: per-project manual priority moves — ContentTopic.id → 'P0'|'P1'|'P2'|'P3'. The
   // user moves a topic to a different priority bucket on the Content Map; this override is
   // applied at READ time (injected onto the snapshot as `_priorityOverrides`, applied in
