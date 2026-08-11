@@ -42,6 +42,13 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS scope_selections_updated_at TIMESTAMP`);
   } catch { /* already exists */ }
+  // v7.419: one backup generation of the selection, written before every replace (wipe recovery).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev JSONB`);
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev_at TIMESTAMP`);
+  } catch { /* already exists */ }
 }
 
 // Full-set replace. ids are opaque ContentTopic.id strings; no cap by default (Const I.6).
@@ -96,6 +103,18 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     contentPlanSelectionsUpdatedAt: new Date(),
     updatedAt:                      new Date(),
   };
+
+  // v7.419: retain ONE backup generation before every replace. The 2026-08-01 wipe
+  // incident (the v7.362 orphan-heal PUT [] over a real 33-topic selection) had no
+  // recovery path — this route is a full-set replace with no history. Copying the
+  // outgoing set to `content_plan_selections_prev` makes the last write undoable
+  // (a Neon restore is no longer the only way back). Only written when the outgoing
+  // set is non-empty, so a stray empty→empty write can never overwrite a useful backup.
+  const outgoing: string[] = (current as any).contentPlanSelections ?? [];
+  if (Array.isArray(outgoing) && outgoing.length > 0) {
+    setObj.contentPlanSelectionsPrev   = outgoing;
+    setObj.contentPlanSelectionsPrevAt = new Date();
+  }
 
   const scope: string[] = (current as any).scopeSelections ?? [];
   const prunedScope = scope.filter((id) => planSet.has(id));
