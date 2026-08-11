@@ -117,6 +117,21 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS priority_overrides_updated_at TIMESTAMP`);       // v7.358
   } catch { /* already exists */ }
+  // v7.419: soft-hidden Category Breakdown categories + content-plan backup generation —
+  // ensured on the project-page load path so the [id] GET's SELECT * never 500s before the
+  // hidden-categories / content-plan routes are hit (the v7.327 lesson).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories JSONB`);                       // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_updated_at TIMESTAMP`);        // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev JSONB`);            // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev_at TIMESTAMP`);     // v7.419
+  } catch { /* already exists */ }
 }
 
 const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];   // v7.99
