@@ -1,3 +1,64 @@
+## v7.417 — the AI Answer panel reads Profound's new sentiment column
+
+**Wayne:** *"I am uploading the sentiment csv file for the AI answer panel and it says it shows
+nothing but the csv file has data - did something change in the profound export?"* — Yes. Profound
+changed the export, and the panel was built on a column that no longer exists.
+
+### What was actually wrong
+
+Four of the five exports were fine and needed no change: Responses, Platforms, Prompt Volume and
+Citations all resolve every column OrbitIQ asks for. The Sentiment export does not. The per-brand
+`sentiment_claims` column — the ONLY input "Net sentiment by brand" and "Client sentiment by theme"
+were ever built from — is absent from all five files. It carried the brand label and the theme label
+per claim; both are simply not in the data any more, so those two charts cannot be rebuilt from this
+export by any parse. The panel was behaving correctly; it just said so in a way that read like a bad
+upload rather than a vendor change.
+
+### What ships instead
+
+`sentiment_v2_score`, the sparse 0–1 scalar Profound now ships, is parsed and rendered:
+
+* **Two separate readings, never blended.** Direct-evaluation prompts ("Evaluate &lt;Brand&gt; on
+  &lt;topic&gt;") and brand-agnostic open answers are different populations — 0.55 and 0.95
+  respectively on the current export. Asking an engine to *evaluate* a brand invites criticism;
+  listing it in a roundup does not. A single average would describe neither, so they get two cards
+  and no code path merges them.
+* **Client sentiment by topic, by engine and by run date**, with every bucket showing its own
+  scored-row count. Nothing is truncated (I.6).
+* **Absence is never zero.** A brand with evaluation rows but no scored rows renders "—", not 0.00 —
+  Profound scores the client's rows and almost none of its competitors', and a 0.00 would assert
+  damning sentiment the export never measured (I.1 / I.5). A blank cell parses to `null`, not 0;
+  `Number('')` is 0 in JavaScript, which would have turned 3,013 blank rows into fabricated
+  zero-sentiment rows.
+* **The score is never renamed.** Profound does not define the scale in the file, so no surface
+  calls it a percentage, a positive share or a claim count. It is shown as the 0–1 score it is (I.1).
+* **The notice now explains itself** — it names the removed column, names the replacement, states
+  the real coverage (268 of 3,281 rows, 8.2%) and says the metric is client-only, so a vendor change
+  can no longer be mistaken for a bad file.
+
+### Also fixed
+
+* **Profound appends a one-cell "Filters — …" trailer** to four of its five exports. Older parses
+  never noticed because each keys off a required column the trailer lacks, but a row counter counts
+  anything — the coverage denominator read 3,282 against a file with 3,281 data rows. Now guarded by
+  a structural `isDataRow` test that survives a reworded or localised trailer.
+* **The PDF reads the same figure (Const II.6).** The assessment report's sentiment page printed
+  "No sentiment claims in this dataset" while the panel showed a number. It now renders the client's
+  score and its by-topic breakdown when claims are absent, and branches on `null` rather than
+  printing a zero.
+* **The `sentiment_claims` path is retained, not deleted.** An export that still carries claims — or
+  an analysis already saved from one — parses and renders exactly as before. An export carrying both
+  shows both.
+
+### Verified
+
+Real project `tsc` clean and a real `next build` clean (V.1a). Retained suite **1168 pass / 21
+pre-existing / zero regression delta**, with **94 new checks** including a full-scale parse of the
+real 3,281-row export and a dual-theme render in real Chromium. The v7.379 `sentiment_claims` check
+was **amended with a dated note, never deleted** (V.6).
+
+---
+
 ## v7.416 — Search demand: the whole prompt, paged, and copyable
 
 The "Search demand — top prompts" card rendered each prompt through the shared `<Bar>` row,
