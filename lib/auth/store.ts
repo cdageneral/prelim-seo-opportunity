@@ -8,7 +8,7 @@
  */
 
 import { db } from '@/db';
-import { appUsers, projectAccess, authSessions, auditEvents, projects } from '@/db/schema';
+import { appUsers, projectAccess, authSessions, auditEvents, projects, userGroups, userGroupMembers, projectGroupAccess } from '@/db/schema';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Role, UserStatus } from './config';
 
@@ -43,6 +43,30 @@ export async function ensureAuthTables(): Promise<void> {
   )`);
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS project_access_user_project_uq
     ON project_access(user_id, project_id)`);
+
+  // v7.418: user groups — grant projects to a named set of users as a unit.
+  // A group carries no role; it only widens which projects members can see.
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS user_groups (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       text NOT NULL UNIQUE,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS user_group_members (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id   uuid NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    user_id    uuid NOT NULL REFERENCES app_users(id)   ON DELETE CASCADE,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS user_group_members_group_user_uq
+    ON user_group_members(group_id, user_id)`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS project_group_access (
+    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id   uuid NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    project_id uuid NOT NULL REFERENCES projects(id)    ON DELETE CASCADE,
+    created_at timestamp NOT NULL DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS project_group_access_group_project_uq
+    ON project_group_access(group_id, project_id)`);
 
   await db.execute(sql`CREATE TABLE IF NOT EXISTS auth_sessions (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -136,10 +160,22 @@ export async function listUsersWithAccess() {
     list.push(g.projectId);
     byUser.set(g.userId, list);
   }
+  // v7.418: which groups each user belongs to (shown next to their direct grants).
+  const memberships = await db
+    .select({ userId: userGroupMembers.userId, groupId: userGroups.id, groupName: userGroups.name })
+    .from(userGroupMembers)
+    .innerJoin(userGroups, eq(userGroupMembers.groupId, userGroups.id));
+  const groupsByUser = new Map<string, { id: string; name: string }[]>();
+  for (const m of memberships) {
+    const list = groupsByUser.get(m.userId) ?? [];
+    list.push({ id: m.groupId, name: m.groupName });
+    groupsByUser.set(m.userId, list);
+  }
   return users.map(u => ({
     id: u.id, name: u.name, email: u.email, role: u.role, status: u.status,
     createdAt: u.createdAt, lastLoginAt: u.lastLoginAt,
     projectIds: byUser.get(u.id) ?? [],
+    groups: groupsByUser.get(u.id) ?? [],
   }));
 }
 
@@ -170,7 +206,141 @@ export async function setGrants(userId: string, projectIds: string[]) {
 export async function hasProjectAccess(userId: string, projectId: string): Promise<boolean> {
   const rows = await db.select({ id: projectAccess.id }).from(projectAccess)
     .where(and(eq(projectAccess.userId, userId), eq(projectAccess.projectId, projectId))).limit(1);
-  return rows.length > 0;
+  if (rows.length > 0) return true;
+  // v7.418: a grant to any group the user belongs to also opens the project.
+  const viaGroup = await db.select({ id: projectGroupAccess.id }).from(projectGroupAccess)
+    .innerJoin(userGroupMembers, eq(projectGroupAccess.groupId, userGroupMembers.groupId))
+    .where(and(eq(userGroupMembers.userId, userId), eq(projectGroupAccess.projectId, projectId)))
+    .limit(1);
+  return viaGroup.length > 0;
+}
+
+/** v7.418: project ids a user can see through group membership. */
+export async function getGroupProjectIds(userId: string): Promise<string[]> {
+  const rows = await db.select({ p: projectGroupAccess.projectId }).from(projectGroupAccess)
+    .innerJoin(userGroupMembers, eq(projectGroupAccess.groupId, userGroupMembers.groupId))
+    .where(eq(userGroupMembers.userId, userId));
+  return rows.map(r => r.p);
+}
+
+/**
+ * v7.418: the FULL set of projects a user can open — direct grants ∪ group
+ * grants. Read sites (projects list, access wall) use this; setGrants() keeps
+ * using getGrantedProjectIds() so admin edits diff against DIRECT grants only
+ * and never try to delete a group-derived id.
+ */
+export async function getEffectiveProjectIds(userId: string): Promise<string[]> {
+  const [direct, viaGroups] = await Promise.all([
+    getGrantedProjectIds(userId),
+    getGroupProjectIds(userId),
+  ]);
+  return Array.from(new Set([...direct, ...viaGroups]));
+}
+
+// ─── Groups (v7.418) ────────────────────────────────────────────────────────
+// A group is a named set of users granted projects as a unit. No role lives on
+// the group: members keep their individual viewer/editor role everywhere.
+
+export async function listGroupsWithDetail() {
+  const groups  = await db.select().from(userGroups).orderBy(desc(userGroups.createdAt));
+  const members = await db.select().from(userGroupMembers);
+  const grants  = await db.select().from(projectGroupAccess);
+  const memberByGroup = new Map<string, string[]>();
+  for (const m of members) {
+    const list = memberByGroup.get(m.groupId) ?? [];
+    list.push(m.userId);
+    memberByGroup.set(m.groupId, list);
+  }
+  const grantByGroup = new Map<string, string[]>();
+  for (const g of grants) {
+    const list = grantByGroup.get(g.groupId) ?? [];
+    list.push(g.projectId);
+    grantByGroup.set(g.groupId, list);
+  }
+  return groups.map(g => ({
+    id: g.id, name: g.name, createdAt: g.createdAt,
+    memberIds:  memberByGroup.get(g.id) ?? [],
+    projectIds: grantByGroup.get(g.id) ?? [],
+  }));
+}
+
+export async function getGroupById(id: string) {
+  const rows = await db.select().from(userGroups).where(eq(userGroups.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getGroupByName(name: string) {
+  const rows = await db.select().from(userGroups).where(eq(userGroups.name, name)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function createGroup(name: string) {
+  const [row] = await db.insert(userGroups).values({ name }).returning();
+  return row;
+}
+
+export async function renameGroup(id: string, name: string) {
+  await db.update(userGroups).set({ name }).where(eq(userGroups.id, id));
+}
+
+export async function deleteGroup(id: string) {
+  // members + project grants cascade via FK ON DELETE CASCADE
+  await db.delete(userGroups).where(eq(userGroups.id, id));
+}
+
+/** Replace a group's member set with exactly `userIds` (same diff shape as setGrants). */
+export async function setGroupMembers(groupId: string, userIds: string[]) {
+  const rows = await db.select({ u: userGroupMembers.userId }).from(userGroupMembers)
+    .where(eq(userGroupMembers.groupId, groupId));
+  const current = rows.map(r => r.u);
+  const want = new Set(userIds);
+  const have = new Set(current);
+  const toAdd = userIds.filter(u => !have.has(u));
+  const toRemove = current.filter(u => !want.has(u));
+  if (toAdd.length) {
+    await db.insert(userGroupMembers)
+      .values(toAdd.map(u => ({ groupId, userId: u })))
+      .onConflictDoNothing();
+  }
+  if (toRemove.length) {
+    await db.delete(userGroupMembers)
+      .where(and(eq(userGroupMembers.groupId, groupId), inArray(userGroupMembers.userId, toRemove)));
+  }
+}
+
+/** Replace a group's project-grant set with exactly `projectIds`. */
+export async function setGroupGrants(groupId: string, projectIds: string[]) {
+  const rows = await db.select({ p: projectGroupAccess.projectId }).from(projectGroupAccess)
+    .where(eq(projectGroupAccess.groupId, groupId));
+  const current = rows.map(r => r.p);
+  const want = new Set(projectIds);
+  const have = new Set(current);
+  const toAdd = projectIds.filter(p => !have.has(p));
+  const toRemove = current.filter(p => !want.has(p));
+  if (toAdd.length) {
+    await db.insert(projectGroupAccess)
+      .values(toAdd.map(p => ({ groupId, projectId: p })))
+      .onConflictDoNothing();
+  }
+  if (toRemove.length) {
+    await db.delete(projectGroupAccess)
+      .where(and(eq(projectGroupAccess.groupId, groupId), inArray(projectGroupAccess.projectId, toRemove)));
+  }
+}
+
+/** v7.418: additive grants used by the new-project flow (never removes anything). */
+export async function grantProjectToUsers(projectId: string, userIds: string[]) {
+  if (!userIds.length) return;
+  await db.insert(projectAccess)
+    .values(userIds.map(u => ({ userId: u, projectId })))
+    .onConflictDoNothing();
+}
+
+export async function grantProjectToGroups(projectId: string, groupIds: string[]) {
+  if (!groupIds.length) return;
+  await db.insert(projectGroupAccess)
+    .values(groupIds.map(g => ({ groupId: g, projectId })))
+    .onConflictDoNothing();
 }
 
 // ─── Sessions ───────────────────────────────────────────────────────────────
