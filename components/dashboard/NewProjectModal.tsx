@@ -9,9 +9,13 @@
  *    CSV upload is available in Edit Project after creation.
  *  - Keyword volume thresholds: client ranked + competitor gap minimums (preset buttons).
  *    Saved with the project on create; editable later in Edit Project.
+ *  - v7.418 Access section: pick the users and/or groups that can see the new
+ *    project (rosters come from the admin API; the section hides itself for
+ *    non-admins). Grants are applied server-side right after creation; access
+ *    is editable later in Admin → Users & Access / Groups.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MARKETS } from '@/lib/utils/markets';
 
 const INDUSTRIES = [
@@ -49,6 +53,35 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
   // Thresholds
   const [clientThresh,     setClientThresh]     = useState<number>(0);
   const [competitorThresh, setCompetitorThresh] = useState<number>(0);
+
+  // v7.418: who can see this project — users + groups (admin-only rosters; the
+  // section renders only if the admin API answers, so non-admins never see it).
+  const [accessUsers,  setAccessUsers]  = useState<{ id: string; name: string; email: string; role: string }[]>([]);
+  const [accessGroups, setAccessGroups] = useState<{ id: string; name: string; memberIds: string[] }[]>([]);
+  const [selUserIds,   setSelUserIds]   = useState<string[]>([]);
+  const [selGroupIds,  setSelGroupIds]  = useState<string[]>([]);
+  const [accessReady,  setAccessReady]  = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/admin/groups', { cache: 'no-store' });
+        if (!res.ok) return; // not an admin (401/403) — keep the section hidden
+        const data = await res.json();
+        if (!alive) return;
+        // Grants only matter for editors/viewers — owners & admins see everything.
+        const grantable = (data.users ?? []).filter((u: { role: string }) => u.role === 'editor' || u.role === 'viewer');
+        setAccessUsers(grantable);
+        setAccessGroups(data.groups ?? []);
+        setAccessReady(true);
+      } catch { /* roster unavailable — section stays hidden */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const toggleUser  = (id: string) => setSelUserIds(x => x.includes(id) ? x.filter(y => y !== id) : [...x, id]);
+  const toggleGroup = (id: string) => setSelGroupIds(x => x.includes(id) ? x.filter(y => y !== id) : [...x, id]);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
@@ -88,6 +121,8 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
           kwVolThresholdClient:     clientThresh,
           kwVolThresholdCompetitor: competitorThresh,
           semrushDatabase:          market,
+          accessUserIds:            selUserIds,
+          accessGroupIds:           selGroupIds,
         }),
       });
       const data = await res.json();
@@ -351,6 +386,69 @@ export default function NewProjectModal({ onClose, onCreated }: Props) {
               </div>
             </div>
           </div>
+
+          {/* ── Who can see this project (v7.418, admins only) ── */}
+          {accessReady && (
+            <div style={{ borderTop: '0.5px solid var(--c-1e1e35)', paddingTop: '14px' }}>
+              <SectionLabel label="Who Can See This Project (optional)" />
+              <p style={{ fontSize: '11px', color: 'var(--c-606080)', marginBottom: '12px', lineHeight: 1.5 }}>
+                Owners and admins always see every project. Grant it to groups and/or individual editors &amp; viewers — you can change this anytime in Admin → Users &amp; Access.
+              </p>
+
+              {accessGroups.length > 0 && (
+                <div style={{ marginBottom: '10px' }}>
+                  <p style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', letterSpacing: '.05em', textTransform: 'uppercase', margin: '0 0 6px' }}>Groups</p>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {accessGroups.map(g => {
+                      const on = selGroupIds.includes(g.id);
+                      return (
+                        <button key={g.id} type="button" onClick={() => toggleGroup(g.id)}
+                          style={{
+                            padding: '5px 12px', borderRadius: '20px', fontSize: '11px', cursor: 'pointer',
+                            border: `1px solid ${on ? 'var(--ca-108-99-255-0_45)' : 'var(--c-2a2a48)'}`,
+                            background: on ? 'var(--ca-108-99-255-0_15)' : 'transparent',
+                            color: on ? 'var(--c-9b96ff)' : 'var(--c-707090)',
+                            fontWeight: on ? 600 : 400, transition: 'all 0.12s',
+                          }}>
+                          <i className="ti ti-users" style={{ fontSize: '11px', marginRight: '5px' }} aria-hidden="true" />
+                          {g.name}{g.memberIds.length ? ` (${g.memberIds.length})` : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {accessUsers.length > 0 && (
+                <div>
+                  <p style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-7070a0)', letterSpacing: '.05em', textTransform: 'uppercase', margin: '0 0 6px' }}>Users</p>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                    {accessUsers.map(u => {
+                      const on = selUserIds.includes(u.id);
+                      return (
+                        <button key={u.id} type="button" onClick={() => toggleUser(u.id)}
+                          style={{
+                            padding: '5px 12px', borderRadius: '20px', fontSize: '11px', cursor: 'pointer',
+                            border: `1px solid ${on ? 'var(--ca-56-189-248-0_6)' : 'var(--c-2a2a48)'}`,
+                            background: on ? 'var(--ca-56-189-248-0_14)' : 'transparent',
+                            color: on ? 'var(--c-38bdf8)' : 'var(--c-707090)',
+                            fontWeight: on ? 600 : 400, transition: 'all 0.12s',
+                          }}>
+                          {u.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {accessGroups.length === 0 && accessUsers.length === 0 && (
+                <p style={{ fontSize: '11px', color: 'var(--c-505070)', margin: 0 }}>
+                  No groups or grantable users yet — create them in Admin → Users &amp; Access, or grant access there later.
+                </p>
+              )}
+            </div>
+          )}
 
           {error && <p style={{ fontSize: '12px', color: 'var(--c-f87171)' }}>{error}</p>}
 
