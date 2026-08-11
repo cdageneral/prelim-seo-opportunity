@@ -103,6 +103,21 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS priority_overrides_updated_at TIMESTAMP`);  // v7.358
   } catch { /* already exists */ }
+  // v7.419: soft-hidden Category Breakdown categories + content-plan backup generation.
+  // Ensured on the dashboard-list load path so a SELECT * over projects never 500s on a DB
+  // that hasn't yet hit the hidden-categories / content-plan routes (the v7.327 lesson).
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories JSONB`);                  // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_updated_at TIMESTAMP`);   // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev JSONB`);       // v7.419
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS content_plan_selections_prev_at TIMESTAMP`); // v7.419
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
