@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * /admin  (v7.373) — Users, roles, per-project grants, and the activity log.
+ * /admin  (v7.373, groups v7.418) — Users, roles, groups, per-project grants,
+ * and the activity log.
  * Owner/admin only (middleware enforces when AUTH_ENFORCED is on). Styled with
  * orbit-* tokens for light/dark parity (Const IV.6); every list is a real DB read
  * with an honest empty state (Const I.1/I.5).
@@ -16,8 +17,10 @@ interface AdminUser {
   id: string; name: string; email: string; role: Role;
   status: 'active' | 'pending' | 'suspended';
   createdAt: string; lastLoginAt: string | null; projectIds: string[];
+  groups: { id: string; name: string }[];
 }
 interface Proj { id: string; name: string; url: string }
+interface Group { id: string; name: string; createdAt: string; memberIds: string[]; projectIds: string[] }
 interface Me { id: string; name: string; email: string; role: Role }
 interface Ev {
   id: string; action: string; actorName: string | null; actorEmail: string | null;
@@ -25,7 +28,7 @@ interface Ev {
   meta: Record<string, unknown> | null; ip: string | null; userAgent: string | null; createdAt: string;
 }
 
-type Tab = 'users' | 'add' | 'activity';
+type Tab = 'users' | 'groups' | 'add' | 'activity';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '—';
@@ -112,7 +115,7 @@ export default function AdminPage() {
         </div>
 
         <div className="flex gap-1 border-b border-orbit-border mb-6">
-          {([['users', 'Users & Access'], ['add', 'Add User'], ['activity', 'Activity Log']] as [Tab, string][]).map(([k, label]) => (
+          {([['users', 'Users & Access'], ['groups', 'Groups'], ['add', 'Add User'], ['activity', 'Activity Log']] as [Tab, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)}
               className={`font-mono text-[12px] px-4 py-2.5 border-b-2 -mb-px transition-colors ${
                 tab === k ? 'text-orbit-accent border-orbit-accent' : 'text-orbit-secondary border-transparent hover:text-orbit-primary'}`}>
@@ -122,6 +125,7 @@ export default function AdminPage() {
         </div>
 
         {tab === 'users'    && <UsersTab loading={loading} users={users} projects={projects} projName={projName} reload={load} />}
+        {tab === 'groups'   && <GroupsTab />}
         {tab === 'add'      && <AddUserTab projects={projects} onDone={() => { setTab('users'); load(); }} />}
         {tab === 'activity' && <ActivityTab />}
       </div>
@@ -211,8 +215,16 @@ function UserRow({ u, projects, projName, open, onToggle, reload }:
         <td className="px-4 py-3 border-b border-orbit-border">
           {u.role === 'owner' || u.role === 'admin'
             ? <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">All ({projects.length})</span>
-            : u.projectIds.length
-              ? <div className="flex flex-wrap gap-1">{u.projectIds.slice(0, 3).map(id => <span key={id} className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">{projName(id)}</span>)}{u.projectIds.length > 3 && <span className="font-mono text-[10px] text-orbit-tertiary">+{u.projectIds.length - 3}</span>}</div>
+            : (u.projectIds.length || (u.groups ?? []).length)
+              ? <div className="flex flex-wrap gap-1 items-center">
+                  {u.projectIds.slice(0, 3).map(id => <span key={id} className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">{projName(id)}</span>)}
+                  {u.projectIds.length > 3 && <span className="font-mono text-[10px] text-orbit-tertiary">+{u.projectIds.length - 3}</span>}
+                  {(u.groups ?? []).map(g => (
+                    <span key={g.id} className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-accent/[0.08] border border-orbit-accent/30 text-orbit-accent-light inline-flex items-center gap-1">
+                      <i className="ti ti-users text-[10px]" />{g.name}
+                    </span>
+                  ))}
+                </div>
               : <span className="font-mono text-[10px] text-orbit-tertiary">none</span>}
         </td>
         <td className="px-4 py-3 border-b border-orbit-border font-mono text-[11px] text-orbit-secondary">{timeAgo(u.lastLoginAt)}</td>
@@ -316,6 +328,236 @@ function ManageDrawer({ u, projects, reload, onClose }:
           </div>
         )}
         <p className="text-[11px] text-orbit-tertiary mt-2">Changes apply on the user’s next page load. Remember to Save.</p>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─── Groups tab (v7.418) ───────────────────────────────────────────────── */
+interface GroupUser { id: string; name: string; email: string; role: Role; status: AdminUser['status'] }
+
+function GroupsTab() {
+  const [groups, setGroups]     = useState<Group[]>([]);
+  const [gUsers, setGUsers]     = useState<GroupUser[]>([]);
+  const [gProjects, setGProjects] = useState<Proj[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [openId, setOpenId]     = useState<string | null>(null);
+  const [newName, setNewName]   = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch('/api/admin/groups', { cache: 'no-store' });
+    const data = await res.json().catch(() => ({ groups: [], users: [], projects: [] }));
+    setGroups(data.groups ?? []);
+    setGUsers(data.users ?? []);
+    setGProjects(data.projects ?? []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const userName = (id: string) => gUsers.find(u => u.id === id)?.name ?? 'user';
+  const projName = (id: string) => gProjects.find(p => p.id === id)?.name ?? 'project';
+
+  async function createNew(e: React.FormEvent) {
+    e.preventDefault();
+    const name = newName.trim();
+    if (!name) return;
+    setCreating(true); setError(null);
+    const res = await fetch('/api/admin/groups', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setCreating(false);
+    if (!res.ok) { setError(data.error || 'Could not create group'); return; }
+    setNewName('');
+    await load();
+    if (data.group?.id) setOpenId(data.group.id);
+  }
+
+  return (
+    <div>
+      <form onSubmit={createNew} className="flex flex-wrap items-center gap-2 mb-4">
+        <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="New group name — e.g. TD Bank team"
+          className="flex-1 min-w-[220px] bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm outline-none focus:border-orbit-accent" />
+        <button type="submit" disabled={creating || !newName.trim()}
+          className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60">
+          {creating ? 'Creating…' : 'Create group'}
+        </button>
+      </form>
+      {error && <div className="mb-4 text-[13px] text-orbit-red bg-orbit-red/10 border border-orbit-red/30 rounded-lg px-3 py-2">{error}</div>}
+      <p className="text-[11px] text-orbit-tertiary mb-4">
+        A group grants its projects to every member. Members keep their own role (editor/viewer) — a group changes <i>which</i> projects they see, not what they can do. Owners &amp; admins see everything regardless.
+      </p>
+
+      {loading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-14 bg-orbit-card rounded-lg animate-pulse" />)}</div>
+      ) : groups.length === 0 ? (
+        <div className="orbit-card text-center py-16">
+          <div className="w-12 h-12 rounded-xl bg-orbit-muted mx-auto flex items-center justify-center mb-3"><i className="ti ti-users text-xl text-orbit-secondary" /></div>
+          <p className="text-orbit-secondary text-sm">No groups yet.</p>
+          <p className="text-orbit-tertiary text-[12px] mt-1">Create one above, then add members and grant it projects.</p>
+        </div>
+      ) : (
+        <div className="orbit-card overflow-hidden p-0">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left">
+                {['Group', 'Members', 'Projects', 'Created', ''].map((h, i) => (
+                  <th key={i} className="font-mono text-[9.5px] uppercase tracking-wider text-orbit-tertiary px-4 py-3 border-b border-orbit-border">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {groups.map(g => (
+                <GroupRow key={g.id} g={g} users={gUsers} projects={gProjects}
+                  userName={userName} projName={projName}
+                  open={openId === g.id} onToggle={() => setOpenId(openId === g.id ? null : g.id)} reload={load} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GroupRow({ g, users, projects, userName, projName, open, onToggle, reload }:
+  { g: Group; users: GroupUser[]; projects: Proj[]; userName: (id: string) => string; projName: (id: string) => string;
+    open: boolean; onToggle: () => void; reload: () => void }) {
+  return (
+    <>
+      <tr className="hover:bg-orbit-accent/[0.03]">
+        <td className="px-4 py-3 border-b border-orbit-border">
+          <div className="flex items-center gap-3">
+            <span className="w-8 h-8 rounded-lg bg-orbit-accent/15 text-orbit-accent-light flex items-center justify-center"><i className="ti ti-users text-[15px]" /></span>
+            <div className="font-semibold text-orbit-primary">{g.name}</div>
+          </div>
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          {g.memberIds.length
+            ? <div className="flex flex-wrap gap-1">{g.memberIds.slice(0, 3).map(id => <span key={id} className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">{userName(id)}</span>)}{g.memberIds.length > 3 && <span className="font-mono text-[10px] text-orbit-tertiary">+{g.memberIds.length - 3}</span>}</div>
+            : <span className="font-mono text-[10px] text-orbit-tertiary">none</span>}
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          {g.projectIds.length
+            ? <div className="flex flex-wrap gap-1">{g.projectIds.slice(0, 3).map(id => <span key={id} className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">{projName(id)}</span>)}{g.projectIds.length > 3 && <span className="font-mono text-[10px] text-orbit-tertiary">+{g.projectIds.length - 3}</span>}</div>
+            : <span className="font-mono text-[10px] text-orbit-tertiary">none</span>}
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border font-mono text-[11px] text-orbit-secondary">{timeAgo(g.createdAt)}</td>
+        <td className="px-4 py-3 border-b border-orbit-border text-right">
+          <button onClick={onToggle} className="font-mono text-[11px] text-orbit-accent hover:underline">{open ? 'Close' : 'Manage'}</button>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={5} className="bg-orbit-surface/50 border-b border-orbit-border px-4 py-4">
+            <GroupDrawer g={g} users={users} projects={projects} reload={reload} onClose={onToggle} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function GroupDrawer({ g, users, projects, reload, onClose }:
+  { g: Group; users: GroupUser[]; projects: Proj[]; reload: () => void; onClose: () => void }) {
+  const [name, setName]       = useState(g.name);
+  const [members, setMembers] = useState<string[]>(g.memberIds);
+  const [grants, setGrants]   = useState<string[]>(g.projectIds);
+  const [busy, setBusy]       = useState(false);
+  const [msg, setMsg]         = useState<string | null>(null);
+
+  const toggleMember  = (id: string) => setMembers(m => m.includes(id) ? m.filter(x => x !== id) : [...m, id]);
+  const toggleProject = (id: string) => setGrants(x => x.includes(id) ? x.filter(y => y !== id) : [...x, id]);
+
+  async function save() {
+    setBusy(true); setMsg(null);
+    const res = await fetch(`/api/admin/groups/${g.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() || undefined, memberIds: members, projectIds: grants }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(data.error || 'Update failed'); return; }
+    setMsg('Saved');
+    reload();
+  }
+
+  async function remove() {
+    if (!confirm(`Delete group “${g.name}”? Members keep their accounts and any direct project grants — they only lose access this group provided.`)) return;
+    setBusy(true);
+    const res = await fetch(`/api/admin/groups/${g.id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(data.error || 'Delete failed'); return; }
+    onClose(); reload();
+  }
+
+  return (
+    <div className="grid md:grid-cols-3 gap-6">
+      <div>
+        <h4 className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary mb-3">Group</h4>
+        <label className="block text-[11px] text-orbit-tertiary mb-1">Name</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm outline-none focus:border-orbit-accent" />
+        <div className="flex flex-wrap gap-2 mt-4">
+          <button disabled={busy} onClick={save}
+            className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-[12px] font-medium px-4 py-2 rounded-lg disabled:opacity-60">Save changes</button>
+          <button disabled={busy} onClick={remove}
+            className="text-[12px] px-3 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-red hover:border-orbit-red/40">Delete group</button>
+        </div>
+        {msg && <p className="text-[12px] text-orbit-secondary mt-3">{msg}</p>}
+      </div>
+
+      <div>
+        <h4 className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary mb-3">Members — {members.length} of {users.length}</h4>
+        {users.length === 0 ? (
+          <p className="text-[12px] text-orbit-tertiary">No users exist yet.</p>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+            {users.map(u => {
+              const on = members.includes(u.id);
+              const seesAll = u.role === 'owner' || u.role === 'admin';
+              return (
+                <button key={u.id} onClick={() => toggleMember(u.id)}
+                  className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-orbit-bg text-left">
+                  <span className={`w-8 h-5 rounded-full relative flex-shrink-0 transition-colors ${on ? 'bg-orbit-green' : 'bg-orbit-muted'}`}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                  </span>
+                  <span className={`text-[12.5px] flex-1 min-w-0 truncate ${on ? 'text-orbit-primary' : 'text-orbit-secondary'}`}>{u.name}</span>
+                  {seesAll && <span className="font-mono text-[9px] text-orbit-tertiary flex-shrink-0" title="Owners and admins already see every project">{u.role}</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <h4 className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary mb-3">Project access — {grants.length} of {projects.length}</h4>
+        {projects.length === 0 ? (
+          <p className="text-[12px] text-orbit-tertiary">No projects exist yet.</p>
+        ) : (
+          <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+            {projects.map(p => {
+              const on = grants.includes(p.id);
+              return (
+                <button key={p.id} onClick={() => toggleProject(p.id)}
+                  className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-orbit-bg text-left">
+                  <span className={`w-8 h-5 rounded-full relative flex-shrink-0 transition-colors ${on ? 'bg-orbit-green' : 'bg-orbit-muted'}`}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                  </span>
+                  <span className={`text-[12.5px] ${on ? 'text-orbit-primary' : 'text-orbit-secondary'}`}>{p.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <p className="text-[11px] text-orbit-tertiary mt-2">Every member of this group can open these projects. Remember to Save.</p>
       </div>
     </div>
   );
@@ -436,6 +678,7 @@ function actionMeta(a: string): { icon: string; cls: string } {
   if (a === 'project.open')   return { icon: 'ti-eye',      cls: 'bg-orbit-cyan/12 text-orbit-cyan' };
   if (a === 'project.create') return { icon: 'ti-sparkles', cls: 'bg-orbit-accent/14 text-orbit-accent-light' };
   if (a === 'project.edit')   return { icon: 'ti-pencil',   cls: 'bg-orbit-amber/14 text-orbit-amber' };
+  if (a.startsWith('group.'))  return { icon: 'ti-users',    cls: 'bg-orbit-accent/12 text-orbit-accent-light' };
   return { icon: 'ti-user-cog', cls: 'bg-orbit-accent/12 text-orbit-accent-light' };
 }
 
@@ -451,6 +694,9 @@ function describe(e: Ev): React.ReactNode {
     case 'user.invite':    return <>{who} added a user{typeof e.meta?.targetEmail === 'string' ? <> · {e.meta.targetEmail as string}</> : ''}</>;
     case 'user.update':    return <>{who} updated a user{typeof e.meta?.targetEmail === 'string' ? <> · {e.meta.targetEmail as string}</> : ''}</>;
     case 'user.delete':    return <>{who} removed a user</>;
+    case 'group.create':   return <>{who} created group{typeof e.meta?.groupName === 'string' ? <> <b className="text-orbit-primary font-semibold">{e.meta.groupName as string}</b></> : ''}</>;
+    case 'group.update':   return <>{who} updated group{typeof e.meta?.groupName === 'string' ? <> <b className="text-orbit-primary font-semibold">{e.meta.groupName as string}</b></> : ''}</>;
+    case 'group.delete':   return <>{who} deleted group{typeof e.meta?.groupName === 'string' ? <> <b className="text-orbit-primary font-semibold">{e.meta.groupName as string}</b></> : ''}</>;
     default:               return <>{who} · {e.action}</>;
   }
 }
