@@ -1,3 +1,75 @@
+## v7.419 — Category Breakdown: rank-band columns, winning brand per category, checkbox actions
+
+**Wayne:** *"On the right hand columns lets remove the share, and avg position. Lets add a column
+before the page 1 column that would be ranks 1-3 … then page 2 volume and then page 3+ volume. I
+would also like to somehow add a way to see which brand is winning share within that category both
+from tracked competitors and untracked competitors. Then we should have a check box in front of
+each category … delete the category and all data updates accordingly (however it can NOT lose the
+category association like it does right now) … or download them into an excel file or move them
+into the content plan."* — All of it ships in this release.
+
+### The columns
+
+* **Share and Avg Pos are gone.** In their place the table reads left to right as a rank ladder:
+  **Annual Demand · 1–3 · Page 1 · Page 2 · Page 3+ · Keywords**. Each band cell is the exact
+  arithmetic rollup the stacked bar already renders (the same `vol[]` bands — one source, no forked
+  math), annualized on the panel's existing convention. Page 1 stays the 1–3 + 4–10 sum it has
+  always been. The Overall row sums the same bands, and a rank-bucket filter now *dims* the
+  non-selected band columns instead of re-filtering numbers that are inherently band-scoped.
+
+### Who is winning the category
+
+* **Every top-level category row carries a winning-brand chip** — the brand holding the largest
+  *measured* page-1 volume on that category's own keywords. Purple = you, cyan = a tracked
+  competitor (their real positions from the CSVs you uploaded), amber = an untracked SERP rival
+  (Semrush-discovered organic competitors — the same two sources the Share-of-Voice panel reads,
+  so the stories reconcile). Click the chip for the **full brand ladder**: page-1 volume, share of
+  category demand, and per-brand rank-data coverage, so a thin competitor upload reads as a data
+  gap, not a weak brand. No CTR model anywhere in this table — measured volume only.
+
+### Checkbox actions — and the delete that finally keeps structure intact
+
+* **Each category row has a checkbox** (plus a select-all). Selecting categories opens an action
+  bar with three bulk actions:
+  * **Delete (hide)** — the category disappears from *every* panel and *every* total, and the
+    numbers everywhere update accordingly. But unlike the old destructive delete, **nothing is
+    removed from the stored taxonomy**: keyword–category associations stay exactly as written
+    (Const II.8), because the hide is a read-time filter at the single `buildKwPool` chokepoint
+    (the same pattern as the scope gate). A **"N hidden" chip** on the table header opens the
+    restore list — one click brings a category back exactly as it was, with the keyword count
+    recorded at hide time and the hide date. Hides are matched by the *stored path key*, so a
+    collapsed display row still hides exactly its own subtree.
+  * **Download Excel** — one .xlsx of the selected categories' real keyword rows: category,
+    keyword, monthly + annual volume, client position, rank band, origin, branded flag, competitor.
+  * **Move to Content Plan** — pushes the selected categories' canonical topics into the shared
+    Content-Plan selection using the clobber-safe read-modify-write from v7.372, so selections made
+    in other panels are never overwritten. The outcome line states exactly what happened: how many
+    topics were added, how many were already there, and how many keywords have no canonical topic yet.
+* The destructive trash icon now lives on **sub-level rows only** (fine-grained keyword removal is
+  unchanged); category-level delete is the restorable checkbox flow above.
+
+### The content-plan wipe (2026-08-01 incident) — closed
+
+* The v7.362 orphan-heal could silently PUT an empty selection over a real one (TD Bank went
+  33 → 0 with no user action). The heal is rebuilt with the three guards it lacked: it only acts
+  once the topic set has **settled** (seen identical twice — "non-empty" is not "settled"); it has
+  a **floor** — a prune that would remove more than 20% of the selection, or reach zero, is never
+  persisted and is *surfaced* as an on-panel notice instead; and the write is a **read-modify-write**
+  that removes only the orphaned ids from the fresh server set. On top of that, the content-plan
+  PUT route now retains **one backup generation** (`content_plan_selections_prev`) before every
+  replace, so the last write is always undoable.
+
+### Verification
+
+Real project `tsc` and the real `next build` both clean. Retained regression suite re-run A/B
+against the pristine v7.418 base: zero delta (the same 19 pre-existing findings, byte-identical),
+plus **52 new v7.419 checks** covering the pool chokepoint (path-key subtree hide, segment-boundary
+safety, flat-name fallback, `_categoryBreakdown` never mutated), the routes/schema/ensureColumns,
+the heal guards, and the panel UI. Real-Chromium dual-theme render of the reworked table: **68
+checks, 0 failures** — every new element legible in both light and dark, band cells verified to
+the exact fixture sums. Dated amendment to the v7.271 checks records the trash-icon scope change;
+nothing was deleted to pass.
+
 ## v7.418 — user groups: grant projects to a team in one move
 
 **Wayne:** *"In the orbit admin panel I need to be able to add a group and then assign members to
