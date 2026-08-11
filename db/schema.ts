@@ -335,6 +335,33 @@ export const projectAccess = pgTable('project_access', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// v7.418: user GROUPS — a named set of users that can be granted projects as a
+// unit (Wayne, 2026-08-11: "add a group, assign members, then allow a project to
+// be seen by a group, a user or multiple users and groups"). A group carries NO
+// role of its own: membership only widens WHICH projects a user can see; what
+// they can do there still comes from their individual role. Tables are created
+// at runtime by ensureAuthTables() (CREATE TABLE IF NOT EXISTS), same as the
+// other auth tables — no manual db:push.
+export const userGroups = pgTable('user_groups', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  name:      text('name').notNull().unique(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const userGroupMembers = pgTable('user_group_members', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  groupId:   uuid('group_id').notNull().references(() => userGroups.id, { onDelete: 'cascade' }),
+  userId:    uuid('user_id').notNull().references(() => appUsers.id,   { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const projectGroupAccess = pgTable('project_group_access', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  groupId:   uuid('group_id').notNull().references(() => userGroups.id, { onDelete: 'cascade' }),
+  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 export const authSessions = pgTable('auth_sessions', {
   id:        uuid('id').defaultRandom().primaryKey(),
   userId:    uuid('user_id').notNull().references(() => appUsers.id, { onDelete: 'cascade' }),
@@ -365,6 +392,9 @@ export const auditEvents = pgTable('audit_events', {
 export type AppUser       = typeof appUsers.$inferSelect;
 export type NewAppUser    = typeof appUsers.$inferInsert;
 export type ProjectAccess = typeof projectAccess.$inferSelect;
+export type UserGroup          = typeof userGroups.$inferSelect;
+export type UserGroupMember    = typeof userGroupMembers.$inferSelect;
+export type ProjectGroupAccess = typeof projectGroupAccess.$inferSelect;
 export type AuthSession   = typeof authSessions.$inferSelect;
 export type AuditEvent    = typeof auditEvents.$inferSelect;
 export type NewAuditEvent = typeof auditEvents.$inferInsert;
