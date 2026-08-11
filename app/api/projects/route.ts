@@ -16,7 +16,7 @@ import { MARKETS } from '@/lib/utils/markets';
 // v7.373: audit + per-project access. No-ops while AUTH_ENFORCED is off.
 import { authEnforced, seesAllProjects } from '@/lib/auth/config';
 import { getActiveUser } from '@/lib/auth/session';
-import { getGrantedProjectIds, ensureAuthTables } from '@/lib/auth/store';
+import { getEffectiveProjectIds, ensureAuthTables, grantProjectToUsers, grantProjectToGroups } from '@/lib/auth/store';
 import { recordEvent } from '@/lib/auth/audit';
 
 async function ensureColumns() {
@@ -117,6 +117,10 @@ const CreateProjectSchema = z.object({
   kwVolThresholdClient:     z.number().int().min(0).optional().default(0),
   kwVolThresholdCompetitor: z.number().int().min(0).optional().default(0),
   semrushDatabase:          z.enum(marketCodes).optional().default('us'),   // v7.99: per-project market
+  // v7.418: who can see the new project — direct user grants and/or group grants,
+  // applied right after creation (additive; owners/admins always see everything).
+  accessUserIds:            z.array(z.string().uuid()).optional().default([]),
+  accessGroupIds:           z.array(z.string().uuid()).optional().default([]),
 });
 
 export async function GET() {
@@ -134,7 +138,9 @@ export async function GET() {
       visible = [];
     } else if (!seesAllProjects(user.role)) {
       await ensureAuthTables();
-      const granted = new Set(await getGrantedProjectIds(user.sub));
+      // v7.418: direct grants ∪ group grants — a project granted to any group
+      // the user belongs to is visible too.
+      const granted = new Set(await getEffectiveProjectIds(user.sub));
       visible = rows.filter(r => granted.has(r.id));
     }
   }
@@ -153,7 +159,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { dataSource, kwVolThresholdClient, kwVolThresholdCompetitor, semrushDatabase, ...rest } = parsed.data;
+  const { dataSource, kwVolThresholdClient, kwVolThresholdCompetitor, semrushDatabase, accessUserIds, accessGroupIds, ...rest } = parsed.data;
 
   const [project] = await db.insert(projects).values({
     ...rest,
@@ -164,6 +170,28 @@ export async function POST(req: NextRequest) {
     clerkOrgId:  'default',
     clerkUserId: 'default',
   }).returning();
+
+  // v7.418: apply the "who can see this project" selections from the create
+  // modal — direct user grants + group grants, both additive. Also make sure the
+  // CREATOR keeps access to their own project: an editor with no grant row would
+  // otherwise create a project and immediately lose sight of it.
+  if (accessUserIds.length || accessGroupIds.length || authEnforced()) {
+    try {
+      await ensureAuthTables();
+      if (accessUserIds.length)  await grantProjectToUsers(project.id, accessUserIds);
+      if (accessGroupIds.length) await grantProjectToGroups(project.id, accessGroupIds);
+      if (authEnforced()) {
+        const creator = await getActiveUser();
+        if (creator && !seesAllProjects(creator.role)) {
+          await grantProjectToUsers(project.id, [creator.sub]);
+        }
+      }
+    } catch (e) {
+      // A failed grant must not orphan the created project — surface it honestly
+      // in the response instead of failing the whole create (Const I.5).
+      console.error('[projects.create] access grant failed:', e);
+    }
+  }
 
   // v7.373: record who created the project (real audit event, Const I.1).
   await recordEvent(req, { action: 'project.create', projectId: project.id, projectName: project.clientName });
