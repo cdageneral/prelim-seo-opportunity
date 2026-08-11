@@ -68,6 +68,10 @@ interface PCiteCat    { category: string; count: number; pct: number }
 interface PCiteDomain { hostname: string; count: number }
 interface PEngineMix  { platform: string; total: number; earned: number; competition: number; owned: number; other: number }
 interface PMentionSrc { hostname: string; count: number; isClient: boolean }
+// v7.417 — `mean` is null when a bucket has rows but none of them were scored. It is never
+// coerced to 0: the report would then assert a bad score where the export in fact said nothing.
+interface PSentScoreBucket { label: string; n: number; rows: number; mean: number | null }
+interface PSentScoreBrand  { brand: string; n: number; rows: number; mean: number | null; isClient: boolean }
 
 export interface ProfoundMetrics {
   client: string; tracked: string[];
@@ -87,6 +91,16 @@ export interface ProfoundMetrics {
   citeMentionByPlatform: { platform: string; count: number }[];
   domainTotalDistinct?: number;
   updatedAt?: string;
+  // v7.417 — Profound replaced the per-brand `sentiment_claims` column with a sparse,
+  // client-only `sentiment_v2_score`. All optional: a report built from metrics saved before
+  // v7.417, or from an export that still carries claims, is byte-for-byte unchanged.
+  sentScoreCol?: boolean;
+  sentScoreRows?: number;
+  sentScoreScored?: number;
+  sentScoreBrands?: PSentScoreBrand[];
+  sentScoreClientTopics?: PSentScoreBucket[];
+  sentScoreClientEngines?: PSentScoreBucket[];
+  sentScoreOpen?: PSentScoreBucket | null;
 }
 
 // ── Authority snapshot (shape persisted by /api/projects/[id]/authority-scan on
@@ -788,12 +802,44 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       tile('Neutral', `${p0((cms.neutral / cms.total) * 100)} <small>${n0(cms.neutral)}</small>`, 'Listed factually among options, no judgment attached.'),
       tile('Negative', `${p0((cms.neg / cms.total) * 100)} <small>${n0(cms.neg)}</small>`, `${n0(cms.neg)} negative mention${cms.neg === 1 ? '' : 's'} across all scanned answers.`),
     ].join('') : '';
+    // ── v7.417 · sentiment_v2_score ────────────────────────────────────────────────────────
+    // Const II.6: the panel now reads a sentiment figure this export DOES carry, so the report —
+    // a rollup over the same metrics blob — must read the same one rather than printing "no
+    // sentiment" while the panel shows a number. Only the client's own reading is rendered:
+    // Profound scores the client's rows and almost none of its competitors', so a brand-by-brand
+    // bar chart off this column would be a chart of who Profound scored, not of who is liked.
+    const ssBrandsP  = pf.sentScoreBrands || [];
+    const ssClientP  = ssBrandsP.find(b => b.isClient) ?? null;
+    const ssOpenP    = pf.sentScoreOpen ?? null;
+    const ssTopicsP  = (pf.sentScoreClientTopics || []).filter(t => t.mean !== null);
+    const ssHasP     = !!(pf.sentScoreCol && ((ssClientP && ssClientP.mean !== null) || (ssOpenP && ssOpenP.mean !== null)));
+    const scoreTiles = ssHasP ? [
+      ssClientP && ssClientP.mean !== null
+        ? tile('Direct evaluation', `${ssClientP.mean.toFixed(2)} <small>of 1.00</small>`, `${n0(ssClientP.n)} of ${n0(ssClientP.rows)} evaluation answers carried a score.`)
+        : '',
+      ssOpenP && ssOpenP.mean !== null
+        ? tile('Open answers', `${ssOpenP.mean.toFixed(2)} <small>of 1.00</small>`, `${n0(ssOpenP.n)} scored answers to brand-agnostic questions.`)
+        : '',
+    ].join('') : '';
+    const scoreTopicBars = ssHasP && ssTopicsP.length > 0
+      ? ssTopicsP.map(t => barRow(t.label, (t.mean as number) * 100, (t.mean as number).toFixed(2), 'var(--blue)', '1.5in', '1.1in')).join('')
+      : '';
+    // The claim-level chart is the preferred read when the export still has claims; the score
+    // section stands in only when it does not. Both can render if an export carries both.
+    const sentFallback = ssHasP
+      ? `<div class="figtitle">Sentiment score — the client's own reading</div>
+      <div class="figsub">Profound's sentiment_v2_score (0–1) · ${n0(pf.sentScoreScored ?? 0)} of ${n0(pf.sentScoreRows ?? 0)} rows in the sentiment export carry a score</div>
+      <div class="tiles s2">${scoreTiles}</div>
+      ${scoreTopicBars ? `<div class="figtitle" style="margin-top:16px;">By topic — under direct evaluation</div>
+      <div class="figsub">Answers to &ldquo;Evaluate ${esc(pf.client)} on &lt;topic&gt;&rdquo;, scored 0–1</div>${scoreTopicBars}` : ''}
+      <div class="figsub" style="margin-top:10px;">This export scores the client's mentions and almost none of its competitors', so it supports a reading of how the client is spoken about — not a ranking of brands against each other. The two populations above are reported separately because a brand put under direct evaluation and a brand merely listed in a recommendation are not measuring the same thing.</div>`
+      : '<p class="figsub">This dataset carries no sentiment claims and no sentiment score.</p>';
     pages.push(pageWrap('SENTIMENT', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Is the problem tone — or frequency?</h1>
       <div class="lede">Two independent reads of tone: the claims AI engines make about each brand, and the tone of each actual mention. Together they answer whether this is a visibility build or a reputation repair.</div>
-      <div class="figtitle">Net sentiment by brand — claims made inside AI answers</div>
+      ${sentBars ? `<div class="figtitle">Net sentiment by brand — claims made inside AI answers</div>
       <div class="figsub">Positive minus negative share of sentiment claims per brand · you highlighted</div>
-      ${sentBars || '<p class="figsub">No sentiment claims in this dataset.</p>'}
+      ${sentBars}` : sentFallback}
       ${toneTiles ? `<div class="figtitle" style="margin-top:16px;">Tone of your actual mentions in answers</div>
       <div class="figsub">All ${n0(cms!.total)} assessed mentions across the engines</div>
       <div class="tiles c3">${toneTiles}</div>` : ''}
@@ -1185,6 +1231,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   .gapblock{border:1.5px dashed #ecd39a; background:#fdf8ec; padding:14px 16px; border-radius:8px; margin-top:14px;}
   .gapblock .t{font-size:9px; font-weight:800; letter-spacing:.1em; color:#8a5a00; margin-bottom:4px;}
   .tiles{display:grid; gap:12px;} .tiles.c3{grid-template-columns:repeat(3,1fr);}
+  /* v7.417 - a two-up tile row for the sentiment-score block. Deliberately a NEW class rather
+     than defining .tiles.c2: c2 is referenced elsewhere in this template but has never had a
+     rule, so those tiles have always stacked one-up. Defining c2 here would silently re-lay-out
+     that other page inside a sentiment release, and a widened row is exactly the kind of change
+     that overflows a fixed-height PDF page. Logged, not fixed. NOTE: this block is inside a
+     template literal - no backticks in these comments, they terminate the string. */
+  .tiles.s2{grid-template-columns:repeat(2,1fr);}
   .tile{border:1px solid var(--grid); border-radius:8px; padding:13px 14px; background:var(--surface);}
   .tile .k{font-size:9px; font-weight:700; letter-spacing:.08em; color:var(--muted); text-transform:uppercase; margin-bottom:7px;}
   .tile .v{font-size:24px; font-weight:800; letter-spacing:-.02em; line-height:1;}
