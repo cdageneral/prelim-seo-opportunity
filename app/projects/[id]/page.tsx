@@ -81,6 +81,8 @@ interface Project {
   scopeOverridesUpdatedAt?: string | null;
   priorityOverrides?:          Record<string, 'P0' | 'P1' | 'P2' | 'P3'> | null;   // v7.358: manual priority moves
   priorityOverridesUpdatedAt?: string | null;
+  hiddenCategories?:           Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }> | null;   // v7.419: soft-hidden categories
+  hiddenCategoriesUpdatedAt?:  string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -375,11 +377,20 @@ export default function ProjectBriefPage() {
     () => ((project as any)?.priorityOverrides && typeof (project as any).priorityOverrides === 'object' ? (project as any).priorityOverrides : {}),
     [project],
   );
+  // v7.419: per-project soft-hidden Category Breakdown categories. Injected onto the
+  // snapshot as `_hiddenCategories` the same way as `_scopeOverrides`, so every panel's
+  // buildKwPool drops a hidden category from one source (Const II.7) — a hide/restore
+  // takes effect on the next render with no re-analysis, and the stored taxonomy /
+  // membership is never touched (Const II.8).
+  const hiddenCategories = useMemo<Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>>(
+    () => (Array.isArray((project as any)?.hiddenCategories) ? (project as any).hiddenCategories : []),
+    [project],
+  );
   const analysisForPanels = useMemo(
     () => (analysis
-      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides, _priorityOverrides: priorityOverrides } }
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides, _priorityOverrides: priorityOverrides, _hiddenCategories: hiddenCategories } }
       : analysis),
-    [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides],
+    [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides, hiddenCategories],
   );
 
   // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
