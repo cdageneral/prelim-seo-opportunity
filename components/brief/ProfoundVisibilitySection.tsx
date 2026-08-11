@@ -52,6 +52,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
 import { shadowCompetitorInsight, earnedFastPathInsight } from '@/lib/insights';   // v7.366 (A3 · A4)
+// v7.417 — Profound's `sentiment_v2_score` replaced the removed `sentiment_claims` column.
+import {
+  emptyAgg, addScore, meanOf, parseScore, parseEvalPrompt, rollBuckets, isDataRow,
+  type ScoreAgg, type SentScoreBucket,
+} from '@/lib/profound/sentimentScore';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand' | 'citations';
@@ -73,6 +78,11 @@ interface DemandPrompt { prompt: string; share: number; topic: string; }
 const DEMAND_PROMPT_STORE_CAP = 200;
 const DEMAND_PROMPT_PAGE = 12;
 interface SentBrand { brand: string; pos: number; neg: number; isClient: boolean; }
+// v7.417 — one brand's `sentiment_v2_score` coverage under DIRECT EVALUATION prompts.
+// `mean` is null (never 0) when the brand has evaluation rows but none of them were scored —
+// Profound scores the client's rows and almost none of the competitors', so a 0.00 here would
+// read as damning sentiment when the truth is simply an absence of data (Const I.1 / I.5).
+interface SentScoreBrand { brand: string; n: number; rows: number; mean: number | null; isClient: boolean; }
 interface MentionSent { brand: string; pos: number; neutral: number; neg: number; total: number; isClient: boolean; }
 // Step 5 — Citation Landscape (citations_data.csv)
 interface CiteCatStat { category: string; count: number; pct: number; }
@@ -96,6 +106,18 @@ interface Metrics {
   sentBrands: SentBrand[];
   mentionSent: MentionSent[];
   clientThemes: ThemeStat[];
+  // ── v7.417 · sentiment_v2_score (the column that replaced `sentiment_claims`) ──────────
+  // All optional on read: metrics persisted before v7.417 carry none of these fields, and the
+  // panel must keep rendering those saved analyses unchanged rather than crashing or blanking.
+  sentScoreCol?: boolean;          // did the Sentiment export actually carry the column?
+  sentScoreRows?: number;          // rows in the Sentiment file
+  sentScoreScored?: number;        // rows carrying a parseable score — the coverage numerator
+  sentScoreBrands?: SentScoreBrand[];        // direct-evaluation coverage per brand
+  sentScoreClientTopics?: SentScoreBucket[]; // client, by topic (every topic, no top-N — I.6)
+  sentScoreClientEngines?: SentScoreBucket[];// client, by engine
+  sentScoreClientDates?: SentScoreBucket[];  // client, by run date
+  sentScoreOpen?: SentScoreBucket | null;    // brand-agnostic prompts, as ONE separate population
+  sentScoreOpenEngines?: SentScoreBucket[];
   totalCites: number;
   domains: DomainStat[];
   domainTotalDistinct: number;
@@ -297,11 +319,20 @@ const COLS: Record<SlotKey, FieldSpec[]> = {
     // v7.380: run date — drives the coverage window + prompt-inventory-change notice.
     { field: 'date', aliases: ['date', 'run_date', 'timestamp'], required: false },
   ],
-  // `sentiment_claims` was REMOVED from the 2026-07-27 export (replaced by a sparse,
-  // brand-less `sentiment_v2_score`). Optional → the panel degrades to an honest empty
-  // sentiment state instead of failing the whole upload.
+  // `sentiment_claims` was REMOVED from the 2026-07-27 export and is absent from EVERY file in
+  // the 2026-08-07..09 set (verified 2026-08-10). It is kept OPTIONAL rather than deleted for two
+  // reasons: an export that still carries it parses exactly as before, and metrics already saved
+  // from an older export keep rendering their per-brand charts. What the current export ships
+  // instead is `sentiment_v2_score` (v7.417) — a sparse, client-only 0-1 scalar. The remaining
+  // columns are the dimensions the score is rolled up by; all optional, so a thinner Sentiment
+  // export still parses and simply yields fewer breakdowns (I.5) rather than failing the upload.
   sentiment: [
     { field: 'sentiment_claims', aliases: ['sentiment_claims', 'claims', 'sentiment_claims_json'], required: false },
+    { field: 'sentiment_v2_score', aliases: ['sentiment_v2_score', 'sentiment_score', 'sentiment_v2'], required: false },
+    { field: 'prompt', aliases: ['prompt', 'query', 'question'], required: false },
+    { field: 'platform', aliases: ['platform', 'engine', 'model'], required: false },
+    { field: 'topic', aliases: ['topic', 'category'], required: false },
+    { field: 'date', aliases: ['date', 'run_date', 'timestamp'], required: false },
   ],
   platforms: [],   // citation_1..N are resolved dynamically below
   demand: [
@@ -473,7 +504,11 @@ type FileMap = Partial<Record<SlotKey, File>>;
 
 interface Progress { label: string; pct: number; rows: number; startedAt: number; }
 
-async function computeAll(
+// v7.417 — exported so the retained regression suite can run the REAL parser against Wayne's
+// REAL five Profound exports at full scale (Const V.4 / V.6), rather than a replica of it in the
+// test. Same pattern as ThemeClustersPanel exporting buildCanonicalClusterTopics. This is a
+// component file, not an App Router route, so a named export alongside the default is safe.
+export async function computeAll(
   files: FileMap,
   clientName: string,
   setProgress: (p: Progress | null) => void,
@@ -488,11 +523,66 @@ async function computeAll(
   // v7.313: per-brand MENTION-level sentiment — each sentiment row is one evaluation,
   // classified by its balance of positive vs negative claims (tie → neutral).
   const mentionByBrand: Record<string, { pos: number; neutral: number; neg: number }> = {};
+  // v7.417 — `sentiment_v2_score` accumulators, filled in the SAME pass as the claim parse.
+  // Keyed by brand because the client is not resolved until the visibility pass below; the
+  // client's slice is taken afterwards. Four brands x eight topics x six engines, so the nesting
+  // is bounded by the export, not by a cap (I.6).
+  interface BrandScore { all: ScoreAgg; byTopic: Record<string, ScoreAgg>; byPlatform: Record<string, ScoreAgg>; byDate: Record<string, ScoreAgg>; }
+  const evalScore: Record<string, BrandScore> = {};
+  const openAll = emptyAgg();
+  const openByPlatform: Record<string, ScoreAgg> = {};
+  let sentRowsSeen = 0;      // every data row in the Sentiment file
+  let sentRowsScored = 0;    // rows carrying a parseable sentiment_v2_score
+  let sentHasScoreCol = false;
   if (files.sentiment) {
     let H: Record<string, number> = {};
     const f = files.sentiment;
     const rows = await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = resolveHeader('sentiment', row); return; }
+      if (idx === 0) {
+        H = resolveHeader('sentiment', row);
+        sentHasScoreCol = H['sentiment_v2_score'] !== undefined;
+        return;
+      }
+      // ── v7.417 · sentiment_v2_score rollup ──────────────────────────────────────────
+      // Runs for every row, independently of the claim parse below, so an export carrying
+      // BOTH columns feeds both views rather than one silently winning.
+      // Profound appends a one-cell "Filters - ..." trailer to the export; it is not a data row
+      // and must not land in the coverage denominator (see isDataRow).
+      if (sentHasScoreCol && isDataRow(row)) {
+        sentRowsSeen++;
+        const v = parseScore(row[H['sentiment_v2_score']]);
+        if (v !== null) sentRowsScored++;
+        const pi = H['prompt'];
+        const ev = pi === undefined ? null : parseEvalPrompt(row[pi]);
+        const plat = H['platform'] === undefined ? '' : (row[H['platform']] || '').trim();
+        if (ev) {
+          // Direct evaluation: "Evaluate <Brand> on <topic>". Topic comes from the PROMPT, not
+          // the `topic` column, so the label always matches the question that was actually asked.
+          if (!evalScore[ev.brand]) evalScore[ev.brand] = { all: emptyAgg(), byTopic: {}, byPlatform: {}, byDate: {} };
+          const b = evalScore[ev.brand];
+          addScore(b.all, v);
+          if (!b.byTopic[ev.topic]) b.byTopic[ev.topic] = emptyAgg();
+          addScore(b.byTopic[ev.topic], v);
+          if (plat) {
+            if (!b.byPlatform[plat]) b.byPlatform[plat] = emptyAgg();
+            addScore(b.byPlatform[plat], v);
+          }
+          const d = H['date'] === undefined ? '' : (row[H['date']] || '').trim();
+          if (d) {
+            if (!b.byDate[d]) b.byDate[d] = emptyAgg();
+            addScore(b.byDate[d], v);
+          }
+        } else {
+          // Open answer: a brand-agnostic prompt. Kept in its own population — a brand LISTED in
+          // a roundup scores far higher than the same brand put under direct evaluation, so the
+          // two are never averaged together.
+          addScore(openAll, v);
+          if (plat) {
+            if (!openByPlatform[plat]) openByPlatform[plat] = emptyAgg();
+            addScore(openByPlatform[plat], v);
+          }
+        }
+      }
       const sci = H['sentiment_claims'];
       const sc = sci === undefined ? '' : row[sci];
       if (!sc || sc[0] !== '[') return;
@@ -694,11 +784,28 @@ async function computeAll(
       );
     }
   }
+  // v7.417 — the v7.379 notice said only that the charts were "unavailable", which read as though
+  // the uploaded file was wrong. It was not: Profound removed the column. The notice now names
+  // what was dropped, what replaced it, and what the replacement can and cannot support, so the
+  // reader can tell a vendor change apart from a bad upload (Const I.5 — an honest, specific gap).
   if (files.sentiment && Object.keys(assets).length === 0) {
-    notices.push(
-      `${SLOT_FILE.sentiment}: this export carries no per-brand sentiment claims (the "sentiment_claims" ` +
-      `column is absent), so the brand and theme sentiment charts are unavailable. Everything else is unaffected.`,
-    );
+    if (sentHasScoreCol) {
+      const pct = sentRowsSeen > 0 ? (100 * sentRowsScored) / sentRowsSeen : 0;
+      notices.push(
+        `${SLOT_FILE.sentiment}: this export no longer carries the per-brand "sentiment_claims" column ` +
+        `Profound shipped through 2026-07-27, so net sentiment by brand and sentiment by theme cannot be ` +
+        `built from it — the brand and theme labels are not in the data. It ships "sentiment_v2_score" ` +
+        `instead: ${fmt(sentRowsScored)} of ${fmt(sentRowsSeen)} rows scored (${pct.toFixed(1)}%), scored ` +
+        `for the client rather than for every brand, so it supports a client sentiment reading but not a ` +
+        `competitor comparison. Everything else in this panel is unaffected.`,
+      );
+    } else {
+      notices.push(
+        `${SLOT_FILE.sentiment}: this export carries neither the per-brand "sentiment_claims" column nor ` +
+        `the "sentiment_v2_score" column, so no sentiment reading can be built from it. Everything else is ` +
+        `unaffected.`,
+      );
+    }
   }
   // prompt coverage = distinct prompts where a brand appears at least once
   const promptKeys = Object.keys(promptInfo);
@@ -887,6 +994,40 @@ async function computeAll(
     .filter((t) => t.pos + t.neg >= 8)
     .sort((a, b) => netPct(b.pos, b.neg) - netPct(a.pos, a.neg));
 
+  // ── v7.417 · sentiment_v2_score rollups ─────────────────────────────────────────────────
+  // The score is accumulated per brand above because `client` is not resolved until this point.
+  // Brands are matched against the SAME resolved client the rest of the panel uses, so the
+  // sentiment view and the visibility view can never disagree about who the client is.
+  // brandSig() is the panel's own brand-identity function (token-normalised), the same one the
+  // roster and client match use — so a prompt-derived spelling ("Sofi") and a roster spelling
+  // ("SoFi") resolve to one brand here exactly as they do everywhere else in the panel.
+  const sentScoreBrands: SentScoreBrand[] = Object.keys(evalScore)
+    .map((b) => {
+      const a = evalScore[b].all;
+      return { brand: b, n: a.n, rows: a.rows, mean: meanOf(a), isClient: brandSig(b) === brandSig(client) };
+    })
+    // Scored brands first (by mean), then unscored ones — an unscored competitor stays visible
+    // as a stated data gap rather than silently vanishing from the list (I.5 / I.6).
+    .sort((x, y) => {
+      if (x.mean === null && y.mean === null) return y.rows - x.rows;
+      if (x.mean === null) return 1;
+      if (y.mean === null) return -1;
+      return y.mean - x.mean;
+    });
+  const clientEvalKey = Object.keys(evalScore).find((b) => brandSig(b) === brandSig(client));
+  const clientEval = clientEvalKey ? evalScore[clientEvalKey] : null;
+  const sentScoreClientTopics  = clientEval ? rollBuckets(clientEval.byTopic)    : [];
+  const sentScoreClientEngines = clientEval ? rollBuckets(clientEval.byPlatform) : [];
+  // Dates read chronologically, not by score — this is a time series, so re-sorting it by value
+  // would destroy the only thing it is for.
+  const sentScoreClientDates: SentScoreBucket[] = clientEval
+    ? rollBuckets(clientEval.byDate).slice().sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
+    : [];
+  const sentScoreOpen: SentScoreBucket | null = openAll.rows > 0
+    ? { label: 'Open answers', n: openAll.n, rows: openAll.rows, mean: meanOf(openAll) }
+    : null;
+  const sentScoreOpenEngines = rollBuckets(openByPlatform);
+
   const domainsSorted = Object.keys(domainCount).sort((a, b) => domainCount[b] - domainCount[a]);
   const domains: DomainStat[] = domainsSorted.slice(0, 25).map((d) => {
     const dd = d.replace(/[^a-z0-9]/g, '');
@@ -938,6 +1079,9 @@ async function computeAll(
     client, tracked: brandList, totalRuns, clientHits, engines, sov, overallTop, topics,
     promptN: promptKeys.length, coverage: coverageStat, gaps, clientPromptCount,
     sentBrands, mentionSent, clientThemes, totalCites, domains, domainTotalDistinct: domainsSorted.length,
+    sentScoreCol: sentHasScoreCol, sentScoreRows: sentRowsSeen, sentScoreScored: sentRowsScored,
+    sentScoreBrands, sentScoreClientTopics, sentScoreClientEngines, sentScoreClientDates,
+    sentScoreOpen, sentScoreOpenEngines,
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
     citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
     earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
@@ -1258,6 +1402,22 @@ function Analysis({ m }: { m: Metrics }) {
   // (in the slot the Net sentiment card used). Guarded for metrics saved by an earlier
   // version that has no mentionSent field → falls back to the claim-level Net sentiment.
   const cms = (m.mentionSent || []).find((x) => x.isClient);
+  // ── v7.417 · sentiment_v2_score, read for render ────────────────────────────────────────
+  // Every field is optional: metrics saved before v7.417 carry none of them and must keep
+  // rendering exactly as they did. `?? null` / `|| []` throughout, never a non-null assertion.
+  const ssBrands   = m.sentScoreBrands   || [];
+  const ssTopics   = m.sentScoreClientTopics  || [];
+  const ssEngines  = m.sentScoreClientEngines || [];
+  const ssDates    = m.sentScoreClientDates   || [];
+  const ssOpen     = m.sentScoreOpen ?? null;
+  const ssClient   = ssBrands.find((b) => b.isClient) ?? null;
+  const ssCoverage = (m.sentScoreCol && (m.sentScoreRows || 0) > 0)
+    ? { scored: m.sentScoreScored || 0, rows: m.sentScoreRows || 0 }
+    : null;
+  // A brand with evaluation rows but no scored rows has mean === null. It is NOT rendered as 0 —
+  // that would state "this brand is rated terribly" when the data says nothing at all (I.1/I.5).
+  const ssHasClient = !!(ssClient && ssClient.mean !== null);
+  const ssHasOpen   = !!(ssOpen && ssOpen.mean !== null);
 
   const cards: Array<{ k: string; v: string; tone: string; s: string; kind?: 'sentiment' }> = [
     { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${fmt(scoreHits)} of ${fmt(scoreRuns)} answers${hasStrict ? ' · Profound Visibility prompts' : ''}` },
@@ -1267,6 +1427,12 @@ function Analysis({ m }: { m: Metrics }) {
   if (scoreEngines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${scoreEngines.length}`, tone: 'text-rose-500', s: scoreEngines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
   if (m.topics.length) cards.push({ k: 'Topics at 0%', v: `${topicsZero} / ${m.topics.length}`, tone: 'text-amber-500', s: 'no presence at all' });
   if (clientNet !== null) cards.push({ k: 'Net sentiment', v: (clientNet > 0 ? '+' : '') + clientNet, tone: clientNet >= 0 ? 'text-emerald-500' : 'text-rose-500', s: `of ${fmt((clientSent as SentBrand).pos + (clientSent as SentBrand).neg)} claims`, kind: 'sentiment' });
+  // v7.417 — the two sentiment_v2_score populations get two cards and are never averaged into
+  // one. Direct evaluation ("Evaluate <Brand> on <topic>") invites critique; an open answer that
+  // merely lists the brand does not. On Wayne's export they read 0.55 and 0.95 — a single blended
+  // figure would describe neither. Each card states its own row count so the reader can weigh it.
+  if (ssHasClient) cards.push({ k: 'Sentiment · direct evaluation', v: (ssClient!.mean as number).toFixed(2), tone: 'text-orbit-accent', s: `${fmt(ssClient!.n)} of ${fmt(ssClient!.rows)} scored · 0–1 scale` });
+  if (ssHasOpen) cards.push({ k: 'Sentiment · open answers', v: (ssOpen!.mean as number).toFixed(2), tone: 'text-orbit-accent', s: `${fmt(ssOpen!.n)} scored rows · 0–1 scale` });
   if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
   if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain` });
   if ((m.citeTotal || 0) > 0) cards.push({ k: 'Owned citation share', v: m.citeOwnedShare.toFixed(1) + '%', tone: 'text-rose-500', s: `${fmt(m.citeOwned)} of ${fmt(m.citeTotal)} cited sources` });
@@ -1426,6 +1592,98 @@ function Analysis({ m }: { m: Metrics }) {
             </table>
           </div>
         </Panel>
+      )}
+
+      {/* v7.417 — Sentiment score (Profound `sentiment_v2_score`) ─────────────────────────
+          Renders whenever the current export carries the column. Independent of the claim-level
+          section below, which still renders for an export (or a saved analysis) that has
+          `sentiment_claims`; an export carrying BOTH shows both. The bars are drawn against the
+          FIXED 0–1 scale rather than rescaled to the highest bucket, so a set of similar means
+          reads as similar rather than being stretched into a false spread. */}
+      {ssCoverage && (ssHasClient || ssHasOpen || ssBrands.length > 0) && (
+        <>
+          <p className="text-orbit-primary text-sm font-semibold pt-1">Sentiment score</p>
+          <p className="text-orbit-tertiary text-[11px] -mt-3 leading-snug">
+            Profound&apos;s <span className="text-orbit-secondary">sentiment_v2_score</span> (0–1), a direct read of the
+            export column — <span className="text-orbit-secondary">{fmt(ssCoverage.scored)}</span> of {fmt(ssCoverage.rows)} rows
+            in the Sentiment file carry a score ({((100 * ssCoverage.scored) / Math.max(1, ssCoverage.rows)).toFixed(1)}%).
+            Profound does not define the scale in the file, so it is shown as the score it is, never converted to a
+            percentage or a claim count. Direct-evaluation and open-answer rows are two different populations and are
+            never averaged together.
+          </p>
+          <div className="grid md:grid-cols-2 gap-4">
+            <Panel title="Score coverage by brand" sub="Direct-evaluation rows scored, per brand — how much of this metric each brand actually has">
+              {ssBrands.map((b) => (
+                <Bar
+                  key={b.brand}
+                  label={disp(b.brand)}
+                  valueLabel={b.mean === null ? '—' : b.mean.toFixed(2)}
+                  frac={b.mean === null ? 0 : b.mean}
+                  color={b.mean === null ? 'bg-orbit-muted' : b.isClient ? 'bg-emerald-500' : 'bg-indigo-500'}
+                  sub={b.mean === null ? `0 of ${b.rows} scored` : `${b.n}/${b.rows}`}
+                  highlight={b.isClient}
+                  small
+                />
+              ))}
+              <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+                A brand with no scored rows shows &ldquo;—&rdquo;, not 0 — the export scored none of its rows, which is an
+                absence of data rather than a poor score. Competitor sentiment is not comparable from this export.
+              </p>
+            </Panel>
+            {ssTopics.length > 0 && (
+              <Panel title="Client sentiment by topic" sub="Direct-evaluation prompts, grouped by the topic asked about (0–1)">
+                {ssTopics.map((t) => (
+                  <Bar
+                    key={t.label}
+                    label={t.label}
+                    valueLabel={t.mean === null ? '—' : t.mean.toFixed(2)}
+                    frac={t.mean === null ? 0 : t.mean}
+                    color={t.mean === null ? 'bg-orbit-muted' : 'bg-indigo-500'}
+                    sub={`${t.n}/${t.rows}`}
+                    small
+                  />
+                ))}
+              </Panel>
+            )}
+          </div>
+          {(ssEngines.length > 0 || ssDates.length > 1) && (
+            <div className="grid md:grid-cols-2 gap-4">
+              {ssEngines.length > 0 && (
+                <Panel title="Client sentiment by engine" sub="Direct-evaluation prompts, per AI engine (0–1)">
+                  {ssEngines.map((e) => (
+                    <Bar
+                      key={e.label}
+                      label={e.label}
+                      valueLabel={e.mean === null ? '—' : e.mean.toFixed(2)}
+                      frac={e.mean === null ? 0 : e.mean}
+                      color={e.mean === null ? 'bg-orbit-muted' : 'bg-indigo-500'}
+                      sub={`${e.n}/${e.rows}`}
+                      small
+                    />
+                  ))}
+                </Panel>
+              )}
+              {ssDates.length > 1 && (
+                <Panel title="Client sentiment by run date" sub="Direct-evaluation prompts, in date order (0–1)">
+                  {ssDates.map((d) => (
+                    <Bar
+                      key={d.label}
+                      label={d.label}
+                      valueLabel={d.mean === null ? '—' : d.mean.toFixed(2)}
+                      frac={d.mean === null ? 0 : d.mean}
+                      color={d.mean === null ? 'bg-orbit-muted' : 'bg-indigo-500'}
+                      sub={`${d.n}/${d.rows}`}
+                      small
+                    />
+                  ))}
+                  <p className="text-orbit-tertiary text-[10px] mt-2 leading-snug">
+                    {ssDates.length} run date{ssDates.length === 1 ? '' : 's'} — too short a series to read as a trend.
+                  </p>
+                </Panel>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {/* Sentiment */}
