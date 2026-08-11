@@ -655,14 +655,64 @@ export function buildKwPool({
   // at the source, not per panel). The staging panel passes includeAdjacent to see them.
   // Honest fallback: pre-v7.326 snapshots carry no umbrellaScope → resolver marks nothing
   // adjacent → pool is byte-for-byte unchanged (Const I.5).
+  let out = pool;
   if (!includeAdjacent) {
     const scope = buildScopeResolver(snap, scopeOverrides);
     if (scope.adjacentUmbrellas.length > 0) {
-      return pool.filter(p => !scope.isAdjacentKeyword(p.keyword.toLowerCase().trim()));
+      out = out.filter(p => !scope.isAdjacentKeyword(p.keyword.toLowerCase().trim()));
     }
   }
 
-  return pool;
+  // ── v7.419: HIDDEN CATEGORIES (soft-hide chokepoint) ────────────────────────
+  // Drop every keyword whose TOP-LEVEL category the user hid from the Category
+  // Breakdown (Wayne 2026-08-11: "delete" a category with all data updating, but
+  // WITHOUT losing any stored category association). Same single-chokepoint pattern
+  // as the scope gate above: because every panel + scan route builds its pool here,
+  // one filter removes the hidden category from ALL panels and ALL volume/footprint
+  // totals at once — while `_categoryBreakdown`, keywordPaths and stored membership
+  // stay byte-for-byte untouched (Const II.8), so restoring the entry brings the
+  // category back exactly as it was. Membership is read from the STORED taxonomy
+  // (path root, with the stored flat category name as fallback for brand/location/
+  // Other rows) — never re-derived lexically. No hidden entries → byte-for-byte
+  // unchanged (Const I.5).
+  const hiddenRaw: any[] = Array.isArray((snap as any)?._hiddenCategories) ? (snap as any)._hiddenCategories : [];
+  if (hiddenRaw.length > 0) {
+    // Two match kinds: `key` entries are STORED-PATH prefixes (' › ' joined) — they hide
+    // exactly the subtree the user clicked, even when the display row is a collapsed
+    // survivor whose name differs from path[0]; name-only entries match the flat stored
+    // membership name (brand/location/Other) or a path root of the same name.
+    const hiddenKeys  = [] as string[];
+    const hiddenNames = new Set<string>();
+    for (const h of hiddenRaw) {
+      if (typeof h === 'string') { const n = h.toLowerCase().trim(); if (n) hiddenNames.add(n); continue; }
+      const k = String(h?.key ?? '').toLowerCase().trim();
+      if (k) { hiddenKeys.push(k); continue; }
+      const n = String(h?.name ?? '').toLowerCase().trim();
+      if (n) hiddenNames.add(n);
+    }
+    if (hiddenKeys.length > 0 || hiddenNames.size > 0) {
+      const kp: Record<string, any> = snap?._categoryBreakdown?.keywordPaths ?? {};
+      const kc: Record<string, any> = snap?._categoryBreakdown?.keywordCategories ?? {};
+      out = out.filter(p => {
+        const kwLow = p.keyword.toLowerCase().trim();
+        const path  = kp[kwLow];
+        if (Array.isArray(path) && path.length > 0) {
+          if (hiddenNames.has(String(path[0] ?? '').toLowerCase().trim())) return false;
+          if (hiddenKeys.length > 0) {
+            const joined = path.map((s: any) => String(s ?? '').trim()).join(' › ').toLowerCase();
+            for (const hk of hiddenKeys) {
+              if (joined === hk || joined.startsWith(hk + ' › ')) return false;
+            }
+          }
+        }
+        const cat = kc[kwLow];
+        if (typeof cat === 'string' && hiddenNames.has(cat.toLowerCase().trim())) return false;
+        return true;
+      });
+    }
+  }
+
+  return out;
 }
 
 // ─── Volume metrics ───────────────────────────────────────────────────────────

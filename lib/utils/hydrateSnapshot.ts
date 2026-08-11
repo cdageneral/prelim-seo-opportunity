@@ -27,10 +27,16 @@ export function hydrateSnapshotForPool(project: any, snap: any): any {
     project?.scopeOverrides && typeof project.scopeOverrides === 'object'
       ? (project.scopeOverrides as Record<string, 'core' | 'adjacent'>)
       : {};
+  // v7.419: per-project soft-hidden categories — page.tsx `hiddenCategories` memo.
+  const hiddenCategories: Array<{ name: string; kwCount: number; hiddenAt: string }> =
+    Array.isArray(project?.hiddenCategories)
+      ? (project.hiddenCategories as Array<{ name: string; kwCount: number; hiddenAt: string }>)
+      : [];
   return {
     ...(snap ?? {}),
-    _brandTerms:     brandTerms,
-    _excludedBrands: excludedBrands,
-    _scopeOverrides: scopeOverrides,
+    _brandTerms:       brandTerms,
+    _excludedBrands:   excludedBrands,
+    _scopeOverrides:   scopeOverrides,
+    _hiddenCategories: hiddenCategories,
   };
 }
