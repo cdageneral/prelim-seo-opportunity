@@ -11,6 +11,7 @@ import JourneySection         from '@/components/brief/JourneySection';
 import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
+import ProductInsightsSection from '@/components/brief/ProductInsightsSection';   // v7.426: Product Insights sub-view (Keyword Landscape group)
 import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
 // v7.337 (QC audit B4-proper, Const II.7): live SERP-feature roll-up for the nav score —
 // same shared builders the SERP Features panel + Executive Summary compute from.
@@ -240,7 +241,7 @@ export default function ProjectBriefPage() {
   const [analysisError,    setAnalysisError]    = useState<string | null>(null);
   const [activeSection,    setActiveSection]    = useState<NavSection>('overview');
   const [hoveredNav,       setHoveredNav]       = useState<NavSection | null>(null);
-  const [keywordsSubView,  setKeywordsSubView]  = useState<'list' | 'clusters'>('list');
+  const [keywordsSubView,  setKeywordsSubView]  = useState<'list' | 'insights' | 'clusters'>('list');   // v7.426: + Product Insights
 
   // Data source state
   const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
@@ -1530,12 +1531,12 @@ export default function ProjectBriefPage() {
                         {/* ── Keywords sub-nav (v7.172: always expanded, not gated on active) ── */}
                         {item.id === 'keywords' && hasResults && (
                           <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
-                            {(['list', 'clusters'] as const).map(sv => {
+                            {(['list', 'insights', 'clusters'] as const).map(sv => {
                               // v7.172: only highlight a sub-item when the Keyword panel is the
                               // active section — otherwise the row stays expanded but unhighlighted.
                               const subActive = isActiveItem && keywordsSubView === sv;
-                              const subLabels = { list: 'Keyword list', clusters: 'Theme clusters' };
-                              const subIcons  = { list: 'ti-list', clusters: 'ti-hierarchy-2' };
+                              const subLabels = { list: 'Keyword list', insights: 'Product Insights', clusters: 'Theme clusters' };   // v7.426
+                              const subIcons  = { list: 'ti-list', insights: 'ti-box', clusters: 'ti-hierarchy-2' };   // v7.426
                               return (
                                 <button
                                   key={sv}
@@ -1789,6 +1790,19 @@ export default function ProjectBriefPage() {
               onScopeChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}  // v7.326: promote/demote a vertical → refetch project (new _scopeOverrides) so every panel re-filters
             />
           )}
+          {/* ── v7.426: Product Insights — search ⇄ AI crosswalk per product category ── */}
+          {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'insights' && (
+            <ProductInsightsSection
+              kwVersion={kwVersion}
+              projectId={projectId}
+              analysis={analysisForPanels}
+              competitors={competitorDomains}
+              domain={domainDisplay}
+              brandTerms={brandTerms}
+              claudeAssigns={pageClaudeAssigns}
+            />
+          )}
+
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'clusters' && (
             <ThemeClustersPanel
               kwVersion={kwVersion}
