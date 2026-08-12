@@ -3172,11 +3172,26 @@ function KwCategorySection({
   const maxVol = Math.max(...allTop.map(n => n.totVol), 1);
   const selIdx = rankFilter === 'all' ? null : RANK_SEL_INDEX[rankFilter];
 
-  const toggle = (id: string) => setExpanded(prev => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
+  // v7.420 (Wayne 2026-08-11): expanding a top-level category ALSO opens its brand ladder,
+  // which renders above the keyword chips / child rows. The winner chip was a small target
+  // inside a fully-clickable row, so the ladder was easy to miss — one click now shows both.
+  // The chip stays an independent toggle, so the ladder can still be closed (or opened
+  // without expanding the row) on its own.
+  const toggle = (id: string) => {
+    const willExpand = !expanded.has(id);
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    if (brandLadders.has(id)) {
+      setBrandOpen(prev => {
+        const next = new Set(prev);
+        if (willExpand) next.add(id); else next.delete(id);
+        return next;
+      });
+    }
+  };
 
   // ── v7.419: selection + bulk-action helpers ─────────────────────────────────
   const nodeById = new Map<string, CatNode>();
@@ -3731,7 +3746,7 @@ function KwCatRow({
               <button
                 type="button"
                 onClick={e => { e.stopPropagation(); onToggleBrand?.(); }}
-                title={`${winner.kind === 'client' ? 'Your site' : winner.kind === 'tracked' ? 'Tracked competitor' : 'Untracked SERP rival'} holds the most page-1 volume in this category — click for the full brand ladder`}
+                title={`${winner.kind === 'client' ? 'Your site' : winner.kind === 'tracked' ? 'Tracked competitor' : 'Untracked SERP rival'} holds the most page-1 volume in this category — click for the full brand ladder (also shown when you expand the row)`}
                 style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '.02em', color: winnerStyle.color, background: winnerStyle.bg, border: `1px solid ${winnerStyle.border}`, borderRadius: 4, padding: '1px 6px', marginLeft: 6, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
                 <i className="ti ti-trophy" style={{ fontSize: 9, marginRight: 3 }} aria-hidden="true" />
