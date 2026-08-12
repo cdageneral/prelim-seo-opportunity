@@ -1,3 +1,31 @@
+## v7.425 — deleting a keyword now actually removes it
+
+**Wayne:** *"When I click the x to delete a keyword — nothing happens. This should delete the
+entire keyword and all panels and data that had this keyword and volume would be updated. All
+product category structures need to stay the same."*
+
+**What was wrong.** A keyword can exist in two places at once: an uploaded row in the keywords
+table *and* a row inside the stored analysis snapshot (your client footprint, or a competitor's
+gap list). The × on a keyword chip hard-deleted the uploaded row — the request succeeded — but the
+snapshot copy was untouched, so the keyword was re-supplied on the very next render and the delete
+looked like it did nothing. Only keywords sourced directly from Semrush were being removed
+correctly, because those alone were written as a "blocked" marker, which is the one removal the
+snapshot honours.
+
+**The fix.** Every keyword deletion now writes that marker, whatever the keyword's source, *and*
+still hard-deletes the uploaded row when there is one. The marker is applied inside the single
+shared pool builder every panel reads, so one write drops the keyword from the Keyword list,
+Category Breakdown, clusters, journeys, content map and every volume, demand and rank-band total
+at the same moment.
+
+**Your category structures are untouched.** Nothing about the stored taxonomy changes — categories,
+their parents, the keyword→category assignments and the full paths all stay exactly as they were.
+The keyword simply stops entering the pool, and the numbers above it re-total themselves.
+
+* A removal that fails is now **stated on screen** with the count, instead of failing silently —
+  the same class of bug this release fixes.
+* Bulk deletes report partial failure honestly ("N of M could not be removed — the rest were").
+
 ## v7.424 — the brand ladder opens with the category row
 
 **Wayne:** *"I see the winner chip but I do not see the tracked brands percentage."* — The ladder
