@@ -1,3 +1,43 @@
+## v7.427 — Warm Paper: the light theme rebuilt for the eyes, and made the default
+
+**Wayne:** *"can we rework the light color scheme. For whatever reason it feels hard on my eyes
+like i am struggling to see the contrast."*
+
+**The diagnosis.** The v7.185 light mode paired pure-white cards with a near-white cool page
+(#F2F3F8) and borders so faint (#E3E4EE) they read as nothing. That combination is glare without
+structure: the eye gets full-brightness surfaces but no edges to lock onto. Three candidate
+palettes were rendered side-by-side on the Product Insights panel (Soft Slate / Warm Paper /
+Dim Mist — `GEO/orbitiq-light-theme-variants-2026-08-12.html`); Wayne chose **Warm Paper**.
+
+**What changed — neutrals only.** Every neutral in the `[data-theme="light"]` token block moved
+warm: the page is parchment (#F2F3F8 → #F0EDE5), cards are ivory (#FFFFFF → #FDFCF8 — **no pure
+white surface remains anywhere**), the surface tone sits one honest step deeper than the card
+(#F7F5EF, restoring the dark theme's surface/card hierarchy that light mode had flattened),
+borders firmed to a visible warm gray (#E3E4EE → #D9D4C6, #BCBED0 → #C9C3B2), and all four ink
+levels warmed (#17182B → #2B2A30, #4C4D67 → #5C594F, #6E6F88 → #767061, #313252 → #44413A) — each
+chosen so its contrast on the new ivory card is parity-or-better with what the old ink read on
+white (tertiary: 4.80:1 vs 4.89:1; primary 13.9:1). The Tailwind `--orbit-*` channel triplets
+moved in lockstep so class-styled and token-styled surfaces cannot diverge.
+
+**What deliberately did not change.** The accent trio (#4338CA / #3730A3 / #474195), every signal
+ink (green/amber/red/cyan) and every alpha wash tied to them are byte-identical — the v7.400 gate
+asserts the accent literally and the signal inks sit at exactly 4.50:1 worst-case, so "warming"
+them would have meant weakening them. `--on-fill-accent` stays pinned #FFFFFF in both blocks
+(v7.400 rule: a colour on a fill does not follow the page surface). **The dark theme is untouched
+byte-for-byte.**
+
+**Light is now the default.** The no-flash script in `app/layout.tsx` and `ThemeToggle` both
+default to light; a stored `orbitiq-theme` choice still wins, so anyone who explicitly picked
+dark keeps dark.
+
+**The gate got stricter, not looser.** The dual-theme contrast gate now composites light-mode
+pairs over the real ivory card (#FDFCF8) instead of an idealized #FFFFFF: 364 resolvable pairs
+re-checked, the light theme still carries **zero** allowlisted debt, and 11 new retained checks
+pin the Warm Paper values, the no-pure-white invariant, the dark-block freeze, and the light
+default. Real-project tsc clean, real `next build` clean, retained suite zero regression delta
+against the pristine v7.426 base, and both themes' computed values verified in real Chromium
+(jsdom cannot resolve `var()`).
+
 ## v7.426 — Product Insights: search and AI visibility, finally in one place
 
 **Wayne:** *"We need to know whats strong, whats weak, where the competition is winning and the
