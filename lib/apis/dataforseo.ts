@@ -78,7 +78,7 @@ interface DfsCall<T> { result: T | null; costUSD: number; }
  * POST one live task. Returns the first result object plus the REAL cost the
  * API reported, and records that measured cost in the usage ledger.
  */
-async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string): Promise<DfsCall<T>> {
+async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string, ledgerUnit: 'searches' | 'llm_mentions' = 'searches'): Promise<DfsCall<T>> {
   const auth = authHeader();
   if (!auth) return { result: null, costUSD: 0 };
   try {
@@ -102,7 +102,7 @@ async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>,
     // Per-task cost when present, else the envelope total. Never invented.
     const costUSD = Number(t0?.cost ?? body?.cost ?? 0) || 0;
     // Record the MEASURED dollars (Const I.1) — 1 request = 1 search unit.
-    await recordDataForSeo(ledgerEndpoint, costUSD, 1, process.env.DATAFORSEO_LOGIN);
+    await recordDataForSeo(ledgerEndpoint, costUSD, 1, process.env.DATAFORSEO_LOGIN, ledgerUnit);
     if (Number(t0?.status_code) !== 20000) {
       console.error(`DataForSEO ${ledgerEndpoint} task status ${t0?.status_code}: ${t0?.status_message}`);
       return { result: null, costUSD };
@@ -368,4 +368,98 @@ export async function dfsGetLocalPack(
   });
   const places = raw.slice(0, 3).map((r, i) => parseDfsPlace(r, i));
   return { packPresent: places.length > 0, places };
+}
+
+// ─── v7.426 · LLM Mentions (AI Optimization API) ─────────────────────────────
+// Queries DataForSEO's index of RECORDED AI answers (ChatGPT + Google AI
+// Overviews) for real questions containing a category's head keyword. Every
+// field returned below is verbatim from the API payload (Const I.1) except
+// `aiSearchVolume`, which DataForSEO documents as an ESTIMATED metric from its
+// own algorithm — every consumer must label it as such (Const I.5a), never
+// present it as measured demand. Cost is the measured per-task `cost` the API
+// reports, recorded on the ledger under unit 'llm_mentions' (Const I.5b).
+// Docs: https://docs.dataforseo.com/v3/ai_optimization/llm_mentions/search_mentions/live/
+
+const LLM_MENTIONS_ENDPOINT = '/ai_optimization/llm_mentions/search_mentions/live';
+
+export interface LlmMentionSource {
+  domain: string;
+  url:    string;
+  title:  string;
+}
+
+export interface LlmMentionRow {
+  platform:         string;              // 'chat_gpt' | 'google'
+  modelName:        string;              // e.g. 'gpt-4o' / 'google_ai_overview'
+  question:         string;              // the recorded prompt — verbatim
+  answerExcerpt:    string;              // first 600 chars of the recorded answer (verbatim, truncated for storage)
+  sources:          LlmMentionSource[];  // sources the model cited in its final answer
+  searchResultDomains: string[];         // chat_gpt only: web-search result domains the model retrieved
+  brandEntities:    string[];            // chat_gpt only: brands the answer named (API-extracted)
+  aiSearchVolume:   number | null;       // DataForSEO ESTIMATED metric — label per I.5a, never measured demand
+  webSearchBased:   boolean | null;      // whether the answer used live web search
+  lastResponseAt:   string | null;       // when the recorded answer was last updated
+}
+
+export interface LlmMentionsResult {
+  rows:       LlmMentionRow[];
+  totalCount: number;                    // total matching rows in the index (we fetch up to `limit`)
+  costUSD:    number;                    // measured task cost the API reported
+}
+
+/**
+ * Fetch recorded AI answers whose QUESTION contains `keyword` (word-match).
+ * Both platforms unless one is specified. `limit` defaults to 100 (the API's
+ * own default page size); `totalCount` always reports the full match count so
+ * the panel can disclose exactly how much of the index it is showing.
+ */
+export async function dfsSearchLlmMentions(
+  keyword: string,
+  opts: { limit?: number; platform?: 'chat_gpt' | 'google' } = {},
+): Promise<LlmMentionsResult | null> {
+  const kw = keyword.trim();
+  if (!kw || !dataForSeoEnabled()) return null;
+  const task: Record<string, unknown> = {
+    target: [{ keyword: kw.slice(0, 250), search_filter: 'include', search_scope: ['question'], match_type: 'word_match' }],
+    limit:  Math.min(Math.max(opts.limit ?? 100, 1), 1000),
+  };
+  if (opts.platform) task.platform = opts.platform;
+
+  const { result, costUSD } = await dfsPost<any>(LLM_MENTIONS_ENDPOINT, task, 'llm_mentions_search', 'llm_mentions');
+  if (!result) return null;
+
+  const items: any[] = Array.isArray(result?.items) ? result.items : [];
+  const rows: LlmMentionRow[] = items.map((it: any) => {
+    const sources: LlmMentionSource[] = (Array.isArray(it?.sources) ? it.sources : [])
+      .map((s: any) => ({
+        domain: typeof s?.domain === 'string' ? s.domain.replace(/^www\./, '') : (typeof s?.url === 'string' ? extractDomain(s.url) : ''),
+        url:    typeof s?.url === 'string' ? s.url : '',
+        title:  typeof s?.title === 'string' ? s.title : (typeof s?.source_name === 'string' ? s.source_name : ''),
+      }))
+      .filter((s: LlmMentionSource) => !!s.domain);
+    const srDomains = Array.from(new Set(
+      (Array.isArray(it?.search_results) ? it.search_results : [])
+        .map((r: any) => typeof r?.domain === 'string' ? r.domain.replace(/^www\./, '') : '')
+        .filter(Boolean) as string[],
+    ));
+    const brands = (Array.isArray(it?.brand_entities) ? it.brand_entities : [])
+      .map((b: any) => typeof b?.title === 'string' ? b.title : '')
+      .filter(Boolean);
+    const vol = Number(it?.ai_search_volume);
+    return {
+      platform:       String(it?.platform ?? ''),
+      modelName:      String(it?.model_name ?? ''),
+      question:       String(it?.question ?? '').slice(0, 500),
+      answerExcerpt:  String(it?.answer ?? '').slice(0, 600),
+      sources,
+      searchResultDomains: srDomains,
+      brandEntities:  brands,
+      aiSearchVolume: Number.isFinite(vol) ? vol : null,
+      webSearchBased: typeof it?.is_web_search_based === 'boolean' ? it.is_web_search_based : null,
+      lastResponseAt: typeof it?.last_response_at === 'string' ? it.last_response_at : null,
+    };
+  }).filter((r: LlmMentionRow) => !!r.question);
+
+  const totalCount = Number(result?.total_count);
+  return { rows, totalCount: Number.isFinite(totalCount) ? totalCount : rows.length, costUSD };
 }
