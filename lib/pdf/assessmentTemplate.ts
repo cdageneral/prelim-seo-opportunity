@@ -76,6 +76,9 @@ interface PSentScoreBrand  { brand: string; n: number; rows: number; mean: numbe
 export interface ProfoundMetrics {
   client: string; tracked: string[];
   totalRuns: number; clientHits: number;
+  // v7.422 — the denominators the PANEL scores on. Optional: analyses stored before v7.420/v7.421
+  // carry neither and fall back to the whole-file basis they were actually computed with.
+  scoredRuns?: number;
   engines: PPlatStat[]; sov: PBrandStat[];
   overallTop: { brand: string; count: number; pct: number }[];
   topics: PTopicStat[]; promptN: number; coverage: PBrandStat[];
@@ -84,6 +87,7 @@ export interface ProfoundMetrics {
   totalCites: number; domains: PDomainStat[];
   demandTopics: PDemandTopic[]; demandPrompts: PDemandPrompt[]; demandPromptTotal: number;
   citeTotal: number; citeOwned: number; citeOwnedShare: number;
+  citeCategorised?: number; citeUncategorised?: number;
   citeCompetition: number; citeCatMix: PCiteCat[];
   earnedTargets: PCiteDomain[]; competitorCites: PCiteDomain[];
   engineSourceMix: PEngineMix[];
@@ -385,7 +389,16 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const rivals    = sov ? sov.compEntries.concat(sov.serpEntries).slice().sort((a, b) => b.pct - a.pct) : [];
   const topRival  = rivals[0] ?? null;
 
-  const pfVisPct   = pf && pf.totalRuns > 0 ? (pf.clientHits / pf.totalRuns) * 100 : 0;
+  // v7.422 — READ the panel's denominator, never re-derive one here. This line divided by
+  // totalRuns while the panel divides by scoredRuns, so the PDF printed 83.15% where the screen
+  // printed 88.02% — the exact vendor-vs-OrbitIQ divergence v7.420 was written to end, recreated
+  // one layer up. Const II.6: when a panel changes how a metric is DERIVED, every rollup reading
+  // it changes in the SAME release.
+  const pfScored   = pf ? ((pf.scoredRuns && pf.scoredRuns > 0) ? pf.scoredRuns : pf.totalRuns) : 0;
+  const pfVisPct   = pf && pfScored > 0 ? (pf.clientHits / pfScored) * 100 : 0;
+  // Same rule for citations: the share is over CATEGORISED sources, so the caption must be too.
+  const pfCiteDen  = pf ? ((pf.citeCategorised && pf.citeCategorised > 0) ? pf.citeCategorised : (pf.citeTotal || 0)) : 0;
+  const pfCiteUncat= pf ? (pf.citeUncategorised || 0) : 0;
   const pfClientCov= pf ? pf.coverage.find(c => c.isClient) ?? null : null;
   const pfRivalCov = pf ? pf.coverage.filter(c => !c.isClient).sort((a, b) => b.count - a.count)[0] ?? null : null;
   const pfEarned   = pf ? pf.citeCatMix.find(c => c.category.toLowerCase().includes('earned')) ?? null : null;
@@ -464,10 +477,10 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const execTiles: string[] = [];
   execTiles.push(tile('Page-1 capture', p1(m.captureRate * 100), `Of ${vol(m.totalMonthly)} monthly searches on your footprint, ${vol(m.page1Monthly)} land where you hold a page-1 position.`, 'accent'));
   if (sov) execTiles.push(tile('Unclaimed page-1 clicks', p0(openPct * 100), `Of ~${vol(sov.availableClicks)} modeled page-1 clicks/mo (${esc(sov.ctrSource)}), no tracked competitor captures them either.`, 'accent'));
-  if (pf)  execTiles.push(tile('Owned citation share', (pf.citeTotal || 0) > 0 ? p1(pf.citeOwnedShare) : '—', (pf.citeTotal || 0) > 0 ? `${n0(pf.citeOwned)} of ${n0(pf.citeTotal)} sources cited by AI engines are yours${pf.citeCompetition ? ` — competitor-owned domains hold ${n0(pf.citeCompetition)}` : ''}.` : 'Citation landscape not yet loaded.', 'accent bad'));
+  if (pf)  execTiles.push(tile('Owned citation share', (pf.citeTotal || 0) > 0 ? p1(pf.citeOwnedShare) : '—', (pf.citeTotal || 0) > 0 ? `${n0(pf.citeOwned)} of ${n0(pfCiteDen)} categorised sources cited by AI engines are yours${pfCiteUncat > 0 ? ` (${n0(pfCiteUncat)} more carry no category and are excluded)` : ''}${pf.citeCompetition ? ` — competitor-owned domains hold ${n0(pf.citeCompetition)}` : ''}.` : 'Citation landscape not yet loaded.', 'accent bad'));
   if (pf && pfRivalCov) execTiles.push(tile('Your real AI rival', esc(pfRivalCov.brand), `Appears in ${p0(pfRivalCov.pct)} of ${n0(pf.promptN)} tracked AI prompts vs your ${pfClientCov ? p0(pfClientCov.pct) : '0%'}.`));
   if (pf && pfBridgeSum > 0) execTiles.push(tile('The shortcut already exists', `${n0(pfBridgeSum)} <small>of ${n0(pf.citeMentions)}</small>`, `Brand mentions already sitting on ${pfBridge.map(h => h.hostname).join(', ')} — hosts AI engines already cite. Converting mentions to citations is outreach, not content.`));
-  if (pf && pf.totalRuns > 0) execTiles.push(tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pf.totalRuns)} scanned AI answers across ${pf.engines.length} engines.`, pfVisPct < 5 ? 'bad' : ''));
+  if (pf && pf.totalRuns > 0) execTiles.push(tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pfScored)} AI answers that named at least one brand, across ${pf.engines.length} engines.`, pfVisPct < 5 ? 'bad' : ''));
   if (execTiles.length < 6 && topSeg && (topSeg.s.volumePct ?? 0) > 0) execTiles.push(tile('Your biggest audience', p0(topSeg.s.volumePct ?? 0), `${esc(topSeg.s.name ?? '')} — a modeled share of real demand${pf && pf.totalRuns > 0 ? `; their journey runs through the AI answer layer, where you appear in ${p1(pfVisPct)} of answers` : ''}.`));
   if (execTiles.length < 6 && lp) execTiles.push(tile('Map-pack presence', `${p0(lp.pack.presenceRate)}`, `In ${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)} scanned local packs — at average rank ${lp.pack.avgRank} when present.`, lp.pack.presenceRate < 50 ? 'bad' : ''));
   pages.push(pageWrap('EXECUTIVE SUMMARY', 'EXECUTIVE SUMMARY', `
@@ -688,13 +701,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     const sovRank = pf.sov.slice().sort((a, b) => b.count - a.count).findIndex(s => s.isClient) + 1;
     pages.push(pageWrap('AI ANSWER ENGINES — MARKET POSITION', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Who AI recommends when your customers ask.</h1>
-      <div class="lede">We analyzed <b>${n0(pf.totalRuns)} real AI answers</b> — ${n0(pf.promptN)} buyer prompts across ${pf.engines.length} engines — and counted who gets named. ${name} appears in ${p1(pfVisPct)} of answers.</div>
+      <div class="lede">We analyzed <b>${n0(pf.totalRuns)} real AI answers</b> — ${n0(pf.promptN)} buyer prompts across ${pf.engines.length} engines — and counted who gets named. Scores run over the <b>${n0(pfScored)}</b> answers that named at least one brand, the same basis the AI engine vendor reports on; ${name} appears in ${p1(pfVisPct)} of them.</div>
       <div class="tiles c3" style="margin-bottom:16px;">
-        ${tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pf.totalRuns)} scanned answers.`, pfVisPct < 5 ? 'bad' : '')}
+        ${tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pfScored)} brand-naming answers.`, pfVisPct < 5 ? 'bad' : '')}
         ${tile('Prompt coverage', pfClientCov ? `${p0(pfClientCov.pct)} <small>${n0(pfClientCov.count)} of ${n0(pf.promptN)}</small>` : '—', pfRivalCov ? `Prompts where you appear at least once — vs ${pfRivalCov.brand} ${n0(pfRivalCov.count)} (${p0(pfRivalCov.pct)}).` : 'Prompts where you appear at least once.', 'bad')}
         ${tile('Tracked-brand rank', sovRank > 0 ? `#${sovRank} <small>of ${pf.sov.length}</small>` : '—', 'Among the brands tracked for this project, by share of answers.')}
       </div>
-      <div class="figtitle">Who AI engines actually name — share of all ${n0(pf.totalRuns)} answers</div>
+      <div class="figtitle">Who AI engines actually name — share of the ${n0(pfScored)} brand-naming answers</div>
       <div class="figsub">Every brand mentioned in scanned answers, ranked · ${name} highlighted</div>
       ${topBars}${clientBar}
       <div class="src">Source: AI visibility dataset — brand counts are direct mention counts from real answers.</div>
@@ -776,8 +789,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       `<tr><td><b>${esc(t.hostname)}</b></td><td class="n">${n0(t.count)}</td><td class="n">${mentionByHost.has(t.hostname) ? n0(mentionByHost.get(t.hostname)!) : '—'}</td></tr>`).join('');
     pages.push(pageWrap('THE CITATION SUPPLY CHAIN', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Who feeds the answers.</h1>
-      <div class="lede">Every AI answer is assembled from cited sources — <b>${n0(pf.citeTotal)}</b> of them across your tracked prompts, each classified by ownership. Your domain supplies <b>${p1(pf.citeOwnedShare)}</b> of the raw material${pf.citeCompetition ? `; competitor-owned domains supply ${n0(pf.citeCompetition)}` : ''}.</div>
-      <div class="figtitle">Ownership of all ${n0(pf.citeTotal)} cited sources</div>
+      <div class="lede">Every AI answer is assembled from cited sources — <b>${n0(pf.citeTotal)}</b> of them across your tracked prompts${pfCiteUncat > 0 ? `, of which <b>${n0(pfCiteDen)}</b> carry an ownership classification` : ', each classified by ownership'}. Your domain supplies <b>${p1(pf.citeOwnedShare)}</b> of that classified raw material${pf.citeCompetition ? `; competitor-owned domains supply ${n0(pf.citeCompetition)}` : ''}.</div>
+      <div class="figtitle">Ownership of the ${n0(pfCiteDen)} classified cited sources${pfCiteUncat > 0 ? ` (${n0(pfCiteUncat)} uncategorised excluded)` : ''}</div>
       <div class="figsub">Who owns the pages AI engines build answers from</div>
       ${catBars}
       <div class="two" style="margin-top:14px; margin-bottom:12px;">
@@ -1151,9 +1164,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   const scoreRows: string[] = [];
   scoreRows.push(`<tr><td><b>Page-1 capture</b> (volume-weighted)</td><td class="n">${p1(m.captureRate * 100)}</td><td>Share of real monthly demand where you hold a top-10 position</td></tr>`);
   if (sov) scoreRows.push(`<tr><td><b>Share of Voice</b> (page-1 click capture, est.)</td><td class="n">${p0(sov.sovPct * 100)}</td><td>Modeled via ${esc(sov.ctrSource)} — the one labeled estimate</td></tr>`);
-  if (pf && pf.totalRuns > 0) scoreRows.push(`<tr><td><b>Overall AI visibility</b></td><td class="n">${p1(pfVisPct)} (${n0(pf.clientHits)} of ${n0(pf.totalRuns)})</td><td>Answers naming you, across all engines</td></tr>`);
+  if (pf && pf.totalRuns > 0) scoreRows.push(`<tr><td><b>Overall AI visibility</b></td><td class="n">${p1(pfVisPct)} (${n0(pf.clientHits)} of ${n0(pfScored)})</td><td>Answers naming you, of those naming any brand</td></tr>`);
   if (pf && pfClientCov) scoreRows.push(`<tr><td><b>AI prompt coverage</b></td><td class="n">${p0(pfClientCov.pct)}${pfRivalCov ? ` (vs ${esc(pfRivalCov.brand)} ${p0(pfRivalCov.pct)})` : ''}</td><td>Distinct prompts where you appear at least once</td></tr>`);
-  if (pf && (pf.citeTotal || 0) > 0) scoreRows.push(`<tr><td><b>Owned citation share</b></td><td class="n">${p1(pf.citeOwnedShare)} (${n0(pf.citeOwned)} of ${n0(pf.citeTotal)})</td><td>Cited sources on your own domain</td></tr>`);
+  if (pf && (pf.citeTotal || 0) > 0) scoreRows.push(`<tr><td><b>Owned citation share</b></td><td class="n">${p1(pf.citeOwnedShare)} (${n0(pf.citeOwned)} of ${n0(pfCiteDen)})</td><td>Cited sources on your own domain, of those classified</td></tr>`);
   if (pf && pfBridgeSum > 0) scoreRows.push(`<tr><td><b>Brand mentions → citations</b></td><td class="n">${n0(pfBridgeSum)} unconverted</td><td>Mentions on top citable hosts, tracked per host</td></tr>`);
   if (auth) {
     const topComp = auth.comps[0];
