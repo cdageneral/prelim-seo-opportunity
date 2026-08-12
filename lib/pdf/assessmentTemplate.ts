@@ -297,6 +297,14 @@ function findCard(ins: Insight | null, title: string, tone: 'blue' | 'red' = 'bl
 // ── the document ─────────────────────────────────────────────────────────────
 export function buildAssessmentHTML(d: AssessmentData): string {
   const name = esc(d.clientName || 'Client');
+  // v7.423 — the report speaks the BRAND, never the project label. `d.clientName` is the project
+  // record's name field, and Wayne's projects are named for his own filing ("Amex (Card Shop)") —
+  // which is exactly the point: a project may be called anything (v7.420). It was printing on the
+  // cover, in every page footer, the HTML title and four body sentences of a CLIENT-FACING report,
+  // and it disagreed with the bar beside it, which already used the resolved brand. The brand is
+  // the one the export's own `mentioned?` column identifies; the project label is used only when
+  // no client could be resolved at all, so a report is never left nameless (I.5).
+  const brandName = esc((d.profound && d.profound.client) ? d.profound.client : (d.clientName || 'Client'));
   const m = d.metrics;
   const sov = d.sov && d.sov.basis === 'capture' ? d.sov : null;
   const pf  = d.profound && (d.profound.totalRuns > 0 || (d.profound.citeTotal || 0) > 0) ? d.profound : null;
@@ -381,7 +389,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // back to the legacy step cards rather than rendering an empty table.
   const prog = d.program ?? null;
 
-  const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${name}`;
+  const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${brandName}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
   const offPage1Monthly = Math.max(0, m.totalMonthly - m.page1Monthly);
@@ -461,7 +469,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <div class="cbrand">ORBITIQ&nbsp;&nbsp;·&nbsp;&nbsp;GROWTH INTELLIGENCE</div>
     <div class="cmid">
       <div class="ck">SEARCH &amp; AI VISIBILITY ASSESSMENT</div>
-      <div class="cname">${name}</div>
+      <div class="cname">${brandName}</div>
       <div class="csub">Where your customers are searching, what they're finding instead of you, and the fastest verified routes to change it — across Google and the AI answer engines.</div>
     </div>
     <div class="cfoot">
@@ -485,7 +493,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   if (execTiles.length < 6 && lp) execTiles.push(tile('Map-pack presence', `${p0(lp.pack.presenceRate)}`, `In ${n0(lp.pack.inPack)} of ${n0(lp.pack.withPack)} scanned local packs — at average rank ${lp.pack.avgRank} when present.`, lp.pack.presenceRate < 50 ? 'bad' : ''));
   pages.push(pageWrap('EXECUTIVE SUMMARY', 'EXECUTIVE SUMMARY', `
     <h1 class="pg">Where the demand is — and who's capturing it.</h1>
-    <div class="lede">This assessment maps ${name}'s full search footprint across Google and the AI answer engines, from live scans of real queries, rankings and AI answers. The headline findings below each trace to a scanned source; the sections that follow show the work.</div>
+    <div class="lede">This assessment maps ${brandName}'s full search footprint across Google and the AI answer engines, from live scans of real queries, rankings and AI answers. The headline findings below each trace to a scanned source; the sections that follow show the work.</div>
     <div class="tiles c3">${execTiles.slice(0, 6).join('')}</div>
     ${insightHTML(g2, 'WHAT THIS MEANS')}
     ${!pf ? gapBlock('AI visibility data', 'Upload the AI visibility exports on the AI Answer Engines panel and regenerate this report to add the full AI answer-layer assessment.') : ''}`));
@@ -695,20 +703,28 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // AI answer layer
   if (pf) {
     const maxTop = Math.max(1, ...pf.overallTop.map(b => b.pct));
-    const topBars = pf.overallTop.slice(0, 10).map(b =>
-      barRow(b.brand, (b.pct / maxTop) * 100, `${p1(b.pct)} · ${n0(b.count)}`, '#c9c8c1', '1.6in')).join('');
-    const clientBar = pf.totalRuns > 0 ? barRow(pf.client || name, (pfVisPct / maxTop) * 100, `${p1(pfVisPct)} · ${n0(pf.clientHits)}`, 'var(--blue)', '1.6in') : '';
+    // v7.423 — highlight the client's OWN row rather than appending a second one. Before v7.420
+    // the client resolved to the alias bucket "AmEx" (0.55%), which never reached the top 10, so
+    // this appended bar was the only way it appeared. Now the client resolves correctly and ranks
+    // #1, so appending printed "American Express 88.0% · 35,014" TWICE in one chart. The append is
+    // still needed for a genuinely low-ranked client, so it is kept — but only when it is absent.
+    const clientKey = (pf.client || '').trim();
+    const top10 = pf.overallTop.slice(0, 10);
+    const clientInTop = clientKey !== '' && top10.some(b => b.brand === clientKey);
+    const topBars = top10.map(b =>
+      barRow(b.brand, (b.pct / maxTop) * 100, `${p1(b.pct)} · ${n0(b.count)}`, b.brand === clientKey ? 'var(--blue)' : '#c9c8c1', '1.6in')).join('');
+    const clientBar = (!clientInTop && pf.totalRuns > 0) ? barRow(brandName, (pfVisPct / maxTop) * 100, `${p1(pfVisPct)} · ${n0(pf.clientHits)}`, 'var(--blue)', '1.6in') : '';
     const sovRank = pf.sov.slice().sort((a, b) => b.count - a.count).findIndex(s => s.isClient) + 1;
     pages.push(pageWrap('AI ANSWER ENGINES — MARKET POSITION', 'PART III · THE AI ANSWER LAYER', `
       <h1 class="pg">Who AI recommends when your customers ask.</h1>
-      <div class="lede">We analyzed <b>${n0(pf.totalRuns)} real AI answers</b> — ${n0(pf.promptN)} buyer prompts across ${pf.engines.length} engines — and counted who gets named. Scores run over the <b>${n0(pfScored)}</b> answers that named at least one brand, the same basis the AI engine vendor reports on; ${name} appears in ${p1(pfVisPct)} of them.</div>
+      <div class="lede">We analyzed <b>${n0(pf.totalRuns)} real AI answers</b> — ${n0(pf.promptN)} buyer prompts across ${pf.engines.length} engines — and counted who gets named. Scores run over the <b>${n0(pfScored)}</b> answers that named at least one brand, the same basis the AI engine vendor reports on; ${brandName} appears in ${p1(pfVisPct)} of them.</div>
       <div class="tiles c3" style="margin-bottom:16px;">
         ${tile('Overall AI visibility', p1(pfVisPct), `Named in ${n0(pf.clientHits)} of ${n0(pfScored)} brand-naming answers.`, pfVisPct < 5 ? 'bad' : '')}
         ${tile('Prompt coverage', pfClientCov ? `${p0(pfClientCov.pct)} <small>${n0(pfClientCov.count)} of ${n0(pf.promptN)}</small>` : '—', pfRivalCov ? `Prompts where you appear at least once — vs ${pfRivalCov.brand} ${n0(pfRivalCov.count)} (${p0(pfRivalCov.pct)}).` : 'Prompts where you appear at least once.', 'bad')}
         ${tile('Tracked-brand rank', sovRank > 0 ? `#${sovRank} <small>of ${pf.sov.length}</small>` : '—', 'Among the brands tracked for this project, by share of answers.')}
       </div>
       <div class="figtitle">Who AI engines actually name — share of the ${n0(pfScored)} brand-naming answers</div>
-      <div class="figsub">Every brand mentioned in scanned answers, ranked · ${name} highlighted</div>
+      <div class="figsub">Every brand mentioned in scanned answers, ranked · ${brandName} highlighted</div>
       ${topBars}${clientBar}
       <div class="src">Source: AI visibility dataset — brand counts are direct mention counts from real answers.</div>
       ${insightHTML(a3, 'READ')}`));
@@ -927,7 +943,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       : '';
     pages.push(pageWrap('AUDIENCE JOURNEYS', partWho, `
       <h1 class="pg">${jCoverage >= 80 ? 'The journey is mapped. The gaps cluster at the front door.' : 'The journey is mapped — and much of it is uncovered.'}</h1>
-      <div class="lede">Every topic cluster is placed on the buyer journey by funnel stage — the same canonical topics the app's panels count, one source of truth. <b>${n0(jOpt)} of ${n0(jTotal)} topics already have ${name} content to optimize</b>; ${n0(jBuild)} must be built new${jBuild > 0 && jTopStage && jTopStage.builds > 0 ? ` — ${n0(jTopStage.builds)} of those at the ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()} stage` : ''}.</div>
+      <div class="lede">Every topic cluster is placed on the buyer journey by funnel stage — the same canonical topics the app's panels count, one source of truth. <b>${n0(jOpt)} of ${n0(jTotal)} topics already have ${brandName} content to optimize</b>; ${n0(jBuild)} must be built new${jBuild > 0 && jTopStage && jTopStage.builds > 0 ? ` — ${n0(jTopStage.builds)} of those at the ${JOURNEY_LABELS[jTopStage.stage].toLowerCase()} stage` : ''}.</div>
       <div class="tiles c3" style="margin-bottom:13px;">
         ${tile('Topics in journey', `${n0(jTotal)} <small>${n0(jGroupCount)} groups</small>`, 'Every cluster mapped to a funnel stage; volumes are real scanned roll-ups.')}
         ${tile('Journey coverage', p0(jCoverage), `${n0(jOpt)} topics to optimize on existing pages · ${n0(jBuild)} net-new builds.`)}
@@ -1220,7 +1236,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
      .replace('__EBL__', `${name.toUpperCase()} — SEARCH &amp; AI VISIBILITY ASSESSMENT`)
      .replace(/__SEC__/g, () => String(++secN).padStart(2, '0')));
 
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${name} — Search &amp; AI Visibility Assessment</title>
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${brandName} — Search &amp; AI Visibility Assessment</title>
 <style>
   :root{--ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --grid:#e1e0d9; --baseline:#c3c2b7; --surface:#fcfcfb;
     --blue:#2a78d6; --blue-550:#1c5cab; --green:#008300; --yellow:#eda100; --aqua:#1baf7a; --orange:#eb6834; --violet:#4a3aa7;
