@@ -109,6 +109,13 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS authority_snapshot_updated_at TIMESTAMP`); // v7.367
   } catch { /* already exists */ }
+  // v7.426: Product Insights — DataForSEO LLM Mentions scan store (project-level)
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_insights JSONB`);                  // v7.426
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_insights_updated_at TIMESTAMP`);   // v7.426
+  } catch { /* already exists */ }
   // v7.358: manual priority moves (ContentTopic.id → P0..P3). Ensured on the project-page load
   // path so the [id] GET's SELECT * never 500s before the priority-overrides route is hit.
   try {
