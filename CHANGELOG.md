@@ -1,3 +1,47 @@
+## v7.422 — the PDF report was still on the old denominator
+
+**Wayne:** *"does the pdf report reflect all of the recent changes?"* It did not. Good question,
+and my miss: v7.420 changed how the panel derives visibility, and Const II.6 says every rollup
+reading that metric changes in the SAME release. The Assessment PDF did not.
+
+### What was wrong
+
+`buildAssessmentHTML()` computed its own figure:
+
+```
+const pfVisPct = pf.clientHits / pf.totalRuns * 100
+```
+
+`totalRuns` is the whole file (42,111). The panel divides by `scoredRuns` (39,780). So the PDF
+printed **83.1%** on the same analysis where the screen printed **88.0%** — the exact
+vendor-vs-OrbitIQ divergence v7.420 was written to end, recreated one layer up in the artifact the
+client actually receives.
+
+The citation figure was worse than stale, it was **arithmetically impossible**: v7.421 moved owned
+share onto the categorised denominator (13.3%), but the PDF still captioned it
+"43,874 of 447,134" — 13.3% of 447,134 is 59,469. The percentage and its own caption disagreed.
+
+### The rule, enforced
+
+A rollup may **READ** a metric. It may never **RE-DERIVE** one. The template now reads the panel's
+denominators (`scoredRuns`, `citeCategorised`) and falls back to the stored whole-file basis only
+when they are absent — so an analysis saved before v7.420 still renders on the basis it was
+actually computed with, rather than being retroactively re-scored. Ten sites corrected: the
+executive tile, the AI-visibility page lede and tile, the Share-of-Voice figure title, the citation
+supply-chain lede and figure title, and the scorecard rows. The uncategorised count is disclosed
+wherever the citation denominator appears.
+
+The direct-evaluation sentiment tile needed no change — it reads `isClient` off the stored brands,
+so v7.421 fixed it here for free. Re-run the analysis and it appears in the PDF too.
+
+### Verification
+
+Real `tsc` clean; real `next build` compiled. Retained suite A/B: FAIL set byte-identical (19
+pre-existing). **9 new v7.422 checks**, all passing, driven through the REAL `buildAssessmentHTML`
+with Wayne's actual numbers — asserting the rendered HTML contains 88.0% and no longer contains
+83.1%, that the citation caption divides, and that a pre-v7.420 analysis still renders on its own
+basis. No panel or parser code was touched.
+
 ## v7.421 — the missing sentiment card, and two citation denominators told apart
 
 **Wayne** re-uploaded all four Profound exports on v7.420 and asked *"is it right?"*. Every one of
