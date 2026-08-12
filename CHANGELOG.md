@@ -1,3 +1,70 @@
+## v7.420 — AI Visibility: the client comes from the data, and one Profound denominator
+
+**Wayne:** *"when I import the visibility export out of profound and into Orbit I am getting
+different visibility scores. Why?"* — Profound showed American Express at **88%**; OrbitIQ showed
+**0.11%**. Then: *"the name of the project should have nothing to do with anything. I can call a
+project burnt toast if I want to."*
+
+Two independent defects, both reproduced exactly from the 42,111-row export.
+
+### 1. The client was identified from the PROJECT NAME
+
+The export carries two surface forms: `American Express` (35,014 answers) and an alias bucket
+`AmEx` (171). `matchClient()` scored the project name against the roster, so a name carrying the
+token "amex" bound the client to the alias bucket — and reported **0.11%** (1 of 873) while naming
+American Express the *top rival* at 98%. Both wrong figures reproduce to the decimal.
+
+`matchClient()` is **deleted**. The client is now derived from the export's own `mentioned?`
+column, which is Yes exactly when the client appears. Scoring every brand's presence against it
+identifies the client with no naming input: **American Express agrees on 42,111 of 42,111 rows
+(100.0000%)**; the runner-up (Chase) reaches 48.83%. A brand must clear 95% agreement, so no wrong
+brand can win. Profound does not alias `AmEx` to the client either — the 5 answers naming AmEx
+without American Express are all `mentioned?=No` — so OrbitIQ no longer does.
+
+If the column is absent, **no client is resolved** and the panel says so. A 0% that means "unknown"
+reads as "absent", which is a false statement about the client (Const I.1/I.5b — automatic
+DETECTION, never an automatic GUESS). The project name is never read.
+
+### 2. The denominator did not match Profound's
+
+Profound excludes answers where the engine named **no brand at all** — 2,331 of 42,111 (5.54%),
+generic replies that recommend nobody. Including them was the entire remaining gap:
+
+| | Profound | v7.419 | v7.420 |
+|---|---|---|---|
+| American Express | 88% | 83.15% | **88.019%** |
+| Citi | 27% | 25.53% | **26.998%** |
+| Chase | 43.3% | 41.03% | 43.431% |
+| Capital One | 34.2% | 32.51% | 34.294% |
+| Delta | 16.4% | 15.54% | 16.453% |
+
+Every visibility percentage on the page — headline, per-engine, Share of Voice, topic whitespace —
+now uses that one denominator, stated on screen. The panel no longer carries a second methodology.
+
+**The v7.380 strict `type == 'Visibility'` basis is retired.** It reconciled on the 2026-07-27 US
+Bank export but is not a durable rule: on this export it selects 873 of 42,111 answers (2%) and
+reads 17.41%, with Delta at 0.23% against a dashboard 16.4%.
+
+### Known residual
+
+Chase, Capital One and Delta land 0.05–0.13pp above the dashboard. Every platform, date, type and
+a dedupe pass were swept; no filter in this export reproduces all five bars at once (best fit 3/5),
+and each brand solves to a slightly different denominator (39,778–39,909). Most likely the
+dashboard's competitor list is computed on a marginally different window than its chart — the
+export's final day is partial. **No correction factor was added to close it.**
+
+### Verification
+
+Real project `tsc` clean; real `next build` compiled successfully. Retained suite A/B against
+pristine v7.419: FAIL set byte-identical (19 pre-existing, all local-ui/localpack). Five checks
+amended with dated V.6 notes, none deleted; **13 new v7.420 checks**, all passing, driven by a
+42,111-row fixture built in the shape that broke the old code — both surface forms present, 2,331
+no-brand answers, and a deliberately meaningless project name ("burnt toast"). Dual-theme SSR
+render clean. No new colour tokens: the changed lines reuse `text-orbit-secondary` and
+`text-rose-500`, which already ship 21× and 11× in v7.419, so IV.6 has no new surface.
+Real-Chromium contrast measurement did not run — the Playwright CDN is unreachable from this
+sandbox.
+
 ## v7.419 — Category Breakdown: rank-band columns, winning brand per category, checkbox actions
 
 **Wayne:** *"On the right hand columns lets remove the share, and avg position. Lets add a column
