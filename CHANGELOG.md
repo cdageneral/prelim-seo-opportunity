@@ -1,3 +1,32 @@
+## v7.430 — the client report now carries Product Insights (and a new standing rule)
+
+**Wayne:** *"i thought as we added new features or changed any outputs the pdf was to be
+updated? I do not see any insights or data from this new panel on the pdf report"*
+
+**The rule change (Constitution v0.26, Art. II.6b).** Until now the parity rule only forced the
+PDF to update when an EXISTING metric changed — a brand-new panel could truthfully ship with "no
+downstream surface reads this yet" and stay invisible in the client report. That blind spot is
+closed: any release that adds a panel or client-facing metric now ships its Assessment PDF
+section in the same release, or carries Wayne's explicit written deferral. "Not applicable" is no
+longer a permitted answer for a new panel.
+
+**The PDF section.** The Assessment report gains a Part II page — "Product Insights: search and
+AI by product" — showing each product line's demand, page-1 share, field position, AI probe
+score, recorded-answer presence and count of topics that rank on Google but are absent from AI
+answers, plus who AI answers cite across your categories. It renders only when product data
+exists, states "not scanned" honestly where the recorded-answer scan has not run, and prints the
+verdict thresholds and scan date.
+
+**One computation, two surfaces.** The panel's entire aggregation moved into a single shared
+module that the screen, the KPI drill-down/XLSX export (v7.429) and the PDF all call — the
+report cannot drift from the panel because they are the same code reading the same stored data.
+
+* Fix: probe scores now roll up to the product line through the stored taxonomy — categories
+  probed at sub-category level previously showed as "not probed" at the product level.
+* Fix: the client's own brand-search lane no longer appears as a product row (read from the
+  stored category type, never guessed from the name).
+* Build note: rebased onto v7.429 after two parallel releases landed mid-build — the v7.428
+  metric labels and the v7.429 drill-down are fully preserved.
 ## v7.429 — "what are those 44 topics?" — the KPI numbers now open
 
 **Wayne:** *"how do i know what these 44 topics are?"* … *"what does arbitrage [mean]"* …
