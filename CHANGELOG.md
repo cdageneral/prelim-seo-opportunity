@@ -1,3 +1,13 @@
+## v7.431 — a name collision was hiding your biggest product line
+
+Live verification of v7.430 on U.S. Bank caught it: the stored taxonomy carries a flat
+brand-search lane literally named "Credit Cards" next to the Credit Cards product umbrella, and
+the new brand-lane exclusion matched on the name — erasing the whole product line from the panel
+and the report. The rule now excludes only brand lanes with no product categories beneath them; a
+product umbrella that shares its name with a brand lane stays. Caught by the release's own live
+check, fixed and re-verified in the same session, and the regression suite now carries the exact
+U.S. Bank collision as a permanent test case.
+
 ## v7.430 — the client report now carries Product Insights (and a new standing rule)
 
 **Wayne:** *"i thought as we added new features or changed any outputs the pdf was to be
