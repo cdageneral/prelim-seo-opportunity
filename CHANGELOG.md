@@ -1,3 +1,69 @@
+## v7.421 — the missing sentiment card, and two citation denominators told apart
+
+**Wayne** re-uploaded all four Profound exports on v7.420 and asked *"is it right?"*. Every one of
+the nine cards on screen was right — all reconciled exactly against the raw files. But one card was
+**missing**, and it carried the most important finding in the export.
+
+### 1. 24,207 scored direct-evaluation rows were being dropped
+
+The Sentiment export phrases its subjects as full noun phrases —
+`Evaluate the Financial services company American Express on rewards`. Keyed on that raw string,
+`brandSig()` reduced it to `services american express`, which never equalled `american express`,
+so `isClient` was false and the client card never rendered. The rest of the panel matches brands
+with `brandIn()` (subset), which *would* have matched: two different brand-identity functions in
+one file — the same class of defect as the v7.420 AmEx split, in a different corner.
+
+What was hidden:
+
+| Direct evaluation | Scored rows | Mean (0–1) |
+|---|---|---|
+| Bank of America | 4,512 | 0.881 |
+| Discover | 4,005 | 0.854 |
+| Chase | 4,573 | 0.815 |
+| Capital One | 4,250 | 0.783 |
+| **American Express** | **6,867** | **0.728** ← worst of five |
+
+American Express leads every visibility metric in this export (88.02%, #1 of 8, 0 topics at 0%)
+and rates **last** when an engine is asked to evaluate it directly. Absence of a card was reading
+as absence of a finding.
+
+Eval subjects now resolve onto the panel's own brand vocabulary — roster first, then every brand
+named anywhere in the visibility export, longest token match wins. That last part matters: scoping
+it to the roster alone left off-roster evaluated brands (Bank of America, Discover — real brands,
+merely outside the top-7 SoV roster) still wearing the raw prompt wording, mixing two naming
+conventions in one column. If two different wordings ever resolve to one brand, a notice says so
+rather than silently reading only the larger.
+
+### 2. A blank citation category was being relabelled as the real category "Other"
+
+`(row[category] || 'Other')` folded the **116,547** sources Profound shipped with no category into
+`Other`, a category it genuinely assigns to 50,786 others. Absence is not a value (Const I.5).
+Blank now renders as its own `Uncategorised` row.
+
+### 3. Owned citation share is now over categorised sources
+
+Counting uncategorised rows in the denominator treats "unknown" as "not owned". Owned share moves
+from **9.8%** (43,874 / 447,134) to **13.3%** (43,874 / 330,587). The card names the basis and the
+excluded count on screen, so the moved number is never silent.
+
+### 4. The two citation cards name their source
+
+They read *different files* — 664,282 citation cells in the platforms export vs 447,134 rows in the
+citations export. Side by side with unlabelled denominators they read as one contradictory
+universe. Each card now names the file it came from.
+
+### Verification
+
+Real project `tsc` clean; real `next build` compiled successfully. Retained suite A/B against
+pristine v7.420: FAIL set byte-identical (19 pre-existing). **16 new v7.421 checks**, all passing,
+driven by fixtures at real scale carrying the real noun-phrase wording and the real 447,134-row
+category mix. Dual-theme SSR render clean; no new colour tokens (`text-orbit-accent`,
+`text-rose-500` already ship 7× and 11×).
+
+Two of those checks failed first and caught real defects rather than confirming intent: the
+roster-only resolver (fixed by widening the candidate pool) and a fixture that never named
+Bank of America in the visibility export, so there was genuinely nothing to resolve it to.
+
 ## v7.420 — AI Visibility: the client comes from the data, and one Profound denominator
 
 **Wayne:** *"when I import the visibility export out of profound and into Orbit I am getting
