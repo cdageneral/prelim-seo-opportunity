@@ -37,6 +37,7 @@ import type { IntentType } from '@/lib/clusters/canonical';
 import { normSovDomain } from '@/lib/sov/model';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import InsightBanner from './InsightBanner';
+import { exportProductInsightTopicsXLSX, type ProductInsightTopicRow } from '@/lib/export/productInsightsExport';   // v7.429
 import type { Insight, InsightSeg } from '@/lib/insights';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -100,6 +101,26 @@ export function topicVerdict(bestPos: number | null, aiRate: number | null, dfsS
   return 'none';
 }
 
+// ─── The one topic-row builder (v7.429) ──────────────────────────────────────
+// The crosswalk and the KPI drill-down MUST show the same rows in the same order,
+// so both read this function — a second inline derivation is how two views of one
+// number drift apart (Const II.6a / II.7).
+
+export interface TopicRow { t: Topic; best: { pos: number | null; url?: string }; v: TopicVerdict }
+
+export function buildTopicRows(p: { topics: Topic[]; aiRate: number | null; dfsShare: number | null }): TopicRow[] {
+  const rows: TopicRow[] = p.topics.map(t => {
+    const best = t.keywords.reduce<{ pos: number | null; url?: string }>((acc, k: any) => {
+      if (k.position !== null && k.position >= 1 && (acc.pos === null || k.position < acc.pos)) return { pos: k.position, url: k.url };
+      return acc;
+    }, { pos: null });
+    return { t, best, v: topicVerdict(best.pos, p.aiRate, p.dfsShare) };
+  });
+  const order: Record<TopicVerdict, number> = { arb: 0, aiOnly: 1, none: 2, dual: 3, noAiData: 4 };
+  rows.sort((a, b) => (order[a.v] - order[b.v]) || (b.t.totalVolume - a.t.totalVolume));
+  return rows;
+}
+
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
 function fmtVol(v: number): string {
@@ -130,6 +151,10 @@ export default function ProductInsightsSection({
   const [providerOk, setProviderOk]   = useState<boolean>(true);
   const [openProduct, setOpenProduct] = useState<string | null>(null);
   const [showAllTopics, setShowAllTopics]   = useState(false);
+  // v7.429 — KPI drill-down: which verdict's topics are listed flat, across every product.
+  const [drill, setDrill]         = useState<TopicVerdict | null>(null);
+  const [planBusy, setPlanBusy]   = useState(false);
+  const [planNote, setPlanNote]   = useState<string | null>(null);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
   const [confirmScan, setConfirmScan] = useState(false);
   const [scanning, setScanning]       = useState(false);
@@ -392,8 +417,13 @@ export default function ProductInsightsSection({
   const chip = (bg: string, fg: string, border: string, text: string, title?: string) => (
     <span title={title} style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '5px', background: bg, color: fg, border: `1px solid ${border}`, whiteSpace: 'nowrap' }}>{text}</span>
   );
+  // v7.429: the drill-down title uses the SAME wording as the tile it came from.
+  const DRILL_LABEL: Record<TopicVerdict, string> = {
+    arb: 'Google yes, AI no', dual: 'Dual presence', aiOnly: 'AI only',
+    none: 'No presence', noAiData: 'No AI data yet',
+  };
   const VERDICT_CHIP: Record<TopicVerdict, () => JSX.Element> = {
-    arb:      () => chip('var(--ca-108-99-255-0_12)', 'var(--c-9b96ff)', 'var(--ca-108-99-255-0_25)', 'RANKS · ABSENT IN AI'),
+    arb:      () => chip('var(--ca-108-99-255-0_12)', 'var(--c-9b96ff)', 'var(--ca-108-99-255-0_25)', 'GOOGLE YES · AI NO'),
     dual:     () => chip('rgba(52,211,153,0.08)', 'var(--c-34d399)', 'rgba(52,211,153,0.3)', 'DUAL PRESENCE'),
     aiOnly:   () => chip('rgba(245,158,11,0.08)', 'var(--c-f59e0b)', 'rgba(245,158,11,0.3)', 'AI ONLY · NO RANK'),
     none:     () => chip('rgba(248,113,113,0.07)', 'var(--c-f87171)', 'rgba(248,113,113,0.3)', 'NO PRESENCE'),
@@ -470,23 +500,124 @@ export default function ProductInsightsSection({
 
         <InsightBanner insight={insight} style={{ marginBottom: '14px' }} />
 
-        {/* ── KPI tiles ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+        {/* ── KPI tiles — v7.429: the four verdict tiles OPEN the topics behind the number ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: drill ? '10px' : '18px' }}>
           {[
-            { k: 'AUTHORITY, NO AI VISIBILITY', v: String(kpi.arb), s: 'topics ranking page 1 · weak AI', c: 'var(--c-9b96ff)' },
-            { k: 'DUAL PRESENCE', v: String(kpi.dual), s: 'rank + AI answers — defend', c: 'var(--c-34d399)' },
-            { k: 'AI ONLY', v: String(kpi.aiOnly), s: 'in AI answers · no page-1 rank', c: 'var(--c-f59e0b)' },
-            { k: 'NO PRESENCE', v: String(kpi.none), s: 'neither ranked nor in AI', c: 'var(--c-f87171)' },
+            { k: 'GOOGLE YES, AI NO', v: String(kpi.arb), s: 'you rank page 1 · AI never mentions you', c: 'var(--c-9b96ff)', d: 'arb' as TopicVerdict },
+            { k: 'DUAL PRESENCE', v: String(kpi.dual), s: 'rank + AI answers — defend', c: 'var(--c-34d399)', d: 'dual' as TopicVerdict },
+            { k: 'AI ONLY', v: String(kpi.aiOnly), s: 'in AI answers · no page-1 rank', c: 'var(--c-f59e0b)', d: 'aiOnly' as TopicVerdict },
+            { k: 'NO PRESENCE', v: String(kpi.none), s: 'neither ranked nor in AI', c: 'var(--c-f87171)', d: 'none' as TopicVerdict },
             { k: 'OWNED CITATION SHARE', v: kpi.citesTotal > 0 ? `${((kpi.citesClient / kpi.citesTotal) * 100).toFixed(1)}%` : '—',
-              s: kpi.citesTotal > 0 ? `of ${kpi.citesTotal} recorded citations` : 'scan recorded answers to measure', c: 'var(--c-46cce0)' },
-          ].map(t => (
-            <div key={t.k} style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '10px', padding: '11px 13px' }}>
-              <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)' }}>{t.k}</div>
-              <div style={{ fontSize: '22px', fontWeight: 800, color: t.c, fontVariantNumeric: 'tabular-nums' }}>{t.v}</div>
-              <div style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)' }}>{t.s}</div>
-            </div>
-          ))}
+              s: kpi.citesTotal > 0 ? `of ${kpi.citesTotal} recorded citations` : 'scan recorded answers to measure', c: 'var(--c-46cce0)', d: null },
+          ].map(t => {
+            const active = t.d !== null && drill === t.d;
+            return (
+              <div
+                key={t.k}
+                role={t.d ? 'button' : undefined}
+                tabIndex={t.d ? 0 : undefined}
+                aria-pressed={t.d ? active : undefined}
+                title={t.d ? 'Show the topics behind this number' : undefined}
+                onClick={t.d ? () => { setDrill(active ? null : t.d); setPlanNote(null); } : undefined}
+                onKeyDown={t.d ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDrill(active ? null : t.d); setPlanNote(null); } } : undefined}
+                style={{ background: 'var(--c-111120)', border: `1px solid ${active ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
+                  borderRadius: '10px', padding: '11px 13px', cursor: t.d ? 'pointer' : 'default' }}
+              >
+                <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)' }}>{t.k}</div>
+                <div style={{ fontSize: '22px', fontWeight: 800, color: t.c, fontVariantNumeric: 'tabular-nums' }}>{t.v}</div>
+                <div style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)' }}>{t.s}</div>
+                {t.d && (
+                  <div style={{ fontSize: '9.5px', fontWeight: 700, marginTop: '3px', color: active ? 'var(--c-9b96ff)' : 'var(--c-6a6a90)' }}>
+                    {active ? 'Hide these topics ▲' : 'Show these topics ▼'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
+
+        {/* ── v7.429 · KPI drill-down: every topic behind the number, across every product ── */}
+        {drill && (() => {
+          const label = DRILL_LABEL[drill];
+          const rows = products.flatMap(p => buildTopicRows(p).filter(r => r.v === drill).map(r => ({ p, ...r })));
+          rows.sort((a, b) => b.t.totalVolume - a.t.totalVolume);
+          const xlsxRows: ProductInsightTopicRow[] = rows.map(({ p, t, best }) => ({
+            verdict: label, product: p.name, topic: t.product || t.parentName,
+            page: best.url ? (best.url.replace(/^https?:\/\/[^/]*/, '') || '/') : '',
+            bestRank: best.pos, demand: t.totalVolume, stage: t.stage || '', keywords: t.keywords.length,
+          }));
+          return (
+            <div style={{ border: '1px solid var(--ca-108-99-255-0_45)', borderRadius: '10px', background: 'var(--c-0a0a14)', padding: '13px 15px', marginBottom: '18px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '9px' }}>
+                <span style={{ fontSize: '11.5px', fontWeight: 800, letterSpacing: '0.06em', color: 'var(--c-9b96ff)' }}>{label.toUpperCase()} — {rows.length} TOPIC{rows.length === 1 ? '' : 'S'}</span>
+                <span style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)' }}>every product · sorted by demand · same rows the crosswalk shows</span>
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: '7px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  {planNote && <span style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)' }}>{planNote}</span>}
+                  <button
+                    onClick={() => { void exportProductInsightTopicsXLSX(xlsxRows, { clientName: domain, verdictLabel: label }); }}
+                    style={{ fontSize: '10.5px', fontWeight: 700, padding: '5px 10px', borderRadius: '7px', cursor: 'pointer',
+                      background: 'transparent', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}
+                  >Export .xlsx</button>
+                  <button
+                    disabled={planBusy || rows.length === 0}
+                    onClick={async () => {
+                      setPlanBusy(true); setPlanNote(null);
+                      try {
+                        // READ-MODIFY-WRITE against the server set — never a blind PUT of a
+                        // locally-derived selection (the v7.371/v7.419 clobber lesson).
+                        const gr = await fetch(`/api/projects/${projectId}/content-plan`, { cache: 'no-store' });
+                        if (!gr.ok) throw new Error('read failed');
+                        const gd = await gr.json();
+                        const set = new Set<string>(Array.isArray(gd.selections) ? gd.selections : []);
+                        const before = set.size;
+                        for (const r of rows) set.add(String(r.t.id));
+                        if (set.size === before) { setPlanNote('already in the content plan'); return; }
+                        const pr = await fetch(`/api/projects/${projectId}/content-plan`, {
+                          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selections: Array.from(set) }),
+                        });
+                        if (!pr.ok) throw new Error('save failed');
+                        setPlanNote(`added ${set.size - before} to the content plan`);
+                      } catch {
+                        setPlanNote('could not update the content plan — nothing was changed');   // honest gap (I.5)
+                      } finally { setPlanBusy(false); }
+                    }}
+                    style={{ fontSize: '10.5px', fontWeight: 700, padding: '5px 10px', borderRadius: '7px', cursor: planBusy ? 'default' : 'pointer',
+                      background: 'var(--ca-108-99-255-0_1)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)', opacity: planBusy ? 0.6 : 1 }}
+                  >{planBusy ? 'Adding…' : 'Add all to Content Plan'}</button>
+                  <button onClick={() => { setDrill(null); setPlanNote(null); }}
+                    style={{ fontSize: '10.5px', fontWeight: 700, padding: '5px 10px', borderRadius: '7px', cursor: 'pointer',
+                      background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}
+                  >Close</button>
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px,1fr) minmax(190px,1.5fr) 70px 92px 92px', gap: '10px', padding: '0 10px 4px',
+                fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
+                <span>PRODUCT</span><span>TOPIC · YOUR PAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>STAGE</span>
+              </div>
+              {rows.length === 0 && <div style={{ fontSize: '11.5px', color: 'var(--c-8a8aa8)', padding: '8px 10px' }}>No topics carry this verdict.</div>}
+              {rows.map(({ p, t, best }) => (
+                <div key={`${p.name}::${t.id}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(150px,1fr) minmax(190px,1.5fr) 70px 92px 92px', gap: '10px', alignItems: 'center',
+                  background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '8px', padding: '7px 10px', marginBottom: '5px' }}>
+                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-c8c8e8)' }}>{p.name}</div>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{t.product || t.parentName}</div>
+                    <div style={{ fontSize: '9.5px', color: best.url ? 'var(--c-6a6a90)' : 'var(--c-f87171)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {best.url ? best.url.replace(/^https?:\/\/[^/]*/, '') || '/' : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
+                      {' '}· {t.keywords.length} kw
+                    </div>
+                  </div>
+                  <div>
+                    {best.pos !== null
+                      ? chip('transparent', best.pos <= 3 ? 'var(--c-34d399)' : best.pos <= 10 ? 'var(--c-46cce0)' : best.pos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-f87171)', 'var(--c-2a2a40)', `#${best.pos}`)
+                      : chip('transparent', 'var(--c-55557a)', 'var(--c-2a2a40)', '—')}
+                  </div>
+                  <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(t.totalVolume)}</div>
+                  <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)' }}>{t.stage}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* ── category grid (v7.428: no header strip — every metric carries its own label) ── */}
 
@@ -570,9 +701,9 @@ export default function ProductInsightsSection({
                     : gap <= -20 ? chip('rgba(245,158,11,0.08)', 'var(--c-f59e0b)', 'rgba(245,158,11,0.3)', `SEARCH LAGS AI ${gap}`)
                     : chip('rgba(52,211,153,0.08)', 'var(--c-34d399)', 'rgba(52,211,153,0.3)', 'BALANCED')}
                 </div>
-                <div style={{ textAlign: 'center' }}>
+                <div style={{ textAlign: 'center' }} title="You rank on page 1 of Google for these topics, but AI answers about them never mention you. The cheapest wins on the board — the hard part (earning the ranking) is already done.">
                   <div style={{ fontSize: '15px', fontWeight: 800, color: p.arbTopics > 0 ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>{p.arbTopics}</div>
-                  <div style={{ fontSize: '9px', color: 'var(--c-6a6a90)', lineHeight: 1.25 }}>Arbitrage topics</div>
+                  <div style={{ fontSize: '9px', color: 'var(--c-6a6a90)', lineHeight: 1.25 }}>Google yes, AI no</div>
                 </div>
               </div>
 
@@ -647,15 +778,7 @@ export default function ProductInsightsSection({
                     <span>TOPIC · YOUR PAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>STAGE</span><span>VERDICT</span>
                   </div>
                   {(() => {
-                    const rowsAll = p.topics.map(t => {
-                      const best = t.keywords.reduce<{ pos: number | null; url?: string }>((acc, k) => {
-                        if (k.position !== null && k.position >= 1 && (acc.pos === null || k.position < acc.pos)) return { pos: k.position, url: k.url };
-                        return acc;
-                      }, { pos: null });
-                      return { t, best, v: topicVerdict(best.pos, p.aiRate, p.dfsShare) };
-                    });
-                    const order: Record<TopicVerdict, number> = { arb: 0, aiOnly: 1, none: 2, dual: 3, noAiData: 4 };
-                    rowsAll.sort((a, b) => (order[a.v] - order[b.v]) || (b.t.totalVolume - a.t.totalVolume));
+                    const rowsAll = buildTopicRows(p);   // v7.429: the shared builder — same rows the KPI drill-down lists
                     const shown = showAllTopics ? rowsAll : rowsAll.slice(0, 12);
                     return (
                       <>
