@@ -111,6 +111,15 @@ export const projects = pgTable('projects', {
   // v7.268 lesson — the list query selects every schema column). No manual db:push.
   profoundData:              jsonb('profound_data'),
   profoundDataUpdatedAt:     timestamp('profound_data_updated_at'),
+  // v7.426: Product Insights — recorded AI answers pulled from DataForSEO LLM Mentions
+  // (ChatGPT + Google AI Overviews), keyed by top-level product category. Server-side so
+  // the scan survives refreshes/devices and is visible to any user opening the project
+  // (same rationale as profound_data). Rows are verbatim trimmed API fields (Const I.1);
+  // `aiSearchVolume` inside rows is DataForSEO's ESTIMATED metric and every consumer must
+  // label it as such (I.5a). Auto-migrated via ADD COLUMN IF NOT EXISTS and ensured in the
+  // projects-list + [id] routes (the v7.268/v7.327 column lesson).
+  productInsights:           jsonb('product_insights'),
+  productInsightsUpdatedAt:  timestamp('product_insights_updated_at'),
   // v7.342: the project's CANONICAL TAXONOMY ANCHOR (distinct canonical paths from the
   // last successful anchored-engine breakdown, capped). Lives on the PROJECT — like brand
   // terms — so it SURVIVES the full keyword reset Wayne's upload workflow runs (the reset
