@@ -534,6 +534,8 @@ export default function KeywordsPanel({
   const [addError,    setAddError]    = useState('');
   const [addLoading,  setAddLoading]  = useState(false);
   const [deletingKey,   setDeletingKey]   = useState<string | null>(null);
+  // v7.425: a keyword removal that did NOT take is stated on screen, never swallowed (Const I.5).
+  const [deleteNote,    setDeleteNote]    = useState<string | null>(null);
   // volThreshold comes from the project-level setting (Edit Project); not adjustable inline
   const [volThreshold] = useState<number>(defaultCompetitorThreshold);
   // Column sort
@@ -1122,31 +1124,52 @@ export default function KeywordsPanel({
     }
   }
 
+  // ── v7.425: remove ONE keyword everywhere ───────────────────────────────────
+  // A keyword can exist in TWO places at once: an uploaded row in project_keywords
+  // AND a row inside the stored analysis snapshot (client footprint `topKeywords` or
+  // competitor `gapKeywords`). Before v7.425 a csv/custom delete only hard-deleted the
+  // uploaded row, so a keyword that ALSO sat in the snapshot was re-supplied by
+  // buildKwPool on the very next render and the delete looked like it did nothing
+  // (Wayne, 2026-08-11: "when i click the x to delete a keyword - nothing happens").
+  // The blocked TOMBSTONE is the only removal that reaches the snapshot lenses: it is
+  // applied inside buildKwPool (the single chokepoint), so one write drops the keyword
+  // from every panel, every rollup and every volume total at once — while
+  // `_categoryBreakdown` (categories, parents, keywordPaths, membership) is never
+  // touched, so the product-category structure stays exactly as it was (Const II.8).
+  // Therefore: ALWAYS tombstone, and ALSO hard-delete the uploaded row when there is
+  // one, so the keyword stops counting as an upload. 409 = already tombstoned (the
+  // route rejects a duplicate blocked row) and is a success, not a failure.
+  async function removeKeywordEverywhere(row: KeywordRow): Promise<boolean> {
+    let ok = true;
+    if (row.source !== 'semrush') {
+      const del = await fetch(`/api/projects/${projectId}/keywords`, {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ keyword: row.keyword, source: row.source }),
+      });
+      if (!del.ok) ok = false;
+    }
+    const res = await fetch(`/api/projects/${projectId}/keywords`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        keyword:      row.keyword,
+        searchVolume: row.searchVolume,
+        type:         row.type,
+        branded:      row.branded,
+        source:       'blocked',
+      }),
+    });
+    if (!res.ok && res.status !== 409) ok = false;
+    return ok;
+  }
+
   // ── Delete / block keyword ──
   async function handleDelete(row: KeywordRow) {
     setDeletingKey(row.key);
     try {
-      if (row.source === 'semrush') {
-        // Block the semrush keyword so it stays hidden
-        await fetch(`/api/projects/${projectId}/keywords`, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({
-            keyword:      row.keyword,
-            searchVolume: row.searchVolume,
-            type:         row.type,
-            branded:      row.branded,
-            source:       'blocked',
-          }),
-        });
-      } else {
-        // Hard delete the custom/csv row
-        await fetch(`/api/projects/${projectId}/keywords`, {
-          method:  'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ keyword: row.keyword, source: row.source }),
-        });
-      }
+      const ok = await removeKeywordEverywhere(row);
+      setDeleteNote(ok ? null : `Could not remove “${row.keyword}” — nothing was changed. Try again.`);
       await fetchDb();
       onKeywordsChanged?.();   // v7.108: refresh dependent panels
     } finally {
@@ -1162,22 +1185,25 @@ export default function KeywordsPanel({
   // truth (Const II.7): the tree is a view, so removing members drops the node and
   // re-rolls-up volumes arithmetically; no taxonomy JSONB is edited at a read site.
   // Chunked to avoid flooding the API, then ONE refresh so dependent panels update once.
+  // v7.425: every row goes through removeKeywordEverywhere (tombstone + uploaded-row
+  // delete), because a hard delete alone cannot remove a keyword that also lives in the
+  // stored analysis snapshot. Failures are COUNTED and surfaced — a delete that silently
+  // did nothing is exactly the bug this release fixes (Const I.5).
   async function deleteRows(rowsToDelete: KeywordRow[]) {
     const uniq = Array.from(new Map(rowsToDelete.map(r => [r.key, r])).values());
     const chunk = 20;
+    let failed = 0;
     for (let i = 0; i < uniq.length; i += chunk) {
-      await Promise.all(uniq.slice(i, i + chunk).map(row =>
-        row.source === 'semrush'
-          ? fetch(`/api/projects/${projectId}/keywords`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ keyword: row.keyword, searchVolume: row.searchVolume, type: row.type, branded: row.branded, source: 'blocked' }),
-            })
-          : fetch(`/api/projects/${projectId}/keywords`, {
-              method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ keyword: row.keyword, source: row.source }),
-            }),
-      ));
+      const results = await Promise.all(
+        uniq.slice(i, i + chunk).map(row => removeKeywordEverywhere(row).catch(() => false)),
+      );
+      failed += results.filter(ok => !ok).length;
     }
+    setDeleteNote(
+      failed === 0
+        ? null
+        : `${failed.toLocaleString()} of ${uniq.length.toLocaleString()} keyword${uniq.length === 1 ? '' : 's'} could not be removed — the rest were. Try again.`,
+    );
     await fetchDb();
     onKeywordsChanged?.();   // refresh dependent panels (single source of truth, Const II.7)
   }
@@ -2390,6 +2416,15 @@ export default function KeywordsPanel({
           v7.139: vertical scrolling now lives on the panel root; this wrapper
           only handles horizontal overflow for the wide table. No fixed height,
           so it flows into the root scroller and nothing gets clipped. */}
+      {/* v7.425: a failed keyword removal is stated here rather than silently ignored (Const I.5). */}
+      {deleteNote && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 20px 8px', padding: '7px 12px', borderRadius: 8, background: 'var(--ca-248-113-113-0_2)', border: '1px solid var(--c-f87171)' }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-f87171)', flex: '1 1 auto' }}>{deleteNote}</span>
+          <button type="button" onClick={() => setDeleteNote(null)} aria-label="Dismiss"
+            style={{ fontSize: 10, color: 'var(--c-9090b8)', background: 'transparent', border: 'none', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
 
         {/* Category breakdown — inside scroll so it doesn't eat fixed height above the table */}
