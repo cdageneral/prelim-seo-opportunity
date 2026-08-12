@@ -29,6 +29,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
+import { buildProductRows, type ProductRow, type ProductKpi, type StoredCatScan } from '@/lib/productInsights';   // v7.427: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -126,6 +127,31 @@ export async function POST(req: NextRequest) {
     console.error('[PDF v7.376] canonical topic build FAILED — journey sections omitted:', err);
   }
 
+  // ── v7.427: Product Insights — the SAME shared basis the panel renders (Const II.6b) ──
+  // Inputs are all already loaded above; a build failure omits the section honestly.
+  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null } | null = null;
+  try {
+    if (journeyTopics && journeyTopics.length > 0) {
+      const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
+      const built = buildProductRows({
+        topics:           journeyTopics,
+        uploadedKeywords: kwRows,
+        serpPositions:    ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+        llmProbe:         (analysis as any).llmProbe ?? null,
+        storedScans:      scans,
+        clientDomain,
+        brandTerms:       (((project as any).brandTerms ?? []) as string[]),
+        breakdown:        (snap as any)?._categoryBreakdown,
+      });
+      if (built.products.length > 0) {
+        const ts = (project as any).productInsightsUpdatedAt;
+        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null };
+      }
+    }
+  } catch (err) {
+    console.error('[PDF v7.427] product insights build FAILED — section omitted:', err);
+  }
+
   // ── v7.404: real AI Overview + People Also Ask rows, flattened for the report ──
   // Both are already scanned per keyword (lib/apis/serp.ts) and stored on
   // analyses.serp_api_snapshot, but nothing ever passed them to this report. The
@@ -213,6 +239,7 @@ export async function POST(req: NextRequest) {
     problemSeeds: (((snap as any)?._demandUniverse?.problemSeeds) ?? []) as string[],
     serpFeatures,
     program,
+    productInsights,   // v7.427 (Const II.6b)
   });
   let pdfBuffer: Buffer;
 
