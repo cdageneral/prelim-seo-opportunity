@@ -1,4 +1,4 @@
-## v7.420 — the brand ladder opens with the category row
+## v7.424 — the brand ladder opens with the category row
 
 **Wayne:** *"I see the winner chip but I do not see the tracked brands percentage."* — The ladder
 was working; it just lived behind a small chip inside a fully-clickable row, so expanding a
@@ -11,6 +11,232 @@ category showed the keyword chips and the ladder stayed shut.
   the row, or to close the ladder while the row stays expanded. Its ▸/▾ arrow reflects the real
   state either way, and collapsing the row closes the ladder with it.
 * No data or math changed — same measured page-1 volume shares, same sources, same coverage line.
+
+*Numbering note: this work was built as v7.420 against the v7.419 base while a parallel session
+shipped v7.420–v7.423. It ships as v7.424 so no two releases share a number, and the v7.420–v7.423
+changelog entries a mid-flight push had removed are restored below.*
+
+## v7.423 — one brand name, one client bar
+
+**Wayne, reading the printed report:** *"why is there two American Express listed?"* Two defects in
+one figure, both **surfaced by** the v7.420 client fix rather than caused by it — the class of thing
+Const II.6a (added yesterday) exists to catch.
+
+### 1. The client bar was appended unconditionally
+
+```
+${topBars}${clientBar}
+```
+
+Before v7.420 the client resolved to the alias bucket `AmEx` at 0.55% — never inside the top 10 —
+so appending a highlighted bar was the *only* way the client appeared in the chart. Once the client
+resolved correctly to American Express at #1, the ranked list already contained it and the append
+printed **`88.0% · 35,014` twice in one chart**. The client's own row is now highlighted in place,
+and the append is kept for the case it was written for: a client that genuinely falls outside the
+top 10.
+
+### 2. The internal project label was printed on a client-facing report
+
+`d.clientName` is the project record's name field, and this project is filed as **"Amex (Card
+Shop)"**. It was rendering on the cover, in **every page footer**, the HTML document title and four
+body sentences — including *"Amex (Card Shop) appears in 88.0% of them"* — while the bar beside it
+read "American Express", because that one line already used the resolved brand. The two disagreed
+on the same page.
+
+v7.420 stopped the project name **driving** the numbers. Nothing had stopped it being
+**displayed**. A project may be named anything; the report speaks the brand the export's own
+`mentioned?` column identifies, and falls back to the project label only when no client resolves at
+all, so a report is never left nameless (I.5).
+
+### Verification
+
+Real `tsc` clean; real `next build` compiled. Retained suite A/B against pristine v7.422: FAIL set
+byte-identical (19 pre-existing). **5 new v7.423 checks**, all passing, driven through the real
+`buildAssessmentHTML` with the project deliberately named "Amex (Card Shop)" — asserting the client
+is drawn once when in the top 10, still drawn once when outside it, that the project label appears
+zero times, and that a no-client analysis still falls back to a name.
+
+Both failing first drafts of those checks were **my measurement, not the code**: counting the brand
+name caught the cover and captions too, and a fixture whose engine and topic tallies equalled the
+client total made the value label ambiguous across three charts. Fixtures must make the thing under
+test uniquely identifiable.
+
+## v7.422 — the PDF report was still on the old denominator
+
+**Wayne:** *"does the pdf report reflect all of the recent changes?"* It did not. Good question,
+and my miss: v7.420 changed how the panel derives visibility, and Const II.6 says every rollup
+reading that metric changes in the SAME release. The Assessment PDF did not.
+
+### What was wrong
+
+`buildAssessmentHTML()` computed its own figure:
+
+```
+const pfVisPct = pf.clientHits / pf.totalRuns * 100
+```
+
+`totalRuns` is the whole file (42,111). The panel divides by `scoredRuns` (39,780). So the PDF
+printed **83.1%** on the same analysis where the screen printed **88.0%** — the exact
+vendor-vs-OrbitIQ divergence v7.420 was written to end, recreated one layer up in the artifact the
+client actually receives.
+
+The citation figure was worse than stale, it was **arithmetically impossible**: v7.421 moved owned
+share onto the categorised denominator (13.3%), but the PDF still captioned it
+"43,874 of 447,134" — 13.3% of 447,134 is 59,469. The percentage and its own caption disagreed.
+
+### The rule, enforced
+
+A rollup may **READ** a metric. It may never **RE-DERIVE** one. The template now reads the panel's
+denominators (`scoredRuns`, `citeCategorised`) and falls back to the stored whole-file basis only
+when they are absent — so an analysis saved before v7.420 still renders on the basis it was
+actually computed with, rather than being retroactively re-scored. Ten sites corrected: the
+executive tile, the AI-visibility page lede and tile, the Share-of-Voice figure title, the citation
+supply-chain lede and figure title, and the scorecard rows. The uncategorised count is disclosed
+wherever the citation denominator appears.
+
+The direct-evaluation sentiment tile needed no change — it reads `isClient` off the stored brands,
+so v7.421 fixed it here for free. Re-run the analysis and it appears in the PDF too.
+
+### Verification
+
+Real `tsc` clean; real `next build` compiled. Retained suite A/B: FAIL set byte-identical (19
+pre-existing). **9 new v7.422 checks**, all passing, driven through the REAL `buildAssessmentHTML`
+with Wayne's actual numbers — asserting the rendered HTML contains 88.0% and no longer contains
+83.1%, that the citation caption divides, and that a pre-v7.420 analysis still renders on its own
+basis. No panel or parser code was touched.
+
+## v7.421 — the missing sentiment card, and two citation denominators told apart
+
+**Wayne** re-uploaded all four Profound exports on v7.420 and asked *"is it right?"*. Every one of
+the nine cards on screen was right — all reconciled exactly against the raw files. But one card was
+**missing**, and it carried the most important finding in the export.
+
+### 1. 24,207 scored direct-evaluation rows were being dropped
+
+The Sentiment export phrases its subjects as full noun phrases —
+`Evaluate the Financial services company American Express on rewards`. Keyed on that raw string,
+`brandSig()` reduced it to `services american express`, which never equalled `american express`,
+so `isClient` was false and the client card never rendered. The rest of the panel matches brands
+with `brandIn()` (subset), which *would* have matched: two different brand-identity functions in
+one file — the same class of defect as the v7.420 AmEx split, in a different corner.
+
+What was hidden:
+
+| Direct evaluation | Scored rows | Mean (0–1) |
+|---|---|---|
+| Bank of America | 4,512 | 0.881 |
+| Discover | 4,005 | 0.854 |
+| Chase | 4,573 | 0.815 |
+| Capital One | 4,250 | 0.783 |
+| **American Express** | **6,867** | **0.728** ← worst of five |
+
+American Express leads every visibility metric in this export (88.02%, #1 of 8, 0 topics at 0%)
+and rates **last** when an engine is asked to evaluate it directly. Absence of a card was reading
+as absence of a finding.
+
+Eval subjects now resolve onto the panel's own brand vocabulary — roster first, then every brand
+named anywhere in the visibility export, longest token match wins. That last part matters: scoping
+it to the roster alone left off-roster evaluated brands (Bank of America, Discover — real brands,
+merely outside the top-7 SoV roster) still wearing the raw prompt wording, mixing two naming
+conventions in one column. If two different wordings ever resolve to one brand, a notice says so
+rather than silently reading only the larger.
+
+### 2. A blank citation category was being relabelled as the real category "Other"
+
+`(row[category] || 'Other')` folded the **116,547** sources Profound shipped with no category into
+`Other`, a category it genuinely assigns to 50,786 others. Absence is not a value (Const I.5).
+Blank now renders as its own `Uncategorised` row.
+
+### 3. Owned citation share is now over categorised sources
+
+Counting uncategorised rows in the denominator treats "unknown" as "not owned". Owned share moves
+from **9.8%** (43,874 / 447,134) to **13.3%** (43,874 / 330,587). The card names the basis and the
+excluded count on screen, so the moved number is never silent.
+
+### 4. The two citation cards name their source
+
+They read *different files* — 664,282 citation cells in the platforms export vs 447,134 rows in the
+citations export. Side by side with unlabelled denominators they read as one contradictory
+universe. Each card now names the file it came from.
+
+### Verification
+
+Real project `tsc` clean; real `next build` compiled successfully. Retained suite A/B against
+pristine v7.420: FAIL set byte-identical (19 pre-existing). **16 new v7.421 checks**, all passing,
+driven by fixtures at real scale carrying the real noun-phrase wording and the real 447,134-row
+category mix. Dual-theme SSR render clean; no new colour tokens (`text-orbit-accent`,
+`text-rose-500` already ship 7× and 11×).
+
+Two of those checks failed first and caught real defects rather than confirming intent: the
+roster-only resolver (fixed by widening the candidate pool) and a fixture that never named
+Bank of America in the visibility export, so there was genuinely nothing to resolve it to.
+
+## v7.420 — AI Visibility: the client comes from the data, and one Profound denominator
+
+**Wayne:** *"when I import the visibility export out of profound and into Orbit I am getting
+different visibility scores. Why?"* — Profound showed American Express at **88%**; OrbitIQ showed
+**0.11%**. Then: *"the name of the project should have nothing to do with anything. I can call a
+project burnt toast if I want to."*
+
+Two independent defects, both reproduced exactly from the 42,111-row export.
+
+### 1. The client was identified from the PROJECT NAME
+
+The export carries two surface forms: `American Express` (35,014 answers) and an alias bucket
+`AmEx` (171). `matchClient()` scored the project name against the roster, so a name carrying the
+token "amex" bound the client to the alias bucket — and reported **0.11%** (1 of 873) while naming
+American Express the *top rival* at 98%. Both wrong figures reproduce to the decimal.
+
+`matchClient()` is **deleted**. The client is now derived from the export's own `mentioned?`
+column, which is Yes exactly when the client appears. Scoring every brand's presence against it
+identifies the client with no naming input: **American Express agrees on 42,111 of 42,111 rows
+(100.0000%)**; the runner-up (Chase) reaches 48.83%. A brand must clear 95% agreement, so no wrong
+brand can win. Profound does not alias `AmEx` to the client either — the 5 answers naming AmEx
+without American Express are all `mentioned?=No` — so OrbitIQ no longer does.
+
+If the column is absent, **no client is resolved** and the panel says so. A 0% that means "unknown"
+reads as "absent", which is a false statement about the client (Const I.1/I.5b — automatic
+DETECTION, never an automatic GUESS). The project name is never read.
+
+### 2. The denominator did not match Profound's
+
+Profound excludes answers where the engine named **no brand at all** — 2,331 of 42,111 (5.54%),
+generic replies that recommend nobody. Including them was the entire remaining gap:
+
+| | Profound | v7.419 | v7.420 |
+|---|---|---|---|
+| American Express | 88% | 83.15% | **88.019%** |
+| Citi | 27% | 25.53% | **26.998%** |
+| Chase | 43.3% | 41.03% | 43.431% |
+| Capital One | 34.2% | 32.51% | 34.294% |
+| Delta | 16.4% | 15.54% | 16.453% |
+
+Every visibility percentage on the page — headline, per-engine, Share of Voice, topic whitespace —
+now uses that one denominator, stated on screen. The panel no longer carries a second methodology.
+
+**The v7.380 strict `type == 'Visibility'` basis is retired.** It reconciled on the 2026-07-27 US
+Bank export but is not a durable rule: on this export it selects 873 of 42,111 answers (2%) and
+reads 17.41%, with Delta at 0.23% against a dashboard 16.4%.
+
+### Known residual
+
+Chase, Capital One and Delta land 0.05–0.13pp above the dashboard. Every platform, date, type and
+a dedupe pass were swept; no filter in this export reproduces all five bars at once (best fit 3/5),
+and each brand solves to a slightly different denominator (39,778–39,909). Most likely the
+dashboard's competitor list is computed on a marginally different window than its chart — the
+export's final day is partial. **No correction factor was added to close it.**
+
+### Verification
+
+Real project `tsc` clean; real `next build` compiled successfully. Retained suite A/B against
+pristine v7.419: FAIL set byte-identical (19 pre-existing, all local-ui/localpack). Five checks
+amended with dated V.6 notes, none deleted; **13 new v7.420 checks**, all passing, driven by a
+42,111-row fixture built in the shape that broke the old code — both surface forms present, 2,331
+no-brand answers, and a deliberately meaningless project name ("burnt toast"). Dual-theme SSR
+render clean. No new colour tokens: the changed lines reuse `text-orbit-secondary` and
+`text-rose-500`, which already ship 21× and 11× in v7.419, so IV.6 has no new surface.
+Real-Chromium contrast measurement did not run — the Playwright CDN is unreachable from this
+sandbox.
 
 ## v7.419 — Category Breakdown: rank-band columns, winning brand per category, checkbox actions
 
