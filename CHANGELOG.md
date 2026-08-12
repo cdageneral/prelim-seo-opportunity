@@ -1,3 +1,44 @@
+## v7.429 — "what are those 44 topics?" — the KPI numbers now open
+
+**Wayne:** *"how do i know what these 44 topics are?"* … *"what does arbitrage [mean]"* …
+*"do something different that a common person would understand."*
+
+Fair questions, and the panel had no good answer to the first. The 44 was a roll-up of each
+product's own count; the only way to see the topics behind it was to expand all fourteen products
+one at a time and read the chips, twelve rows at a time, with no export. A number you can't open
+is a number you can't act on.
+
+**The four verdict tiles are now buttons.** Click one and it lists **every topic behind that
+number, across every product**, sorted by demand: product, topic, your ranking page, best rank,
+demand/mo, funnel stage. Keyboard-reachable (`role="button"`, Enter/Space, `aria-pressed`). The
+Owned-citation-share tile is deliberately NOT clickable — it counts citations, not topics, so
+there is no topic list under it.
+
+**Two actions on the list:** `Export .xlsx` (one row per topic — a pure serializer over the same
+rows on screen; an unranked topic exports a BLANK rank, never a zero, Const I.1) and
+`Add all to Content Plan`, which does a **read-modify-write against the server selection** and
+unions — never a blind PUT of a locally-derived set (the v7.371/v7.419 clobber lesson). A failed
+write says so and changes nothing (I.5).
+
+**One builder, so the two views cannot drift.** The crosswalk used to derive its topic rows
+inline; that logic is now the exported `buildTopicRows()` and both the crosswalk and the
+drill-down read it. The drill-down is a *view* of the same rows, not a second derivation
+(Const II.6a / II.7).
+
+**And it's called the same thing everywhere now.** One concept had three names — the tile said
+AUTHORITY, NO AI VISIBILITY, the row said "Arbitrage topics", the chip said RANKS · ABSENT IN AI —
+and "arbitrage" is finance jargon. All four sites now read **Google yes, AI no**, with the count
+explaining itself on hover: *you rank on page 1 of Google for these topics, but AI answers about
+them never mention you.* Two retained checks were AMENDED with dated notes to follow the rename
+(never deleted to pass, Const V.6); the verdict rule and its thresholds are byte-identical — only
+the words changed.
+
+Verified: real tsc + real `next build` clean; retained suite zero regression delta against the
+pristine v7.428 base (1,245 pass) with 14 new checks; the machine contrast gate **caught a real
+defect in this release** — the new primary button was a solid accent fill, the known 4.32:1
+dark-theme pair — so it was restyled to the panel's own proven tinted CTA rather than adding
+allowlist debt. Drill-down rendered and clicked open in real Chromium in both themes.
+
 ## v7.428 — Product Insights: the header strip is gone; every metric says what it is
 
 **Wayne:** *"lets remove the header row above the container and then add the description of the
