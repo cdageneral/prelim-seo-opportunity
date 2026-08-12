@@ -132,6 +132,10 @@ interface Metrics {
   citeOwnedDomain: string;
   citeCompetition: number;
   citeCatMix: CiteCatStat[];
+  // v7.421 — both optional on read so analyses saved before v7.421 keep rendering on their
+  // original (whole-file) basis rather than being silently re-scored.
+  citeUncategorised?: number;
+  citeCategorised?: number;
   earnedTargets: CiteDomain[];
   competitorCites: CiteDomain[];
   engineSourceMix: EngineSourceMix[];
@@ -360,6 +364,9 @@ const COLS: Record<SlotKey, FieldSpec[]> = {
     { field: 'mentioned', aliases: ['mentioned', 'mentioned?'], required: false },
   ],
 };
+
+// v7.421 — the on-screen label for citations Profound shipped with no category.
+const UNCATEGORISED = 'Uncategorised';
 
 const SLOT_FILE: Record<SlotKey, string> = {
   visibility: 'Step 1 · Responses',
@@ -948,6 +955,7 @@ export async function computeAll(
   const mentionHost: Record<string, number> = {};
   const mentionPlat: Record<string, number> = {};
   let citeTotal = 0;
+  let citeUncategorised = 0;   // v7.421 — rows Profound left without a category
   let citeMentions = 0;
   if (files.citations) {
     let H: Record<string, number> = {};
@@ -956,11 +964,16 @@ export async function computeAll(
       if (idx === 0) { H = resolveHeader('citations', row); return; }
       const host = (row[H['hostname']] || '').replace(/^www\./, '').toLowerCase().trim();
       const plat = (row[H['platform']] || '').trim();
-      const cat = (row[H['category']] || 'Other').trim() || 'Other';
+      // v7.421 — a BLANK category is ABSENCE, not the real category "Other". Folding them
+      // together relabelled 116,547 of Wayne's 447,134 cited sources into a bucket Profound never
+      // assigned, and diluted every share computed over them (Const I.5 — absence is never a value).
+      const rawCat = (row[H['category']] || '').trim();
+      const cat = rawCat || UNCATEGORISED;
       const mi = H['mentioned'];
       const mentioned = (mi === undefined ? '' : (row[mi] || '')).trim().toLowerCase() === 'mentioned';
       if (!host && !plat) return;
       citeTotal++;
+      if (!rawCat) citeUncategorised++;
       citeCatCount[cat] = (citeCatCount[cat] || 0) + 1;
       const lc = cat.toLowerCase();
       if (lc === 'earned media' && host) earnedDomain[host] = (earnedDomain[host] || 0) + 1;
@@ -1058,10 +1071,51 @@ export async function computeAll(
   // brandSig() is the panel's own brand-identity function (token-normalised), the same one the
   // roster and client match use — so a prompt-derived spelling ("Sofi") and a roster spelling
   // ("SoFi") resolve to one brand here exactly as they do everywhere else in the panel.
-  const sentScoreBrands: SentScoreBrand[] = Object.keys(evalScore)
+  // v7.421 — the Sentiment export phrases its subjects as full noun phrases:
+  //   "Evaluate the Financial services company American Express on ..."
+  // Keyed raw, that never matched the roster's "American Express" — brandSig() strips the suffix
+  // words to "services american express", which is not equal to "american express" — so the
+  // client's own direct-evaluation card silently never rendered. On Wayne's 2026-08-10 export
+  // that hid 6,867 scored rows reading 0.7277, the WORST of the five evaluated brands, while the
+  // client led every visibility metric. Absence of a card read as absence of a finding.
+  // Resolve each subject onto the SAME brand vocabulary the rest of the panel uses (longest
+  // token match wins, so "American Express" beats a bare "Express"), and never guess past it.
+  // Candidates are the roster FIRST, then every other brand named anywhere in the visibility
+  // export. Restricting this to the roster left off-roster evaluated brands (Bank Of America,
+  // Discover on Wayne's export — real brands, just outside the top-7 SoV roster) still wearing
+  // the raw prompt wording, so the chart mixed two naming conventions in one column.
+  const evalCandidates = brandList.concat(
+    Object.keys(overallRaw).filter((b) => brandList.indexOf(b) === -1),
+  );
+  function evalSubjectBrand(subject: string): string {
+    let best = ''; let bestLen = 0;
+    for (let i = 0; i < evalCandidates.length; i++) {
+      const b = evalCandidates[i];
+      const n = toks(b).length;
+      // strictly greater => the FIRST candidate at a given length wins, and the roster is first,
+      // so a roster spelling beats an equally specific non-roster one.
+      if (n > bestLen && brandIn(b, [subject])) { best = b; bestLen = n; }
+    }
+    return best || subject;
+  }
+  const evalKeys = Object.keys(evalScore);
+  const evalBrandOf: Record<string, string> = {};
+  evalKeys.forEach((k) => { evalBrandOf[k] = evalSubjectBrand(k); });
+  const evalDup: Record<string, number> = {};
+  evalKeys.forEach((k) => { evalDup[evalBrandOf[k]] = (evalDup[evalBrandOf[k]] || 0) + 1; });
+  Object.keys(evalDup).forEach((b) => {
+    if (evalDup[b] > 1) {
+      notices.push(
+        `${SLOT_FILE.sentiment}: ${evalDup[b]} differently-worded evaluation prompts resolve to ` +
+        `"${b}". Its direct-evaluation figure reads the largest of them only — the others are NOT ` +
+        `merged, so treat that brand's score as covering part of its rows.`,
+      );
+    }
+  });
+  const sentScoreBrands: SentScoreBrand[] = evalKeys
     .map((b) => {
       const a = evalScore[b].all;
-      return { brand: b, n: a.n, rows: a.rows, mean: meanOf(a), isClient: brandSig(b) === brandSig(client) };
+      return { brand: evalBrandOf[b], n: a.n, rows: a.rows, mean: meanOf(a), isClient: evalBrandOf[b] === client };
     })
     // Scored brands first (by mean), then unscored ones — an unscored competitor stays visible
     // as a stated data gap rather than silently vanishing from the list (I.5 / I.6).
@@ -1071,7 +1125,9 @@ export async function computeAll(
       if (y.mean === null) return -1;
       return y.mean - x.mean;
     });
-  const clientEvalKey = Object.keys(evalScore).find((b) => brandSig(b) === brandSig(client));
+  const clientEvalKey = evalKeys
+    .filter((b) => evalBrandOf[b] === client)
+    .sort((x, y) => evalScore[y].all.n - evalScore[x].all.n)[0];
   const clientEval = clientEvalKey ? evalScore[clientEvalKey] : null;
   const sentScoreClientTopics  = clientEval ? rollBuckets(clientEval.byTopic)    : [];
   const sentScoreClientEngines = clientEval ? rollBuckets(clientEval.byPlatform) : [];
@@ -1111,7 +1167,12 @@ export async function computeAll(
   let citeOwned = 0;
   ownedDomainsSorted.forEach((d) => { citeOwned += ownedDomainCite[d]; });
   const citeCompetition = citeCatCount['Competition'] || 0;
-  const citeOwnedShare = citeTotal ? (100 * citeOwned) / citeTotal : 0;
+  // v7.421 — share is over CATEGORISED sources only. Counting the rows Profound left
+  // uncategorised in the denominator treats "unknown" as "not owned", which understated owned
+  // share on Wayne's export (43,874/447,134 = 9.8% vs 43,874/330,587 = 13.3%). The card names
+  // the basis and the excluded count on screen, so the change is never silent.
+  const citeCategorised = citeTotal - citeUncategorised;
+  const citeOwnedShare = citeCategorised ? (100 * citeOwned) / citeCategorised : 0;
   const citeCatMix: CiteCatStat[] = Object.keys(citeCatCount)
     .map((c) => ({ category: c, count: citeCatCount[c], pct: citeTotal ? (100 * citeCatCount[c]) / citeTotal : 0 }))
     .sort((a, b) => b.count - a.count);
@@ -1141,6 +1202,7 @@ export async function computeAll(
     sentScoreOpen, sentScoreOpenEngines,
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
     citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
+    citeUncategorised, citeCategorised,
     earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
     slots, clientMatched, clientMatchScore, flagHits, hasFlagCol, notices, scoredRuns,
     visRuns, visHits, visPromptN: Object.keys(visPrompts).length, visEngines,
@@ -1494,8 +1556,18 @@ function Analysis({ m }: { m: Metrics }) {
   if (ssHasClient) cards.push({ k: 'Sentiment · direct evaluation', v: (ssClient!.mean as number).toFixed(2), tone: 'text-orbit-accent', s: `${fmt(ssClient!.n)} of ${fmt(ssClient!.rows)} scored · 0–1 scale` });
   if (ssHasOpen) cards.push({ k: 'Sentiment · open answers', v: (ssOpen!.mean as number).toFixed(2), tone: 'text-orbit-accent', s: `${fmt(ssOpen!.n)} scored rows · 0–1 scale` });
   if (topRival) cards.push({ k: 'Top rival in prompts', v: topRival.pct.toFixed(0) + '%', tone: 'text-orbit-accent', s: `${disp(topRival.brand)} (${topRival.count}/${m.promptN})` });
-  if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain` });
-  if ((m.citeTotal || 0) > 0) cards.push({ k: 'Owned citation share', v: m.citeOwnedShare.toFixed(1) + '%', tone: 'text-rose-500', s: `${fmt(m.citeOwned)} of ${fmt(m.citeTotal)} cited sources` });
+  // v7.421 — these two cards read DIFFERENT files (664,282 citation cells in the platforms
+  // export vs 447,134 rows in the citations export on Wayne's upload). Sitting side by side with
+  // unlabelled denominators they read as one contradictory universe, so each now names its source.
+  const platFile = (m.slots && m.slots.platforms && m.slots.platforms.fileName) || SLOT_FILE.platforms;
+  const citeFile = (m.slots && m.slots.citations && m.slots.citations.fileName) || SLOT_FILE.citations;
+  if (m.totalCites > 0) cards.push({ k: 'Citations analysed', v: fmt(m.totalCites), tone: 'text-orbit-accent', s: `${fmt(m.clientDomainCites)} from client domain · ${platFile}` });
+  if ((m.citeTotal || 0) > 0) {
+    const uncat = m.citeUncategorised || 0;
+    const den = (m.citeCategorised && m.citeCategorised > 0) ? m.citeCategorised : (m.citeTotal || 0);
+    cards.push({ k: 'Owned citation share', v: m.citeOwnedShare.toFixed(1) + '%', tone: 'text-rose-500',
+      s: `${fmt(m.citeOwned)} of ${fmt(den)} categorised · ${uncat > 0 ? `${fmt(uncat)} uncategorised excluded · ` : ''}${citeFile}` });
+  }
 
   const maxSov = Math.max(1, ...m.sov.map((s) => s.count));
   const maxCov = Math.max(1, ...m.coverage.map((c) => c.count));
