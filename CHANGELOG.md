@@ -1,3 +1,48 @@
+## v7.423 — one brand name, one client bar
+
+**Wayne, reading the printed report:** *"why is there two American Express listed?"* Two defects in
+one figure, both **surfaced by** the v7.420 client fix rather than caused by it — the class of thing
+Const II.6a (added yesterday) exists to catch.
+
+### 1. The client bar was appended unconditionally
+
+```
+${topBars}${clientBar}
+```
+
+Before v7.420 the client resolved to the alias bucket `AmEx` at 0.55% — never inside the top 10 —
+so appending a highlighted bar was the *only* way the client appeared in the chart. Once the client
+resolved correctly to American Express at #1, the ranked list already contained it and the append
+printed **`88.0% · 35,014` twice in one chart**. The client's own row is now highlighted in place,
+and the append is kept for the case it was written for: a client that genuinely falls outside the
+top 10.
+
+### 2. The internal project label was printed on a client-facing report
+
+`d.clientName` is the project record's name field, and this project is filed as **"Amex (Card
+Shop)"**. It was rendering on the cover, in **every page footer**, the HTML document title and four
+body sentences — including *"Amex (Card Shop) appears in 88.0% of them"* — while the bar beside it
+read "American Express", because that one line already used the resolved brand. The two disagreed
+on the same page.
+
+v7.420 stopped the project name **driving** the numbers. Nothing had stopped it being
+**displayed**. A project may be named anything; the report speaks the brand the export's own
+`mentioned?` column identifies, and falls back to the project label only when no client resolves at
+all, so a report is never left nameless (I.5).
+
+### Verification
+
+Real `tsc` clean; real `next build` compiled. Retained suite A/B against pristine v7.422: FAIL set
+byte-identical (19 pre-existing). **5 new v7.423 checks**, all passing, driven through the real
+`buildAssessmentHTML` with the project deliberately named "Amex (Card Shop)" — asserting the client
+is drawn once when in the top 10, still drawn once when outside it, that the project label appears
+zero times, and that a no-client analysis still falls back to a name.
+
+Both failing first drafts of those checks were **my measurement, not the code**: counting the brand
+name caught the cover and captions too, and a fixture whose engine and topic tallies equalled the
+client total made the value label ambiguous across three charts. Fixtures must make the thing under
+test uniquely identifiable.
+
 ## v7.422 — the PDF report was still on the old denominator
 
 **Wayne:** *"does the pdf report reflect all of the recent changes?"* It did not. Good question,
