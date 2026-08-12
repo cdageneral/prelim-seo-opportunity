@@ -1,3 +1,34 @@
+## v7.428 — Product Insights: the header strip is gone; every metric says what it is
+
+**Wayne:** *"lets remove the header row above the container and then add the description of the
+metric at the metric level. So instead of saying 13.1M. Say 13.1M Search Demand. instead of
+saying S and AI — say Search & AI Visibility, etc"*
+
+A header strip only works while your eye can still connect a column to its caption. On a wide
+row with bars, chips and two-line sub-captions, that link breaks by the second product — and
+`S` / `AI` / `ARB` are unreadable on their own regardless. The strip is deleted and every metric
+now carries its own label inside the cell:
+
+- **`200K`** → **`200K` / Search demand · monthly**
+- **`40%`** → **`40%` + bar / of search demand on page 1** (the measured leader line — *you lead ·
+  40.0% page-1 share* — is unchanged underneath it)
+- probe chips → captioned **AI answers · named in 20% of 100 answers**, and the empty state now
+  reads **AI answers · not scanned yet** rather than the cryptic *recorded answers: not scanned*
+- **`S` / `AI`** bars → a titled **Search & AI visibility** block with the bars spelled out
+  **Search** and **AI**
+- **`15` topics** → **`15` / Arbitrage topics**
+
+Columns were rebalanced to hold the longer labels on one line (demand 90→152px, connection
+190→214px, ARB 80→96px, product column gives back the difference). **The crosswalk table inside
+an expanded product keeps its header** — that one is a genuine multi-row table where a header
+still earns its place (Wayne's call).
+
+No metric, basis, threshold or denominator changed: this release is labels and column widths.
+Verified with real-project tsc + real `next build`, the retained suite at zero regression delta
+(1,231 pass, the 26 pre-existing FAILs byte-identical to the pristine v7.427 base) plus 8 new
+retained checks pinning each label and the deliberately-retained crosswalk header, and a real
+Chromium render of the actual component in **both** themes at fixture scale.
+
 ## v7.427 — Warm Paper: the light theme rebuilt for the eyes, and made the default
 
 **Wayne:** *"can we rework the light color scheme. For whatever reason it feels hard on my eyes
