@@ -129,6 +129,27 @@ export function brandTypedCategoryNames(breakdown: any): Set<string> {
   return out;
 }
 
+/**
+ * v7.431: brand-typed names that are BRAND-ONLY — i.e. not also the parent of any
+ * non-brand category. Real data (U.S. Bank) carries a FLAT brand-lane category
+ * literally named "Credit Cards" alongside the product umbrella "Credit Cards"
+ * that parents 12 procedure sub-categories; excluding by name alone erased the
+ * whole product line from the panel and the PDF. A name that parents genuine
+ * product children is a product umbrella sharing its name with the brand lane —
+ * it stays. Pure brand lanes ("Brand Searches", "Amazon Brand Searches") have no
+ * product children and are excluded. Stored data only, never lexical (II.8).
+ */
+export function brandOnlyUmbrellaNames(breakdown: any): Set<string> {
+  const cats: any[] = Array.isArray(breakdown?.categories) ? breakdown.categories : [];
+  const brand = brandTypedCategoryNames(breakdown);
+  for (const c of cats) {
+    const parent = normName(String(c?.parent ?? ''));
+    const name = normName(String(c?.name ?? ''));
+    if (parent && brand.has(parent) && String(c?.type ?? '') !== 'brand' && name !== parent) brand.delete(parent);
+  }
+  return brand;
+}
+
 /** Probe results whose category rolls up to `umbrella` (unbranded only when asked). */
 export function probeResultsForUmbrella(
   llmProbe: any, umbrella: string, catToUmb: Map<string, string>, unbrandedOnly = true,
@@ -160,7 +181,7 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
   const clientNorm = normSovDomain(clientDomain);
   const brandToks  = buildBrandTokens(clientDomain, brandTerms);
   const catToUmb   = buildCategoryToUmbrella(breakdown);
-  const brandCats  = brandTypedCategoryNames(breakdown);
+  const brandCats  = brandOnlyUmbrellaNames(breakdown);   // v7.431: brand-ONLY lanes; a product umbrella sharing the brand lane's name stays
 
   // ── per-keyword brand rank maps — v7.419 ladder method verbatim ──
   const perKw   = new Map<string, Map<string, number>>();
