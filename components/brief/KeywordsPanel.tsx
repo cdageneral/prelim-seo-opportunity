@@ -3172,7 +3172,7 @@ function KwCategorySection({
   const maxVol = Math.max(...allTop.map(n => n.totVol), 1);
   const selIdx = rankFilter === 'all' ? null : RANK_SEL_INDEX[rankFilter];
 
-  // v7.420 (Wayne 2026-08-11): expanding a top-level category ALSO opens its brand ladder,
+  // v7.424 (Wayne 2026-08-11): expanding a top-level category ALSO opens its brand ladder,
   // which renders above the keyword chips / child rows. The winner chip was a small target
   // inside a fully-clickable row, so the ladder was easy to miss — one click now shows both.
   // The chip stays an independent toggle, so the ladder can still be closed (or opened
