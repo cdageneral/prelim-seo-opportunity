@@ -1,3 +1,38 @@
+## v7.426 — Product Insights: search and AI visibility, finally in one place
+
+**Wayne:** *"We need to know whats strong, whats weak, where the competition is winning and the
+ultimate goal is to know what to action… We need to connect SEO and AI visibility together."*
+
+**The new panel.** Keyword Landscape now has a third view — **Product Insights**, between Keyword
+list and Theme clusters. Every top-level product category is always visible with its search
+strength and AI answer visibility measured side by side: monthly demand, share of demand on page 1
+(with the same measured brand ladder the Category Breakdown uses — no click model), the in-app AI
+probe scores, and a **Connection** readout showing exactly where AI lags search or search lags AI.
+Expanding a product opens the crosswalk: every topic with your best rank and ranking page next to
+the category's AI visibility, classified by fixed rules into **Ranks · absent in AI** (your
+cheapest AI wins — the authority already exists), **Dual presence**, **AI only**, or **No
+presence**. The thresholds behind those verdicts are printed on the panel.
+
+**Recorded AI answers — a second, verifiable AI lens.** A new "Scan recorded AI answers" action
+pulls real recorded ChatGPT and Google AI Overview answers for each product category from
+DataForSEO's LLM Mentions index: the actual questions, which brands the answers name, and which
+sources they cite. The panel shows who owns the citations in your categories and your owned
+citation share — direct counts from recorded answers, stored on the project so every device and
+user sees the same scan, with the scan time stamped on the panel. Each category reports how many
+recorded matches exist and how many were fetched, and a failed pull is reported and retryable —
+never stored as "no answers".
+
+* Cost honesty: the scan's cost is the measured per-task amount DataForSEO reports, recorded on
+  the API Usage ledger under its own "LLM mention requests" unit with the list price kept only as
+  a cross-check.
+* DataForSEO's `ai_search_volume` on recorded questions is that vendor's **estimated** metric — it
+  is labeled EST everywhere it appears and is never presented as measured demand.
+* The probe basis (5 unbranded Claude + 5 unbranded GPT prompts per category) and the
+  recorded-answer basis are shown separately, never blended into one number.
+* The panel is a rollup: it reads the canonical pool, stored taxonomy, the stored probe and the
+  v7.419 ladder method — nothing re-derived, no existing metric changed, and the Assessment PDF is
+  untouched (reviewed per Const II.6a: no downstream surface reads these new metrics yet).
+
 ## v7.425 — deleting a keyword now actually removes it
 
 **Wayne:** *"When I click the x to delete a keyword — nothing happens. This should delete the
