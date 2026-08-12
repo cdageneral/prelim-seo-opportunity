@@ -33,7 +33,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   anthropic: 'Anthropic (Claude)', openai: 'OpenAI',
 };
 const UNIT_LABEL: Record<string, string> = {
-  units: 'API units', searches: 'searches', calls: 'calls', tokens: 'tokens', images: 'images',
+  units: 'API units', searches: 'searches', calls: 'calls', tokens: 'tokens', images: 'images', llm_mentions: 'LLM mention requests',
 };
 const PROVIDER_ICON: Record<string, string> = {
   semrush: 'ti-chart-bar', serpapi: 'ti-brand-google', profound: 'ti-robot',
