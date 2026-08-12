@@ -153,8 +153,11 @@ interface Metrics {
   dateDays: number;
   inventoryChanges: { date: string; delta: number }[];
   // v7.379 — parse-integrity surface
-  clientMatched: boolean;      // was the client resolved to a brand IN the data?
-  clientMatchScore: number;    // 0..1 share of the matched brand's tokens covered
+  clientMatched: boolean;      // was the client resolved from the data's own `mentioned?` column?
+  clientMatchScore: number;    // 0..1 agreement between that brand's presence and `mentioned?`
+  // v7.420 — Profound's denominator: answers naming >=1 brand. Optional on read so analyses
+  // saved before v7.420 keep rendering (they fall back to totalRuns, their original basis).
+  scoredRuns?: number;
   flagHits: number;            // Profound's own `mentioned?` = Yes tally (0 when column absent)
   hasFlagCol: boolean;
   notices: string[];           // honest, on-screen notes about degraded/absent inputs
@@ -216,28 +219,38 @@ function brandIn(brand: string, mentions: string[]): boolean {
 // word "bank") and whichever sat earlier in the roster won — a silent WRONG-client identification,
 // which is more dangerous than the 0% this release fixes. Coverage scoring separates them
 // cleanly: "US Bank" 2/2 = 1.00 vs "Bank of America" 1/3 = 0.33.
-const MATCH_MIN = 0.5;
+// v7.420 — the client is derived from the DATA, never from the project name.
+// Profound ships a `mentioned?` column that is Yes exactly when the client appears in that
+// answer. Scoring every brand's presence against that column identifies the client with no
+// naming input at all: on the 2026-08-10 American Express export, "American Express" agrees on
+// 42,111 of 42,111 rows (100.0000%) while the runner-up (Chase) reaches 48.83%.
+// The old matchClient() scored the PROJECT NAME against the roster, so a project whose name
+// carried the token "amex" bound the client to the alias bucket "AmEx" (171 answers) instead of
+// "American Express" (35,014) and reported 0.11% against a real 88%. A project may be named
+// anything; identification must come from the export. If the flag column is absent we resolve
+// NO client and say so — a guess on client identity is worse than a stated gap (Const I.5b:
+// automatic DETECTION, never an automatic GUESS).
+const CLIENT_AGREE_MIN = 0.95;
 interface ClientMatch { brand: string; score: number; }
 
-function matchClient(clientName: string, candidates: string[]): ClientMatch | null {
-  const ct = new Set(toks(clientName));
-  if (ct.size === 0) return null;
+function deriveClientFromFlag(
+  candidates: string[],
+  brandYes: Record<string, number>,
+  brandNo: Record<string, number>,
+  yesRows: number,
+  noRows: number,
+): ClientMatch | null {
+  const total = yesRows + noRows;
+  if (total === 0) return null;
   let best: ClientMatch | null = null;
-  let bestOverlap = 0;
   for (let i = 0; i < candidates.length; i++) {
-    const at = toks(candidates[i]);
-    if (at.length === 0) continue;
-    let overlap = 0;
-    for (let k = 0; k < at.length; k++) { if (ct.has(at[k])) overlap++; }
-    if (overlap === 0) continue;
-    const score = overlap / at.length;
-    if (!best || score > best.score || (score === best.score && overlap > bestOverlap)) {
-      best = { brand: candidates[i], score };
-      bestOverlap = overlap;
-    }
+    const b = candidates[i];
+    // agreement = rows where (brand present) === (mentioned? === Yes)
+    const agree = (brandYes[b] || 0) + (noRows - (brandNo[b] || 0));
+    const score = agree / total;
+    if (!best || score > best.score) best = { brand: b, score };
   }
-  // One shared generic word out of many is not an identification — say so instead of guessing.
-  return best && best.score >= MATCH_MIN ? best : null;
+  return best && best.score >= CLIENT_AGREE_MIN ? best : null;
 }
 
 function clientDomainRoot(clientName: string): string {
@@ -624,6 +637,21 @@ export async function computeAll(
   const evalSubjects: Record<string, boolean> = {};
   let flagHits = 0;                 // v7.379: tally of Profound's own `mentioned?` = Yes
   let hasFlagCol = false;
+  // v7.420 — Profound's denominator: answers that named AT LEAST ONE brand. Answers where the
+  // engine named nobody are excluded from its Visibility Score. On the American Express export
+  // that is 2,331 of 42,111 answers (5.54%); including them read 83.15% against a dashboard 88%.
+  // Excluding them reproduces the dashboard: 35,014/39,780 = 88.019% vs a displayed 88%, and
+  // Citi 26.998% vs a displayed 27%.
+  let scoredRuns = 0;
+  const scoredPlatRuns: Record<string, number> = {};
+  const scoredTopicRuns: Record<string, number> = {};
+  const flagPlatYes: Record<string, number> = {};
+  const flagTopicYes: Record<string, number> = {};
+  // per-brand agreement tallies against `mentioned?`, for data-derived client identification
+  const brandYes: Record<string, number> = {};
+  const brandNo: Record<string, number> = {};
+  let yesRows = 0;
+  let noRows = 0;
   // v7.380: STRICT set = Profound's own Visibility Score denominator (type is exactly 'Visibility').
   let visRuns = 0;
   const visPlatRuns: Record<string, number> = {};
@@ -664,7 +692,21 @@ export async function computeAll(
       for (let k = 0; k < ms.length; k++) { if (!seen[ms[k]]) { seen[ms[k]] = true; overallRaw[ms[k]] = (overallRaw[ms[k]] || 0) + 1; } }
       // Profound's own client-mentioned flag, tallied independently for the cross-check below.
       const mfi = H['mentioned_flag'];
-      if (mfi !== undefined) { hasFlagCol = true; if ((row[mfi] || '').trim().toLowerCase() === 'yes') flagHits++; }
+      const isYes = mfi !== undefined && (row[mfi] || '').trim().toLowerCase() === 'yes';
+      if (mfi !== undefined) { hasFlagCol = true; if (isYes) flagHits++; }
+      // v7.420 — Profound denominator + per-brand agreement tallies, both from this one pass.
+      if (ms.length > 0) {
+        scoredRuns++;
+        scoredPlatRuns[plat] = (scoredPlatRuns[plat] || 0) + 1;
+        scoredTopicRuns[topic] = (scoredTopicRuns[topic] || 0) + 1;
+      }
+      if (mfi !== undefined) {
+        if (isYes) { yesRows++; flagPlatYes[plat] = (flagPlatYes[plat] || 0) + 1; flagTopicYes[topic] = (flagTopicYes[topic] || 0) + 1; }
+        else noRows++;
+        const bag = isYes ? brandYes : brandNo;
+        const ks = Object.keys(seen);
+        for (let k = 0; k < ks.length; k++) bag[ks[k]] = (bag[ks[k]] || 0) + 1;
+      }
     }, (pct, r) => setProgress({ label: 'Responses', pct, rows: r, startedAt }));
 
     // ── Layer C · structural assertions (v7.379) ──
@@ -699,10 +741,12 @@ export async function computeAll(
     ? Object.keys(assets)
     : Object.keys(evalSubjects);
   let tracked: string[] = dedupeBySig(rosterFromData);
-  const cm = matchClient(clientName, tracked.length ? tracked : dedupeBySig(Object.keys(overallRaw)));
+  // v7.420 — identify the client from `mentioned?`, over EVERY brand named anywhere in the
+  // export (not just the tracked roster — the client need not be an Evaluate-subject).
+  const cm = deriveClientFromFlag(Object.keys(overallRaw), brandYes, brandNo, yesRows, noRows);
   const clientMatched = !!cm;
   const clientMatchScore = cm ? cm.score : 0;
-  let client = cm ? cm.brand : clientName.trim();
+  let client = cm ? cm.brand : '';
   if (tracked.length === 0) {
     // No roster in the data → derive a competitive set from the most-mentioned brands.
     const top = dedupeBySig(Object.keys(overallRaw)).sort((a, b) => overallRaw[b] - overallRaw[a]);
@@ -762,6 +806,15 @@ export async function computeAll(
     }, (pct, r) => setProgress({ label: 'Responses (analysing)', pct, rows: r, startedAt }));
     slots.visibility = { fileName: f.name, rows };
 
+    // v7.420 — the client's own tallies ARE Profound's `mentioned?` column. Re-deriving them by
+    // brand-token matching would reintroduce a second methodology that can drift from the vendor's;
+    // there is exactly one client series in this panel and it is the vendor's own flag.
+    if (hasFlagCol) {
+      clientHits = flagHits;
+      Object.keys(flagPlatYes).forEach((k) => { platClient[k] = flagPlatYes[k]; });
+      Object.keys(flagTopicYes).forEach((k) => { topicClient[k] = flagTopicYes[k]; });
+    }
+
     // v7.379 · independent cross-check. Two unrelated signals should agree on client presence:
     // (a) brand-token matching over `mentions`, (b) Profound's own `mentioned?` flag. On the
     // verified 2026-07-27 US Bank export they agree on all 1,192 of 1,192 rows. A material
@@ -778,9 +831,13 @@ export async function computeAll(
     }
     if (!clientMatched) {
       notices.push(
-        `The project name "${clientName.trim()}" could not be matched to any brand in the uploaded data, ` +
-        `so every client figure below is 0 by construction. Rename the project to the brand as the export ` +
-        `spells it, or confirm the client is actually tracked in this Profound export.`,
+        hasFlagCol
+          ? `No brand's presence agrees with this export's "mentioned?" column closely enough ` +
+            `(best match under ${(CLIENT_AGREE_MIN * 100).toFixed(0)}%) to identify the client, so no client ` +
+            `figures are shown. The competitive landscape below is unaffected.`
+          : `${SLOT_FILE.visibility}: this export carries no "mentioned?" column, which is the only ` +
+            `field that states which brand is the client. No client figures are shown. The competitive ` +
+            `landscape below is unaffected. Re-export from Profound including the mentioned column.`,
       );
     }
   }
@@ -954,21 +1011,21 @@ export async function computeAll(
     .map((p) => ({ platform: p, runs: visPlatRuns[p], hits: visPlatClient[p] || 0 }))
     .sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs)));
 
-  const engines: PlatStat[] = Object.keys(platRuns)
-    .map((p) => ({ platform: p, runs: platRuns[p], hits: platClient[p] || 0 }))
+  const engines: PlatStat[] = Object.keys(scoredPlatRuns)
+    .map((p) => ({ platform: p, runs: scoredPlatRuns[p], hits: platClient[p] || 0 }))
     .sort((a, b) => (b.hits / Math.max(1, b.runs)) - (a.hits / Math.max(1, a.runs)));
 
   const sov: BrandStat[] = brandList
-    .map((b) => ({ brand: b, count: trackedOverall[b] || 0, pct: totalRuns ? (100 * (trackedOverall[b] || 0)) / totalRuns : 0, isClient: b === client }))
+    .map((b) => ({ brand: b, count: trackedOverall[b] || 0, pct: scoredRuns ? (100 * (trackedOverall[b] || 0)) / scoredRuns : 0, isClient: b === client }))
     .sort((a, b) => b.count - a.count);
 
   const overallTop = Object.keys(overallRaw)
-    .map((b) => ({ brand: b, count: overallRaw[b], pct: totalRuns ? (100 * overallRaw[b]) / totalRuns : 0 }))
+    .map((b) => ({ brand: b, count: overallRaw[b], pct: scoredRuns ? (100 * overallRaw[b]) / scoredRuns : 0 }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 10);
 
-  const topics: TopicStat[] = Object.keys(topicRuns)
-    .map((t) => ({ topic: t, runs: topicRuns[t], hits: topicClient[t] || 0 }))
+  const topics: TopicStat[] = Object.keys(scoredTopicRuns)
+    .map((t) => ({ topic: t, runs: scoredTopicRuns[t], hits: topicClient[t] || 0 }))
     .sort((a, b) => (a.hits / Math.max(1, a.runs)) - (b.hits / Math.max(1, b.runs)));
 
   const coverageStat: BrandStat[] = brandList
@@ -1085,7 +1142,7 @@ export async function computeAll(
     clientDomainCites, demandTopics, demandPrompts, demandPromptTotal: demandPromptsArr.length,
     citeTotal, citeOwned, citeOwnedShare, citeOwnedDomain, citeCompetition, citeCatMix,
     earnedTargets, competitorCites, engineSourceMix, citeMentions, citeMentionSources, citeMentionByPlatform,
-    slots, clientMatched, clientMatchScore, flagHits, hasFlagCol, notices,
+    slots, clientMatched, clientMatchScore, flagHits, hasFlagCol, notices, scoredRuns,
     visRuns, visHits, visPromptN: Object.keys(visPrompts).length, visEngines,
     dateFrom, dateTo, dateDays: dateKeys.length, inventoryChanges,
     updatedAt: new Date().toISOString(),
@@ -1375,19 +1432,20 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
 
 // ─── Analysis render ─────────────────────────────────────────────────────────────
 function Analysis({ m }: { m: Metrics }) {
-  // v7.380 · TWO denominators, each stated on screen and never mixed.
-  //   STRICT  (`type == 'Visibility'`) = Profound's own Visibility Score denominator → the headline
-  //           score + the per-engine chart, so both reconcile with the client's Profound dashboard.
-  //   FULL    (every Visibility-typed answer, incl. the dual-purpose 'Sentiment, Visibility' rows)
-  //           = the opportunity lens → topic whitespace, prompt gaps, coverage, Share of Voice.
-  // Narrowing the opportunity views to the strict set would discard two-thirds of the real answers
-  // the client could have won, so they deliberately keep the full footprint (Const I.6).
-  // Metrics saved before v7.380 carry no strict tallies → fall back to the blended figure.
-  const hasStrict = typeof m.visRuns === 'number' && m.visRuns > 0;
-  const scoreRuns = hasStrict ? m.visRuns : m.totalRuns;
-  const scoreHits = hasStrict ? m.visHits : m.clientHits;
+  // v7.420 · ONE denominator, and it is Profound's, applied to every visibility percentage in
+  // this panel: answers that named AT LEAST ONE brand. Profound excludes answers where the engine
+  // named nobody; on the American Express export that is 2,331 of 42,111 (5.54%), and including
+  // them was the whole of the 83.15%-vs-88% gap. Verified against the client's own dashboard:
+  // American Express 35,014/39,780 = 88.019% (displayed 88%), Citi 26.998% (displayed 27%).
+  // The v7.380 strict `type == 'Visibility'` basis is retired — on this export it selects 873 of
+  // 42,111 answers (2%) and reads 17.41%, and Delta 0.23% against a dashboard 16.4%.
+  // Analyses saved before v7.420 carry no scoredRuns and keep rendering on their original basis.
+  const hasScored = typeof m.scoredRuns === 'number' && (m.scoredRuns as number) > 0;
+  const scoreRuns = hasScored ? (m.scoredRuns as number) : m.totalRuns;
+  const scoreHits = m.clientHits;
+  const noBrandRuns = hasScored ? m.totalRuns - (m.scoredRuns as number) : 0;
   const visPct = scoreRuns ? (100 * scoreHits) / scoreRuns : 0;
-  const scoreEngines = (hasStrict && (m.visEngines || []).length) ? m.visEngines : m.engines;
+  const scoreEngines = m.engines;
   const windowLabel = m.dateFrom && m.dateTo
     ? (m.dateFrom === m.dateTo ? m.dateFrom : `${m.dateFrom} – ${m.dateTo}`)
     : '';
@@ -1420,8 +1478,10 @@ function Analysis({ m }: { m: Metrics }) {
   const ssHasOpen   = !!(ssOpen && ssOpen.mean !== null);
 
   const cards: Array<{ k: string; v: string; tone: string; s: string; kind?: 'sentiment' }> = [
-    { k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${fmt(scoreHits)} of ${fmt(scoreRuns)} answers${hasStrict ? ' · Profound Visibility prompts' : ''}` },
   ];
+  // Never render a client percentage when no client could be identified — a 0% that means
+  // "unknown" reads as "absent", which is a false statement about the client (Const I.1/I.5).
+  if (m.clientMatched !== false) cards.push({ k: 'Overall AI visibility', v: visPct.toFixed(2) + '%', tone: 'text-rose-500', s: `${fmt(scoreHits)} of ${fmt(scoreRuns)} answers naming a brand` });
   if (clientCov) cards.push({ k: 'Prompt coverage', v: `${clientCov.count} / ${m.promptN}`, tone: 'text-amber-500', s: `${clientCov.pct.toFixed(1)}% of all tested prompts` });
   if (sovRank > 0) cards.push({ k: 'Share-of-Voice rank', v: `#${sovRank} / ${m.sov.length}`, tone: 'text-amber-500', s: 'tracked brands' });
   if (scoreEngines.length) cards.push({ k: 'Engines at 0%', v: `${enginesZero} / ${scoreEngines.length}`, tone: 'text-rose-500', s: scoreEngines.filter((e) => e.hits === 0).map((e) => e.platform).slice(0, 3).join(' · ') || 'none' });
@@ -1473,10 +1533,10 @@ function Analysis({ m }: { m: Metrics }) {
       {/* Summary cards */}
       {/* v7.380 · coverage window + which prompt set the headline score uses. Stated up front so
           the score is never read against the wrong denominator or the wrong date range. */}
-      {(windowLabel || hasStrict) && (
+      {(windowLabel || hasScored) && (
         <p className="text-orbit-tertiary text-[11px] mb-3">
           {windowLabel ? <>Data covers <span className="text-orbit-secondary">{windowLabel}</span>{m.dateDays > 1 ? ` (${m.dateDays} days)` : ''}. </> : null}
-          {hasStrict ? <>Headline score and per-engine chart use Profound&apos;s Visibility prompt set (<span className="text-orbit-secondary">{fmt(m.visRuns)}</span> answers · {m.visPromptN} prompts), so they reconcile with the Profound dashboard. Topic whitespace, prompt gaps and Share of Voice use all <span className="text-orbit-secondary">{fmt(m.totalRuns)}</span> tested answers ({m.promptN} prompts).</> : null}
+          {hasScored ? <>Every visibility percentage on this page uses Profound&apos;s own denominator — the <span className="text-orbit-secondary">{fmt(scoreRuns)}</span> of {fmt(m.totalRuns)} answers that named at least one brand ({fmt(noBrandRuns)} answers named none and are excluded, as Profound excludes them) — so these figures reconcile with the Profound dashboard.{m.clientMatched !== false ? <> The client is identified from this export&apos;s own <span className="font-mono">mentioned?</span> column ({(m.clientMatchScore * 100).toFixed(2)}% agreement), not from the project name.</> : null}</> : null}
         </p>
       )}
 
@@ -1515,13 +1575,13 @@ function Analysis({ m }: { m: Metrics }) {
 
       {/* Visibility by engine + SoV */}
       <div className="grid md:grid-cols-2 gap-4">
-        <Panel title="AI visibility by engine" sub={hasStrict ? `% of Profound Visibility answers where the client appears (${fmt(m.visRuns)} answers · ${m.visPromptN} prompts)` : '% of competitive answers where the client appears, per engine'}>
+        <Panel title="AI visibility by engine" sub={`% of the ${fmt(scoreRuns)} brand-naming answers where the client appears, per engine`}>
           {scoreEngines.map((e) => {
             const pct = e.runs ? (100 * e.hits) / e.runs : 0;
             return <Bar key={e.platform} label={e.platform} valueLabel={`${pct.toFixed(1)}%`} frac={pct / Math.max(1, Math.max(...scoreEngines.map((x) => (x.runs ? (100 * x.hits) / x.runs : 0)), 1))} color={e.hits === 0 ? 'bg-orbit-muted' : 'bg-indigo-500'} sub={`${e.hits}/${e.runs}`} />;
           })}
         </Panel>
-        <Panel title="Share of Voice — tracked brands" sub={`% of ALL ${fmt(m.totalRuns)} tested answers mentioning each tracked firm`}>
+        <Panel title="Share of Voice — tracked brands" sub={`% of the ${fmt(scoreRuns)} brand-naming answers mentioning each tracked firm`}>
           {m.sov.map((s) => (
             <Bar key={s.brand} label={disp(s.brand)} valueLabel={`${s.pct.toFixed(2)}%`} frac={s.count / maxSov} color={s.isClient ? 'bg-emerald-500' : 'bg-indigo-500'} sub={`${s.count}`} highlight={s.isClient} />
           ))}
