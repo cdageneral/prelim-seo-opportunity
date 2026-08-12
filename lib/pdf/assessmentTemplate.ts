@@ -188,6 +188,24 @@ export interface AssessmentData {
   problemSeeds?: string[];                   // v7.376: deep-journey problem seeds (lane rule)
   serpFeatures?: SerpFeatureSnapshot | null; // v7.404: real AIO/PAA scan rows (absent = section omitted, Const I.5)
   program?: ProgramData | null;              // v7.405: Part V counts (null = legacy step cards, Const I.5)
+  // v7.427 (Const II.6b): Product Insights — the panel's shared basis, computed by the
+  // route via lib/productInsights.buildProductRows. null = no products (section omitted).
+  productInsights?: {
+    products: Array<{
+      name: string; kwCount: number; demand: number; p1Share: number;
+      ladder: Array<{ domain: string; kind: 'client' | 'tracked' | 'rival'; p1Vol: number; measuredKw: number }>;
+      clientRank: number | null;
+      probe: { mentions: number; total: number; claude: string; gpt: string } | null;
+      scan: { fetched: number; totalCount: number; scannedAt: string } | null;
+      aiRate: number | null; dfsShare: number | null;
+      citedTop: Array<{ domain: string; count: number; isClient: boolean }>;
+      arbTopics: number;
+      topics: Array<{ product: string; parentName: string; totalVolume: number;
+        keywords: Array<{ position: number | null; searchVolume: number }> }>;
+    }>;
+    kpi: { arb: number; dual: number; aiOnly: number; none: number; citesClient: number; citesTotal: number };
+    scannedAt: string | null;
+  } | null;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -698,6 +716,53 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="lede">The footprint carries a local component — locations and map-pack demand — but no local scan is attached to the analysis this report was built from, so every local figure is omitted rather than estimated.</div>
       ${gapBlock('Local map-pack data', 'Run the local scan on the Local Search panel and regenerate this report — the assessment expands with map-pack presence and average pack rank by position band, share of local voice against the rivals actually holding the pack, the location estate and its review reputation, and a Local workstream in the recommended program.')}
       <div class="src">Source: none — no local scan rows exist on this analysis. Nothing on this page is estimated, and no local figure appears anywhere else in this report.</div>`));
+  }
+
+  // ── v7.427: Product Insights — search and AI by product (Const II.6b) ──────
+  // Reads the SAME shared basis the panel renders (lib/productInsights via the
+  // route) — nothing here is re-derived. Absent products => section omitted
+  // entirely (honest gap, Const I.5). ASCII-safe glyphs only (the v7.414 rule).
+  if (d.productInsights && d.productInsights.products.length > 0) {
+    const pi = d.productInsights;
+    const prods = pi.products.slice(0, 8);
+    const anyScan = pi.products.some(p => p.scan);
+    const ownedShare = pi.kpi.citesTotal > 0 ? (pi.kpi.citesClient / pi.kpi.citesTotal) * 100 : null;
+    const rowsHtml = prods.map(p => {
+      const leader = p.ladder[0] ?? null;
+      const field = leader
+        ? (leader.kind === 'client'
+            ? `You lead - ${p1((leader.p1Vol / Math.max(p.demand, 1)) * 100)} page-1 share`
+            : `${esc(leader.domain)} leads${p.clientRank !== null ? ` - you #${p.clientRank} of ${p.ladder.length}` : ' - no page-1 hold'}`)
+        : 'No page-1 holds measured';
+      const probeTxt = p.probe ? `${p.probe.mentions}/${p.probe.total} unbranded prompts` : 'not probed';
+      const recTxt = p.scan
+        ? `named in ${p0((p.dfsShare ?? 0) * 100)} of ${n0(p.scan.fetched)}${p.scan.totalCount > p.scan.fetched ? ` of ${n0(p.scan.totalCount)}` : ''}`
+        : 'not scanned';
+      return `<tr><td><b>${esc(p.name)}</b><br><span style="color:var(--muted); font-size:8.5px;">${n0(p.kwCount)} kws</span></td>
+        <td>${vol(p.demand)}/mo</td><td>${p0(p.p1Share * 100)}</td><td>${field}</td>
+        <td>${esc(probeTxt)}</td><td>${esc(recTxt)}</td><td style="text-align:right;"><b>${p.arbTopics}</b></td></tr>`;
+    }).join('');
+    const citedAgg = new Map<string, { count: number; isClient: boolean }>();
+    for (const p of pi.products) for (const c of p.citedTop) {
+      const e = citedAgg.get(c.domain); if (e) e.count += c.count; else citedAgg.set(c.domain, { count: c.count, isClient: c.isClient });
+    }
+    const citedTop = Array.from(citedAgg.entries()).map(([domain, v]) => ({ domain, ...v })).sort((a, b) => b.count - a.count).slice(0, 6);
+    const maxCite = Math.max(1, ...citedTop.map(c => c.count));
+    const citedHtml = citedTop.length > 0
+      ? `<div class="h2" style="margin-top:14px;">Who AI answers cite in your product categories</div>
+         ${citedTop.map(c => barRow(c.isClient ? `${c.domain} (you)` : c.domain, (c.count / maxCite) * 100, `${n0(c.count)} citations`, c.isClient ? 'var(--blue)' : '#c9c8c1', '1.9in')).join('')}
+         ${!citedTop.some(c => c.isClient) ? `<div style="font-size:9px; color:var(--critical); margin-top:4px;">${esc(d.clientName)} is cited 0 times across these recorded answers.</div>` : ''}`
+      : '';
+    pages.push(pageWrap('PRODUCT INSIGHTS — SEARCH AND AI BY PRODUCT', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg">Where ranking authority is not yet an AI answer.</h1>
+      <div class="lede">Each product line measured on both axes: share of search demand held on page 1, and presence in AI answers. <b>${n0(pi.kpi.arb)} topics</b> already rank on page 1 while the AI side is weak — the authority exists; the AI answer is what is missing.${ownedShare !== null ? ` Across ${n0(pi.kpi.citesTotal)} recorded citations, ${esc(d.clientName)} holds <b>${p1(ownedShare)}</b>.` : ''}</div>
+      <table class="dt" style="margin-bottom:6px;">
+        <tr><th>Product</th><th style="width:.75in;">Demand</th><th style="width:.65in;">Page 1</th><th>Field position</th><th style="width:1.05in;">AI probe</th><th style="width:1.15in;">Recorded answers</th><th style="width:.5in;">Arb</th></tr>
+        ${rowsHtml}
+      </table>
+      ${pi.products.length > 8 ? `<div style="font-size:8.5px; color:var(--muted);">Showing the top 8 of ${pi.products.length} product lines by demand — the full set lives on the Product Insights panel.</div>` : ''}
+      ${citedHtml}
+      <div class="src">Source: canonical keyword pool + stored taxonomy (page-1 share and the brand field are measured volume at positions 1-10 — no click model); AI probe = unbranded prompts at analysis time; recorded answers = DataForSEO LLM Mentions index (ChatGPT + Google AI Overviews, first ${anyScan ? '100' : '100'} per category with full match counts shown)${pi.scannedAt ? `, last scanned ${esc(new Date(pi.scannedAt).toLocaleDateString('en-US'))}` : ' — not yet scanned'}. Verdict thresholds: weak below 30%, strong at 50%+. This section reads the same shared computation as the Product Insights panel.</div>`));
   }
 
   // AI answer layer
