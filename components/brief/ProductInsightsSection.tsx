@@ -35,10 +35,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { buildCanonicalClusterTopics, type Topic } from '@/lib/clusters/canonical';
 import type { IntentType } from '@/lib/clusters/canonical';
 import { normSovDomain } from '@/lib/sov/model';
-import { extractBrand } from '@/lib/utils/kwVolume';
 import InsightBanner from './InsightBanner';
 import { exportProductInsightTopicsXLSX, type ProductInsightTopicRow } from '@/lib/export/productInsightsExport';   // v7.429
 import type { Insight, InsightSeg } from '@/lib/insights';
+// v7.430: the aggregation lives in the ONE shared basis module (Const II.7) so the
+// Assessment PDF reads the same computation this panel renders (II.6a/II.6b).
+import {
+  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella,
+  buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
+  type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow,
+} from '@/lib/productInsights';
+// Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
+// of the shared row builder) keep working unchanged (V.6).
+export { buildTopicRows, topicVerdict, AI_WEAK_BELOW, AI_STRONG_FROM } from '@/lib/productInsights';
+export type { TopicVerdict, TopicRow } from '@/lib/productInsights';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -52,75 +62,6 @@ interface Props {
   claudeAssigns?: Record<string, IntentType>;
 }
 
-interface StoredMentionRow {
-  platform: string; modelName: string; question: string; answerExcerpt: string;
-  sources: Array<{ domain: string; url: string; title: string }>;
-  searchResultDomains: string[]; brandEntities: string[];
-  aiSearchVolume: number | null; webSearchBased: boolean | null; lastResponseAt: string | null;
-}
-interface StoredCatScan {
-  category: string; query: string; scannedAt: string; totalCount: number;
-  fetched: number; costUSD: number; provider: string; rows: StoredMentionRow[];
-}
-
-interface LadderEntry { domain: string; kind: 'client' | 'tracked' | 'rival'; p1Vol: number; p1Kw: number; measuredKw: number }
-
-interface ProductRow {
-  name:        string;
-  topics:      Topic[];
-  kwCount:     number;
-  demand:      number;               // monthly volume (exact rollup of the product's canonical keywords)
-  bands:       [number, number, number, number];   // vol at pos 1–3 / 4–10 / 11–20 / 21+ or unranked
-  p1Share:     number;               // 0–1 measured: (bands0+bands1)/demand
-  ladder:      LadderEntry[];
-  clientRank:  number | null;        // 1-based position in the ladder, null = no page-1 hold
-  probe:       { mentions: number; total: number; claude: string; gpt: string } | null;
-  scan:        StoredCatScan | null;
-  aiRate:      number | null;        // probe unbranded mention rate 0–1 (labeled basis)
-  dfsShare:    number | null;        // share of recorded answers naming/citing the client 0–1
-  citedTop:    Array<{ domain: string; count: number; isClient: boolean }>;
-  arbTopics:   number;               // topics ranking p1 while AI side is weak
-  verdicts:    { arb: number; dual: number; aiOnly: number; none: number };
-}
-
-// ─── Deterministic verdict thresholds (stated on-panel) ──────────────────────
-export const AI_WEAK_BELOW  = 0.3;   // exported for the retained suite (V.6)   // category AI rate below this = weak
-export const AI_STRONG_FROM = 0.5;   // exported for the retained suite (V.6)   // at/above = strong
-
-export type TopicVerdict = 'arb' | 'dual' | 'aiOnly' | 'none' | 'noAiData';
-
-export function topicVerdict(bestPos: number | null, aiRate: number | null, dfsShare: number | null): TopicVerdict {
-  const rates = [aiRate, dfsShare].filter((x): x is number => x !== null);
-  if (rates.length === 0) return 'noAiData';
-  const weak   = rates.every(r => r < AI_WEAK_BELOW);
-  const strong = rates.some(r => r >= AI_STRONG_FROM);
-  const onP1   = bestPos !== null && bestPos <= 10;
-  if (onP1 && weak) return 'arb';
-  if (onP1) return 'dual';
-  if (strong) return 'aiOnly';
-  return 'none';
-}
-
-// ─── The one topic-row builder (v7.429) ──────────────────────────────────────
-// The crosswalk and the KPI drill-down MUST show the same rows in the same order,
-// so both read this function — a second inline derivation is how two views of one
-// number drift apart (Const II.6a / II.7).
-
-export interface TopicRow { t: Topic; best: { pos: number | null; url?: string }; v: TopicVerdict }
-
-export function buildTopicRows(p: { topics: Topic[]; aiRate: number | null; dfsShare: number | null }): TopicRow[] {
-  const rows: TopicRow[] = p.topics.map(t => {
-    const best = t.keywords.reduce<{ pos: number | null; url?: string }>((acc, k: any) => {
-      if (k.position !== null && k.position >= 1 && (acc.pos === null || k.position < acc.pos)) return { pos: k.position, url: k.url };
-      return acc;
-    }, { pos: null });
-    return { t, best, v: topicVerdict(best.pos, p.aiRate, p.dfsShare) };
-  });
-  const order: Record<TopicVerdict, number> = { arb: 0, aiOnly: 1, none: 2, dual: 3, noAiData: 4 };
-  rows.sort((a, b) => (order[a.v] - order[b.v]) || (b.t.totalVolume - a.t.totalVolume));
-  return rows;
-}
-
 // ─── Small helpers ───────────────────────────────────────────────────────────
 
 function fmtVol(v: number): string {
@@ -131,14 +72,6 @@ function fmtVol(v: number): string {
 const seg = (t: string, em = false): InsightSeg => ({ t, em });
 
 function normName(s: string): string { return s.toLowerCase().trim(); }
-
-/** Does this recorded row name or cite the client? Direct field checks only. */
-function rowNamesClient(row: StoredMentionRow, clientNorm: string, brandToks: string[]): boolean {
-  if (row.sources.some(s => normSovDomain(s.domain) === clientNorm)) return true;
-  if (row.searchResultDomains.some(d => normSovDomain(d) === clientNorm)) return true;
-  const hay = (row.brandEntities.join(' ') + ' ' + row.answerExcerpt).toLowerCase();
-  return brandToks.some(t => t.length >= 3 && hay.includes(t));
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -190,12 +123,11 @@ export default function ProductInsightsSection({
   useEffect(() => { void refreshStored(); }, [refreshStored]);
 
   const clientNorm = normSovDomain(domain);
-  const brandToks  = useMemo(() => {
-    const toks = new Set<string>();
-    const b = extractBrand(domain); if (b) toks.add(b.toLowerCase());
-    for (const t of brandTerms) if (t && t.trim()) toks.add(t.toLowerCase().trim());
-    return Array.from(toks);
-  }, [domain, brandTerms]);
+  const brandToks  = useMemo(() => buildBrandTokens(domain, brandTerms), [domain, brandTerms]);
+  const catToUmb   = useMemo(
+    () => buildCategoryToUmbrella((analysis?.semrushSnapshot as any)?._categoryBreakdown),
+    [analysis],
+  );
 
   // ── canonical topics (the shared basis — Const II.7, unfloored 0,0) ──
   const topics: Topic[] = useMemo(() => {
@@ -205,160 +137,21 @@ export default function ProductInsightsSection({
     } catch { return []; }
   }, [analysis, domain, competitors, uploadedKeywords, claudeAssigns]);
 
-  // ── per-keyword brand rank maps — v7.419 ladder method verbatim ──
-  const brandRankData = useMemo(() => {
-    const perKw   = new Map<string, Map<string, number>>();
-    const tracked = new Set<string>();
-    for (const r of (uploadedKeywords ?? [])) {
-      if (r?.source === 'blocked') continue;
-      const dom = normSovDomain(r?.domain ?? '');
-      if (!dom || dom === clientNorm) continue;
-      const p = r?.position;
-      if (p == null || p < 1) continue;
-      tracked.add(dom);
-      const k = String(r?.keyword ?? '').toLowerCase().trim();
-      if (!k) continue;
-      let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-      const prev = m.get(dom);
-      if (prev === undefined || p < prev) m.set(dom, p);
-    }
-    const serpPositions: Record<string, Array<{ keyword: string; position: number }>> =
-      (analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {};
-    for (const [rawDom, positions] of Object.entries(serpPositions)) {
-      const dom = normSovDomain(rawDom);
-      if (!dom || dom === clientNorm || tracked.has(dom)) continue;
-      for (const pos of (positions ?? [])) {
-        const p = pos?.position;
-        if (p == null || p < 1) continue;
-        const k = String(pos?.keyword ?? '').toLowerCase().trim();
-        if (!k) continue;
-        let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-        const prev = m.get(dom);
-        if (prev === undefined || p < prev) m.set(dom, p);
-      }
-    }
-    return { perKw, tracked };
-  }, [uploadedKeywords, analysis, clientNorm]);
-
-  // ── probe categories (analysis-time LLM probe, category level) ──
-  const probeCats = useMemo(() => {
-    const out = new Map<string, { mentions: number; total: number; claude: string; gpt: string }>();
-    const cats: any[] = (analysis?.llmProbe as any)?.categories ?? [];
-    for (const c of cats) {
-      const name = normName(String(c?.category ?? ''));
-      if (!name) continue;
-      const mentions = (c?.claudeMentions ?? 0) + (c?.chatgptMentions ?? 0);
-      const total    = (c?.claudeTotal ?? 0) + (c?.chatgptTotal ?? 0);
-      out.set(name, {
-        mentions, total,
-        claude: `${c?.claudeMentions ?? 0}/${c?.claudeTotal ?? 0}`,
-        gpt:    `${c?.chatgptMentions ?? 0}/${c?.chatgptTotal ?? 0}`,
-      });
-    }
-    return out;
-  }, [analysis]);
-
-  const storedByCat = useMemo(() => {
-    const m = new Map<string, StoredCatScan>();
-    for (const c of (stored?.categories ?? [])) m.set(normName(c.category), c);
-    return m;
-  }, [stored]);
-
-  // ── the product rows: one per umbrella (excluding brand/location/Other) ──
-  const products: ProductRow[] = useMemo(() => {
-    const byUmbrella = new Map<string, Topic[]>();
-    for (const t of topics) {
-      if (t.parentType === 'brand' || t.parentType === 'location') continue;   // products only; client-brand + geo live in their own panels
-      const u = (t.umbrella || t.parentName || '').trim();
-      if (!u || normName(u) === 'other') continue;
-      const arr = byUmbrella.get(u); if (arr) arr.push(t); else byUmbrella.set(u, [t]);
-    }
-    const { perKw, tracked } = brandRankData;
-    const rows: ProductRow[] = [];
-    byUmbrella.forEach((uts, name) => {
-      // one keyword = one row inside the canonical topics (I.3); aggregate directly
-      const bands: [number, number, number, number] = [0, 0, 0, 0];
-      let demand = 0, kwCount = 0;
-      const seen = new Set<string>();
-      const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number }>();
-      let clientP1Vol = 0, clientP1Kw = 0;
-      for (const t of uts) for (const k of t.keywords) {
-        const kwLow = k.keyword.toLowerCase().trim();
-        if (seen.has(kwLow)) continue;
-        seen.add(kwLow);
-        kwCount++;
-        const vol = k.searchVolume || 0;
-        demand += vol;
-        const p = k.position;
-        if (p !== null && p >= 1 && p <= 3)       bands[0] += vol;
-        else if (p !== null && p >= 4 && p <= 10) bands[1] += vol;
-        else if (p !== null && p >= 11 && p <= 20) bands[2] += vol;
-        else bands[3] += vol;
-        if (p !== null && p >= 1 && p <= 10) { clientP1Vol += vol; clientP1Kw++; }
-        const m = perKw.get(kwLow);
-        if (m) m.forEach((bp, dom) => {
-          let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0 }; byDom.set(dom, e); }
-          e.measuredKw++;
-          if (bp >= 1 && bp <= 10) { e.p1Vol += vol; e.p1Kw++; }
-        });
-      }
-      const ladder: LadderEntry[] = [];
-      if (clientP1Vol > 0) ladder.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: kwCount });
-      byDom.forEach((e, dom) => {
-        if (e.p1Vol <= 0) return;   // no page-1 hold → no entry (honest gap, I.5)
-        ladder.push({ domain: dom, kind: tracked.has(dom) ? 'tracked' : 'rival', p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
-      });
-      ladder.sort((a, b) => b.p1Vol - a.p1Vol);
-      const clientIdx = ladder.findIndex(e => e.kind === 'client');
-
-      const probe = probeCats.get(normName(name)) ?? null;
-      const scan  = storedByCat.get(normName(name)) ?? null;
-      const aiRate = probe && probe.total > 0 ? probe.mentions / probe.total : null;
-      let dfsShare: number | null = null;
-      let citedTop: ProductRow['citedTop'] = [];
-      if (scan && scan.rows.length > 0) {
-        const named = scan.rows.filter(r => rowNamesClient(r, clientNorm, brandToks)).length;
-        dfsShare = named / scan.rows.length;
-        const counts = new Map<string, number>();
-        for (const r of scan.rows) for (const s of r.sources) {
-          const d = normSovDomain(s.domain); if (!d) continue;
-          counts.set(d, (counts.get(d) ?? 0) + 1);
-        }
-        citedTop = Array.from(counts.entries())
-          .map(([d, c]) => ({ domain: d, count: c, isClient: d === clientNorm }))
-          .sort((a, b) => b.count - a.count);
-      }
-
-      const verdicts = { arb: 0, dual: 0, aiOnly: 0, none: 0 };
-      for (const t of uts) {
-        const best = t.keywords.reduce<number | null>((acc, k) =>
-          k.position !== null && k.position >= 1 && (acc === null || k.position < acc) ? k.position : acc, null);
-        const v = topicVerdict(best, aiRate, dfsShare);
-        if (v !== 'noAiData') verdicts[v]++;
-      }
-
-      rows.push({
-        name, topics: uts, kwCount, demand, bands,
-        p1Share: demand > 0 ? (bands[0] + bands[1]) / demand : 0,
-        ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null,
-        probe, scan, aiRate, dfsShare, citedTop,
-        arbTopics: verdicts.arb, verdicts,
-      });
-    });
-    rows.sort((a, b) => b.demand - a.demand);
-    return rows;
-  }, [topics, brandRankData, probeCats, storedByCat, clientNorm, brandToks]);
+  // ── the shared basis (Const II.7): same call the Assessment PDF makes ──
+  const built = useMemo(() => buildProductRows({
+    topics,
+    uploadedKeywords: uploadedKeywords ?? [],
+    serpPositions: ((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+    llmProbe: (analysis as any)?.llmProbe ?? null,
+    storedScans: (stored?.categories ?? []) as StoredCatScan[],
+    clientDomain: domain,
+    brandTerms,
+    breakdown: (analysis?.semrushSnapshot as any)?._categoryBreakdown,
+  }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms]);
+  const products = built.products;
 
   // ── KPI totals + headline insight ──
-  const kpi = useMemo(() => {
-    const t = { arb: 0, dual: 0, aiOnly: 0, none: 0, citesClient: 0, citesTotal: 0 };
-    for (const p of products) {
-      t.arb += p.verdicts.arb; t.dual += p.verdicts.dual;
-      t.aiOnly += p.verdicts.aiOnly; t.none += p.verdicts.none;
-      for (const c of p.citedTop) { t.citesTotal += c.count; if (c.isClient) t.citesClient += c.count; }
-    }
-    return t;
-  }, [products]);
+  const kpi = built.kpi;
 
   const insight: Insight | null = useMemo(() => {
     // Largest-demand product where the client leads search (rank 1–2 in the ladder)
@@ -818,8 +611,8 @@ export default function ProductInsightsSection({
                         LLM PROBE PROMPTS — THIS CATEGORY (analysis-time, unbranded)
                       </div>
                       {(() => {
-                        const res: any[] = ((analysis?.llmProbe as any)?.results ?? [])
-                          .filter((r: any) => normName(String(r?.category ?? '')) === normName(p.name) && !r?.branded);
+                        // v7.430: prompts roll up to the umbrella through the STORED taxonomy (II.8)
+                        const res: any[] = probeResultsForUmbrella((analysis as any)?.llmProbe, p.name, catToUmb);
                         if (res.length === 0) return <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No probe prompts for this category (the probe covers the top 30 categories by demand).</div>;
                         return res.map((r: any) => (
                           <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '4px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
