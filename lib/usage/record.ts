@@ -96,7 +96,7 @@ export const SEMRUSH_RATES: Record<string, number> = {
 const SEMRUSH_DEFAULT_RATE = 10;
 
 export type Provider = 'semrush' | 'serpapi' | 'profound' | 'anthropic' | 'openai' | 'dataforseo';
-export type Unit     = 'units' | 'searches' | 'calls' | 'tokens' | 'images';
+export type Unit     = 'units' | 'searches' | 'calls' | 'tokens' | 'images' | 'llm_mentions';   // v7.426: llm_mentions = DataForSEO AI Optimization requests (measured cost)
 
 interface RecordInput {
   provider:  Provider;
@@ -294,12 +294,13 @@ export async function recordDataForSeo(
   costUSD: number,
   searches = 1,
   login?: string | null,
+  unit: Unit = 'searches',   // v7.426: LLM Mentions calls record under 'llm_mentions' so the cost panel names the product correctly (Const I.1 provenance naming)
 ): Promise<void> {
   const measured = Number.isFinite(costUSD) && costUSD >= 0 ? costUSD : 0;
   await recordUsage({
     provider: 'dataforseo',
     endpoint,
-    unit:     'searches',
+    unit,
     quantity: searches,
     keyHash:  keyFingerprint(login ?? process.env.DATAFORSEO_LOGIN),
     meta:     { costUSD: measured, measured: true },

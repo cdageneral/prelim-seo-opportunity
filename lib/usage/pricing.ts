@@ -78,6 +78,17 @@ export const MEASURED_COST_PROVIDERS: MeasuredCostEntry[] = [
     source:   'https://dataforseo.com/apis/serp-api/pricing',
     asOf:     '2026-08-03',
   },
+  {
+    // v7.426 — DataForSEO AI Optimization · LLM Mentions (Search Mentions live).
+    provider: 'dataforseo',
+    unit:     'llm_mentions',
+    label:    'DataForSEO LLM Mentions',
+    note:     'Cost is read from the `cost` field DataForSEO returns on every LLM Mentions task and stored per call — the actual dollars charged, not a rate applied to a count.',
+    crossCheckPerUnit: 0.1,
+    crossCheckNote:    'List price $0.10 per live request + $0.001 per returned row (dataforseo.com/pricing/ai-optimization/llm-mentions, read 2026-08-12). CROSS-CHECK only — never charged and never added to a total; the measured per-task cost is what the ledger bills against.',
+    source:   'https://dataforseo.com/pricing/ai-optimization/llm-mentions',
+    asOf:     '2026-08-12',
+  },
 ];
 
 export interface TokenRate { inputPerM: number; outputPerM: number; } // USD per 1,000,000 tokens
