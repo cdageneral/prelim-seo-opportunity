@@ -7,15 +7,15 @@ import { useEffect, useState } from 'react';
  * Reads/writes the [data-theme] attribute on <html> and persists the choice to
  * localStorage ('orbitiq-theme'). The no-flash script in app/layout.tsx applies
  * the stored theme before first paint; this component keeps React state in sync.
- * Dark is the default.
+ * Light (Warm Paper) is the default since v7.427.
  */
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
   // Sync from the attribute the no-flash script already set (avoids hydration flash).
   useEffect(() => {
     const current =
-      document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
     setTheme(current);
   }, []);
 
