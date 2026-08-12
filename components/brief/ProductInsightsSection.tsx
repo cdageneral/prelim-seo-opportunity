@@ -488,10 +488,7 @@ export default function ProductInsightsSection({
           ))}
         </div>
 
-        {/* ── category grid ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '22px minmax(150px,1.4fr) 90px 170px 170px 190px 80px', gap: '10px', padding: '0 14px 5px', fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-55557a)' }}>
-          <span /><span>PRODUCT</span><span>DEMAND/MO</span><span>SEARCH — % DEMAND ON PAGE 1</span><span>AI ANSWERS</span><span>CONNECTION</span><span style={{ textAlign: 'center' }}>ARB</span>
-        </div>
+        {/* ── category grid (v7.428: no header strip — every metric carries its own label) ── */}
 
         {loading && (
           <div style={{ padding: '18px 14px', fontSize: '12px', color: 'var(--c-8a8aa8)' }}>Loading canonical topics…</div>
@@ -513,7 +510,7 @@ export default function ProductInsightsSection({
             <div key={p.name}>
               <div
                 onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); }}
-                style={{ display: 'grid', gridTemplateColumns: '22px minmax(150px,1.4fr) 90px 170px 170px 190px 80px', gap: '10px', alignItems: 'center',
+                style={{ display: 'grid', gridTemplateColumns: '22px minmax(140px,1.2fr) 152px 180px 180px 214px 96px', gap: '10px', alignItems: 'center',
                   background: 'var(--c-111120)', border: `1px solid ${isOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
                   borderRadius: isOpen ? '10px 10px 0 0' : '10px', padding: '10px 14px', marginBottom: isOpen ? 0 : '7px', cursor: 'pointer' }}
               >
@@ -522,7 +519,10 @@ export default function ProductInsightsSection({
                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{p.name}</div>
                   <div style={{ fontSize: '10px', color: 'var(--c-6a6a90)' }}>{p.kwCount.toLocaleString()} kws · {p.topics.length} topics</div>
                 </div>
-                <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(p.demand)}</div>
+                <div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(p.demand)}</div>
+                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '2px' }}>Search demand · monthly</div>
+                </div>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
                     <span style={{ fontSize: '12.5px', fontWeight: 800, width: '38px', fontVariantNumeric: 'tabular-nums',
@@ -531,7 +531,8 @@ export default function ProductInsightsSection({
                       <span style={{ display: 'block', height: '100%', width: `${sPct}%`, background: 'var(--c-46cce0)' }} />
                     </span>
                   </div>
-                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '2px' }}>
+                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '2px' }}>of search demand on page 1</div>
+                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)' }}>
                     {winner ? (winner.kind === 'client'
                       ? `you lead · ${((winner.p1Vol / Math.max(p.demand, 1)) * 100).toFixed(1)}% page-1 share`
                       : `${winner.domain} leads${p.clientRank !== null ? ` · you #${p.clientRank} of ${p.ladder.length}` : ' · no page-1 hold'}`) : 'no page-1 holds measured'}
@@ -548,14 +549,15 @@ export default function ProductInsightsSection({
                   )}
                   <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '2px' }}>
                     {p.scan
-                      ? `recorded: named in ${Math.round((p.dfsShare ?? 0) * 100)}% of ${p.scan.rows.length}${p.scan.totalCount > p.scan.fetched ? ` of ${p.scan.totalCount.toLocaleString()}` : ''} answers`
-                      : 'recorded answers: not scanned'}
+                      ? `AI answers · named in ${Math.round((p.dfsShare ?? 0) * 100)}% of ${p.scan.rows.length}${p.scan.totalCount > p.scan.fetched ? ` of ${p.scan.totalCount.toLocaleString()}` : ''} answers`
+                      : 'AI answers · not scanned yet'}
                   </div>
                 </div>
                 <div>
-                  {[['S', sPct, 'var(--c-46cce0)'] as const, ['AI', aPct, 'var(--c-8b85ff)'] as const].map(([lab, v, col]) => (
-                    <div key={lab} style={{ display: 'grid', gridTemplateColumns: '18px 1fr 32px', gap: '5px', alignItems: 'center', marginBottom: '2px' }}>
-                      <span style={{ fontSize: '8.5px', fontWeight: 800, color: 'var(--c-55557a)' }}>{lab}</span>
+                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginBottom: '3px' }}>Search &amp; AI visibility</div>
+                  {[['Search', sPct, 'var(--c-46cce0)'] as const, ['AI', aPct, 'var(--c-8b85ff)'] as const].map(([lab, v, col]) => (
+                    <div key={lab} style={{ display: 'grid', gridTemplateColumns: '42px 1fr 32px', gap: '5px', alignItems: 'center', marginBottom: '2px' }}>
+                      <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--c-6a6a90)' }}>{lab}</span>
                       <span style={{ height: '6px', borderRadius: '3px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
                         <span style={{ display: 'block', height: '100%', width: `${v ?? 0}%`, background: col }} />
                       </span>
@@ -570,7 +572,7 @@ export default function ProductInsightsSection({
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: '15px', fontWeight: 800, color: p.arbTopics > 0 ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontVariantNumeric: 'tabular-nums' }}>{p.arbTopics}</div>
-                  <div style={{ fontSize: '8.5px', color: 'var(--c-6a6a90)' }}>topics</div>
+                  <div style={{ fontSize: '9px', color: 'var(--c-6a6a90)', lineHeight: 1.25 }}>Arbitrage topics</div>
                 </div>
               </div>
 
