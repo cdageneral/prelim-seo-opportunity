@@ -46,7 +46,10 @@ async function ensureColumns() {
 }
 
 const PostSchema = z.object({
-  category: z.string().min(1).max(300),          // top-level category name (opaque to the server)
+  // v7.432: the scan KEY — a top-level product name, or a full stored path
+  // (' › ' joined, e.g. "Credit Cards › Card Types › Travel Cards") so any
+  // sub-category can carry its OWN recorded-answer scan. Opaque to the server.
+  category: z.string().min(1).max(600),
   keyword:  z.string().min(1).max(250),          // the category's head keyword — the query term
   limit:    z.number().int().min(1).max(1000).optional(),   // default 100 (the API's own page size)
 }).strict();
