@@ -1031,6 +1031,23 @@ export async function runFullSynthesis(
 ): Promise<SynthesisResult> {
   console.log(`[OrbitIQ] Starting synthesis for ${domain}${Object.keys(cached).length > 0 ? ` (resuming — cached: ${Object.keys(cached).join(', ')})` : ''}`);
 
+  // ── v7.442: fail CLOSED on an empty footprint (Const I.5) ──────────────────
+  // Every downstream pass reads semrush.topKeywords / semrush.gapKeywords. With
+  // both empty there is nothing to categorise, cluster, rank or narrate: the run
+  // previously spent API credits, logged "Categories: 0", and either crashed on a
+  // nulled positionDist or "completed" into an analysis whose every panel renders
+  // empty. An emptied footprint is a data state to REPORT, not to synthesise
+  // around — say so and stop before spending anything.
+  const footprintKw = (semrush.topKeywords?.length ?? 0) + (semrush.gapKeywords?.length ?? 0);
+  if (footprintKw === 0) {
+    throw new Error(
+      'EMPTY_FOOTPRINT: This analysis has no keyword footprint — its snapshot holds 0 client '
+      + 'keywords and 0 competitor gap keywords, so there is nothing to analyse. This is what a '
+      + 'cleared footprint looks like. Upload or re-pull the keyword data for this project, then '
+      + 'run the analysis again (it will re-gather Phase 1 rather than resume this one).',
+    );
+  }
+
   // v7.346 hotfix: wall-clock start so the LLM probe below can be time-boxed and never
   // let this function hit Vercel's 300s hard kill mid-probe (which checkpointed nothing
   // and looped forever — the "stuck at batch 0 of 58" incident).
