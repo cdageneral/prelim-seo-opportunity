@@ -31,7 +31,7 @@
 //    panel header (IV.4/IV.5).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildCanonicalClusterTopics, type Topic } from '@/lib/clusters/canonical';
 import type { IntentType } from '@/lib/clusters/canonical';
 import { normSovDomain } from '@/lib/sov/model';
@@ -45,6 +45,8 @@ import {
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
   buildCategoryTree, flattenNodes, buildPromptBreakdown, buildPlatformMix,
   PLATFORM_LABEL,
+  // v7.444: cascade scanning — a level includes every level below it
+  buildScanPlan, projectedScanCost, projectedScanTime, scanQueryFor, type ScanTarget,
   type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
@@ -91,16 +93,27 @@ export default function ProductInsightsSection({
   const [planBusy, setPlanBusy]   = useState(false);
   const [planNote, setPlanNote]   = useState<string | null>(null);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
-  const [confirmScan, setConfirmScan] = useState(false);
   const [scanning, setScanning]       = useState(false);
-  const [scanIdx, setScanIdx]         = useState(0);
-  const [scanTotal, setScanTotal]     = useState(0);
-  const [scanCat, setScanCat]         = useState('');
   const [scanErrors, setScanErrors]   = useState<string[]>([]);
   // v7.432: sub-category drill — expanded node keys + the node currently being scanned
   const [openNodes, setOpenNodes]     = useState<Set<string>>(new Set());
   const [nodeScanning, setNodeScanning] = useState<string | null>(null);
   const [nodeConfirm, setNodeConfirm] = useState<string | null>(null);
+  // v7.444: a cascade run — the plan is built and PRICED before anything is spent,
+  // and can be stopped mid-run (skipped nodes stay unscanned, so it resumes cleanly).
+  const [plan, setPlan]           = useState<{ label: string; targets: ScanTarget[]; alreadyDone: number } | null>(null);
+  const [planIdx, setPlanIdx]     = useState(0);
+  const [planStop, setPlanStop]   = useState(false);
+  const [planStart, setPlanStart] = useState(0);
+  const [planNow, setPlanNow]     = useState('');
+  const planStopRef = useRef(false);
+  useEffect(() => { planStopRef.current = planStop; }, [planStop]);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!scanning) return;
+    const t = setInterval(() => setTick(v => v + 1), 1000);   // IV.3: elapsed/ETA keep moving
+    return () => clearInterval(t);
+  }, [scanning]);
   const [openKwAll, setOpenKwAll]     = useState<Set<string>>(new Set());   // v7.433: per-node keyword list expanded
   const [promptView, setPromptView]   = useState<Record<string, 'cited' | 'named' | 'absent' | 'urls' | null>>({});   // v7.434
 
@@ -157,6 +170,35 @@ export default function ProductInsightsSection({
     breakdown: (analysis?.semrushSnapshot as any)?._categoryBreakdown,
   }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms]);
   const products = built.products;
+
+  // v7.444: the same tree build, callable for ANY product — the cascade must know a
+  // product's whole subtree before the row has ever been expanded.
+  const treeFor = useCallback((productName: string): CatNode | null => {
+    if (uploadedKeywords === null) return null;
+    const p = built.products.find(x => x.name === productName);
+    if (!p) return null;
+    const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
+      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+    const seen = new Set<string>();
+    for (const t of p.topics) for (const k of t.keywords as any[]) {
+      const kk = String(k?.keyword ?? '').toLowerCase().trim();
+      if (!kk || seen.has(kk)) continue;
+      seen.add(kk);
+      poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
+        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+    }
+    try {
+      return buildCategoryTree(p.name, {
+        breakdown: (analysis?.semrushSnapshot as any)?._categoryBreakdown,
+        poolKeywords,
+        uploadedKeywords: uploadedKeywords ?? [],
+        serpPositions: ((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+        storedScans: (stored?.categories ?? []) as StoredCatScan[],
+        clientDomain: domain,
+        brandTerms,
+      });
+    } catch { return null; }
+  }, [built, analysis, uploadedKeywords, stored, domain, brandTerms]);
 
   // v7.432: the stored-path tree for the OPEN product line (built on demand — the
   // whole taxonomy for every product at once is wasted work when one is expanded).
@@ -223,7 +265,9 @@ export default function ProductInsightsSection({
       const res = await fetch(`/api/projects/${projectId}/product-insights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category: node.key, keyword: node.name.toLowerCase() }),
+        // v7.444: qualified, never the bare node name — a leaf called "Requirements"
+        // queried alone matches recorded answers about anything (the v7.440 lesson).
+        body: JSON.stringify({ category: node.key, keyword: scanQueryFor(node) }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -236,31 +280,63 @@ export default function ProductInsightsSection({
     setNodeScanning(null);
   }, [projectId, refreshStored]);
 
-  const runScan = useCallback(async () => {
-    setConfirmScan(false);
-    setScanning(true);
-    setScanErrors([]);
-    setScanTotal(products.length);
-    for (let i = 0; i < products.length; i++) {
-      const p = products[i];
-      setScanIdx(i + 1); setScanCat(p.name);
+  // ── v7.444: cascade scan — "whatever level you select includes every level below" ──
+  // Two-step by design (Const I.5b): `planScan` only BUILDS and PRICES the plan; nothing
+  // is spent until `runPlan` is confirmed. Already-scanned nodes are excluded from the
+  // plan itself, so the count and the cost on screen are what will actually be bought.
+  // v7.444: the panel-level CTA is the same cascade over every product line, so the
+  // rule "this level includes all levels below" holds at the top of the tree too.
+  const planScanAll = useCallback(() => {
+    const scans = (stored?.categories ?? []) as StoredCatScan[];
+    const targets: ScanTarget[] = [];
+    let all = 0;
+    const seen = new Set<string>();
+    for (const p of products) {
+      const t = treeFor(p.name);
+      if (!t) continue;
+      all += buildScanPlan(t, scans, { skipScanned: false }).length;
+      for (const x of buildScanPlan(t, scans)) { if (!seen.has(x.key)) { seen.add(x.key); targets.push(x); } }
+    }
+    targets.sort((a, b) => a.depth - b.depth);
+    setPlan({ label: `all ${products.length} product categories`, targets, alreadyDone: all - targets.length });
+    setPlanIdx(0); setPlanStop(false); setScanErrors([]);
+  }, [products, treeFor, stored]);
+
+  const planScan = useCallback((label: string, root: CatNode | null) => {
+    if (!root) return;
+    const all      = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[], { skipScanned: false });
+    const targets  = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[]);
+    setPlan({ label, targets, alreadyDone: all.length - targets.length });
+    setPlanIdx(0); setPlanStop(false); setScanErrors([]);
+  }, [stored]);
+
+  const runPlan = useCallback(async () => {
+    if (!plan) return;
+    const targets = plan.targets;
+    setScanning(true); setPlanStart(Date.now()); setScanErrors([]);
+    for (let i = 0; i < targets.length; i++) {
+      if (planStopRef.current) break;
+      const t = targets[i];
+      setPlanIdx(i + 1); setPlanNow(t.name);
       try {
         const res = await fetch(`/api/projects/${projectId}/product-insights`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ category: p.name, keyword: p.name.toLowerCase() }),
+          // v7.444: the QUALIFIED query, never the bare node name (see lib/productInsights.ts)
+          body: JSON.stringify({ category: t.key, keyword: t.query }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          setScanErrors(prev => [...prev, `${p.name}: ${d?.error ?? `HTTP ${res.status}`}`]);
+          setScanErrors(prev => [...prev, `${t.name}: ${d?.error ?? `HTTP ${res.status}`}`]);
         }
       } catch (e: any) {
-        setScanErrors(prev => [...prev, `${p.name}: ${e?.message ?? 'request failed'}`]);
+        setScanErrors(prev => [...prev, `${t.name}: ${e?.message ?? 'request failed'}`]);
       }
-      await refreshStored();   // incremental — each finished category appears immediately
+      await refreshStored();   // each finished node appears immediately (IV.2)
     }
-    setScanning(false);
-  }, [products, projectId, refreshStored]);
+    setScanning(false); setPlan(null); setPlanNow('');
+  }, [plan, projectId, refreshStored]);
+
 
   // ── render ──
   if (!analysis) return null;
@@ -296,7 +372,7 @@ export default function ProductInsightsSection({
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
             {!scanning && (
               <button
-                onClick={() => setConfirmScan(v => !v)}
+                onClick={() => planScanAll()}
                 disabled={loading || products.length === 0 || !providerOk}
                 title={providerOk ? 'Pull real recorded AI answers (ChatGPT + Google AI Overviews) for every product category' : 'DataForSEO is not configured'}
                 style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
@@ -320,32 +396,110 @@ export default function ProductInsightsSection({
           </div>
         )}
 
-        {/* scan confirm — cost disclosed BEFORE the run (I.5b) */}
-        {confirmScan && !scanning && (
-          <div style={{ padding: '11px 14px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'var(--c-111120)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-c8c8e8)' }}>
-            <b style={{ color: 'var(--c-e8e8ff)' }}>Scan {products.length} categor{products.length === 1 ? 'y' : 'ies'} through DataForSEO LLM Mentions?</b>
-            <div style={{ marginTop: '4px', color: 'var(--c-8a8aa8)' }}>
-              Two live requests per category — one for Google AI Overviews and one for ChatGPT — up to 100 recorded answers each (the API's own page size; the full match count is shown after the scan).
-              Scanning per platform is deliberate: unfiltered, a high-volume category filled all 100 rows with AI Overviews and left ChatGPT unmeasured.
-              List price $0.10/request + $0.001/row, so a full 100-row page is <b>$0.20 per platform request</b> — about $0.40 per category across both. The <b>measured</b> per-task cost is what lands on the API Usage ledger (never a rate×count estimate).
+        {/* v7.444: cascade plan — priced from THIS project's measured history before a cent is spent (I.5b) */}
+        {plan && !scanning && (() => {
+          const n    = plan.targets.length;
+          const cost = projectedScanCost((stored?.categories ?? []) as StoredCatScan[], n);
+          const time = projectedScanTime((stored?.categories ?? []) as StoredCatScan[], n);
+          const deep = plan.targets.filter(t => t.depth > 1).length;
+          const hhmm = (sec: number) => sec < 90 ? `${Math.round(sec)}s`
+            : sec < 5400 ? `${Math.round(sec / 60)} min`
+            : `${Math.floor(sec / 3600)}h ${String(Math.round((sec % 3600) / 60)).padStart(2, '0')}m`;
+          return (
+            <div style={{ padding: '11px 14px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'var(--c-111120)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-c8c8e8)' }}>
+              <b style={{ color: 'var(--c-e8e8ff)' }}>
+                Scan “{plan.label}” and every level beneath it — {n.toLocaleString()} node{n === 1 ? '' : 's'}
+                {deep > 0 ? ` (${(n - deep).toLocaleString()} at this level, ${deep.toLocaleString()} below)` : ''}?
+              </b>
+              {n === 0 && (
+                <div style={{ marginTop: '4px', color: 'var(--c-34d399)' }}>
+                  Every level in this subtree already has recorded answers on file — nothing to scan, nothing to spend.
+                </div>
+              )}
+              {n > 0 && (
+                <>
+                  <div style={{ marginTop: '4px', color: 'var(--c-8a8aa8)' }}>
+                    {plan.alreadyDone > 0
+                      ? <><b>{plan.alreadyDone.toLocaleString()}</b> level{plan.alreadyDone === 1 ? ' is' : 's are'} already scanned and {plan.alreadyDone === 1 ? 'is' : 'are'} excluded — you never re-buy stored answers. Use a row’s own <i>Re-scan</i> to refresh one.<br /></>
+                      : null}
+                    Two live requests per node (Google AI Overviews + ChatGPT, so neither is left unmeasured), up to 100 recorded answers each.
+                    List price is $0.10 per request + $0.001 per returned row, so a full 100-row page is <b>$0.20 per platform request</b> — about $0.40 for a node that fills both.
+                    Each node is queried by its <b>qualified</b> term — a level named “Requirements” is asked as “{plan.targets[0]?.query ?? ''}”-style, never the bare label, so the answers come back about your product and not the word.
+                  </div>
+                  <div style={{ marginTop: '6px', padding: '8px 10px', borderRadius: '7px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-1e1e34)',
+                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-8a8aa8)', marginBottom: '2px' }}>PROJECTED COST</div>
+                      {cost
+                        ? <><b style={{ color: 'var(--c-e8e8ff)', fontSize: '15px' }}>${cost.usd.toFixed(2)}</b>
+                            <div style={{ color: 'var(--c-8a8aa8)', fontSize: '10.5px', marginTop: '2px' }}>
+                              {n.toLocaleString()} × ${cost.avgUsd.toFixed(3)} — the measured average of this project’s {cost.basedOn} scan{cost.basedOn === 1 ? '' : 's'}.
+                              A projection, not a quote: the <b>measured</b> per-task cost is what reaches the API Usage ledger.
+                            </div></>
+                        : <span style={{ color: 'var(--c-8a8aa8)', fontSize: '10.5px' }}>No measured cost history on this project yet — nothing to project from. Each task’s measured cost posts to the API Usage ledger as it completes.</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-8a8aa8)', marginBottom: '2px' }}>PROJECTED TIME</div>
+                      {time
+                        ? <><b style={{ color: 'var(--c-e8e8ff)', fontSize: '15px' }}>{hhmm(time.seconds)}</b>
+                            <div style={{ color: 'var(--c-8a8aa8)', fontSize: '10.5px', marginTop: '2px' }}>
+                              {n.toLocaleString()} × {time.avgSeconds.toFixed(1)}s measured across {time.basedOn} timed scan{time.basedOn === 1 ? '' : 's'}, run one after another.
+                              You can stop at any point and resume later.
+                            </div></>
+                        : <span style={{ color: 'var(--c-8a8aa8)', fontSize: '10.5px' }}>No scan on this project has been timed yet, so there is no measured basis for a total — this run records one. Live elapsed time and a running ETA appear from the first few nodes.</span>}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '6px', fontSize: '11px', color: 'var(--c-6a6a90)' }}>
+                    Nodes are scanned shallowest-first, and each one is stored as it finishes — you can stop at any point and keep everything already measured.
+                  </div>
+                </>
+              )}
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                {n > 0 && (
+                  <button onClick={() => void runPlan()} style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>
+                    Run scan · {n.toLocaleString()} node{n === 1 ? '' : 's'}
+                  </button>
+                )}
+                <button onClick={() => setPlan(null)} style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>
+                  {n > 0 ? 'Cancel' : 'Close'}
+                </button>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-              <button onClick={() => void runScan()} style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run scan</button>
-              <button onClick={() => setConfirmScan(false)} style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>Cancel</button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
-        {/* scan progress — determinate, category X of N (IV.2) */}
-        {scanning && (
-          <div style={{ padding: '11px 14px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'var(--c-111120)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-c8c8e8)' }}>
-            <b style={{ color: 'var(--c-9b96ff)' }}>Scanning recorded AI answers — category {scanIdx} of {scanTotal}</b>
-            <span style={{ color: 'var(--c-8a8aa8)' }}> · {scanCat}</span>
-            <div style={{ height: '5px', borderRadius: '3px', background: 'var(--c-1e1e34)', marginTop: '7px', overflow: 'hidden' }}>
-              <div style={{ height: '100%', width: `${scanTotal > 0 ? Math.round((scanIdx / scanTotal) * 100) : 0}%`, background: 'var(--c-6c63ff)', transition: 'width .3s' }} />
+        {/* v7.444: cascade progress — X of N, elapsed, ETA and a working Stop (IV.2/IV.3) */}
+        {plan && scanning && (() => {
+          const n       = plan.targets.length;
+          const doneN   = Math.max(0, planIdx - 1);
+          const elapsed = planStart ? (Date.now() - planStart) / 1000 : 0;
+          const perNode = doneN > 0 ? elapsed / doneN : 0;
+          const etaSec  = perNode > 0 ? Math.round(perNode * (n - doneN)) : null;
+          const mmss    = (t: number) => `${Math.floor(t / 60)}m ${String(Math.round(t % 60)).padStart(2, '0')}s`;
+          return (
+            <div style={{ padding: '11px 14px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'var(--c-111120)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-c8c8e8)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <b style={{ color: 'var(--c-9b96ff)' }}>Scanning “{plan.label}” — level {planIdx} of {n}</b>
+                <span style={{ color: 'var(--c-8a8aa8)' }}>{planNow}</span>
+                <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--c-6a6a90)' }}>
+                  {mmss(elapsed)} elapsed{etaSec !== null ? ` · ~${mmss(etaSec)} left` : ' · measuring rate…'}
+                </span>
+                <button onClick={() => setPlanStop(true)} disabled={planStop}
+                  style={{ padding: '3px 10px', fontSize: '11px', fontWeight: 700, borderRadius: '6px', cursor: planStop ? 'default' : 'pointer',
+                    background: 'transparent', color: planStop ? 'var(--c-55557a)' : 'var(--c-f87171)', border: '1px solid var(--c-2a2a40)' }}>
+                  {planStop ? 'Stopping after this level…' : 'Stop'}
+                </button>
+              </div>
+              <div style={{ height: '5px', borderRadius: '3px', background: 'var(--c-1e1e34)', marginTop: '7px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${n > 0 ? Math.round((planIdx / n) * 100) : 0}%`, background: 'var(--c-6c63ff)', transition: 'width .3s' }} />
+              </div>
+              <div style={{ marginTop: '5px', fontSize: '11px', color: 'var(--c-6a6a90)' }}>
+                Each level is stored as it finishes — stopping keeps everything measured so far, and running again resumes with what is left.
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
+
         {scanErrors.length > 0 && !scanning && (
           <div style={{ padding: '9px 12px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.3)', color: 'var(--c-f87171)' }}>
             {scanErrors.length} categor{scanErrors.length === 1 ? 'y' : 'ies'} failed and can be re-run: {scanErrors.join(' · ')}
@@ -537,6 +691,19 @@ export default function ProductInsightsSection({
                       ? `AI answers · named in ${Math.round((p.dfsShare ?? 0) * 100)}% of ${p.scan.rows.length}${p.scan.totalCount > p.scan.fetched ? ` of ${p.scan.totalCount.toLocaleString()}` : ''} answers`
                       : 'AI answers · not scanned yet'}
                   </div>
+                  {/* v7.444 (Wayne): scan AI at THIS parent level — and the whole subtree
+                      below it. The row's own onClick expands the product, so stop the
+                      bubble or the button would toggle the drill instead. */}
+                  {!scanning && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); planScan(p.name, treeFor(p.name)); }}
+                      disabled={!providerOk}
+                      title={`Scan recorded AI answers for ${p.name} and every sub-category beneath it`}
+                      style={{ marginTop: '4px', padding: '3px 8px', fontSize: '9.5px', fontWeight: 700, borderRadius: '6px',
+                        cursor: providerOk ? 'pointer' : 'not-allowed', background: 'var(--ca-108-99-255-0_12)',
+                        color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)', opacity: providerOk ? 1 : 0.5 }}
+                    >↻ Scan AI · this level + all below</button>
+                  )}
                 </div>
                 <div>
                   <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginBottom: '3px' }}>Search &amp; AI visibility</div>
@@ -713,12 +880,25 @@ export default function ProductInsightsSection({
                                       <button onClick={() => setNodeConfirm(null)} style={{ fontSize: '10px', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>✕</button>
                                     </div>
                                   )
-                                  : <button onClick={() => setNodeConfirm(node.key)} disabled={!providerOk}
-                                      title={providerOk ? 'Measure recorded AI answers for THIS sub-category' : 'DataForSEO is not configured'}
-                                      style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
-                                        background: 'transparent', color: node.scan ? 'var(--c-8a8aa8)' : 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>
-                                      {node.scan ? '↻ Re-scan AI' : '＋ Scan AI'}
-                                    </button>}
+                                  : (
+                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                      <button onClick={() => setNodeConfirm(node.key)} disabled={!providerOk}
+                                        title={providerOk ? 'Measure recorded AI answers for THIS sub-category only' : 'DataForSEO is not configured'}
+                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
+                                          background: 'transparent', color: node.scan ? 'var(--c-8a8aa8)' : 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>
+                                        {node.scan ? '↻ Re-scan AI' : '＋ Scan AI'}
+                                      </button>
+                                      {/* v7.444: same control at every depth — this node AND everything under it */}
+                                      {node.children.length > 0 && (
+                                        <button onClick={() => planScan(node.name, node)} disabled={!providerOk}
+                                          title={`Scan ${node.name} and every level beneath it`}
+                                          style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
+                                            background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}>
+                                          ↻ + all below
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                             </div>
                           </div>
                           {/* v7.433: the keywords behind this level — position, volume, ranking page */}
