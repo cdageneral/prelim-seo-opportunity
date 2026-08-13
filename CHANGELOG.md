@@ -1,3 +1,26 @@
+## v7.432 - insights at the sub-category level
+
+**Wayne:** *"I see the data for the parent level of the category but how about at the sub
+category level, such as travel cards. I cant get any insights at that product level"*
+
+**Every stored level is now measured.** Expanding a product line no longer shows a flat topic
+list - it opens the real taxonomy tree (Credit Cards > Card Types > Travel Cards > Rewards, as
+deep as your data goes). Every level carries its own numbers: monthly demand, share of that
+level's demand held on page 1, best rank and ranking page, and its own page-1 brand ladder - so
+"who leads Travel Cards" is answered with Travel Cards keywords, not the parent's.
+
+**AI is measured per level and never inherited.** A sub-category shows an AI figure only when a
+recorded-answer scan has been run for that sub-category; until then it reads "AI not measured at
+this level" instead of borrowing the product line's rate. Each row has its own Scan AI button
+with the cost shown before it runs, so you choose which sub-categories are worth measuring.
+Scanned levels also show who gets cited for that specific sub-category.
+
+* The client report gains the same depth: a "sub-categories carrying the demand" table on the
+  Product Insights page, showing each level's stored path, demand, page-1 share, who leads, and
+  its own AI figure or an honest "not measured at this level".
+* Scans run before this release still work untouched - a product-line scan stays attached to the
+  product line and is never spread down onto its children.
+
 ## v7.431 — a name collision was hiding your biggest product line
 
 Live verification of v7.430 on U.S. Bank caught it: the stored taxonomy carries a flat
