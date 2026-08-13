@@ -208,7 +208,12 @@ export interface AssessmentData {
     // v7.432 (Const II.6b): the sub-category level the panel measures, ranked by demand.
     subNodes?: Array<{ name: string; path: string; depth: number; demand: number; kwCount: number;
       p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
-      dfsShare: number | null; scanned: boolean }>;
+      dfsShare: number | null; scanned: boolean;
+      // v7.435: which AI platforms this node's figure actually covers. A scan stored
+      // before v7.435 was one unfiltered request, so the mix is what came back rather
+      // than a per-platform measurement — the panel and this table say so either way.
+      platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
+      platformsMissing?: string[] }>;
   } | null;
 }
 
@@ -768,10 +773,10 @@ export function buildAssessmentHTML(d: AssessmentData): string {
           <td>${vol(n.demand)}/mo</td>
           <td>${p0(n.p1Share * 100)}</td>
           <td>${n.leader ? (n.leader === 'you' ? `You - ${p1(n.leaderPct ?? 0)}` : `${esc(n.leader)} - ${p1(n.leaderPct ?? 0)}${n.clientRank !== null ? ` (you #${n.clientRank})` : ''}`) : 'No page-1 holds'}</td>
-          <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}` : 'not measured at this level'}</td>
+          <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}${(n.platformMix && n.platformMix.length) ? `<br><span style="color:var(--muted); font-size:8px;">${n.platformMix.map(m => `${n0(m.rows)} ${esc(m.label)}`).join(' - ')}${(n.platformsMissing && n.platformsMissing.length) ? `; ${n.platformsMissing.map(esc).join(' + ')} not measured` : ''}</span>` : ''}` : 'not measured at this level'}</td>
         </tr>`).join('')}
       </table>
-      <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run.</div>`;
+      <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run. Each scan queries Google AI Overviews and ChatGPT separately (one request per platform), so the platform counts under each figure are what was actually measured on each; a platform listed as not measured is unknown, not zero.</div>`;
     pages.push(pageWrap('PRODUCT INSIGHTS — SEARCH AND AI BY PRODUCT', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">Where ranking authority is not yet an AI answer.</h1>
       <div class="lede">Each product line measured on both axes: share of search demand held on page 1, and presence in AI answers. <b>${n0(pi.kpi.arb)} topics</b> already rank on page 1 while the AI side is weak — the authority exists; the AI answer is what is missing.${ownedShare !== null ? ` Across ${n0(pi.kpi.citesTotal)} recorded citations, ${esc(d.clientName)} holds <b>${p1(ownedShare)}</b>.` : ''}</div>
