@@ -29,7 +29,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
-import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan } from '@/lib/productInsights';   // v7.427/v7.432: the panel's shared basis (Const II.6b)
+import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL } from '@/lib/productInsights';   // v7.427/v7.432: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -150,15 +150,19 @@ export async function POST(req: NextRequest) {
         // shared builder; AI is shown only where THAT node carries its own scan.
         const subNodes: Array<{ name: string; path: string; depth: number; demand: number; kwCount: number;
           p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
-          dfsShare: number | null; scanned: boolean }> = [];
+          dfsShare: number | null; scanned: boolean;
+          platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
+          platformsMissing?: string[] }> = [];
         for (const prod of built.products) {
-          const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string }> = [];
+          const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
+      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
           const seenKw = new Set<string>();
           for (const t of prod.topics) for (const k of (t.keywords as any[])) {
             const kk = String(k?.keyword ?? '').toLowerCase().trim();
             if (!kk || seenKw.has(kk)) continue;
             seenKw.add(kk);
-            poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url });
+            poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
+              origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
           }
           const tree = buildCategoryTree(prod.name, {
             breakdown:        (snap as any)?._categoryBreakdown,
@@ -178,6 +182,16 @@ export async function POST(req: NextRequest) {
               leader: lead ? (lead.kind === 'client' ? 'you' : lead.domain) : null,
               leaderPct: lead ? (lead.p1Vol / Math.max(n.demand, 1)) * 100 : null,
               clientRank: n.clientRank, dfsShare: n.dfsShare, scanned: !!n.scan,
+              // v7.435: the platform split behind the AI figure (same shared basis as the panel)
+              platformMix: n.scan
+                ? buildPlatformMix(n.scan, clientDomain, (((project as any).brandTerms ?? []) as string[]))
+                    .map(m => ({ label: m.label, rows: m.rows, cited: m.cited }))
+                : null,
+              platformsMissing: n.scan
+                ? ['google', 'chat_gpt']
+                    .filter(pf => !buildPlatformMix(n.scan!, clientDomain, (((project as any).brandTerms ?? []) as string[])).some(m => m.platform === pf))
+                    .map(pf => PLATFORM_LABEL[pf] ?? pf)
+                : [],
             });
           }
         }
