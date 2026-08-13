@@ -176,6 +176,11 @@ export async function POST(req: NextRequest) {
     const synthesis = await runFullSynthesis(domain, clientName, industry, semrush, serp, profound, cached, persistCheckpoint, priorPaths)
       .catch(err => {
         const msg = String((err as any)?.message ?? err);
+        // v7.442: an empty footprint is a DATA state, not a Claude failure — passing it
+        // through the "Claude synthesis failed:" wrapper named the wrong source (Const I.1).
+        if (msg.startsWith('EMPTY_FOOTPRINT: ')) {
+          throw new Error(msg.slice('EMPTY_FOOTPRINT: '.length));
+        }
         if (msg.includes('API key') || msg.includes('authentication') || msg.includes('401')) {
           throw new Error(`Anthropic API key error: ${msg}. Check ANTHROPIC_API_KEY in Vercel → Settings → Environment Variables.`);
         }
