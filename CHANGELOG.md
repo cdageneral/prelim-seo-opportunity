@@ -1,3 +1,24 @@
+## v7.434 - which prompts cite you, and which page they hit
+
+**Wayne:** *"is the client cited in any prompts at this level? what prompts are associated to this
+URL?"*
+
+**The prompts behind the AI number.** A scanned level now opens its recorded answers in three
+buckets you can read: **you are cited** (with the exact page each answer linked to), **named, not
+cited** (the answer talks about your brand but sends the click elsewhere), and **absent**. A
+fourth view, **by your page**, groups the prompts around each URL of yours that AI answers cite -
+so "which prompts is this page winning" is a click, not a question.
+
+**A counting fix that changes the numbers.** The mention test derived its brand token from the
+domain - "americanexpress" - so an answer writing "American Express" the way people actually do
+never matched. Only citations were being counted. Text is now compared with spacing and
+punctuation removed, so the spaced form, the hyphenated form and the run-together form all count.
+On Amex Travel Cards this moves the level from 17% to a truer figure: 16 of 100 answers cite a
+page, and 27 name the brand. Nothing is inferred - a brand term still has to literally appear.
+
+The gap between those two numbers is the point: 11 answers discuss you while linking somewhere
+else. Both are read from the same stored scan, so the buckets always sum to the total.
+
 ## v7.433 - the keywords behind every level
 
 **Wayne:** *"on all of these - i dont see the keywords they are ranking for, the positions and the
