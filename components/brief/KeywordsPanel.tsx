@@ -600,6 +600,14 @@ export default function KeywordsPanel({
   // v7.244: shared minimum-volume floor for the product & pre-product builds (Const I.6
   // opt-in). 0 = no floor. Applied to both "Run expansion" and "Run build".
   const [minVolume, setMinVolume] = useState<number>(0);
+  // ── v7.440 (Wayne): Step 3 no longer commits blind ──────────────────────────
+  // `phrase_related` is OPT-IN (it produced 96% of the volume AND all of the off-domain
+  // drift), and a run is a DRY RUN first: what would be added comes back grouped by seed
+  // for review, and only the seeds left checked are actually pulled and stored.
+  const [includeRelated, setIncludeRelated] = useState(false);
+  type ReviewSeed = { seed: string; label: string; keywords: number; volume: number; sample: Array<{ keyword: string; searchVolume: number }> };
+  const [review, setReview] = useState<null | { mode: 'product' | 'pre'; includeRelated: boolean; totals: { keywords: number; volume: number }; seeds: ReviewSeed[] }>(null);
+  const [reviewRejected, setReviewRejected] = useState<Set<string>>(new Set());
 
   // ── Fetch DB keywords on mount ──
   const fetchDb = useCallback(async () => {
@@ -731,15 +739,18 @@ export default function KeywordsPanel({
   // (Const IV.2), never a bare spinner. On done it tells the page to refetch the
   // analysis (onDeepJourneyBuilt) so the new Semrush-backed topics backfill into this
   // panel and the Cluster/Journey/Content panels (Const II.3). No invented data.
-  async function runDeepBuild(mode: 'product' | 'pre') {
+  async function runDeepBuild(mode: 'product' | 'pre', opts: { dryRun?: boolean; excludeSeeds?: string[] } = {}) {
     if (buildMode) return;   // one pass at a time
+    const dryRun = opts.dryRun === true;
     setBuildMode(mode);
     setBuildError(null);
+    if (dryRun) setReview(null);
     setBuildProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
     try {
       const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, linesPerSeed: 50, minVolume }),   // v7.244: opt-in volume floor
+        // v7.244 volume floor · v7.440 dry run + related opt-in + rejected seeds
+        body: JSON.stringify({ mode, linesPerSeed: 50, minVolume, dryRun, includeRelated, excludeSeeds: opts.excludeSeeds ?? [] }),
       });
       if (!r.ok || !r.body) {
         let msg = `Build failed (${r.status})`;
@@ -767,7 +778,12 @@ export default function KeywordsPanel({
             setBuildProgress(p => ({ done: ev.done, total: ev.total, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
           } else if (ev.type === 'error') {
             setBuildError(ev.error ?? 'Build failed');
+          } else if (ev.type === 'review') {
+            // v7.440: nothing was stored — this is what a commit WOULD add.
+            setReview({ mode, includeRelated: !!ev.includeRelated, totals: ev.totals ?? { keywords: 0, volume: 0 }, seeds: (ev.seeds ?? []) as ReviewSeed[] });
+            setReviewRejected(new Set());
           } else if (ev.type === 'done') {
+            setReview(null);
             onDeepJourneyBuilt?.();   // page refetches analysis → backfill everywhere
           }
         }
@@ -1927,6 +1943,78 @@ export default function KeywordsPanel({
         );
       })()}
 
+      {/* ── v7.440: Step 3/4 REVIEW — nothing is stored until you say so (Wayne) ──── */}
+      {review && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--ca-0-0-0-0_65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+          onClick={() => setReview(null)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: 'var(--c-0d0d18)', border: '1px solid var(--c-2a2a48)', borderRadius: 12, width: 'min(920px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px var(--ca-0-0-0-0_7)' }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--c-111120)' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-c8c8e8)' }}>
+                Review before adding — {review.mode === 'pre' ? 'pre-product' : 'product'} expansion
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--c-8a8aa8)', marginTop: 4, lineHeight: 1.5 }}>
+                Nothing has been stored. This is exactly what would be added: <b style={{ color: 'var(--c-c8c8e8)' }}>{review.totals.keywords.toLocaleString()}</b> keywords,
+                {' '}<b style={{ color: 'var(--c-c8c8e8)' }}>{review.totals.volume.toLocaleString()}</b>/mo, grouped by the seed that produced them.
+                {' '}{review.includeRelated
+                  ? <span style={{ color: 'var(--c-f59e0b)' }}>Loosely related terms were included — check the samples carefully.</span>
+                  : <span>Questions only — the loose related report was not pulled.</span>}
+                {' '}Untick a seed to leave every one of its keywords out.
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1, padding: '6px 10px' }}>
+              {review.seeds.length === 0 && (
+                <div style={{ padding: 20, fontSize: 12, color: 'var(--c-8a8aa8)' }}>This pass returned nothing — nothing to add.</div>
+              )}
+              {review.seeds.map(sd => {
+                const rejected = reviewRejected.has(sd.seed);
+                return (
+                  <div key={sd.seed} style={{ padding: '9px 10px', borderBottom: '1px solid var(--c-111120)', opacity: rejected ? 0.45 : 1 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={!rejected} style={{ accentColor: 'var(--c-9b96ff)' }}
+                        onChange={() => setReviewRejected(prev => { const n = new Set(prev); if (n.has(sd.seed)) n.delete(sd.seed); else n.add(sd.seed); return n; })} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>{sd.seed}</span>
+                      <span style={{ fontSize: 10, color: 'var(--c-6a6a90)' }}>{sd.label}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'monospace', color: 'var(--c-8a8aa8)' }}>
+                        {sd.keywords.toLocaleString()} kw · {sd.volume.toLocaleString()}/mo
+                      </span>
+                    </label>
+                    <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', marginTop: 4, marginLeft: 27, lineHeight: 1.6 }}>
+                      {sd.sample.map(k => `${k.keyword} (${k.searchVolume.toLocaleString()})`).join(' · ')}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {(() => {
+              const keptSeeds = review.seeds.filter(sd => !reviewRejected.has(sd.seed));
+              const keptKw  = keptSeeds.reduce((n, sd) => n + sd.keywords, 0);
+              const keptVol = keptSeeds.reduce((n, sd) => n + sd.volume, 0);
+              return (
+                <div style={{ padding: '12px 18px', borderTop: '1px solid var(--c-111120)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 11, color: 'var(--c-8a8aa8)' }}>
+                    keeping <b style={{ color: 'var(--c-c8c8e8)' }}>{keptSeeds.length}</b> of {review.seeds.length} seeds
+                    {reviewRejected.size > 0 && <> · dropping {reviewRejected.size}</>}
+                  </span>
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                    <button onClick={() => setReview(null)}
+                      style={{ fontSize: 11.5, fontWeight: 700, padding: '6px 12px', borderRadius: 7, cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a48)' }}>
+                      Cancel — add nothing
+                    </button>
+                    <button disabled={keptSeeds.length === 0 || !!buildMode}
+                      onClick={() => { const ex = Array.from(reviewRejected); const m = review.mode; setReview(null); void runDeepBuild(m, { excludeSeeds: ex }); }}
+                      style={{ fontSize: 11.5, fontWeight: 800, padding: '6px 14px', borderRadius: 7, cursor: keptSeeds.length === 0 ? 'default' : 'pointer',
+                        background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)', opacity: keptSeeds.length === 0 ? 0.5 : 1 }}>
+                      Add {keptKw.toLocaleString()} keywords · {keptVol.toLocaleString()}/mo
+                    </button>
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* ── v7.326: Adjacent verticals (competitor-only) — scope-gate staging ────── */}
       {/* Competitor gap umbrellas the client doesn't compete in. EXCLUDED from every    */}
       {/* panel + all volume totals (so they never inflate the footprint); surfaced ONLY */}
@@ -2042,16 +2130,16 @@ export default function KeywordsPanel({
           {
             n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', bgAct: 'var(--ca-155-150-255-0_10)', glow: 'var(--ca-155-150-255-0_20)', icon: 'ti-sparkles',
             status: buildMode === 'product' ? 'building' : productDone ? 'done' : 'action', doneLabel: 'Built', cta: productDone ? 'Re-run' : 'Run expansion',
-            onClick: () => runDeepBuild('product'), disabled: !!buildMode,
+            onClick: () => runDeepBuild('product', { dryRun: true }), disabled: !!buildMode,
             clearKind: 'product', canClear: productDone,
             body: productDone
               ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
-              : `Expand each product category into full-funnel demand${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
+              : `Expand each product category into full-funnel demand${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''} · you review before anything is added`,
           },
           {
             n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', bgAct: 'var(--ca-34-211-238-0_1)', glow: 'var(--ca-34-211-238-0_2)', icon: 'ti-route',
             status: buildMode === 'pre' ? 'building' : preDone ? 'done' : 'action', doneLabel: 'Built', cta: preDone ? 'Re-run' : 'Run build',
-            onClick: () => runDeepBuild('pre'), disabled: !!buildMode,
+            onClick: () => runDeepBuild('pre', { dryRun: true }), disabled: !!buildMode,
             clearKind: 'pre', canClear: preDone,
             body: preDone
               ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
@@ -2080,6 +2168,16 @@ export default function KeywordsPanel({
                   Four steps build your landscape from the ground up — <span style={{ color: 'var(--c-9090c0)' }}>base → competitors → product demand → pre-product demand</span>. Each step unlocks the next.
                 </p>
               </div>
+
+              {/* v7.440: the loose `related` report, opt-in. Measured on the real Amex build it
+                  produced 96% of the volume AND all of the off-domain drift, so it is OFF by
+                  default; turning it on also doubles the Semrush spend for the pass. */}
+              <label title="Semrush's phrase_related report. Off = questions only, which stay anchored to the seed words. On = also pull loosely related terms; on a broad category this is where off-topic keywords come from, and it doubles the API spend."
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--c-8a8aa8)', cursor: buildMode ? 'default' : 'pointer', opacity: buildMode ? 0.55 : 1 }}>
+                <input type="checkbox" checked={includeRelated} disabled={!!buildMode}
+                  onChange={e => setIncludeRelated(e.target.checked)} style={{ accentColor: 'var(--c-9b96ff)' }} />
+                also pull loosely related terms
+              </label>
 
               {/* v7.244: shared minimum-volume floor for steps 3 & 4 (opt-in, Const I.6). */}
               {(() => {
