@@ -1,3 +1,39 @@
+## v7.444 - scan AI at any level, and it takes everything below with it
+
+**Wayne:** *"we should have a scan ai at this parent level. Also at whatever level you select it
+should automatically include all the child levels below"* and *"make sure time estimates and cost
+estimates are noted before confirming scan."*
+
+**The control is on every row now.** Each product category carries its own **Scan AI · this level +
+all below**, and every sub-level in the drill carries the same thing. Selecting a level plans its
+whole subtree - the node, its children, their children, all the way down - and the panel-level
+button does the same across every product line, so the rule holds at the top of the tree too.
+
+**Nothing is spent until you have seen the numbers.** Choosing a level opens a plan, not a run. It
+tells you how many levels will be scanned and how many are already on file and therefore excluded -
+you never re-buy an answer you already own. Beside that sit two figures:
+
+- **Projected cost**, computed from the measured average of this project's own completed scans. It
+  says so, and it says it is a projection rather than a quote: the measured per-task cost is what
+  reaches the API Usage ledger.
+- **Projected time**, computed the same way from measured scan durations. Every scan now records its
+  own wall clock, which is what makes the estimate real rather than a guess.
+
+Where a project has no history to project from, the panel says exactly that instead of inventing a
+number, and the first run establishes the basis.
+
+**A long run stays yours.** Levels are scanned shallowest-first, so stopping early keeps the levels
+that matter most. Each one is stored the moment it finishes, elapsed time and a running ETA update
+every second, and **Stop** ends the run after the level in flight. Running again picks up whatever
+is left, because finished levels are excluded from the next plan.
+
+**One thing worth knowing about the queries.** A deep level is named for its position in the tree,
+not for the world - "Requirements", "No Annual Fee", "Card Types". Asked of the recorded-answer
+index on their own, those match answers about anything, which is the same contamination v7.440 found
+in Step 3, where "Card Types" came back with playing cards. Every level is now queried through its
+umbrella: "No Annual Fee" under Business Credit Cards is asked as *business credit card no annual
+fee*. That runs through the same qualifier Step 3 uses, so the two behave identically.
+
 ## v7.443 - the error you could not read, and the refresh that copied nothing forward
 
 **Wayne:** *"first i cant read the error message because of the color - so fix the color and second
