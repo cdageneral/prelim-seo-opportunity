@@ -100,6 +100,7 @@ export default function ProductInsightsSection({
   const [openNodes, setOpenNodes]     = useState<Set<string>>(new Set());
   const [nodeScanning, setNodeScanning] = useState<string | null>(null);
   const [nodeConfirm, setNodeConfirm] = useState<string | null>(null);
+  const [openKwAll, setOpenKwAll]     = useState<Set<string>>(new Set());   // v7.433: per-node keyword list expanded
 
   // ── data: uploaded keywords (same fetch every canonical consumer uses) ──
   useEffect(() => {
@@ -618,7 +619,7 @@ export default function ProductInsightsSection({
                   <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', margin: '2px 0 6px' }}>
                     SUB-CATEGORY DRILL — SEARCH MEASURED AT EVERY LEVEL
                     <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--c-55557a)' }}>
-                      {'  '}· expand any row for its own children · AI is measured per level, never inherited from the parent
+                      {'  '}· expand ANY row for its keywords, positions and volumes · AI is measured per level, never inherited from the parent
                     </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', padding: '0 10px 4px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
@@ -649,11 +650,13 @@ export default function ProductInsightsSection({
                             style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', alignItems: 'center',
                               background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '8px',
                               padding: '8px 10px', marginBottom: '5px', marginLeft: `${(node.depth - 1) * 18}px`,
-                              cursor: node.children.length > 0 ? 'pointer' : 'default' }}
+                              cursor: 'pointer' }}
                           >
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
-                              <span style={{ color: node.children.length > 0 ? (isOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)') : 'transparent', fontSize: '10px', flexShrink: 0 }}>
-                                {node.children.length > 0 ? (isOpen ? '▼' : '▶') : '·'}
+                              {/* v7.433: EVERY level opens — a leaf has no children but it does have
+                                  keywords, and those are the point of the drill. */}
+                              <span style={{ color: isOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontSize: '10px', flexShrink: 0 }}>
+                                {isOpen ? '▼' : '▶'}
                               </span>
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{node.name}</div>
@@ -709,6 +712,45 @@ export default function ProductInsightsSection({
                                     </button>}
                             </div>
                           </div>
+                          {/* v7.433: the keywords behind this level — position, volume, ranking page */}
+                          {isOpen && (() => {
+                            const own = node.kws.length > 0 ? node.kws : node.allKws;
+                            const showAll = openKwAll.has(node.key);
+                            const shown = showAll ? own : own.slice(0, 15);
+                            const ranked = own.filter(k => k.position !== null && k.position <= 10).length;
+                            return (
+                              <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '9px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
+                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '6px' }}>
+                                  KEYWORDS AT THIS LEVEL — {own.length.toLocaleString()}{node.kws.length === 0 ? ' (rolled up from sub-levels)' : ''} · {ranked.toLocaleString()} ON PAGE 1
+                                </div>
+                                {own.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No keywords are filed at this level.</div>}
+                                {own.length > 0 && (
+                                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', padding: '0 2px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
+                                    <span>KEYWORD</span><span>POSITION</span><span>VOLUME/MO</span><span>YOUR RANKING PAGE</span>
+                                  </div>
+                                )}
+                                {shown.map(k => (
+                                  <div key={k.keyword} style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', alignItems: 'center', padding: '3px 2px', borderBottom: '1px solid var(--c-111120)', fontSize: '11px' }}>
+                                    <span style={{ color: 'var(--c-c8c8e8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.keyword}</span>
+                                    <span style={{ fontWeight: 800, fontSize: '10.5px',
+                                      color: k.position === null ? 'var(--c-55557a)' : k.position <= 3 ? 'var(--c-34d399)' : k.position <= 10 ? 'var(--c-46cce0)' : k.position <= 20 ? 'var(--c-f59e0b)' : 'var(--c-f87171)' }}>
+                                      {k.position === null ? 'unranked' : `#${k.position}`}
+                                    </span>
+                                    <span style={{ fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{k.searchVolume.toLocaleString()}</span>
+                                    <span style={{ fontSize: '9.5px', color: k.url ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {k.url ? k.url.replace(/^https?:\/\/[^/]*/, '') || '/' : (k.position !== null ? 'URL not in source rows' : '—')}
+                                    </span>
+                                  </div>
+                                ))}
+                                {own.length > 15 && (
+                                  <button onClick={e => { e.stopPropagation(); setOpenKwAll(prev => { const n = new Set(prev); if (n.has(node.key)) n.delete(node.key); else n.add(node.key); return n; }); }}
+                                    style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 0 0' }}>
+                                    {showAll ? 'Show fewer keywords' : `Show all ${own.length.toLocaleString()} keywords`}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })()}
                           {isOpen && node.scan && node.citedTop.length > 0 && (
                             <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '8px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
                               <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
