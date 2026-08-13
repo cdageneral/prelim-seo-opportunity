@@ -26,6 +26,7 @@ import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { buildDemandUniverse, mergeDemandLanes } from '@/lib/apis/demandExpansion';
 import { assignProductExpansionPaths, isFunnelStageLabel } from '@/lib/category/productExpansion';
+import { loadLatestAnalysisWithSnapshot } from '@/lib/latestAnalysis';   // v7.445
 import { assignPreProductPaths, isPreProductPath } from '@/lib/category/canonicalize';   // v7.339
 import { qualifySeed, rootCategoryOf } from '@/lib/category/seedQualify';               // v7.440
 
@@ -156,12 +157,8 @@ export async function POST(
   const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-    limit:   5,
-  });
-  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  // v7.445: one row, not five (Neon 64 MB response cap — lib/db/latestAnalysis.ts)
+  const analysis = await loadLatestAnalysisWithSnapshot(projectId);
   if (!analysis) {
     return NextResponse.json({ error: 'No analysis with keyword data found. Run an analysis first.' }, { status: 400 });
   }
@@ -382,12 +379,8 @@ export async function DELETE(
   const mode: 'product' | 'pre' = body?.mode === 'pre' ? 'pre' : 'product';
   const lane: 'product' | 'problem' = mode === 'pre' ? 'problem' : 'product';
 
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-    limit:   5,
-  });
-  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  // v7.445: one row, not five (Neon 64 MB response cap — lib/db/latestAnalysis.ts)
+  const analysis = await loadLatestAnalysisWithSnapshot(projectId);
   if (!analysis) return NextResponse.json({ error: 'No analysis found.' }, { status: 400 });
 
   const snap = (analysis.semrushSnapshot as any) ?? {};
