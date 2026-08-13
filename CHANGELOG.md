@@ -1,3 +1,44 @@
+## v7.442 - a cleared footprint is reported, never crashed on
+
+**Wayne:** *"I am getting errors on the product insights panel for an existing project that was
+already established"*
+
+Product Insights was telling the truth. First Citizens had no stored taxonomy to show, and the
+reason sat three layers upstream.
+
+**What the log actually said.** Every click of Refresh Analysis produced the same five lines:
+`Personas: 3, Categories: 0` followed by
+`Phase 2 failed: Claude synthesis failed: Cannot read properties of null (reading '11-20')`.
+The project's snapshot held **0 client keywords and 0 competitor gap keywords** with
+`positionDist: null` - the exact shape a scope clear leaves behind - while 6,389 keywords uploaded
+that same morning sat untouched in the project. Three separate defects chained off that one data
+state, and each one hid the next.
+
+**The crash.** `narrativePrompt` read `semrush.positionDist['11-20'] ?? 0`. The `?? 0` guards the
+value, not the object, so a null distribution took the whole synthesis down. Two sibling prompts
+passed the same null through `JSON.stringify`, writing the literal string `null` into the model's
+input as though it were data. All four sites now resolve to a stated absence, and a real
+distribution is still reported verbatim.
+
+**The trap.** Refresh Analysis decided whether to re-gather data by asking whether a snapshot
+existed. An emptied snapshot is still an object, so the answer was always yes: Phase 1 was skipped,
+the morning's uploads were never built into a snapshot, and synthesis re-ran on nothing - on every
+click, forever. The gate now asks whether the snapshot carries a **footprint**, not whether it
+exists.
+
+**The silence.** With both keyword lists empty there is nothing to categorise, cluster, rank or
+narrate. Synthesis used to spend credits anyway and either crash or "complete" into an analysis
+whose every panel renders empty. It now stops before the first paid pass and says what is wrong and
+what to do about it - and because an empty footprint is a data state rather than a model failure,
+the message is no longer wrapped in "Claude synthesis failed".
+
+No metric changed basis, so nothing downstream moved. The Assessment PDF never reads
+`positionDist`; the delivery-package route and the dashboard header already guarded it.
+
+Recovering a project in this state: upload or re-pull its keyword data, then run the analysis
+again. The taxonomy anchor lives on the project row and survives a clear, so the tree rebuilds
+under the same category names.
+
 ## v7.441 - the csv badge is gone
 
 **Wayne:** *"i dont need the csv badge - remove that"*
