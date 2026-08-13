@@ -94,10 +94,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // match count + fetched count + measured cost is stored separately so the panel
   // can state the mix instead of implying one (Const I.1 / I.5).
   const PLATFORMS = ['google', 'chat_gpt'] as const;
+  // v7.444: MEASURE how long the scan takes. A cascade can be hundreds of nodes, and
+  // Wayne asked for a time estimate before confirming — an estimate needs a measured
+  // basis, so every scan now records its own wall-clock duration and the projection is
+  // computed from this project's own history (Const I.1 — never a made-up rate).
+  const startedMs = Date.now();
   const per = await Promise.all(PLATFORMS.map(async (pf) => ({
     platform: pf,
     res: await dfsSearchLlmMentions(keyword, { limit: limit ?? 100, platform: pf }),
   })));
+  const durationMs = Date.now() - startedMs;
   // Every platform failing is a failed scan (retryable, never stored as "no answers").
   if (per.every(x => x.res === null)) {
     return NextResponse.json({ error: 'DataForSEO LLM Mentions call failed — try again' }, { status: 502 });
@@ -119,6 +125,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     fetched:    rows.length,
     costUSD:    per.reduce((n, x) => n + (x.res?.costUSD ?? 0), 0),   // measured, summed across platforms
     provider:   'dataforseo' as const, // provenance travels with the data (Const I.1 naming)
+    durationMs,                        // v7.444: measured wall clock for this node's scan
     platforms,                         // v7.435: per-platform provenance — never inferred from rows
     rows,
   };
