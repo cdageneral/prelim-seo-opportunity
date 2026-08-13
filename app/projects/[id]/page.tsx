@@ -227,6 +227,15 @@ function parseCsvText(text: string): { keyword: string; searchVolume: number; po
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+// v7.442 (Const I.5): does this stored snapshot carry a real ranking footprint?
+// Used by the resume gate — an emptied snapshot has nothing to resume, so the run
+// must go back through Phase 1 data gathering rather than straight to synthesis.
+function snapshotHasFootprint(snap: any): boolean {
+  if (!snap || typeof snap !== 'object') return false;
+  return (Array.isArray(snap.topKeywords) && snap.topKeywords.length > 0)
+      || (Array.isArray(snap.gapKeywords) && snap.gapKeywords.length > 0);
+}
+
 export default function ProjectBriefPage() {
   const params    = useParams();
   const router    = useRouter();
@@ -541,9 +550,17 @@ export default function ProjectBriefPage() {
       // checkpointed server-side, so this resumes where it stopped — no
       // duplicate API spend.
       let analysisId: string;
+      // v7.442: a snapshot OBJECT is not a snapshot with DATA. A scope clear
+      // (lib/clearScope.ts) empties topKeywords/gapKeywords and nulls positionDist
+      // while leaving the object in place, so this test was true for an analysis
+      // that had nothing to resume: Phase 1 was skipped, every keyword uploaded
+      // since the clear was never built into a snapshot, and synthesis re-ran on an
+      // empty footprint on every click — a permanent trap (First Citizens,
+      // 2026-08-13: 6,389 uploaded rows, 0 in the snapshot). Resume only when the
+      // snapshot actually carries a footprint; otherwise re-gather (Phase 1).
       const incomplete = latestAnalysis
         && latestAnalysis.status !== 'completed'
-        && latestAnalysis.semrushSnapshot;
+        && snapshotHasFootprint(latestAnalysis.semrushSnapshot);
 
       if (incomplete) {
         console.log('[OrbitIQ] Resuming interrupted synthesis for', latestAnalysis.id);
