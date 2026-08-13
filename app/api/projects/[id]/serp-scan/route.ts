@@ -27,6 +27,7 @@ import type { KeywordSerpData } from '@/lib/apis/serp';
 import { buildKwPool } from '@/lib/utils/kwVolume';
 // v7.336 (QC audit B3): server-side snapshot hydration — same helper the v7.335 PDF route uses.
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
+import { loadLatestAnalysisWithSnapshot } from '@/lib/latestAnalysis';   // v7.445
 
 export const maxDuration = 300;
 
@@ -91,13 +92,11 @@ export async function POST(
   });
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
-  // Latest analysis that has a semrush snapshot (keyword pool source)
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-    limit:   5,
-  });
-  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  // Latest analysis that has a semrush snapshot (keyword pool source).
+  // v7.445: fetched through the shared one-row loader. Pulling 5 FULL rows here
+  // exceeded Neon's 64 MB response cap on a large project and 500'd every batch,
+  // so Resume looped forever — see lib/latestAnalysis.ts.
+  const analysis = await loadLatestAnalysisWithSnapshot(projectId);
   if (!analysis) {
     return NextResponse.json({ error: 'No analysis with keyword data found. Run an analysis first.' }, { status: 400 });
   }
