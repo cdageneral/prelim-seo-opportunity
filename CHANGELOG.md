@@ -1,3 +1,25 @@
+## v7.439 - competitor brands your own brand was shielding
+
+Found while explaining where Step 3's keywords came from: **Bank of America terms were sitting in
+the Amex landscape and could not be dropped**, because the guard thought they were Amex's.
+
+The brand test splits a run-together domain root into halves so it can catch compound brands -
+"americanexpress" becomes "american" + "express" - and then does a fuzzy per-word comparison. Both
+of those are useful for spotting your own branded keywords. But the competitor guard used that same
+loose test to decide when NOT to drop a keyword, and "america" matches "american" at an edit
+distance of one. So every Bank of America term read as an American Express term and was protected:
+`bank of america login` (1,220,000/mo) stayed in the pool. The same half-token ran the other way -
+Bank of America's "america" claimed `american express platinum` as a competitor term.
+
+Protection now requires an **exact** match on the full client root or on your configured brand
+vocabulary - no half-tokens, no edit distance. The loose test is unchanged everywhere else, so the
+"branded" chip still behaves as before. Measured on the real Amex configuration: `bank of america`
+and `bank of america login` now drop, `capital one`, `discover login` and `chase sapphire` still
+drop, and `american express platinum` and `amex gold card` still survive.
+
+Any client whose brand contains an ordinary word - American Express, Bank of America, Capital One,
+US Bank, First Citizens - was exposed to this in both directions.
+
 ## v7.438 - every keyword says where it came from, and you can filter on it
 
 **Wayne:** *"lets add a badge to the keywords - original footprint would be for what came from the
