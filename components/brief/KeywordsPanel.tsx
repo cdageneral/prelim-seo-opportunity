@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData, serpCellHasLocalPack } from '@/lib/utils/kwVolume';
 import { buildScopeResolver } from '@/lib/category/scopeModel';   // v7.326: scope gate (adjacent-vertical staging)
-import { keywordProvenance } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
+import { keywordProvenance, keywordSource, KEYWORD_SOURCE_LABEL, type KeywordSource } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';   // v7.337 (QC audit B12): ONE shared path-tree builder (also consumed by lib/local/serviceLines)
@@ -426,11 +426,9 @@ async function downloadXLSX(rows: KeywordRow[], clientName: string, filterSlug: 
 function Pill({ active, cited, label }: { active: boolean; cited: boolean; label: string }) {
   if (!active) return <span className="text-orbit-tertiary text-xs">—</span>;
   return (
-    <span className={`text-[10px] px-2.5 py-1 rounded-full border font-medium ${
-      cited
-        ? 'bg-green-500/10 border-green-500/30 text-green-400'
-        : 'bg-orbit-muted border-orbit-border text-orbit-tertiary'
-    }`}>
+    // v7.438: theme-aware — the green Tailwind pair was unreadable on the light surface
+    <span className={`text-[10px] px-2.5 py-1 rounded-full border font-medium ${cited ? '' : 'bg-orbit-muted border-orbit-border text-orbit-tertiary'}`}
+      style={cited ? { background: 'var(--ca-52-211-153-0_1)', color: 'var(--c-34d399)', borderColor: 'var(--c-34d399)' } : undefined}>
       {cited ? `✓ ${label}` : label}
     </span>
   );
@@ -440,13 +438,41 @@ function Pill({ active, cited, label }: { active: boolean; cited: boolean; label
 
 function SourceBadge({ source }: { source: KwSource }) {
   if (source === 'semrush') return null;
-  const styles: Record<string, string> = {
-    custom: 'bg-purple-500/10 border-purple-500/20 text-purple-400',
-    csv:    'bg-blue-500/10 border-blue-500/20 text-blue-400',
+  // v7.438: theme-aware tokens. The old Tailwind palette classes (bg-blue-500/10 +
+  // text-blue-400) do not follow the theme, so every chip on this row washed out to
+  // near-invisible on the Warm Paper light surface (the v7.400 class of defect).
+  const tone: Record<string, { bg: string; fg: string; bd: string }> = {
+    custom: { bg: 'var(--ca-167-139-250-0_1)', fg: 'var(--c-a78bfa)', bd: 'var(--ca-167-139-250-0_1)' },
+    csv:    { bg: 'var(--ca-56-189-248-0_1)',  fg: 'var(--c-38bdf8)', bd: 'var(--ca-56-189-248-0_1)' },
   };
+  const t = tone[source];
+  if (!t) return null;
   return (
-    <span className={`text-[9px] px-1.5 py-0.5 rounded-full border shrink-0 ${styles[source] ?? ''}`}>
+    <span className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0"
+      style={{ background: t.bg, color: t.fg, border: `1px solid ${t.bd}`, fontWeight: 700 }}>
       {source}
+    </span>
+  );
+}
+
+// ── v7.438: where a keyword came from, on the row (Wayne) ────────────────────
+// Reads lib/utils/keywordProvenance.keywordSource — the SAME classifier behind the
+// SOURCE OF COUNT chips, so a badge can never disagree with the count above it.
+const KW_SOURCE_TONE: Record<KeywordSource, { bg: string; fg: string; title: string }> = {
+  footprint:  { bg: 'var(--ca-52-211-153-0_1)',  fg: 'var(--c-34d399)',
+                title: "The client's own ranking data — your uploaded CSV rows and the Semrush crawl" },
+  competitor: { bg: 'var(--ca-245-158-11-0_1)',  fg: 'var(--c-f59e0b)',
+                title: 'A competitor ranks for this keyword and the client does not' },
+  expanded:   { bg: 'var(--ca-34-211-238-0_1)',  fg: 'var(--c-22d3ee)',
+                title: 'Added by Step 3 "Expand product data" — not from your upload or the client footprint' },
+};
+
+function KeywordSourceBadge({ src }: { src: KeywordSource }) {
+  const t = KW_SOURCE_TONE[src];
+  return (
+    <span className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0" title={t.title}
+      style={{ background: t.bg, color: t.fg, border: `1px solid ${t.fg}`, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {KEYWORD_SOURCE_LABEL[src]}
     </span>
   );
 }
@@ -518,6 +544,9 @@ export default function KeywordsPanel({
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
+  // v7.438 (Wayne): filter the table by where a keyword came from. 'all' = no filter.
+  // Reads the SAME classifier as the SOURCE OF COUNT chips, which are the control.
+  const [sourceFilter, setSourceFilter] = useState<KeywordSource | 'all'>('all');
   // v7.204: journey scope — All / Product / Pre-product. Uses the SAME per-keyword
   // classifier as the Journey & Cluster panels (Art II.7 single source of truth), so
   // the split never disagrees across panels. Scopes the summary cards, rank
@@ -804,10 +833,14 @@ export default function KeywordsPanel({
   );
   const visibleRows = useMemo(
     () => applySort(
-      segmentRows.filter(r => matchesRankFilter(r.position, rankFilter)),
+      segmentRows.filter(r =>
+        matchesRankFilter(r.position, rankFilter) &&
+        // v7.438: source filter — same classifier as the count chips (Const II.7)
+        (sourceFilter === 'all' || keywordSource(r as any) === sourceFilter),
+      ),
       sortCol, sortDir,
     ),
-    [segmentRows, rankFilter, sortCol, sortDir],
+    [segmentRows, rankFilter, sourceFilter, sortCol, sortDir],
   );
 
   // v7.104: PAGINATION — rendering all rows froze the browser once uploaded
@@ -822,7 +855,7 @@ export default function KeywordsPanel({
     [visibleRows, safePage],
   );
   // Reset to page 1 whenever the underlying list changes shape
-  useEffect(() => { setPage(0); }, [filter, rankFilter, sortCol, sortDir, journeyScope, visibleRows.length]);
+  useEffect(() => { setPage(0); }, [filter, rankFilter, sourceFilter, sortCol, sortDir, journeyScope, visibleRows.length]);
 
   function handleSort(col: NonNullable<SortCol>) {
     if (sortCol === col) {
@@ -1836,11 +1869,16 @@ export default function KeywordsPanel({
       {/* sources (Const I.2) and spot any unexpected source or duplicate rows.            */}
       {dbLoaded && (() => {
         const p = provenance;
-        const chips: Array<{ label: string; n: number; color: string }> = [
-          { label: 'your CSV upload', n: p.upload, color: 'var(--c-9b96ff)' },
-          { label: 'Semrush crawl',   n: p.crawl,  color: 'var(--c-38bdf8)' },
-          { label: 'missing demand',  n: p.demand, color: 'var(--c-22d3ee)' },
-          { label: 'competitor gap',  n: p.gap,    color: 'var(--c-f59e0b)' },
+        // v7.438 (Wayne): these counts are now the FILTER control. Each chip toggles the
+        // table to that source and reads the same classifier the badges do, so the number
+        // you click and the rows you get are the same partition (Const II.7). Upload and
+        // crawl are both the client's own footprint, so both drive the one 'footprint'
+        // filter — the split stays visible here because it is still worth seeing.
+        const chips: Array<{ label: string; n: number; color: string; src: KeywordSource }> = [
+          { label: 'your CSV upload', n: p.upload, color: 'var(--c-34d399)', src: 'footprint'  as KeywordSource },
+          { label: 'Semrush crawl',   n: p.crawl,  color: 'var(--c-34d399)', src: 'footprint'  as KeywordSource },
+          { label: 'expanded · Step 3', n: p.demand, color: 'var(--c-22d3ee)', src: 'expanded' as KeywordSource },
+          { label: 'competitor gap',  n: p.gap,    color: 'var(--c-f59e0b)', src: 'competitor' as KeywordSource },
         ].filter(c => c.n > 0);
         const dupRows = p.rawDbRows - p.distinctDb;
         return (
@@ -1848,12 +1886,27 @@ export default function KeywordsPanel({
             <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--c-6a6a90)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
               <i className="ti ti-route" /> Source of count
             </span>
-            {chips.length ? chips.map(c => (
-              <span key={c.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-c8c8e8)' }}>
-                <span style={{ width: 8, height: 8, borderRadius: 2, background: c.color, display: 'inline-block' }} />
-                <b style={{ fontFamily: 'monospace', color: c.color }}>{c.n.toLocaleString()}</b> {c.label}
+            {chips.length ? chips.map(c => {
+              const active = sourceFilter === c.src;
+              return (
+                <button key={c.label} type="button"
+                  onClick={() => setSourceFilter(active ? 'all' : c.src)}
+                  title={active ? 'Showing only these — click to clear' : `Show only ${KEYWORD_SOURCE_LABEL[c.src]} keywords`}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer',
+                    color: 'var(--c-c8c8e8)', background: active ? 'var(--ca-108-99-255-0_12)' : 'transparent',
+                    border: active ? '1px solid var(--ca-108-99-255-0_45)' : '1px solid transparent',
+                    borderRadius: 6, padding: '2px 7px', fontFamily: 'inherit' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 2, background: c.color, display: 'inline-block' }} />
+                  <b style={{ fontFamily: 'monospace', color: c.color }}>{c.n.toLocaleString()}</b> {c.label}
+                  {active && <i className="ti ti-x" style={{ fontSize: 11, color: 'var(--c-9b96ff)' }} />}
+                </button>
+              );
+            }) : <span style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>No keywords loaded yet.</span>}
+            {sourceFilter !== 'all' && (
+              <span style={{ fontSize: 10.5, color: 'var(--c-9b96ff)', fontWeight: 700 }}>
+                table filtered to {KEYWORD_SOURCE_LABEL[sourceFilter]} — {visibleRows.length.toLocaleString()} shown
               </span>
-            )) : <span style={{ fontSize: 11, color: 'var(--c-6a6a90)' }}>No keywords loaded yet.</span>}
+            )}
             <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--c-6a6a90)', fontFamily: 'monospace' }}>
               {p.distinctDb.toLocaleString()} distinct of {p.rawDbRows.toLocaleString()} uploaded rows
               {dupRows > 0 && <span style={{ color: 'var(--c-f59e0b)', marginLeft: 6 }}>· {dupRows.toLocaleString()} duplicate rows</span>}
@@ -2474,19 +2527,14 @@ export default function KeywordsPanel({
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-orbit-primary text-xs">{row.keyword}</span>
-                    {row.type === 'gap' && (
-                      <span className="text-[9px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full shrink-0">gap</span>
-                    )}
-                    {row.branded && (
-                      <span className="text-[9px] bg-purple-500/10 border border-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full shrink-0">branded</span>
-                    )}
-                    {!row.branded && (
-                      <span className="text-[9px] bg-sky-500/10 border border-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded-full shrink-0">non-branded</span>
-                    )}
+                    {/* v7.438: where it came from — original footprint / competitor / expanded */}
+                    <KeywordSourceBadge src={keywordSource(row as any)} />
+                    {row.branded
+                      ? <span className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0"
+                          style={{ background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)', border: '1px solid var(--c-a78bfa)', fontWeight: 700 }}>branded</span>
+                      : <span className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0"
+                          style={{ background: 'var(--ca-56-189-248-0_1)', color: 'var(--c-38bdf8)', border: '1px solid var(--c-38bdf8)', fontWeight: 700 }}>non-branded</span>}
                     <SourceBadge source={row.source} />
-                    {row.origin === 'demand' && (
-                      <span className="text-[9px] bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded-full shrink-0" title="Surfaced by the deep-journey demand build">demand</span>
-                    )}
                   </div>
                 </td>
 
@@ -2562,10 +2610,13 @@ export default function KeywordsPanel({
       {/* ── Footer legend ── */}
       <div className="px-5 py-2.5 border-t border-orbit-border shrink-0 flex items-center gap-3 flex-wrap" style={{ background: 'var(--c-0d0d18)' }}>
         <span className="text-[10px] text-orbit-tertiary">Semrush ranked + gap · SERP features from SerpAPI · custom rows via Add or CSV upload</span>
-        <span className="text-[10px] bg-green-500/10 border border-green-500/30 text-green-400 px-1.5 py-0.5 rounded-full">✓ AIO = client cited</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-52-211-153-0_1)', color: 'var(--c-34d399)', border: '1px solid var(--c-34d399)' }}>✓ AIO = client cited</span>
         <span className="text-[10px] bg-orbit-muted border border-orbit-border text-orbit-tertiary px-1.5 py-0.5 rounded-full">AIO = feature exists, not cited</span>
-        <span className="text-[10px] bg-amber-500/10 border border-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded-full">gap = client not ranking</span>
-        <span className="text-[10px] bg-purple-500/10 border border-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded-full">branded = client or competitor name</span>
+        {/* v7.438: the legend now names the SOURCE badges, because that is what the rows carry */}
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-52-211-153-0_1)', color: 'var(--c-34d399)', border: '1px solid var(--c-34d399)', fontWeight: 700 }}>original footprint = your CSV + the client crawl</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-245-158-11-0_1)', color: 'var(--c-f59e0b)', border: '1px solid var(--c-f59e0b)', fontWeight: 700 }}>competitor = a rival ranks, the client does not</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--c-22d3ee)', fontWeight: 700 }}>expanded = added by Step 3</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)', border: '1px solid var(--c-a78bfa)', fontWeight: 700 }}>branded = client or competitor name</span>
       </div>
     </div>
   );
