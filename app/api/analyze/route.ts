@@ -25,7 +25,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z }       from 'zod';
 import { db }      from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray, desc, sql } from 'drizzle-orm';
 import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/apis/semrush';
 import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan, activeProviderLabel, providerBalanceUrl, providerUnitLabel, serpProvider }  from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
@@ -142,19 +142,42 @@ export async function POST(req: NextRequest) {
       //    (fetchedAt is stamped when Semrush data was genuinely pulled/merged;
       //    data-mode copies retain the old stamp, so this skips polluted rows)
       //  • profoundSnapshot — most recent row that has one
-      const recentCompleted = await db.query.analyses.findMany({
-        where: and(
-          eq(analyses.projectId, projectId),
-          eq(analyses.status, 'completed'),
-        ),
-        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-        limit: 15,
-      });
+      // v7.445: this pulled FIFTEEN complete analysis rows — each carrying a whole
+      // semrushSnapshot — purely to compare a timestamp and two presence flags. On a
+      // large project that response exceeds Neon's 64 MB cap and the query fails
+      // outright (the SERP-scan 507). Read the comparison keys in SQL, then fetch only
+      // the rows actually chosen.
+      const recentKeys = await db
+        .select({
+          id:          analyses.id,
+          semFetched:  sql<string | null>`${analyses.semrushSnapshot}->>'fetchedAt'`,
+          serpKws:     sql<number>`COALESCE(jsonb_array_length(${analyses.serpApiSnapshot}->'keywords'), 0)`,
+          serpFetched: sql<string | null>`${analyses.serpApiSnapshot}->>'fetchedAt'`,
+          hasProfound: sql<boolean>`${analyses.profoundSnapshot} IS NOT NULL`,
+        })
+        .from(analyses)
+        .where(and(eq(analyses.projectId, projectId), eq(analyses.status, 'completed')))
+        .orderBy(desc(analyses.triggeredAt))
+        .limit(15);
+
+      const msOf = (t: string | null) => { const n = Date.parse(t ?? ''); return Number.isFinite(n) ? n : 0; };
+      const semPick   = recentKeys.filter(r => r.semFetched !== null)
+        .sort((a, b) => msOf(b.semFetched) - msOf(a.semFetched))[0]
+        ?? recentKeys[0] ?? null;
+      const serpPick  = recentKeys.filter(r => (r.serpKws ?? 0) > 0)
+        .sort((a, b) => msOf(b.serpFetched) - msOf(a.serpFetched))[0] ?? null;
+      const probePick = recentKeys.find(r => r.hasProfound) ?? null;
+
+      const needed = Array.from(new Set([semPick?.id, serpPick?.id, probePick?.id].filter(Boolean) as string[]));
+      const recentCompleted = needed.length > 0
+        ? await db.query.analyses.findMany({ where: inArray(analyses.id, needed) })
+        : [];
 
       const fetchedAtMs = (s: any) => {
         const t = Date.parse(s?.fetchedAt ?? '');
         return Number.isFinite(t) ? t : 0;
       };
+      const byId = new Map(recentCompleted.map((a: any) => [a.id, a]));
       // v7.443: a snapshot OBJECT is not a snapshot with DATA. A scope clear leaves an
       // emptied shell on EVERY analysis row (topKeywords/gapKeywords []), so the old
       // `if (s && …)` test happily selected one and this mode copied the emptiness into a
@@ -163,7 +186,7 @@ export async function POST(req: NextRequest) {
       // Only a snapshot that actually carries keywords can be a reuse base (Const II.7).
       let baseSemrush: any = null;
       for (const a of recentCompleted) {
-        const s: any = a.semrushSnapshot;
+        const s: any = (a as any).semrushSnapshot;
         if (snapshotHasFootprint(s) && (!baseSemrush || fetchedAtMs(s) > fetchedAtMs(baseSemrush))) baseSemrush = s;
       }
 
@@ -180,12 +203,8 @@ export async function POST(req: NextRequest) {
           warnings.push(`No previous analysis had a keyword footprint to reuse, so it was rebuilt from this project's ${n.toLocaleString()} uploaded keywords. No Semrush units were spent.`);
         }
       }
-      const existingSerp: any = recentCompleted
-        .map((a: any) => a.serpApiSnapshot as any)
-        .filter((s: any) => (s?.keywords?.length ?? 0) > 0)
-        .sort((a: any, b: any) => fetchedAtMs(b) - fetchedAtMs(a))[0] ?? null;
-      const baseProbe: any = recentCompleted
-        .find((a: any) => a.profoundSnapshot != null)?.profoundSnapshot ?? null;
+      const existingSerp: any = (serpPick ? (byId.get(serpPick.id) as any)?.serpApiSnapshot : null) ?? null;
+      const baseProbe: any    = (probePick ? (byId.get(probePick.id) as any)?.profoundSnapshot : null) ?? null;
 
       if (!baseSemrush) {
         await db.update(analyses).set({ status: 'failed' }).where(eq(analyses.id, analysis.id));
@@ -280,29 +299,44 @@ export async function POST(req: NextRequest) {
       // data mode — footprint by newest fetchedAt (skips rows that merely
       // copied an old snapshot), serp snapshot from the row that actually has
       // scanned keywords, probe from the most recent row that has one.
-      const gapRecent = await db.query.analyses.findMany({
-        where: and(
-          eq(analyses.projectId, projectId),
-          eq(analyses.status, 'completed'),
-        ),
-        orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-        limit: 15,
-      });
+      // v7.445: same 15-full-row pull as data mode had — see the Neon 507 note above.
+      // Keys in SQL, then fetch only the rows actually chosen.
+      const gapKeys = await db
+        .select({
+          id:          analyses.id,
+          semFetched:  sql<string | null>`${analyses.semrushSnapshot}->>'fetchedAt'`,
+          semKws:      sql<number>`COALESCE(jsonb_array_length(${analyses.semrushSnapshot}->'topKeywords'), 0)
+                                 + COALESCE(jsonb_array_length(${analyses.semrushSnapshot}->'gapKeywords'), 0)`,
+          serpKws:     sql<number>`COALESCE(jsonb_array_length(${analyses.serpApiSnapshot}->'keywords'), 0)`,
+          serpFetched: sql<string | null>`${analyses.serpApiSnapshot}->>'fetchedAt'`,
+          hasProfound: sql<boolean>`${analyses.profoundSnapshot} IS NOT NULL`,
+        })
+        .from(analyses)
+        .where(and(eq(analyses.projectId, projectId), eq(analyses.status, 'completed')))
+        .orderBy(desc(analyses.triggeredAt))
+        .limit(15);
+
       const gapFetchedAtMs = (s: any) => {
         const t = Date.parse(s?.fetchedAt ?? '');
         return Number.isFinite(t) ? t : 0;
       };
-      let gapBaseSemrush: any = null;
-      for (const a of gapRecent) {
-        const s: any = a.semrushSnapshot;
-        if (s && (!gapBaseSemrush || gapFetchedAtMs(s) > gapFetchedAtMs(gapBaseSemrush))) gapBaseSemrush = s;
-      }
-      const gapBaseSerp: any = gapRecent
-        .map((a: any) => a.serpApiSnapshot as any)
-        .filter((s: any) => (s?.keywords?.length ?? 0) > 0)
-        .sort((a: any, b: any) => gapFetchedAtMs(b) - gapFetchedAtMs(a))[0] ?? null;
-      const gapBaseProbe: any = gapRecent
-        .find((a: any) => a.profoundSnapshot != null)?.profoundSnapshot ?? null;
+      const gapMs = (t: string | null) => { const n = Date.parse(t ?? ''); return Number.isFinite(n) ? n : 0; };
+      // v7.445 (the v7.443 rule): an emptied snapshot is a truthy object with no keywords.
+      // The old `if (s && …)` picked one, so a gap scan could build on nothing.
+      const gapSemPick   = gapKeys.filter(r => (r.semKws ?? 0) > 0)
+        .sort((a, b) => gapMs(b.semFetched) - gapMs(a.semFetched))[0] ?? null;
+      const gapSerpPick  = gapKeys.filter(r => (r.serpKws ?? 0) > 0)
+        .sort((a, b) => gapMs(b.serpFetched) - gapMs(a.serpFetched))[0] ?? null;
+      const gapProbePick = gapKeys.find(r => r.hasProfound) ?? null;
+      const gapNeeded = Array.from(new Set([gapSemPick?.id, gapSerpPick?.id, gapProbePick?.id].filter(Boolean) as string[]));
+      const gapRows = gapNeeded.length > 0
+        ? await db.query.analyses.findMany({ where: inArray(analyses.id, gapNeeded) })
+        : [];
+      const gapById = new Map(gapRows.map((a: any) => [a.id, a]));
+
+      const gapBaseSemrush: any = (gapSemPick ? (gapById.get(gapSemPick.id) as any)?.semrushSnapshot : null) ?? null;
+      const gapBaseSerp:    any = (gapSerpPick ? (gapById.get(gapSerpPick.id) as any)?.serpApiSnapshot : null) ?? null;
+      const gapBaseProbe:   any = (gapProbePick ? (gapById.get(gapProbePick.id) as any)?.profoundSnapshot : null) ?? null;
 
       if (!gapBaseSemrush) {
         console.log(`[OrbitIQ] Gap scan: no completed analysis found — falling back to full mode`);
