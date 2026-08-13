@@ -85,22 +85,42 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   const { category, keyword, limit } = parsed.data;
-  const result = await dfsSearchLlmMentions(keyword, { limit: limit ?? 100 });
-  if (!result) {
-    // The provider call failed — surfaced as a retryable error, never stored as
-    // "no recorded answers" (the v0.24 transient-silent-empty lesson).
+
+  // ── v7.435: ONE REQUEST PER PLATFORM (Wayne: "is all of this data just for AIOs?") ──
+  // Unfiltered, the index returns both platforms in one ranked page — and on a
+  // high-volume category the 100-row page came back 100% Google AI Overviews, so
+  // ChatGPT visibility was UNMEASURED while reading like a complete picture. Each
+  // platform now gets its own request and its own row quota, and each platform's
+  // match count + fetched count + measured cost is stored separately so the panel
+  // can state the mix instead of implying one (Const I.1 / I.5).
+  const PLATFORMS = ['google', 'chat_gpt'] as const;
+  const per = await Promise.all(PLATFORMS.map(async (pf) => ({
+    platform: pf,
+    res: await dfsSearchLlmMentions(keyword, { limit: limit ?? 100, platform: pf }),
+  })));
+  // Every platform failing is a failed scan (retryable, never stored as "no answers").
+  if (per.every(x => x.res === null)) {
     return NextResponse.json({ error: 'DataForSEO LLM Mentions call failed — try again' }, { status: 502 });
   }
 
+  const rows = per.flatMap(x => x.res?.rows ?? []);
+  const platforms = per.map(x => ({
+    platform:   x.platform,
+    // null = the request for THIS platform failed; 0 = it genuinely returned nothing.
+    totalCount: x.res ? x.res.totalCount : null,
+    fetched:    x.res ? x.res.rows.length : null,
+    costUSD:    x.res ? x.res.costUSD : 0,
+  }));
   const entry = {
     category,
     query:      keyword,
     scannedAt:  new Date().toISOString(),
-    totalCount: result.totalCount,
-    fetched:    result.rows.length,
-    costUSD:    result.costUSD,        // measured task cost (also on the usage ledger)
+    totalCount: per.reduce((n, x) => n + (x.res?.totalCount ?? 0), 0),
+    fetched:    rows.length,
+    costUSD:    per.reduce((n, x) => n + (x.res?.costUSD ?? 0), 0),   // measured, summed across platforms
     provider:   'dataforseo' as const, // provenance travels with the data (Const I.1 naming)
-    rows:       result.rows,
+    platforms,                         // v7.435: per-platform provenance — never inferred from rows
+    rows,
   };
 
   // RMW merge: re-read inside the write path and replace ONLY this category's entry.
