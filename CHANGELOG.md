@@ -1,3 +1,11 @@
+## v7.441 - the csv badge is gone
+
+**Wayne:** *"i dont need the csv badge - remove that"*
+
+Since v7.438 every row already carries **original footprint**, which is what an uploaded CSV row
+is. The `csv` chip beside it said the same thing twice. Removed. The `custom` chip stays, because a
+hand-added keyword is genuinely a different thing from an uploaded one.
+
 ## v7.440 - Step 3 stops wandering, and asks before it adds
 
 Three changes to "Expand product data", from the live dry run.
