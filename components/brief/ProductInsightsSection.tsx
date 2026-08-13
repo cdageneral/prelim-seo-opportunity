@@ -327,7 +327,7 @@ export default function ProductInsightsSection({
             <div style={{ marginTop: '4px', color: 'var(--c-8a8aa8)' }}>
               Two live requests per category — one for Google AI Overviews and one for ChatGPT — up to 100 recorded answers each (the API's own page size; the full match count is shown after the scan).
               Scanning per platform is deliberate: unfiltered, a high-volume category filled all 100 rows with AI Overviews and left ChatGPT unmeasured.
-              List price $0.10/request + $0.001/row — the <b>measured</b> per-task cost is what lands on the API Usage ledger (never a rate×count estimate).
+              List price $0.10/request + $0.001/row, so a full 100-row page is <b>$0.20 per platform request</b> — about $0.40 per category across both. The <b>measured</b> per-task cost is what lands on the API Usage ledger (never a rate×count estimate).
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
               <button onClick={() => void runScan()} style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run scan</button>
@@ -708,8 +708,8 @@ export default function ProductInsightsSection({
                                 : confirming
                                   ? (
                                     <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                                      <button onClick={() => void runNodeScan(node)} title="Two live DataForSEO LLM Mentions requests for this sub-category — one for Google AI Overviews, one for ChatGPT, so neither platform is left unmeasured. Measured cost lands on the API Usage ledger."
-                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run both platforms · ~$0.20</button>
+                                      <button onClick={() => void runNodeScan(node)} title="Two live DataForSEO LLM Mentions requests for this sub-category — one for Google AI Overviews, one for ChatGPT, so neither platform is left unmeasured. List price is $0.10 per request plus $0.001 per returned row, so a full 100-row page costs $0.20 per platform. The measured per-task cost is what lands on the API Usage ledger."
+                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run both platforms · ~$0.40</button>
                                       <button onClick={() => setNodeConfirm(null)} style={{ fontSize: '10px', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>✕</button>
                                     </div>
                                   )
