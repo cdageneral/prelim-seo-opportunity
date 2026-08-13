@@ -1,3 +1,30 @@
+## v7.440 - Step 3 stops wandering, and asks before it adds
+
+Three changes to "Expand product data", from the live dry run.
+
+**The seed now carries its umbrella.** Step 3 sent Semrush the bare taxonomy name, and a name
+like "Card Types" is unambiguous only inside your taxonomy. Asked what relates to "Card Types",
+Semrush answered `playing cards`, `deck of cards`, `cards magic gathering`. Asked about
+"Education" it answered `ohio`, `mcgraw hill`, `school`. Asked about "Tools": `acme tools`,
+`power tools`. The umbrella was sitting in the stored taxonomy the whole time and simply was not
+passed. Seeds are now qualified from it - "Card Types" under "Credit Cards" becomes
+`credit card types`, which returns `credit cards`, `apply for credit card`, `credit card offers`.
+Categories sitting under a **brand** lane are no longer seeded at all: "Offers & Promotions" lives
+under "Brand Searches", and expanding it is what pulled in `capital one` (9,140,000/mo), `groupon`
+and `black friday deals`.
+
+**The loose report is opt-in.** Semrush's `phrase_related` produced 1,060 of the 2,391 keywords in
+your Amex build but **44.08M of the 45.71M volume - 96%** - and essentially all of the off-domain
+drift. `phrase_questions` needs the seed words to appear in the question, so it stays anchored.
+Related is now off by default with a checkbox next to the volume floor; leaving it off also halves
+the Semrush spend for the pass.
+
+**Nothing is stored until you have looked at it.** Running Step 3 or Step 4 now performs a dry run
+and shows you exactly what would be added - grouped by the seed that produced it, with each seed's
+keyword count, monthly volume and a sample of its actual keywords. Untick a seed and none of its
+keywords are pulled; cancel and nothing is written at all. A seed like "tools", which no rule could
+have predicted, dies in one click.
+
 ## v7.439 - competitor brands your own brand was shielding
 
 Found while explaining where Step 3's keywords came from: **Bank of America terms were sitting in
