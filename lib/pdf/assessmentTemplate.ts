@@ -205,6 +205,10 @@ export interface AssessmentData {
     }>;
     kpi: { arb: number; dual: number; aiOnly: number; none: number; citesClient: number; citesTotal: number };
     scannedAt: string | null;
+    // v7.432 (Const II.6b): the sub-category level the panel measures, ranked by demand.
+    subNodes?: Array<{ name: string; path: string; depth: number; demand: number; kwCount: number;
+      p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
+      dfsShare: number | null; scanned: boolean }>;
   } | null;
 }
 
@@ -753,6 +757,21 @@ export function buildAssessmentHTML(d: AssessmentData): string {
          ${citedTop.map(c => barRow(c.isClient ? `${c.domain} (you)` : c.domain, (c.count / maxCite) * 100, `${n0(c.count)} citations`, c.isClient ? 'var(--blue)' : '#c9c8c1', '1.9in')).join('')}
          ${!citedTop.some(c => c.isClient) ? `<div style="font-size:9px; color:var(--critical); margin-top:4px;">${esc(d.clientName)} is cited 0 times across these recorded answers.</div>` : ''}`
       : '';
+    // v7.432: the deepest measured levels — the panel's sub-category drill, in the report.
+    const subs = (pi.subNodes ?? []).slice(0, 10);
+    const subHtml = subs.length === 0 ? '' : `
+      <div class="h2" style="margin-top:14px;">Inside the product lines - the sub-categories carrying the demand</div>
+      <table class="dt">
+        <tr><th>Sub-category</th><th style="width:.7in;">Demand</th><th style="width:.6in;">Page 1</th><th>Who leads page 1</th><th style="width:1.25in;">AI answers</th></tr>
+        ${subs.map(n => `<tr>
+          <td><b>${esc(n.name)}</b><br><span style="color:var(--muted); font-size:8px;">${esc(n.path)} - ${n0(n.kwCount)} kws</span></td>
+          <td>${vol(n.demand)}/mo</td>
+          <td>${p0(n.p1Share * 100)}</td>
+          <td>${n.leader ? (n.leader === 'you' ? `You - ${p1(n.leaderPct ?? 0)}` : `${esc(n.leader)} - ${p1(n.leaderPct ?? 0)}${n.clientRank !== null ? ` (you #${n.clientRank})` : ''}`) : 'No page-1 holds'}</td>
+          <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}` : 'not measured at this level'}</td>
+        </tr>`).join('')}
+      </table>
+      <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run.</div>`;
     pages.push(pageWrap('PRODUCT INSIGHTS — SEARCH AND AI BY PRODUCT', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">Where ranking authority is not yet an AI answer.</h1>
       <div class="lede">Each product line measured on both axes: share of search demand held on page 1, and presence in AI answers. <b>${n0(pi.kpi.arb)} topics</b> already rank on page 1 while the AI side is weak — the authority exists; the AI answer is what is missing.${ownedShare !== null ? ` Across ${n0(pi.kpi.citesTotal)} recorded citations, ${esc(d.clientName)} holds <b>${p1(ownedShare)}</b>.` : ''}</div>
@@ -762,6 +781,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       </table>
       ${pi.products.length > 8 ? `<div style="font-size:8.5px; color:var(--muted);">Showing the top 8 of ${pi.products.length} product lines by demand — the full set lives on the Product Insights panel.</div>` : ''}
       ${citedHtml}
+      ${subHtml}
       <div class="src">Source: canonical keyword pool + stored taxonomy (page-1 share and the brand field are measured volume at positions 1-10 — no click model); AI probe = unbranded prompts at analysis time; recorded answers = DataForSEO LLM Mentions index (ChatGPT + Google AI Overviews, first ${anyScan ? '100' : '100'} per category with full match counts shown)${pi.scannedAt ? `, last scanned ${esc(new Date(pi.scannedAt).toLocaleDateString('en-US'))}` : ' — not yet scanned'}. Verdict thresholds: weak below 30%, strong at 50%+. This section reads the same shared computation as the Product Insights panel.</div>`));
   }
 
