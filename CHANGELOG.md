@@ -1,3 +1,15 @@
+## v7.437 - the demand and gap chips actually render
+
+The v7.435 provenance chips never appeared. The tree builder rebuilds each keyword into its own
+row object, and that rebuild copied four fields - keyword, volume, position, URL - so `origin` and
+`isGap` were dropped one line after being passed in. Every keyword rendered as a bare "unranked"
+with no reason given, which is the exact ambiguity v7.435 set out to remove. The row now carries
+provenance through, and a retained check asserts the chips survive the rebuild rather than only
+asserting the markup exists.
+
+Live: Credit Cards > How It Works lists 16 keywords, all of them demand-built - so all 16 now say
+so instead of implying a rank check that never happened.
+
 ## v7.436 - the scan cost shown was understated
 
 A correction to the figure v7.435 printed, caught on the live verification run. DataForSEO charges
