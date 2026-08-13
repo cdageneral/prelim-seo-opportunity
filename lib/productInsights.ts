@@ -340,3 +340,211 @@ export function buildTopicRows(p: { topics: Topic[]; aiRate: number | null; dfsS
   rows.sort((a, b) => (order[a.v] - order[b.v]) || (b.t.totalVolume - a.t.totalVolume));
   return rows;
 }
+
+
+// ─── v7.432: unlimited-depth sub-category tree (Wayne 2026-08-12) ───────────
+// "I see the data for the parent level of the category but how about at the sub
+// category level, such as travel cards. I cant get any insights at that product
+// level."
+//
+// The stored taxonomy is deeper than the product line (real Amex data:
+// Credit Cards › Card Types › Travel Cards › Rewards). Every node here is built
+// from the STORED path (`_categoryBreakdown.keywordPaths`, Const II.8/III.1b) —
+// never re-derived from keyword text — and carries the SAME measured metric set
+// the product row does, computed over that node's own keywords (its own +
+// descendants', deduped so volume is never double-counted, I.3).
+//
+// AI is NOT inherited downward. A node shows an AI figure only when a
+// recorded-answer scan exists for THAT node (scans are keyed by node path);
+// otherwise `scan` is null and every render site must say so (I.5) rather than
+// borrowing the parent's rate — a parent-level number displayed on a child is a
+// different metric wearing the child's label.
+
+export interface CatNode {
+  /** ' › ' joined stored path — the stable id and the scan key. */
+  key:        string;
+  name:       string;
+  depth:      number;
+  path:       string[];
+  children:   CatNode[];
+  kwCount:    number;                                    // own + descendants (deduped)
+  demand:     number;                                    // exact rollup (I.1)
+  bands:      [number, number, number, number];
+  p1Share:    number;
+  ladder:     LadderEntry[];
+  clientRank: number | null;
+  scan:       StoredCatScan | null;                      // ONLY this node's own scan
+  dfsShare:   number | null;
+  citedTop:   Array<{ domain: string; count: number; isClient: boolean }>;
+  /** Best measured client position across the node's keywords (null = unranked). */
+  bestPos:    number | null;
+  /** Client's best ranking URL among the node's keywords, when the source rows carry one. */
+  bestUrl?:   string;
+}
+
+interface NodeKw { keyword: string; searchVolume: number; position: number | null; url?: string }
+
+export interface BuildCategoryTreeOpts {
+  breakdown:        any;              // semrushSnapshot._categoryBreakdown (keywordPaths + categories)
+  poolKeywords:     Array<{ keyword: string; searchVolume: number; position: number | null; url?: string }>;
+  uploadedKeywords: any[];
+  serpPositions:    Record<string, Array<{ keyword: string; position: number }>>;
+  storedScans:      StoredCatScan[];  // keyed by node key (' › ' path) OR legacy top-level name
+  clientDomain:     string;
+  brandTerms?:      string[];
+}
+
+/**
+ * Build the full stored-path tree under `rootName` (a product line), with every
+ * node carrying its own measured metrics. Returns null when the analysis has no
+ * stored paths for that root (honest gap — the caller renders the flat topic
+ * list it already has, never a fabricated tree).
+ */
+export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts): CatNode | null {
+  const { breakdown, poolKeywords, uploadedKeywords, serpPositions, storedScans, clientDomain, brandTerms = [] } = opts;
+  const rawPaths: Record<string, any> = breakdown?.keywordPaths ?? {};
+  if (!rawPaths || Object.keys(rawPaths).length === 0) return null;
+
+  const clientNorm = normSovDomain(clientDomain);
+  const brandToks  = buildBrandTokens(clientDomain, brandTerms);
+  const rootNorm   = normName(rootName);
+
+  // keyword → its measured row (one row per keyword — the canonical pool already deduped)
+  const kwRow = new Map<string, NodeKw>();
+  for (const k of poolKeywords) {
+    const key = String(k?.keyword ?? '').toLowerCase().trim();
+    if (!key || kwRow.has(key)) continue;
+    kwRow.set(key, { keyword: key, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: (k as any).url });
+  }
+
+  // competitor rank map (same two sources as the ladder — v7.419 basis)
+  const perKw   = new Map<string, Map<string, number>>();
+  const tracked = new Set<string>();
+  for (const r of (uploadedKeywords ?? [])) {
+    if (r?.source === 'blocked') continue;
+    const dom = normSovDomain(r?.domain ?? '');
+    if (!dom || dom === clientNorm) continue;
+    const p = r?.position;
+    if (p == null || p < 1) continue;
+    tracked.add(dom);
+    const k = String(r?.keyword ?? '').toLowerCase().trim();
+    if (!k) continue;
+    let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
+    const prev = m.get(dom);
+    if (prev === undefined || p < prev) m.set(dom, p);
+  }
+  for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
+    const dom = normSovDomain(rawDom);
+    if (!dom || dom === clientNorm || tracked.has(dom)) continue;
+    for (const pos of (positions ?? [])) {
+      const p = pos?.position;
+      if (p == null || p < 1) continue;
+      const k = String(pos?.keyword ?? '').toLowerCase().trim();
+      if (!k) continue;
+      let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
+      const prev = m.get(dom);
+      if (prev === undefined || p < prev) m.set(dom, p);
+    }
+  }
+
+  const scanByKey = new Map<string, StoredCatScan>();
+  for (const s of (storedScans ?? [])) if (s?.category) scanByKey.set(normName(s.category), s);
+
+  // ── assemble the raw tree from stored paths ──
+  interface Raw { name: string; path: string[]; kws: NodeKw[]; children: Map<string, Raw> }
+  const root: Raw = { name: rootName, path: [rootName], kws: [], children: new Map() };
+  for (const [kwRaw, pathRaw] of Object.entries(rawPaths)) {
+    if (!Array.isArray(pathRaw) || pathRaw.length === 0) continue;
+    const path = pathRaw.map((x: any) => String(x ?? '').trim()).filter(Boolean);
+    if (path.length === 0 || normName(path[0]) !== rootNorm) continue;
+    const row = kwRow.get(String(kwRaw).toLowerCase().trim());
+    if (!row) continue;                       // not in the canonical pool (hidden/blocked/out of scope) — skip
+    let cur = root;
+    for (let i = 1; i < path.length; i++) {
+      const seg = path[i];
+      const kk = normName(seg);
+      let next = cur.children.get(kk);
+      if (!next) { next = { name: seg, path: path.slice(0, i + 1), kws: [], children: new Map() }; cur.children.set(kk, next); }
+      cur = next;
+    }
+    cur.kws.push(row);                        // a keyword sits at its MOST SPECIFIC node (III.6)
+  }
+
+  // ── fold each raw node into a measured CatNode (post-order: children first) ──
+  const fold = (raw: Raw, depth: number): CatNode => {
+    const children = Array.from(raw.children.values()).map(c => fold(c, depth + 1));
+    const seen = new Set<string>();
+    const all: NodeKw[] = [];
+    const collect = (r: Raw) => { for (const k of r.kws) { if (!seen.has(k.keyword)) { seen.add(k.keyword); all.push(k); } } r.children.forEach(collect); };
+    collect(raw);
+
+    const bands: [number, number, number, number] = [0, 0, 0, 0];
+    let demand = 0, clientP1Vol = 0, clientP1Kw = 0;
+    let bestPos: number | null = null; let bestUrl: string | undefined;
+    const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number }>();
+    for (const k of all) {
+      const v = k.searchVolume || 0;
+      demand += v;
+      const p = k.position;
+      if (p !== null && p >= 1 && p <= 3)        bands[0] += v;
+      else if (p !== null && p >= 4 && p <= 10)  bands[1] += v;
+      else if (p !== null && p >= 11 && p <= 20) bands[2] += v;
+      else bands[3] += v;
+      if (p !== null && p >= 1 && p <= 10) { clientP1Vol += v; clientP1Kw++; }
+      if (p !== null && p >= 1 && (bestPos === null || p < bestPos)) { bestPos = p; bestUrl = k.url; }
+      const m = perKw.get(k.keyword);
+      if (m) m.forEach((bp, dom) => {
+        let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0 }; byDom.set(dom, e); }
+        e.measuredKw++;
+        if (bp >= 1 && bp <= 10) { e.p1Vol += v; e.p1Kw++; }
+      });
+    }
+    const ladder: LadderEntry[] = [];
+    if (clientP1Vol > 0) ladder.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: all.length });
+    byDom.forEach((e, dom) => {
+      if (e.p1Vol <= 0) return;               // no page-1 hold → no entry (I.5)
+      ladder.push({ domain: dom, kind: tracked.has(dom) ? 'tracked' : 'rival', p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
+    });
+    ladder.sort((a, b) => b.p1Vol - a.p1Vol);
+    const clientIdx = ladder.findIndex(e => e.kind === 'client');
+
+    const key = raw.path.join(' › ');
+    // Scans are keyed by the node key; the top-level node also honours the legacy
+    // name-keyed scans written before v7.432 (no re-scan needed, I.5).
+    const scan = scanByKey.get(normName(key)) ?? (depth === 0 ? (scanByKey.get(rootNorm) ?? null) : null);
+    let dfsShare: number | null = null;
+    let citedTop: CatNode['citedTop'] = [];
+    if (scan && scan.rows.length > 0) {
+      const named = scan.rows.filter(r => rowNamesClient(r, clientNorm, brandToks)).length;
+      dfsShare = named / scan.rows.length;
+      const counts = new Map<string, number>();
+      for (const r of scan.rows) for (const sc of r.sources) {
+        const dd = normSovDomain(sc.domain); if (!dd) continue;
+        counts.set(dd, (counts.get(dd) ?? 0) + 1);
+      }
+      citedTop = Array.from(counts.entries())
+        .map(([dd, c]) => ({ domain: dd, count: c, isClient: dd === clientNorm }))
+        .sort((a, b) => b.count - a.count);
+    }
+
+    children.sort((a, b) => b.demand - a.demand);
+    return {
+      key, name: raw.name, depth, path: raw.path, children,
+      kwCount: all.length, demand, bands,
+      p1Share: demand > 0 ? (bands[0] + bands[1]) / demand : 0,
+      ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null,
+      scan, dfsShare, citedTop, bestPos, bestUrl,
+    };
+  };
+
+  const tree = fold(root, 0);
+  return tree.kwCount > 0 ? tree : null;
+}
+
+/** Flatten a node's subtree (excluding itself) — used by exports and the PDF. */
+export function flattenNodes(node: CatNode): CatNode[] {
+  const out: CatNode[] = [];
+  const walk = (n: CatNode) => { for (const c of n.children) { out.push(c); walk(c); } };
+  walk(node);
+  return out;
+}
