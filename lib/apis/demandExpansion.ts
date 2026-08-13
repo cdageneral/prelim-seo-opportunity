@@ -40,6 +40,8 @@ export interface DemandUniverse {
   builtAt:     string;          // ISO timestamp
   seedCount:   number;
   topicCount:  number;
+  /** v7.440: whether `phrase_related` was pulled for this build (opt-in, default false). */
+  includeRelated?: boolean;
   status:      string;          // human-readable summary
 }
 
@@ -75,12 +77,26 @@ export type { LaneHint, MergedLaneTopic, LaneTopic } from '@/lib/apis/demandLane
  * @param linesPerSeed rows to request per report per seed (deep build = 50+)
  * @param database     Semrush regional database (e.g. 'us')
  */
+export interface DemandExpandOpts {
+  /**
+   * v7.440: `phrase_related` is OPT-IN. Measured on the real Amex universe, the related
+   * report produced 1,060 of 2,391 keywords but **44.08M of the 45.71M volume (96%)** —
+   * and essentially all of the off-domain drift (a "Card Types" seed returned `deck of
+   * cards`, `cards magic gathering`, `how many poker cards in a deck`). `phrase_questions`
+   * requires the seed words to appear in the question, so it stays anchored. Default OFF:
+   * questions only. Turning it on also doubles the Semrush spend for the pass.
+   */
+  includeRelated?: boolean;
+}
+
 export async function buildDemandUniverse(
   seeds: string[],
   linesPerSeed = 50,
   database = 'us',
   onProgress?: (done: number, total: number, seed: string) => void | Promise<void>,
+  opts: DemandExpandOpts = {},
 ): Promise<DemandUniverse> {
+  const includeRelated = opts.includeRelated === true;
   // De-dupe seeds (case-insensitive), drop blanks.
   const seen = new Set<string>();
   const cleanSeeds: string[] = [];
@@ -98,9 +114,10 @@ export async function buildDemandUniverse(
   // Sequential across seeds (gentle on rate limits), both reports per seed in
   // parallel. Each report independently guarded so partial pulls survive.
   for (const seed of cleanSeeds) {
+    // v7.440: the related report is only CALLED when opted in — no request, no spend.
     const [qRes, rRes] = await Promise.allSettled([
       getPhraseQuestions(seed, linesPerSeed, database),
-      getPhraseRelated(seed, linesPerSeed, database),
+      includeRelated ? getPhraseRelated(seed, linesPerSeed, database) : Promise.resolve([] as SemrushPhrase[]),
     ]);
 
     let questions = 0, related = 0;
@@ -109,8 +126,10 @@ export async function buildDemandUniverse(
     if (qRes.status === 'fulfilled') { mergeInto(map, qRes.value, seed, 'questions'); questions = qRes.value.length; }
     else { error = `questions: ${String(qRes.reason?.message ?? qRes.reason)}`; }
 
-    if (rRes.status === 'fulfilled') { mergeInto(map, rRes.value, seed, 'related'); related = rRes.value.length; }
-    else { error = (error ? error + ' · ' : '') + `related: ${String(rRes.reason?.message ?? rRes.reason)}`; }
+    if (includeRelated) {
+      if (rRes.status === 'fulfilled') { mergeInto(map, rRes.value, seed, 'related'); related = rRes.value.length; }
+      else { error = (error ? error + ' · ' : '') + `related: ${String(rRes.reason?.message ?? rRes.reason)}`; }
+    }
 
     seedResults.push({ seed, questions, related, error });
     // v7.156: report progress after each seed so the UI can show a determinate
@@ -131,6 +150,7 @@ export async function buildDemandUniverse(
     builtAt:    new Date().toISOString(),
     seedCount:  cleanSeeds.length,
     topicCount: topics.length,
+    includeRelated,          // v7.440: provenance — was the loose report used at all?
     status,
   };
 }
