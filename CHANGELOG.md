@@ -1,3 +1,38 @@
+## v7.445 - the SERP scan's 507, and one button instead of two
+
+**Wayne:** *"why is there two buttons?"* and *"the serp features run seems to have broken. I hit
+resume and it loops back to the same error."*
+
+**One control per row.** v7.444 put the new cascade button next to the old single-level one, which
+contradicts the rule set for it - a level always takes the levels below it with it. There was no
+decision left to offer, so there is no second button. Re-scanning levels already on file moved into
+the plan dialog, where it can state how many it would re-buy and sit behind the default action
+rather than beside it.
+
+**The SERP scan was not timing out.** The banner said "likely a timeout" because that is what the
+code guessed whenever it saw a 500. The server was actually returning this, on every batch:
+
+    NeonDbError: Server error (HTTP status 507):
+    response is too large (max is 67108864 bytes)
+
+Six routes fetched **five complete analysis rows** in order to keep one - and each row carries the
+whole keyword snapshot, every stored SERP feature payload included. On First Citizens, with 7,040
+scanned keywords, five of those rows exceed the database driver's 64 MB response limit and the query
+is refused before it returns anything. The scan never got as far as scanning. Resume re-ran the same
+oversized query, which is why it looped straight back to the same message.
+
+The fix is to stop asking for rows that get thrown away: `lib/latestAnalysis.ts` resolves the id in
+SQL and then fetches exactly one row. Six routes now use it - SERP scan, clusters, refine clusters,
+page map and both demand-universe call sites. **Analyze was worse and is fixed the same way**: its
+data and gap modes each pulled *fifteen* full rows to compare a timestamp and two presence flags,
+which are now read as columns in SQL, with only the chosen rows fetched. That also removed one more
+instance of the emptied-snapshot bug: the gap mode's `if (s && ...)` could still select a snapshot
+holding no keywords at all.
+
+**The banner no longer names a cause it does not know.** It reports the status the server returned
+and adds the thing that would have saved a lot of time here: if Resume comes straight back to the
+same message, the error is not a timeout and re-running will not clear it.
+
 ## v7.444 - scan AI at any level, and it takes everything below with it
 
 **Wayne:** *"we should have a scan ai at this parent level. Also at whatever level you select it
