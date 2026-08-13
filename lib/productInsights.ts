@@ -20,6 +20,7 @@
 import type { Topic } from '@/lib/clusters/canonical';
 import { normSovDomain } from '@/lib/sov/model';
 import { extractBrand } from '@/lib/utils/kwVolume';
+import { qualifySeed } from '@/lib/category/seedQualify';   // v7.444
 
 export interface StoredMentionSource { domain: string; url: string; title: string }
 export interface StoredMentionRow {
@@ -40,6 +41,9 @@ export interface StoredScanPlatform {
 export interface StoredCatScan {
   category: string; query: string; scannedAt: string; totalCount: number;
   fetched: number; costUSD: number; provider: string; rows: StoredMentionRow[];
+  /** v7.444: measured wall-clock ms for this node's scan. Absent on pre-v7.444 scans —
+   *  those carry no timing, so they simply do not contribute to a time projection. */
+  durationMs?: number;
   /** v7.435: per-platform provenance. Absent on scans stored before v7.435 — those
    *  were a single unfiltered request, so the mix is derived from the rows and the
    *  UI says the platform split is "as returned" rather than per-platform measured. */
@@ -715,3 +719,98 @@ export function flattenNodes(node: CatNode): CatNode[] {
   walk(node);
   return out;
 }
+
+// ─── v7.444: cascade scan planning ───────────────────────────────────────────
+// Wayne: "at whatever level you select it should automatically include all the
+// child levels below". Scanning a node now means scanning its whole subtree.
+//
+// Two rules make that safe rather than expensive noise:
+//
+//  1. THE QUERY IS QUALIFIED, NEVER THE BARE NODE NAME. A deep leaf is named for
+//     its position in the tree, not for the world: "Requirements", "No Annual
+//     Fee", "Card Types". Sent alone to the recorded-answer index those match
+//     answers about anything — the exact contamination v7.440 fixed in Step 3
+//     ("Card Types" returned deck-of-cards, "Education" returned mcgraw hill).
+//     Every target is qualified through the SAME `qualifySeed` helper that fix
+//     introduced (Const II.7), so "No Annual Fee" under "Business Credit Cards"
+//     is queried as "business credit cards no annual fee".
+//  2. ALREADY-SCANNED NODES ARE SKIPPED by default (Wayne, 2026-08-13), so a
+//     cascade is incremental and a stopped run resumes where it left off without
+//     re-spending on nodes already on file (Const I.5b — never re-buy stored data).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface ScanTarget {
+  /** stored scan key — the node's ' › ' joined path. */
+  key:     string;
+  name:    string;
+  depth:   number;
+  /** the QUALIFIED query term actually sent to the index (never the bare name). */
+  query:   string;
+  /** does this node already carry a stored scan? */
+  scanned: boolean;
+}
+
+/** The qualified query term for one node — exported so the UI can show it before spending. */
+export function scanQueryFor(node: Pick<CatNode, 'name' | 'path'>): string {
+  const umbrella = (node.path && node.path.length > 0) ? node.path[0] : '';
+  return qualifySeed(node.name, umbrella) || String(node.name ?? '').toLowerCase().trim();
+}
+
+/**
+ * Every node in this subtree — the node itself plus ALL descendants at every depth —
+ * as scan targets, in breadth-first order so the shallowest (most valuable) nodes are
+ * scanned first if the run is stopped early.
+ */
+export function buildScanPlan(
+  root: CatNode,
+  storedScans: StoredCatScan[] = [],
+  opts: { skipScanned?: boolean } = {},
+): ScanTarget[] {
+  const done = new Set((storedScans ?? []).filter(s => s?.category).map(s => normName(s.category)));
+  const all: CatNode[] = [root, ...flattenNodes(root)];
+  all.sort((a, b) => a.depth - b.depth);
+  const seen = new Set<string>();
+  const out: ScanTarget[] = [];
+  for (const n of all) {
+    if (!n?.key || seen.has(n.key)) continue;
+    seen.add(n.key);
+    const scanned = done.has(normName(n.key));
+    if (opts.skipScanned !== false && scanned) continue;
+    out.push({ key: n.key, name: n.name, depth: n.depth, query: scanQueryFor(n), scanned });
+  }
+  return out;
+}
+
+/**
+ * Projected cost of scanning N nodes, derived from THIS project's own measured scan
+ * costs (Const I.1 — the average of real per-task costs DataForSEO reported and the
+ * ledger stored). Returns null when the project has no measured history: a projection
+ * with nothing to project FROM would be a modeled number presented as a quote (I.5a),
+ * so the UI says the cost is measured per scan and reported afterwards instead.
+ */
+/**
+ * Projected wall-clock time for N nodes, from THIS project's measured scan durations
+ * (v7.444). Same discipline as projectedScanCost: null when nothing has been timed yet,
+ * because a duration with no measurement behind it would be a made-up number (I.1/I.5a).
+ * Nodes run sequentially, so the projection is simply avg x N.
+ */
+export function projectedScanTime(
+  storedScans: StoredCatScan[],
+  nodes: number,
+): { seconds: number; avgSeconds: number; basedOn: number } | null {
+  const timed = (storedScans ?? []).filter(s => typeof s?.durationMs === 'number' && (s.durationMs as number) > 0);
+  if (timed.length === 0 || nodes <= 0) return null;
+  const avgMs = timed.reduce((n, s) => n + (s.durationMs as number), 0) / timed.length;
+  return { seconds: (avgMs / 1000) * nodes, avgSeconds: avgMs / 1000, basedOn: timed.length };
+}
+
+export function projectedScanCost(
+  storedScans: StoredCatScan[],
+  nodes: number,
+): { usd: number; avgUsd: number; basedOn: number } | null {
+  const priced = (storedScans ?? []).filter(s => typeof s?.costUSD === 'number' && s.costUSD > 0);
+  if (priced.length === 0 || nodes <= 0) return null;
+  const avg = priced.reduce((n, s) => n + s.costUSD, 0) / priced.length;
+  return { usd: avg * nodes, avgUsd: avg, basedOn: priced.length };
+}
+
