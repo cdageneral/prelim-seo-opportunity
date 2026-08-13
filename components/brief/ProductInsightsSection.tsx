@@ -97,11 +97,10 @@ export default function ProductInsightsSection({
   const [scanErrors, setScanErrors]   = useState<string[]>([]);
   // v7.432: sub-category drill — expanded node keys + the node currently being scanned
   const [openNodes, setOpenNodes]     = useState<Set<string>>(new Set());
-  const [nodeScanning, setNodeScanning] = useState<string | null>(null);
-  const [nodeConfirm, setNodeConfirm] = useState<string | null>(null);
+  const [nodeScanning] = useState<string | null>(null);
   // v7.444: a cascade run — the plan is built and PRICED before anything is spent,
   // and can be stopped mid-run (skipped nodes stay unscanned, so it resumes cleanly).
-  const [plan, setPlan]           = useState<{ label: string; targets: ScanTarget[]; alreadyDone: number } | null>(null);
+  const [plan, setPlan]           = useState<{ label: string; targets: ScanTarget[]; rescanTargets: ScanTarget[]; alreadyDone: number } | null>(null);
   const [planIdx, setPlanIdx]     = useState(0);
   const [planStop, setPlanStop]   = useState(false);
   const [planStart, setPlanStart] = useState(0);
@@ -258,27 +257,6 @@ export default function ProductInsightsSection({
   // ── scan flow (one category per request — real progress, Const IV.2) ──
   // v7.432: scan ONE node (any depth). The scan is stored under the node's own
   // key, so a sub-category carries its own recorded answers — never the parent's.
-  const runNodeScan = useCallback(async (node: CatNode) => {
-    setNodeConfirm(null);
-    setNodeScanning(node.key);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/product-insights`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // v7.444: qualified, never the bare node name — a leaf called "Requirements"
-        // queried alone matches recorded answers about anything (the v7.440 lesson).
-        body: JSON.stringify({ category: node.key, keyword: scanQueryFor(node) }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        setScanErrors(prev => [...prev, `${node.name}: ${d?.error ?? `HTTP ${res.status}`}`]);
-      }
-    } catch (e: any) {
-      setScanErrors(prev => [...prev, `${node.name}: ${e?.message ?? 'request failed'}`]);
-    }
-    await refreshStored();
-    setNodeScanning(null);
-  }, [projectId, refreshStored]);
 
   // ── v7.444: cascade scan — "whatever level you select includes every level below" ──
   // Two-step by design (Const I.5b): `planScan` only BUILDS and PRICES the plan; nothing
@@ -291,14 +269,18 @@ export default function ProductInsightsSection({
     const targets: ScanTarget[] = [];
     let all = 0;
     const seen = new Set<string>();
+    const everything: ScanTarget[] = [];
+    const seenAll = new Set<string>();
     for (const p of products) {
       const t = treeFor(p.name);
       if (!t) continue;
-      all += buildScanPlan(t, scans, { skipScanned: false }).length;
+      for (const x of buildScanPlan(t, scans, { skipScanned: false })) { if (!seenAll.has(x.key)) { seenAll.add(x.key); everything.push(x); } }
       for (const x of buildScanPlan(t, scans)) { if (!seen.has(x.key)) { seen.add(x.key); targets.push(x); } }
     }
+    all = everything.length;
     targets.sort((a, b) => a.depth - b.depth);
-    setPlan({ label: `all ${products.length} product categories`, targets, alreadyDone: all - targets.length });
+    everything.sort((a, b) => a.depth - b.depth);
+    setPlan({ label: `all ${products.length} product categories`, targets, rescanTargets: everything, alreadyDone: all - targets.length });
     setPlanIdx(0); setPlanStop(false); setScanErrors([]);
   }, [products, treeFor, stored]);
 
@@ -306,7 +288,7 @@ export default function ProductInsightsSection({
     if (!root) return;
     const all      = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[], { skipScanned: false });
     const targets  = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[]);
-    setPlan({ label, targets, alreadyDone: all.length - targets.length });
+    setPlan({ label, targets, rescanTargets: all, alreadyDone: all.length - targets.length });
     setPlanIdx(0); setPlanStop(false); setScanErrors([]);
   }, [stored]);
 
@@ -454,10 +436,19 @@ export default function ProductInsightsSection({
                   </div>
                 </>
               )}
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
                 {n > 0 && (
                   <button onClick={() => void runPlan()} style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>
                     Run scan · {n.toLocaleString()} node{n === 1 ? '' : 's'}
+                  </button>
+                )}
+                {/* v7.445: the ONLY place a re-scan is offered. It re-buys levels already on
+                    file, so it states how many and is never the default action. */}
+                {plan.alreadyDone > 0 && (
+                  <button onClick={() => setPlan({ ...plan, targets: plan.rescanTargets, alreadyDone: 0 })}
+                    title="Re-measure every level in this subtree, including the ones already on file"
+                    style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>
+                    Re-scan all {plan.rescanTargets.length.toLocaleString()}, including the {plan.alreadyDone.toLocaleString()} on file
                   </button>
                 )}
                 <button onClick={() => setPlan(null)} style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>
@@ -702,7 +693,7 @@ export default function ProductInsightsSection({
                       style={{ marginTop: '4px', padding: '3px 8px', fontSize: '9.5px', fontWeight: 700, borderRadius: '6px',
                         cursor: providerOk ? 'pointer' : 'not-allowed', background: 'var(--ca-108-99-255-0_12)',
                         color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)', opacity: providerOk ? 1 : 0.5 }}
-                    >↻ Scan AI · this level + all below</button>
+                    >↻ Scan AI + below</button>
                   )}
                 </div>
                 <div>
@@ -815,7 +806,6 @@ export default function ProductInsightsSection({
                       const leader = node.ladder[0] ?? null;
                       const sPct = Math.round(node.p1Share * 100);
                       const scanning = nodeScanning === node.key;
-                      const confirming = nodeConfirm === node.key;
                       rowsOut.push(
                         <div key={node.key}>
                           <div
@@ -872,32 +862,18 @@ export default function ProductInsightsSection({
                             <div onClick={e => e.stopPropagation()}>
                               {scanning
                                 ? <span style={{ fontSize: '10px', color: 'var(--c-9b96ff)', fontWeight: 700 }}>Scanning…</span>
-                                : confirming
-                                  ? (
-                                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                                      <button onClick={() => void runNodeScan(node)} title="Two live DataForSEO LLM Mentions requests for this sub-category — one for Google AI Overviews, one for ChatGPT, so neither platform is left unmeasured. List price is $0.10 per request plus $0.001 per returned row, so a full 100-row page costs $0.20 per platform. The measured per-task cost is what lands on the API Usage ledger."
-                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run both platforms · ~$0.40</button>
-                                      <button onClick={() => setNodeConfirm(null)} style={{ fontSize: '10px', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>✕</button>
-                                    </div>
-                                  )
-                                  : (
-                                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                                      <button onClick={() => setNodeConfirm(node.key)} disabled={!providerOk}
-                                        title={providerOk ? 'Measure recorded AI answers for THIS sub-category only' : 'DataForSEO is not configured'}
-                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
-                                          background: 'transparent', color: node.scan ? 'var(--c-8a8aa8)' : 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>
-                                        {node.scan ? '↻ Re-scan AI' : '＋ Scan AI'}
-                                      </button>
-                                      {/* v7.444: same control at every depth — this node AND everything under it */}
-                                      {node.children.length > 0 && (
-                                        <button onClick={() => planScan(node.name, node)} disabled={!providerOk}
-                                          title={`Scan ${node.name} and every level beneath it`}
-                                          style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
-                                            background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}>
-                                          ↻ + all below
-                                        </button>
-                                      )}
-                                    </div>
+                                : (
+                                    <button onClick={() => planScan(node.name, node)} disabled={!providerOk}
+                                      title={providerOk
+                                        ? (node.children.length > 0
+                                            ? `Scan ${node.name} and every level beneath it`
+                                            : `Scan ${node.name}`)
+                                        : 'DataForSEO is not configured'}
+                                      style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
+                                        background: 'transparent', color: node.scan ? 'var(--c-8a8aa8)' : 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>
+                                      {node.scan ? '↻ Re-scan AI' : '＋ Scan AI'}
+                                      {node.children.length > 0 ? ' + below' : ''}
+                                    </button>
                                   )}
                             </div>
                           </div>

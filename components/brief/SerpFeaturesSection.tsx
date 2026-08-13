@@ -1149,7 +1149,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
         });
         const data = await safeJson(res);
         if (!res.ok || !data) {
-          setAioScan(s => ({ ...s, running: false, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout while scanning). ${SAVED_NOTE}` }));
+          setAioScan(s => ({ ...s, running: false, error: data?.error ?? `The scan stopped on a server error (HTTP ${res.status}). ${SAVED_NOTE} If Resume returns straight to this message, the error is not a timeout and re-running will not clear it.` }));
           return;
         }
         done += data.scanned ?? 0;
@@ -1211,7 +1211,7 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
           body: JSON.stringify({ filter: 'rescan', keywords: slice, batchSize: SCAN_BATCH }),
         });
         const data = await safeJson(res);
-        if (!res.ok || !data) { setRescan({ key: null, done, total: kws.length, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout while scanning). ${SAVED_NOTE}` }); return; }
+        if (!res.ok || !data) { setRescan({ key: null, done, total: kws.length, error: data?.error ?? `The scan stopped on a server error (HTTP ${res.status}). ${SAVED_NOTE} If Resume returns straight to this message, the error is not a timeout and re-running will not clear it.` }); return; }
         if (data.results?.length) {
           setExtraScanned(prev => {
             const lo = new Set((data.results as SerpKw[]).map(r => (r.keyword ?? '').toLowerCase()));
