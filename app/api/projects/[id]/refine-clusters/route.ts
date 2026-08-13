@@ -23,6 +23,7 @@ import { analyses, projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { groupCategoriesByIntent, INTENT_ENGINE, CategoryInput } from '@/lib/claude/intentGroups';
 import { setUsageProject } from '@/lib/usage/context';
+import { loadLatestAnalysisWithSnapshot } from '@/lib/latestAnalysis';   // v7.445
 
 export const maxDuration = 300;
 
@@ -40,12 +41,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
   if (!project) return new Response(JSON.stringify({ error: 'Project not found' }), { status: 404 });
 
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-    limit:   5,
-  });
-  const analysis = recent.find((a: any) => a.semrushSnapshot != null);
+  // v7.445: one row, not five (Neon 64 MB response cap — lib/db/latestAnalysis.ts)
+  const analysis = await loadLatestAnalysisWithSnapshot(projectId);
   if (!analysis) {
     return new Response(JSON.stringify({ error: 'No analysis with keyword data found. Run an analysis first.' }), { status: 400 });
   }
