@@ -43,7 +43,8 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 import {
   buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
-  buildCategoryTree, flattenNodes, buildPromptBreakdown,
+  buildCategoryTree, flattenNodes, buildPromptBreakdown, buildPlatformMix,
+  PLATFORM_LABEL,
   type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
@@ -163,13 +164,16 @@ export default function ProductInsightsSection({
     if (!openProduct || uploadedKeywords === null) return null;
     const p = built.products.find(x => x.name === openProduct);
     if (!p) return null;
-    const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string }> = [];
+    const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
+      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
     const seen = new Set<string>();
     for (const t of p.topics) for (const k of t.keywords as any[]) {
       const kk = String(k?.keyword ?? '').toLowerCase().trim();
       if (!kk || seen.has(kk)) continue;
       seen.add(kk);
-      poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url });
+      poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
+        // v7.435: carried through untouched — same fields, same pool, as the Keyword list panel
+        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
     }
     try {
       return buildCategoryTree(p.name, {
@@ -321,7 +325,8 @@ export default function ProductInsightsSection({
           <div style={{ padding: '11px 14px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'var(--c-111120)', border: '1px solid var(--ca-108-99-255-0_25)', color: 'var(--c-c8c8e8)' }}>
             <b style={{ color: 'var(--c-e8e8ff)' }}>Scan {products.length} categor{products.length === 1 ? 'y' : 'ies'} through DataForSEO LLM Mentions?</b>
             <div style={{ marginTop: '4px', color: 'var(--c-8a8aa8)' }}>
-              One live request per category, up to 100 recorded answers each (the API's own page size; the full match count is shown after the scan).
+              Two live requests per category — one for Google AI Overviews and one for ChatGPT — up to 100 recorded answers each (the API's own page size; the full match count is shown after the scan).
+              Scanning per platform is deliberate: unfiltered, a high-volume category filled all 100 rows with AI Overviews and left ChatGPT unmeasured.
               List price $0.10/request + $0.001/row — the <b>measured</b> per-task cost is what lands on the API Usage ledger (never a rate×count estimate).
             </div>
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
@@ -691,6 +696,9 @@ export default function ProductInsightsSection({
                               {node.scan
                                 ? <span style={{ color: (node.dfsShare ?? 0) >= AI_STRONG_FROM ? 'var(--c-34d399)' : (node.dfsShare ?? 0) < AI_WEAK_BELOW ? 'var(--c-f87171)' : 'var(--c-f59e0b)', fontWeight: 700 }}>
                                     named in {Math.round((node.dfsShare ?? 0) * 100)}% of {node.scan.rows.length}
+                                    <span style={{ display: 'block', fontWeight: 400, color: 'var(--c-6a6a90)', fontSize: '9px' }}>
+                                      {buildPlatformMix(node.scan, domain, brandTerms).map(m => `${m.rows} ${m.label}`).join(' · ')}
+                                    </span>
                                   </span>
                                 : <span style={{ color: 'var(--c-55557a)' }}>AI not measured at this level</span>}
                             </div>
@@ -700,8 +708,8 @@ export default function ProductInsightsSection({
                                 : confirming
                                   ? (
                                     <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                                      <button onClick={() => void runNodeScan(node)} title="One live DataForSEO LLM Mentions request for this sub-category — measured cost lands on the API Usage ledger"
-                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run · ~$0.10</button>
+                                      <button onClick={() => void runNodeScan(node)} title="Two live DataForSEO LLM Mentions requests for this sub-category — one for Google AI Overviews, one for ChatGPT, so neither platform is left unmeasured. Measured cost lands on the API Usage ledger."
+                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run both platforms · ~$0.20</button>
                                       <button onClick={() => setNodeConfirm(null)} style={{ fontSize: '10px', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>✕</button>
                                     </div>
                                   )
@@ -724,6 +732,9 @@ export default function ProductInsightsSection({
                                 <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '6px' }}>
                                   KEYWORDS AT THIS LEVEL — {own.length.toLocaleString()}{node.kws.length === 0 ? ' (rolled up from sub-levels)' : ''} · {ranked.toLocaleString()} ON PAGE 1
                                 </div>
+                                <div style={{ fontSize: '9px', color: 'var(--c-55557a)', marginBottom: '5px' }}>
+                                  Keyword, position, volume and ranking page come from the same keyword pool the Keyword list panel renders — nothing is re-derived here.
+                                </div>
                                 {own.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No keywords are filed at this level.</div>}
                                 {own.length > 0 && (
                                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', padding: '0 2px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
@@ -732,7 +743,19 @@ export default function ProductInsightsSection({
                                 )}
                                 {shown.map(k => (
                                   <div key={k.keyword} style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', alignItems: 'center', padding: '3px 2px', borderBottom: '1px solid var(--c-111120)', fontSize: '11px' }}>
-                                    <span style={{ color: 'var(--c-c8c8e8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.keyword}</span>
+                                    <span style={{ color: 'var(--c-c8c8e8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {k.keyword}
+                                      {/* v7.435: the same provenance chips the Keyword list panel shows, so an
+                                          "unranked" row says WHY there is no position instead of implying a checked miss. */}
+                                      {k.origin === 'demand' && (
+                                        <span title="Surfaced by the deep-journey demand build — there is no client ranking row for this keyword, so no position exists to show"
+                                          style={{ marginLeft: '6px', fontSize: '8.5px', fontWeight: 700, padding: '1px 5px', borderRadius: '999px', background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-46cce0)', border: '1px solid var(--ca-34-211-238-0_2)' }}>demand</span>
+                                      )}
+                                      {k.origin !== 'demand' && k.isGap && (
+                                        <span title="A competitor holds this keyword and your ranking export does not"
+                                          style={{ marginLeft: '6px', fontSize: '8.5px', fontWeight: 700, padding: '1px 5px', borderRadius: '999px', background: 'var(--ca-245-158-11-0_10)', color: 'var(--c-f59e0b)', border: '1px solid var(--ca-245-158-11-0_25)' }}>gap</span>
+                                      )}
+                                    </span>
                                     <span style={{ fontWeight: 800, fontSize: '10.5px',
                                       color: k.position === null ? 'var(--c-55557a)' : k.position <= 3 ? 'var(--c-34d399)' : k.position <= 10 ? 'var(--c-46cce0)' : k.position <= 20 ? 'var(--c-f59e0b)' : 'var(--c-f87171)' }}>
                                       {k.position === null ? 'unranked' : `#${k.position}`}
@@ -768,9 +791,30 @@ export default function ProductInsightsSection({
                             const shown = view && view !== 'urls' ? pb.rows.filter(r => r.bucket === view) : [];
                             return (
                               <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '9px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
-                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '6px' }}>
+                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '4px' }}>
                                   RECORDED AI ANSWERS FOR “{node.name.toUpperCase()}” — {pb.counts.total}
                                 </div>
+                                {/* v7.435: the platform split, stated — an AI Overview figure is not a ChatGPT figure */}
+                                {(() => {
+                                  const mix = buildPlatformMix(node.scan, domain, brandTerms);
+                                  const missing = ['google', 'chat_gpt'].filter(pf => !mix.some(m => m.platform === pf));
+                                  return (
+                                    <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', marginBottom: '7px', lineHeight: 1.5 }}>
+                                      {mix.map(m => (
+                                        <span key={m.platform} style={{ marginRight: '10px' }}>
+                                          <b style={{ color: 'var(--c-c8c8e8)' }}>{m.label}</b>: {m.rows} answer{m.rows === 1 ? '' : 's'}
+                                          {m.total !== null && m.total > m.rows ? ` of ${m.total.toLocaleString()}` : ''} · cited {m.cited}
+                                          {m.failed ? ' · request failed — unmeasured' : ''}
+                                        </span>
+                                      ))}
+                                      {missing.length > 0 && (
+                                        <span style={{ color: 'var(--c-f59e0b)' }}>
+                                          {missing.map(pf => PLATFORM_LABEL[pf]).join(' + ')} not measured on this scan — re-scan to include {missing.length > 1 ? 'them' : 'it'}.
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
                                   {tab('cited', 'You are cited', pb.counts.cited, 'var(--c-34d399)')}
                                   {tab('named', 'Named, not cited', pb.counts.named, 'var(--c-f59e0b)')}
