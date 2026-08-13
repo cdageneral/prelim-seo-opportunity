@@ -43,7 +43,8 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 import {
   buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
-  type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow,
+  buildCategoryTree, flattenNodes,
+  type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
 // of the shared row builder) keep working unchanged (V.6).
@@ -95,6 +96,10 @@ export default function ProductInsightsSection({
   const [scanTotal, setScanTotal]     = useState(0);
   const [scanCat, setScanCat]         = useState('');
   const [scanErrors, setScanErrors]   = useState<string[]>([]);
+  // v7.432: sub-category drill — expanded node keys + the node currently being scanned
+  const [openNodes, setOpenNodes]     = useState<Set<string>>(new Set());
+  const [nodeScanning, setNodeScanning] = useState<string | null>(null);
+  const [nodeConfirm, setNodeConfirm] = useState<string | null>(null);
 
   // ── data: uploaded keywords (same fetch every canonical consumer uses) ──
   useEffect(() => {
@@ -150,6 +155,33 @@ export default function ProductInsightsSection({
   }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms]);
   const products = built.products;
 
+  // v7.432: the stored-path tree for the OPEN product line (built on demand — the
+  // whole taxonomy for every product at once is wasted work when one is expanded).
+  const openTree = useMemo(() => {
+    if (!openProduct || uploadedKeywords === null) return null;
+    const p = built.products.find(x => x.name === openProduct);
+    if (!p) return null;
+    const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string }> = [];
+    const seen = new Set<string>();
+    for (const t of p.topics) for (const k of t.keywords as any[]) {
+      const kk = String(k?.keyword ?? '').toLowerCase().trim();
+      if (!kk || seen.has(kk)) continue;
+      seen.add(kk);
+      poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url });
+    }
+    try {
+      return buildCategoryTree(p.name, {
+        breakdown: (analysis?.semrushSnapshot as any)?._categoryBreakdown,
+        poolKeywords,
+        uploadedKeywords: uploadedKeywords ?? [],
+        serpPositions: ((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+        storedScans: (stored?.categories ?? []) as StoredCatScan[],
+        clientDomain: domain,
+        brandTerms,
+      });
+    } catch { return null; }
+  }, [openProduct, built, analysis, uploadedKeywords, stored, domain, brandTerms]);
+
   // ── KPI totals + headline insight ──
   const kpi = built.kpi;
 
@@ -176,6 +208,28 @@ export default function ProductInsightsSection({
   }, [products]);
 
   // ── scan flow (one category per request — real progress, Const IV.2) ──
+  // v7.432: scan ONE node (any depth). The scan is stored under the node's own
+  // key, so a sub-category carries its own recorded answers — never the parent's.
+  const runNodeScan = useCallback(async (node: CatNode) => {
+    setNodeConfirm(null);
+    setNodeScanning(node.key);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/product-insights`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category: node.key, keyword: node.name.toLowerCase() }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setScanErrors(prev => [...prev, `${node.name}: ${d?.error ?? `HTTP ${res.status}`}`]);
+      }
+    } catch (e: any) {
+      setScanErrors(prev => [...prev, `${node.name}: ${e?.message ?? 'request failed'}`]);
+    }
+    await refreshStored();
+    setNodeScanning(null);
+  }, [projectId, refreshStored]);
+
   const runScan = useCallback(async () => {
     setConfirmScan(false);
     setScanning(true);
@@ -560,48 +614,129 @@ export default function ProductInsightsSection({
                     </div>
                   </div>
 
-                  {/* topic crosswalk */}
+                  {/* ── v7.432: sub-category drill — every stored level, its own measured metrics ── */}
                   <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', margin: '2px 0 6px' }}>
-                    TOPIC CROSSWALK — YOUR RANK vs THIS CATEGORY'S AI VISIBILITY
+                    SUB-CATEGORY DRILL — SEARCH MEASURED AT EVERY LEVEL
                     <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: 'none', color: 'var(--c-55557a)' }}>
-                      {'  '}· verdicts combine each topic's measured best rank with the CATEGORY-level AI bases (thresholds: weak &lt; {AI_WEAK_BELOW * 100}%, strong ≥ {AI_STRONG_FROM * 100}%)
+                      {'  '}· expand any row for its own children · AI is measured per level, never inherited from the parent
                     </span>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,1.5fr) 64px 78px 90px 170px', gap: '10px', padding: '0 10px 4px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
-                    <span>TOPIC · YOUR PAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>STAGE</span><span>VERDICT</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', padding: '0 10px 4px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
+                    <span>SUB-CATEGORY</span><span>DEMAND/MO</span><span>SEARCH · PAGE 1</span><span>WHO LEADS PAGE 1</span><span>AI ANSWERS</span><span>ACTION</span>
                   </div>
-                  {(() => {
-                    const rowsAll = buildTopicRows(p);   // v7.429: the shared builder — same rows the KPI drill-down lists
-                    const shown = showAllTopics ? rowsAll : rowsAll.slice(0, 12);
-                    return (
-                      <>
-                        {shown.map(({ t, best, v }) => (
-                          <div key={t.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,1.5fr) 64px 78px 90px 170px', gap: '10px', alignItems: 'center',
-                            background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '8px', padding: '8px 10px', marginBottom: '5px' }}>
-                            <div>
-                              <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{t.product || t.parentName}</div>
-                              <div style={{ fontSize: '9.5px', color: best.url ? 'var(--c-6a6a90)' : 'var(--c-f87171)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {best.url ? best.url.replace(/^https?:\/\/[^/]*/, '') || '/' : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
-                                {' '}· {t.keywords.length} kw
+                  {!openTree && (
+                    <div style={{ fontSize: '11.5px', color: 'var(--c-8a8aa8)', padding: '8px 10px' }}>
+                      This analysis carries no stored category paths, so no sub-category level exists to measure (honest gap — nothing is inferred from keyword text).
+                    </div>
+                  )}
+                  {openTree && openTree.children.length === 0 && (
+                    <div style={{ fontSize: '11.5px', color: 'var(--c-8a8aa8)', padding: '8px 10px' }}>
+                      This product line has no sub-categories in the stored taxonomy.
+                    </div>
+                  )}
+                  {openTree && (() => {
+                    const rowsOut: JSX.Element[] = [];
+                    const render = (node: CatNode) => {
+                      const isOpen = openNodes.has(node.key);
+                      const leader = node.ladder[0] ?? null;
+                      const sPct = Math.round(node.p1Share * 100);
+                      const scanning = nodeScanning === node.key;
+                      const confirming = nodeConfirm === node.key;
+                      rowsOut.push(
+                        <div key={node.key}>
+                          <div
+                            onClick={() => setOpenNodes(prev => { const n = new Set(prev); if (n.has(node.key)) n.delete(node.key); else n.add(node.key); return n; })}
+                            style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', alignItems: 'center',
+                              background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '8px',
+                              padding: '8px 10px', marginBottom: '5px', marginLeft: `${(node.depth - 1) * 18}px`,
+                              cursor: node.children.length > 0 ? 'pointer' : 'default' }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
+                              <span style={{ color: node.children.length > 0 ? (isOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)') : 'transparent', fontSize: '10px', flexShrink: 0 }}>
+                                {node.children.length > 0 ? (isOpen ? '▼' : '▶') : '·'}
+                              </span>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{node.name}</div>
+                                <div style={{ fontSize: '9.5px', color: node.bestUrl ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {node.bestUrl ? node.bestUrl.replace(/^https?:\/\/[^/]*/, '') || '/' : (node.bestPos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
+                                  {' '}· {node.kwCount.toLocaleString()} kw{node.children.length > 0 ? ` · ${node.children.length} sub` : ''}
+                                </div>
                               </div>
                             </div>
+                            <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(node.demand)}</div>
                             <div>
-                              {best.pos !== null
-                                ? chip('transparent', best.pos <= 3 ? 'var(--c-34d399)' : best.pos <= 10 ? 'var(--c-46cce0)' : best.pos <= 20 ? 'var(--c-f59e0b)' : 'var(--c-f87171)', 'var(--c-2a2a40)', `#${best.pos}`)
-                                : chip('transparent', 'var(--c-55557a)', 'var(--c-2a2a40)', '—')}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontSize: '11.5px', fontWeight: 800, width: '34px', fontVariantNumeric: 'tabular-nums',
+                                  color: sPct >= 50 ? 'var(--c-34d399)' : sPct >= 25 ? 'var(--c-f59e0b)' : 'var(--c-f87171)' }}>{sPct}%</span>
+                                <span style={{ flex: 1, height: '6px', borderRadius: '3px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
+                                  <span style={{ display: 'block', height: '100%', width: `${sPct}%`, background: 'var(--c-46cce0)' }} />
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '9px', color: 'var(--c-6a6a90)', marginTop: '1px' }}>
+                                {node.bestPos !== null ? `best rank #${node.bestPos}` : 'not ranked'}
+                              </div>
                             </div>
-                            <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(t.totalVolume)}</div>
-                            <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)' }}>{t.stage}</div>
-                            <div>{VERDICT_CHIP[v]()}</div>
+                            <div style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {leader
+                                ? (leader.kind === 'client'
+                                    ? <span style={{ color: 'var(--c-9b96ff)', fontWeight: 700 }}>You · {((leader.p1Vol / Math.max(node.demand, 1)) * 100).toFixed(1)}%</span>
+                                    : <>{leader.domain} · {((leader.p1Vol / Math.max(node.demand, 1)) * 100).toFixed(1)}%{node.clientRank !== null ? ` · you #${node.clientRank}` : ''}</>)
+                                : 'no page-1 holds'}
+                            </div>
+                            <div style={{ fontSize: '10.5px' }}>
+                              {node.scan
+                                ? <span style={{ color: (node.dfsShare ?? 0) >= AI_STRONG_FROM ? 'var(--c-34d399)' : (node.dfsShare ?? 0) < AI_WEAK_BELOW ? 'var(--c-f87171)' : 'var(--c-f59e0b)', fontWeight: 700 }}>
+                                    named in {Math.round((node.dfsShare ?? 0) * 100)}% of {node.scan.rows.length}
+                                  </span>
+                                : <span style={{ color: 'var(--c-55557a)' }}>AI not measured at this level</span>}
+                            </div>
+                            <div onClick={e => e.stopPropagation()}>
+                              {scanning
+                                ? <span style={{ fontSize: '10px', color: 'var(--c-9b96ff)', fontWeight: 700 }}>Scanning…</span>
+                                : confirming
+                                  ? (
+                                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                                      <button onClick={() => void runNodeScan(node)} title="One live DataForSEO LLM Mentions request for this sub-category — measured cost lands on the API Usage ledger"
+                                        style={{ fontSize: '10px', fontWeight: 700, padding: '3px 7px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}>Run · ~$0.10</button>
+                                      <button onClick={() => setNodeConfirm(null)} style={{ fontSize: '10px', padding: '3px 6px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>✕</button>
+                                    </div>
+                                  )
+                                  : <button onClick={() => setNodeConfirm(node.key)} disabled={!providerOk}
+                                      title={providerOk ? 'Measure recorded AI answers for THIS sub-category' : 'DataForSEO is not configured'}
+                                      style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', cursor: providerOk ? 'pointer' : 'not-allowed',
+                                        background: 'transparent', color: node.scan ? 'var(--c-8a8aa8)' : 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>
+                                      {node.scan ? '↻ Re-scan AI' : '＋ Scan AI'}
+                                    </button>}
+                            </div>
                           </div>
-                        ))}
-                        {rowsAll.length > 12 && (
-                          <button onClick={() => setShowAllTopics(s => !s)} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 10px 8px' }}>
-                            {showAllTopics ? 'Show fewer topics' : `Show all ${rowsAll.length} topics`}
-                          </button>
-                        )}
-                      </>
-                    );
+                          {isOpen && node.scan && node.citedTop.length > 0 && (
+                            <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '8px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
+                              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
+                                WHO GETS CITED FOR “{node.name.toUpperCase()}” — {node.scan.rows.length} RECORDED ANSWERS
+                              </div>
+                              {node.citedTop.slice(0, 5).map((c, i) => (
+                                <div key={c.domain} style={{ display: 'flex', gap: '7px', alignItems: 'center', fontSize: '11px', marginBottom: '3px' }}>
+                                  <span style={{ width: '10px', color: 'var(--c-55557a)', fontSize: '9.5px' }}>{i + 1}</span>
+                                  <span style={{ flex: '0 0 150px', fontWeight: 600, color: c.isClient ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {c.isClient ? `${c.domain} (you)` : c.domain}
+                                  </span>
+                                  <span style={{ flex: 1, height: '6px', borderRadius: '3px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
+                                    <span style={{ display: 'block', height: '100%', width: `${(c.count / Math.max(1, node.citedTop[0].count)) * 100}%`, background: c.isClient ? 'var(--c-6c63ff)' : 'var(--c-f59e0b)' }} />
+                                  </span>
+                                  <span style={{ width: '42px', textAlign: 'right', fontWeight: 700, color: 'var(--c-c8c8e8)' }}>{c.count}×</span>
+                                </div>
+                              ))}
+                              {!node.citedTop.some(c => c.isClient) && (
+                                <div style={{ marginTop: '4px', fontSize: '10px', color: 'var(--c-f87171)' }}>You are cited 0 times in this sub-category&apos;s recorded answers.</div>
+                              )}
+                            </div>
+                          )}
+                        </div>,
+                      );
+                      if (isOpen) for (const c of node.children) render(c);
+                    };
+                    for (const c of openTree.children) render(c);
+                    return <>{rowsOut}</>;
                   })()}
 
                   {/* prompt drawer: probe prompts + recorded questions */}
