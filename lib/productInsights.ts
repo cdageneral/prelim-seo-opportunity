@@ -574,7 +574,11 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
   for (const k of poolKeywords) {
     const key = String(k?.keyword ?? '').toLowerCase().trim();
     if (!key || kwRow.has(key)) continue;
-    kwRow.set(key, { keyword: key, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: (k as any).url });
+    // v7.437: carry the pool row's provenance through. v7.435 rebuilt this object with four
+    // fields and silently dropped `origin`/`isGap`, so every keyword rendered as a bare
+    // "unranked" with no reason — the exact ambiguity v7.435 set out to remove.
+    kwRow.set(key, { keyword: key, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: (k as any).url,
+                     origin: (k as any).origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any).isGap });
   }
 
   // competitor rank map (same two sources as the ladder — v7.419 basis)
