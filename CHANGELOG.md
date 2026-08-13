@@ -1,3 +1,32 @@
+## v7.443 - the error you could not read, and the refresh that copied nothing forward
+
+**Wayne:** *"first i cant read the error message because of the color - so fix the color and second
+fix the error."*
+
+**The colour.** The banner was written in raw Tailwind palette classes - `text-red-300/80` on
+`bg-red-500/10`. Tailwind's palette is not theme-mapped, so those values are fixed no matter which
+theme is on: red-300 at 80% opacity is a pale pink that reads fine on the dark surface and measures
+**1.62:1** on the light paper one. The heading "Analysis failed" was visible; the sentence that
+actually told you what went wrong was not. Both banners - error and data-warning - now use the
+`--c-*` tokens, which do have light values (`f87171` becomes `#8e0707` on paper), and the body text
+no longer drops to 80% opacity. Measured in real Chromium against the actual page background:
+**5.62:1 and 8.22:1 in light, 5.25:1 and 7.14:1 in dark**. The same defect was sitting in the amber
+warning banner, so that was fixed in the same pass rather than waiting for it to be reported.
+
+**The error.** v7.442 fixed the resume gate so Refresh Analysis would go back and gather data
+instead of resuming a dead run. It did - and then hit the identical bug one layer down. The
+data-only refresh picks a previous snapshot to reuse and its test was `if (s && ...)`: an emptied
+snapshot is still an object, so it selected one, copied the emptiness into a brand-new analysis,
+and synthesis correctly refused it. Three places had now made the same mistake, so the test lives
+in one file - `lib/snapshotFootprint.ts` - and everything that asks "can I build on this snapshot?"
+imports it.
+
+**And it no longer gives up when it does not have to.** If no previous analysis carries a footprint,
+a data refresh now rebuilds one from the project's own uploaded keyword rows before failing. Those
+rows are already in the database, so this reads real source data and spends **zero Semrush units**,
+which is exactly what data-only mode promises. The run says so in a banner. Only when there is no
+reusable snapshot **and** no uploaded keywords does it stop, and it names both.
+
 ## v7.442 - a cleared footprint is reported, never crashed on
 
 **Wayne:** *"I am getting errors on the product insights panel for an existing project that was
