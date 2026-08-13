@@ -380,9 +380,16 @@ export interface CatNode {
   bestPos:    number | null;
   /** Client's best ranking URL among the node's keywords, when the source rows carry one. */
   bestUrl?:   string;
+  // v7.433 (Wayne): the keywords BEHIND the number, so a level can be inspected without
+  // leaving the panel. `kws` = the keywords filed at THIS node (its own, most-specific
+  // placement, III.6) — descendants keep theirs, so nothing is double-listed (I.3).
+  // `allKws` = own + descendants, the exact set every metric on this node was computed
+  // from, so the row and its keyword list can never disagree. Both sorted by volume desc.
+  kws:        NodeKw[];
+  allKws:     NodeKw[];
 }
 
-interface NodeKw { keyword: string; searchVolume: number; position: number | null; url?: string }
+export interface NodeKw { keyword: string; searchVolume: number; position: number | null; url?: string }
 
 export interface BuildCategoryTreeOpts {
   breakdown:        any;              // semrushSnapshot._categoryBreakdown (keywordPaths + categories)
@@ -528,12 +535,15 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
     }
 
     children.sort((a, b) => b.demand - a.demand);
+    const byVol = (a: NodeKw, b: NodeKw) => b.searchVolume - a.searchVolume;
     return {
       key, name: raw.name, depth, path: raw.path, children,
       kwCount: all.length, demand, bands,
       p1Share: demand > 0 ? (bands[0] + bands[1]) / demand : 0,
       ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null,
       scan, dfsShare, citedTop, bestPos, bestUrl,
+      kws: raw.kws.slice().sort(byVol),
+      allKws: all.slice().sort(byVol),
     };
   };
 
