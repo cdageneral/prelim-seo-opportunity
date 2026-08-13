@@ -27,6 +27,7 @@ import { eq } from 'drizzle-orm';
 import { buildDemandUniverse, mergeDemandLanes } from '@/lib/apis/demandExpansion';
 import { assignProductExpansionPaths, isFunnelStageLabel } from '@/lib/category/productExpansion';
 import { assignPreProductPaths, isPreProductPath } from '@/lib/category/canonicalize';   // v7.339
+import { qualifySeed, rootCategoryOf } from '@/lib/category/seedQualify';               // v7.440
 
 export const maxDuration = 300;
 
@@ -85,16 +86,32 @@ const DEMAND_ENGINE = 'demand-v2';
 
 const MAX_PROBLEM_SEEDS = 14;   // cap Semrush spend; richest head terms first
 
-function deriveSeeds(analysis: any): { product: string[]; problem: string[] } {
+function deriveSeeds(analysis: any): { product: string[]; problem: string[]; seedMap: Record<string, string> } {
   const snap = analysis?.semrushSnapshot ?? {};
   const categories: any[] = snap?._categoryBreakdown?.categories ?? [];
   const segments: any[]   = snap?._audienceSegments ?? [];
 
-  // Product seeds = procedure category names (they ARE the named solutions).
-  const product = categories
-    .filter((c: any) => c.type === 'procedure')
-    .map((c: any) => String(c.name ?? '').trim())
-    .filter(Boolean);
+  // Product seeds = procedure category names (they ARE the named solutions), QUALIFIED by
+  // their umbrella. v7.440: a category sitting under a BRAND-typed umbrella is skipped —
+  // "Offers & Promotions" under "Brand Searches" is not product data, and expanding it is
+  // what pulled `capital one` (9,140,000/mo), `groupon` and `black friday deals` in.
+  const byName = new Map<string, any>();
+  for (const c of categories) if (c?.name) byName.set(String(c.name).toLowerCase().trim(), c);
+  const rootOf = (c: any): any => rootCategoryOf(c, byName);
+  const seedMap: Record<string, string> = {};   // qualified seed → the category it came from
+  const product: string[] = [];
+  for (const c of categories) {
+    if (c?.type !== 'procedure') continue;
+    const name = String(c?.name ?? '').trim();
+    if (!name) continue;
+    const root = rootOf(c);
+    if (root && root !== c && root.type === 'brand') continue;   // brand lane — not product data
+    const umb = root && root !== c ? String(root.name ?? '') : '';
+    const seed = qualifySeed(name, umb);
+    if (!seed) continue;
+    product.push(seed);
+    seedMap[seed] = umb ? `${umb} › ${name}` : name;
+  }
 
   // Problem seeds — GENERIC, per-client: reduce each pre-LLM prompt to a head term.
   const prompts: string[] = segments.flatMap((s: any) => [
@@ -111,7 +128,7 @@ function deriveSeeds(analysis: any): { product: string[]; problem: string[] } {
   // (procedure categories) — defensible because those are the client's real
   // solutions. We never inject another vertical's vocabulary here.
 
-  return { product, problem: Array.from(problemSet).slice(0, MAX_PROBLEM_SEEDS) };
+  return { product, problem: Array.from(problemSet).slice(0, MAX_PROBLEM_SEEDS), seedMap };
 }
 
 export async function POST(
@@ -150,7 +167,15 @@ export async function POST(
   }
 
   const database = String((project as any).semrushDatabase ?? 'us');
-  const { product, problem } = deriveSeeds(analysis);
+  const { product, problem, seedMap } = deriveSeeds(analysis);
+  // v7.440: `phrase_related` is opt-in (it carried 96% of the volume AND the drift);
+  // `dryRun` builds and RETURNS without persisting so the pass can be reviewed first.
+  const includeRelated = body?.includeRelated === true;
+  const dryRun         = body?.dryRun === true;
+  // v7.440: seeds the reviewer rejected — dropped before any request is made.
+  const excludeSeeds = new Set<string>(
+    (Array.isArray(body?.excludeSeeds) ? body.excludeSeeds : []).map((x: any) => String(x ?? '').toLowerCase().trim()).filter(Boolean),
+  );
 
   // v7.241: two independent passes (Wayne). The Keyword panel's "Expand product
   // data" button posts mode:'product' (product/procedure seeds only) and "Build
@@ -161,7 +186,8 @@ export async function POST(
   // Semrush (Const I.1) and each keyword is kept once (Const I.3, no double count).
   const mode: 'product' | 'pre' | 'all' =
     body?.mode === 'product' ? 'product' : body?.mode === 'pre' ? 'pre' : 'all';
-  const seeds = mode === 'product' ? product : mode === 'pre' ? problem : [...product, ...problem];
+  const seedsAll = mode === 'product' ? product : mode === 'pre' ? problem : [...product, ...problem];
+  const seeds = seedsAll.filter(s => !excludeSeeds.has(s.toLowerCase().trim()));
   const rebuiltLanes: Array<'product' | 'problem'> =
     mode === 'product' ? ['product'] : mode === 'pre' ? ['problem'] : ['product', 'problem'];
 
@@ -195,7 +221,7 @@ export async function POST(
 
         const universe = await buildDemandUniverse(seeds, linesPerSeed, database, (done, total, seed) => {
           send({ type: 'progress', done, total, seed });
-        });
+        }, { includeRelated });
 
         if (universe.topicCount === 0) {
           // Honest gap (Const I.5): this lane returned nothing — do NOT persist, so the
@@ -217,6 +243,34 @@ export async function POST(
           return;
         }
 
+        // ── v7.440: DRY RUN — build, review, THEN commit ─────────────────────────
+        // Wayne's third fix: nothing is stored until the pass has been looked at. The
+        // rows returned here are exactly what a commit would add, grouped by the seed
+        // that produced them, so a bad seed ("tools" → acme tools, power tools) can be
+        // killed before it ever reaches the pool. Nothing is written on this path.
+        if (dryRun) {
+          const bySeed = new Map<string, { seed: string; label: string; keywords: number; volume: number; sample: Array<{ keyword: string; searchVolume: number }> }>();
+          for (const t of pulledTopics) {
+            for (const sd of ((t as any).seeds ?? []) as string[]) {
+              let e = bySeed.get(sd);
+              if (!e) { e = { seed: sd, label: seedMap[sd] ?? sd, keywords: 0, volume: 0, sample: [] }; bySeed.set(sd, e); }
+              e.keywords++; e.volume += (t as any).searchVolume ?? 0;
+              if (e.sample.length < 8) e.sample.push({ keyword: (t as any).keyword, searchVolume: (t as any).searchVolume ?? 0 });
+            }
+          }
+          const seedRows = Array.from(bySeed.values()).sort((a, b) => b.volume - a.volume);
+          for (const r of seedRows) r.sample.sort((a, b) => b.searchVolume - a.searchVolume);
+          send({
+            type: 'review',
+            dryRun: true,
+            includeRelated,
+            totals: { keywords: pulledTopics.length, volume: pulledTopics.reduce((n, t) => n + ((t as any).searchVolume ?? 0), 0) },
+            seeds: seedRows,
+          });
+          controller.close();
+          return;
+        }
+
         // Merge: keep existing topics from lanes NOT rebuilt, then overlay this run's
         // topics (new wins on a keyword collision, taking the max real volume). Pure
         // helper in demandExpansion.ts (unit-checked in the retained regression suite).
@@ -233,6 +287,7 @@ export async function POST(
           topics:      mergedTopics,
           topicCount:  mergedTopics.length,
           lastMode:    mode,                 // v7.241: which pass last ran
+          includeRelated,                    // v7.440: was the loose `related` report used?
           minVolume,                         // v7.244: the floor applied to the last pass (0 = none)
           productTopicCount, problemTopicCount,
           status: `${mergedTopics.length} topics (${productTopicCount} product · ${problemTopicCount} pre-product) · last pass: ${mode}${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
