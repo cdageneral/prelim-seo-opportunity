@@ -43,7 +43,7 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 import {
   buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
-  buildCategoryTree, flattenNodes,
+  buildCategoryTree, flattenNodes, buildPromptBreakdown,
   type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
@@ -101,6 +101,7 @@ export default function ProductInsightsSection({
   const [nodeScanning, setNodeScanning] = useState<string | null>(null);
   const [nodeConfirm, setNodeConfirm] = useState<string | null>(null);
   const [openKwAll, setOpenKwAll]     = useState<Set<string>>(new Set());   // v7.433: per-node keyword list expanded
+  const [promptView, setPromptView]   = useState<Record<string, 'cited' | 'named' | 'absent' | 'urls' | null>>({});   // v7.434
 
   // ── data: uploaded keywords (same fetch every canonical consumer uses) ──
   useEffect(() => {
@@ -747,6 +748,66 @@ export default function ProductInsightsSection({
                                     style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '5px 0 0' }}>
                                     {showAll ? 'Show fewer keywords' : `Show all ${own.length.toLocaleString()} keywords`}
                                   </button>
+                                )}
+                              </div>
+                            );
+                          })()}
+                          {isOpen && node.scan && (() => {
+                            const pb = buildPromptBreakdown(node.scan, domain, brandTerms);
+                            if (!pb) return null;
+                            const view = promptView[node.key] ?? null;
+                            const setView = (v: typeof view) => setPromptView(prev => ({ ...prev, [node.key]: prev[node.key] === v ? null : v }));
+                            const tab = (v: Exclude<typeof view, null>, label: string, n: number, col: string) => (
+                              <button onClick={e => { e.stopPropagation(); setView(v); }}
+                                style={{ fontSize: '10.5px', fontWeight: 700, padding: '3px 9px', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap',
+                                  background: view === v ? 'var(--ca-108-99-255-0_12)' : 'transparent', color: col,
+                                  border: `1px solid ${view === v ? 'var(--ca-108-99-255-0_45)' : 'var(--c-2a2a40)'}` }}>
+                                {label} {n}
+                              </button>
+                            );
+                            const shown = view && view !== 'urls' ? pb.rows.filter(r => r.bucket === view) : [];
+                            return (
+                              <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '9px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
+                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '6px' }}>
+                                  RECORDED AI ANSWERS FOR “{node.name.toUpperCase()}” — {pb.counts.total}
+                                </div>
+                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                                  {tab('cited', 'You are cited', pb.counts.cited, 'var(--c-34d399)')}
+                                  {tab('named', 'Named, not cited', pb.counts.named, 'var(--c-f59e0b)')}
+                                  {tab('absent', 'Absent', pb.counts.absent, 'var(--c-f87171)')}
+                                  {pb.byUrl.length > 0 && tab('urls', 'By your page', pb.byUrl.length, 'var(--c-9b96ff)')}
+                                </div>
+                                {view === null && (
+                                  <div style={{ fontSize: '10.5px', color: 'var(--c-8a8aa8)' }}>
+                                    {pb.counts.cited} of {pb.counts.total} answers cite one of your pages; {pb.counts.named} name the brand without linking to you. Pick a bucket to read the prompts.
+                                  </div>
+                                )}
+                                {view === 'urls' && pb.byUrl.map(u => (
+                                  <div key={u.url} style={{ padding: '5px 0', borderBottom: '1px solid var(--c-111120)' }}>
+                                    <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-9b96ff)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {u.url} <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>· cited by {u.prompts.length} prompt{u.prompts.length === 1 ? '' : 's'}</span>
+                                    </div>
+                                    <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', marginTop: '2px', lineHeight: 1.5 }}>{u.prompts.join(' · ')}</div>
+                                  </div>
+                                ))}
+                                {view && view !== 'urls' && shown.length === 0 && (
+                                  <div style={{ fontSize: '10.5px', color: 'var(--c-55557a)' }}>No recorded answers in this bucket.</div>
+                                )}
+                                {view && view !== 'urls' && shown.slice(0, 25).map((r, i) => (
+                                  <div key={`${r.question}-${i}`} style={{ padding: '4px 0', borderBottom: '1px solid var(--c-111120)' }}>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                                      <span style={{ flex: 1, fontSize: '11.5px', color: 'var(--c-c8c8e8)' }}>{r.question}</span>
+                                      <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--c-55557a)', whiteSpace: 'nowrap' }}>{r.platform === 'google' ? 'AI Overview' : 'ChatGPT'}</span>
+                                    </div>
+                                    <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                      {r.bucket === 'cited' && r.ownedUrls.length > 0
+                                        ? <span style={{ color: 'var(--c-34d399)' }}>cites your {r.ownedUrls.join(', ')}</span>
+                                        : <>cites: {r.cites.length > 0 ? r.cites.slice(0, 4).join(', ') : 'no sources recorded'}</>}
+                                    </div>
+                                  </div>
+                                ))}
+                                {view && view !== 'urls' && shown.length > 25 && (
+                                  <div style={{ fontSize: '10px', color: 'var(--c-6a6a90)', marginTop: '5px' }}>Showing 25 of {shown.length} — the full set is in the stored scan.</div>
                                 )}
                               </div>
                             );
