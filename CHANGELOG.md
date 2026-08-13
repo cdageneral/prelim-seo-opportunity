@@ -1,3 +1,23 @@
+## v7.433 - the keywords behind every level
+
+**Wayne:** *"on all of these - i dont see the keywords they are ranking for, the positions and the
+volumes in addition to the AI visibility. Also the sub categories as you drill down dont seem to
+open ie. rewards and hilton honors."*
+
+**Every level opens now.** Previously only rows with children expanded, so the deepest
+sub-categories - Rewards, Hilton Card - looked inert even though they are exactly where the
+detail lives. Every row is expandable, whatever its depth.
+
+**And expanding shows the keywords.** Each level lists the keywords filed at it with their
+measured position, monthly volume and your ranking page, sorted by volume, with a count of how
+many sit on page 1. A parent lists only the keywords filed at its own level - descendants keep
+theirs, so nothing is counted or listed twice - and a level with no keywords of its own says so
+and rolls up its sub-levels rather than showing a blank list. The first 15 show by default with
+the full list one click away; nothing is hidden behind a cap.
+
+The keyword list and the metrics above it come from the same set, so the row and the detail
+cannot disagree. Scanning AI still works at every level, unchanged.
+
 ## v7.432 - insights at the sub-category level
 
 **Wayne:** *"I see the data for the parent level of the category but how about at the sub
