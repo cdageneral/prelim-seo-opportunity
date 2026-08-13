@@ -1,3 +1,18 @@
+## v7.436 - the scan cost shown was understated
+
+A correction to the figure v7.435 printed, caught on the live verification run. DataForSEO charges
+$0.10 per LLM Mentions request **plus $0.001 per returned row**, so a full 100-row page is $0.20
+per platform - the "~$0.10" the panel showed before v7.435 was only the base rate, and the "~$0.20"
+v7.435 replaced it with was the cost of one request, not two. A two-platform scan is about **$0.40**
+per category, and that is what the panel now shows before you run it. Measured on the live run of
+Credit Cards > How It Works: $0.20 for Google AI Overviews and $0.20 for ChatGPT, $0.40 recorded on
+the API Usage ledger. The ledger figure has always been the measured per-task cost DataForSEO
+reports - only the estimate shown beforehand was wrong.
+
+That live run is also the proof v7.435 was needed: How It Works matched 16,170 recorded Google AI
+Overview answers and 5,693 ChatGPT answers, and returned 100 of each. Under the old single-request
+scan, ChatGPT would have contributed none of them.
+
 ## v7.435 - Google and ChatGPT are scanned separately, and the keyword source is named
 
 **Wayne:** *"is all of this data just for AIOs? or does it have LLM data?"* - and, on the keyword
