@@ -333,21 +333,44 @@ function buildCompetitorBrandGuards(
       ? brandTerms
       : (Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : []);
 
+  // v7.439 (Wayne — "capital one" et al. reaching the pool): the client-brand test used
+  // here PROTECTS a keyword from the competitor guard, so it must be STRICT. The general
+  // isBrandedKeyword splits a run-together root into halves ("americanexpress" ->
+  // "american" + "express") and then fuzzy-matches per word, so "bank of america login"
+  // matched the client at edit distance 1 ("america" ~ "american") and was protected from
+  // being dropped as a Bank of America term. The same half-token ran the other way too:
+  // Bank of America's "america" half claimed "american express platinum" as a COMPETITOR
+  // term. Protection now requires an exact match on the full client root or on the
+  // explicit brand vocabulary — no half-tokens, no edit distance. The loose test is
+  // unchanged everywhere else (the "branded" chip still uses it).
+  const clientRoot = extractBrand(clientDomain);
+  const strictTerms = effectiveBrandTerms.map(t => (t ?? '').toLowerCase().trim()).filter(Boolean);
+  const isClientBrandedStrict = (kw: string): boolean => {
+    const kwNorm = String(kw ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!kwNorm) return false;
+    if (clientRoot.length >= 4 && kwNorm.includes(clientRoot)) return true;
+    for (const t of strictTerms) {
+      const tn = t.replace(/[^a-z0-9]/g, '');
+      if (tn.length >= 3 && kwNorm.includes(tn)) return true;
+    }
+    return false;
+  };
+
   // v7.208: user-maintained blocklist (client's own brand never stripped).
   const excludedBrandTokens = buildExcludedBrandTokens(snap);
   const isExcludedBrand = (kw: string): boolean =>
     excludedBrandTokens.size > 0
     && textHasCompetitorBrand(kw, excludedBrandTokens)
-    && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+    && !isClientBrandedStrict(kw);   // v7.439: strict protection (see isClientBrandedStrict)
 
   // v7.195: branded to a competitor (any compDomain) but NOT to the client.
   const isCompetitorBranded = (kw: string): boolean =>
-    isBrandedKeyword(kw, '', compDomains) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+    isBrandedKeyword(kw, '', compDomains) && !isClientBrandedStrict(kw);
 
   // v7.201: deterministic auto-discovered competitor-brand tokens.
   const compBrandTokens = buildCompetitorBrandTokens(snap, clientDomain, compDomains, uploadedGapDomains);
   const isAutoCompetitorBrand = (kw: string): boolean =>
-    textHasCompetitorBrand(kw, compBrandTokens) && !isBrandedKeyword(kw, clientDomain, [], effectiveBrandTerms);
+    textHasCompetitorBrand(kw, compBrandTokens) && !isClientBrandedStrict(kw);   // v7.439: strict protection
 
   // v7.196: competitor BRAND-CATEGORY members + v7.199 AI-flagged brand terms.
   const cb = snap?._categoryBreakdown ?? null;
