@@ -1,3 +1,30 @@
+## v7.435 - Google and ChatGPT are scanned separately, and the keyword source is named
+
+**Wayne:** *"is all of this data just for AIOs? or does it have LLM data?"* - and, on the keyword
+table: *"where is this rank data coming from? it should not be made up or pulled differently. It
+should be sourced from the keyword panel."*
+
+**The AI figures were nearly all Google.** A scan asked the recorded-answer index for a keyword and
+took the first 100 matches, unfiltered. On a high-volume category that page came back 100% Google
+AI Overviews - Credit Cards, Travel Cards and Travel Cards > Rewards were 100/0 - so ChatGPT was
+never being measured while the number read like the whole picture. Only a small category (Brand
+Searches, 77 total matches) was small enough for ChatGPT rows to surface at all.
+
+**Each platform now gets its own request.** A scan issues one request for Google AI Overviews and
+one for ChatGPT, each with its own row quota and its own measured cost, and the panel states the
+split under every figure - "62 AI Overview - 38 ChatGPT" - along with how many answers on each
+platform cite you. A platform whose request fails is labelled unmeasured, never counted as zero,
+and a scan stored before this release says plainly that its platform split was not measured per
+platform. Scans cost about $0.20 per level instead of $0.10, disclosed before the run, and the
+Assessment PDF carries the same disclosure.
+
+**The keyword numbers are the Keyword list panel's numbers.** Position, volume and ranking page in
+the drill-down are read from the same keyword pool the Keyword list panel renders - nothing is
+recalculated here, and the panel now says so on screen. Where a keyword shows no position, it now
+says why: a **demand** chip means the keyword came from the demand build and has no client ranking
+row at all, and a **gap** chip means a competitor holds it and your export does not. That is the
+same labelling the Keyword list panel uses, so the two panels read identically.
+
 ## v7.434 - which prompts cite you, and which page they hit
 
 **Wayne:** *"is the client cited in any prompts at this level? what prompts are associated to this
