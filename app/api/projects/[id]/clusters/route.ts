@@ -25,6 +25,7 @@ import { classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/cl
 import { db } from '@/db';
 import { analyses } from '@/db/schema';
 import { eq, desc } from 'drizzle-orm';
+import { latestAnalysisIdWithSnapshot } from '@/lib/latestAnalysis';   // v7.445
 
 function getClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -36,13 +37,9 @@ function getClient(): Anthropic {
  *  given, else the project's most recent analysis with a snapshot. */
 async function resolveAnalysisId(projectId: string, analysisId?: string): Promise<string | null> {
   if (analysisId) return analysisId;
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: [desc(analyses.triggeredAt)],
-    limit:   5,
-  });
-  const hit = recent.find((a: any) => a.semrushSnapshot != null);
-  return hit ? (hit as any).id : null;
+  // v7.445: this only ever needed the ID — fetching 5 whole snapshots to read one
+  // was what blew Neon's response cap elsewhere (lib/latestAnalysis.ts).
+  return latestAnalysisIdWithSnapshot(projectId);
 }
 
 export async function POST(
