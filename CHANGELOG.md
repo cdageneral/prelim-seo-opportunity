@@ -1,3 +1,34 @@
+## v7.438 - every keyword says where it came from, and you can filter on it
+
+**Wayne:** *"lets add a badge to the keywords - original footprint would be for what came from the
+client csv upload, then competitor would be anything from a competitor and then expanded would be
+from step 3. We should be able to filter against all of these as well. Also lets fix the colors as
+the real light highlights are not working and hard to read."*
+
+**Three badges, on every row.** **original footprint** = the client's own ranking data (your
+uploaded CSV rows and the Semrush crawl). **competitor** = a rival ranks for it and the client does
+not. **expanded** = added by Step 3 "Expand product data" - not from your upload and not from the
+client's footprint. Until now the only hint was a small "demand" chip, and the tree view showed
+nothing at all, so keywords Step 3 invented were indistinguishable from keywords you supplied.
+
+**The counts are now the filter.** The SOURCE OF COUNT chips above the table - your CSV upload,
+Semrush crawl, expanded, competitor gap - are buttons. Click one and the table shows only those
+keywords, with a running count of what is on screen; click again to clear. The badge and the chip
+read the same classifier, so the number you click and the rows you get can never disagree.
+
+**Colour fix, two layers.** The row chips were built on Tailwind palette classes, which do not
+follow the theme - on the light surface they rendered as pale text on a pale wash. Every chip on
+this panel now uses the theme tokens.
+
+Underneath that sat a bigger one: **twelve colour tokens all resolved to the same pale sand
+(#C9C3B2) in the light theme**, which measures 1.5:1 against the paper surface - the table headers
+(CATEGORY, ANNUAL DEMAND, PAGE 1, PAGE 3+) and the section labels (PROCEDURE LINES, BRAND &
+NAVIGATION) were effectively invisible, on every panel that uses them, not just this one. Every one
+of those tokens is used only as text colour, and they were already identical to each other, so they
+now share one legible value (measured 4.4:1 on the panel surface, 5.0:1 on the card surface) - the
+hierarchy is unchanged, it is just readable. A retained check fails the build if any text-colour
+token drifts back to the pale value.
+
 ## v7.437 - the demand and gap chips actually render
 
 The v7.435 provenance chips never appeared. The tree builder rebuilds each keyword into its own
