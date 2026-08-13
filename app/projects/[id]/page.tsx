@@ -716,7 +716,7 @@ export default function ProjectBriefPage() {
         });
         const data = await res.json().catch(() => null);
         if (!res.ok || !data) {
-          setSerpScan(s => ({ ...s, running: false, error: data?.error ?? `The server returned an unexpected ${res.status} response (likely a timeout). Every completed batch is saved — click Resume to continue from where it stopped.` }));
+          setSerpScan(s => ({ ...s, running: false, error: data?.error ?? `The scan stopped on a server error (HTTP ${res.status}). Every completed batch is saved — click Resume to continue from where it stopped. If Resume returns straight to this message, the error is not a timeout and re-running will not clear it.` }));
           return;
         }
         const batch: any[] = data.results ?? [];
