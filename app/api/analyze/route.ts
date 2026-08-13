@@ -30,6 +30,7 @@ import { getSemrushSnapshot, getKeywordGap, getOrganicKeywords } from '@/lib/api
 import { getSerpApiSnapshot, buildSnapshotFromKeywordData, batchKeywordScan, activeProviderLabel, providerBalanceUrl, providerUnitLabel, serpProvider }  from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { buildSnapshotFromUploads } from '@/lib/apis/uploadedFootprint';
+import { snapshotHasFootprint, snapshotFootprintCount } from '@/lib/snapshotFootprint';
 import type { SemrushSnapshot, SemrushKeywordGap } from '@/lib/apis/semrush';
 import { setUsageProject } from '@/lib/usage/context';
 
@@ -154,10 +155,30 @@ export async function POST(req: NextRequest) {
         const t = Date.parse(s?.fetchedAt ?? '');
         return Number.isFinite(t) ? t : 0;
       };
+      // v7.443: a snapshot OBJECT is not a snapshot with DATA. A scope clear leaves an
+      // emptied shell on EVERY analysis row (topKeywords/gapKeywords []), so the old
+      // `if (s && …)` test happily selected one and this mode copied the emptiness into a
+      // brand-new analysis — which then failed synthesis with "no keyword footprint" while
+      // the project's uploaded keywords sat untouched (First Citizens, 2026-08-13).
+      // Only a snapshot that actually carries keywords can be a reuse base (Const II.7).
       let baseSemrush: any = null;
       for (const a of recentCompleted) {
         const s: any = a.semrushSnapshot;
-        if (s && (!baseSemrush || fetchedAtMs(s) > fetchedAtMs(baseSemrush))) baseSemrush = s;
+        if (snapshotHasFootprint(s) && (!baseSemrush || fetchedAtMs(s) > fetchedAtMs(baseSemrush))) baseSemrush = s;
+      }
+
+      // v7.443: nothing reusable. Before failing, rebuild the footprint from the project's
+      // OWN uploaded keyword rows — real source rows already in the database (Const I.1),
+      // read-only, ZERO Semrush units, which is exactly this mode's contract. This is the
+      // same builder FULL mode uses for upload-sourced projects.
+      if (!baseSemrush) {
+        const rebuilt = await buildSnapshotFromUploads(projectId, domain, manualCompetitorDomains).catch(() => null);
+        if (snapshotHasFootprint(rebuilt)) {
+          baseSemrush = rebuilt;
+          const n = snapshotFootprintCount(rebuilt);
+          console.log(`[OrbitIQ] Data refresh: no reusable snapshot — rebuilt the footprint from ${n} uploaded keywords (0 Semrush units)`);
+          warnings.push(`No previous analysis had a keyword footprint to reuse, so it was rebuilt from this project's ${n.toLocaleString()} uploaded keywords. No Semrush units were spent.`);
+        }
       }
       const existingSerp: any = recentCompleted
         .map((a: any) => a.serpApiSnapshot as any)
@@ -169,7 +190,9 @@ export async function POST(req: NextRequest) {
       if (!baseSemrush) {
         await db.update(analyses).set({ status: 'failed' }).where(eq(analyses.id, analysis.id));
         return NextResponse.json(
-          { error: 'Data-only refresh needs a completed analysis to reuse. Run a full analysis (or upload a footprint) first.' },
+          { error: 'Data-only refresh needs an existing keyword footprint to reuse, and this project has none — '
+                 + 'no previous analysis carries one and there are no uploaded keywords to rebuild from. '
+                 + 'Upload a keyword CSV, or run a full analysis to pull the footprint.' },
           { status: 400 }
         );
       }
