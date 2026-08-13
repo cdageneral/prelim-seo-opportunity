@@ -75,12 +75,16 @@ export function topicVerdict(bestPos: number | null, aiRate: number | null, dfsS
 
 const normName = (s: string) => s.toLowerCase().trim();
 
-/** Does this recorded row name or cite the client? Direct field checks only. */
+/**
+ * Does this recorded row name OR cite the client? Direct field checks only.
+ * v7.434: the text test now runs on a squashed haystack (see `squash`), so a brand
+ * written "American Express" matches the domain-derived token "americanexpress".
+ */
 export function rowNamesClient(row: StoredMentionRow, clientNorm: string, brandToks: string[]): boolean {
-  if (row.sources.some(s => normSovDomain(s.domain) === clientNorm)) return true;
-  if (row.searchResultDomains.some(d => normSovDomain(d) === clientNorm)) return true;
-  const hay = (row.brandEntities.join(' ') + ' ' + row.answerExcerpt).toLowerCase();
-  return brandToks.some(t => t.length >= 3 && hay.includes(t));
+  if ((row.sources ?? []).some(s => normSovDomain(s.domain) === clientNorm)) return true;
+  if ((row.searchResultDomains ?? []).some(d => normSovDomain(d) === clientNorm)) return true;
+  const hay = squash((row.brandEntities ?? []).join(' ') + ' ' + (row.answerExcerpt ?? ''));
+  return brandToks.some(t => { const q = squash(t); return q.length >= 3 && hay.includes(q); });
 }
 
 export function buildBrandTokens(clientDomain: string, brandTerms: string[] = []): string[] {
@@ -88,6 +92,90 @@ export function buildBrandTokens(clientDomain: string, brandTerms: string[] = []
   const b = extractBrand(clientDomain); if (b) toks.add(b.toLowerCase());
   for (const t of brandTerms) if (t && t.trim()) toks.add(t.toLowerCase().trim());
   return Array.from(toks);
+}
+
+/**
+ * v7.434 — the mention matcher UNDER-COUNTED (Wayne, live on Amex Travel Cards).
+ * `extractBrand('americanexpress.com')` yields the run-together token
+ * "americanexpress", so an answer writing the brand the way humans do —
+ * "American Express" — never matched: 16 answers cited the site while 27 named
+ * the brand, and only the citations were counted. The fix is to compare on a
+ * PUNCTUATION- AND SPACE-STRIPPED haystack, so "American Express", "american-express"
+ * and "AmericanExpress" all reduce to the same run of letters as the token.
+ * Nothing is inferred: a token still has to literally occur in the text.
+ */
+export const squash = (s: string) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/** Does the recorded answer's TEXT (or extracted brand entities) name the client? */
+export function rowNamesBrand(row: StoredMentionRow, brandToks: string[]): boolean {
+  const hay = squash((row.brandEntities ?? []).join(' ') + ' ' + (row.answerExcerpt ?? ''));
+  return brandToks.some(t => { const q = squash(t); return q.length >= 3 && hay.includes(q); });
+}
+
+/** Does the answer CITE the client — an owned URL in sources or retrieved search results? */
+export function rowCitesClient(row: StoredMentionRow, clientNorm: string): boolean {
+  if ((row.sources ?? []).some(s => normSovDomain(s.domain) === clientNorm)) return true;
+  return (row.searchResultDomains ?? []).some(d => normSovDomain(d) === clientNorm);
+}
+
+export type PromptBucket = 'cited' | 'named' | 'absent';
+
+/** cited > named > absent — the three states a recorded answer can be in for this client. */
+export function promptBucket(row: StoredMentionRow, clientNorm: string, brandToks: string[]): PromptBucket {
+  if (rowCitesClient(row, clientNorm)) return 'cited';
+  if (rowNamesBrand(row, brandToks)) return 'named';
+  return 'absent';
+}
+
+export interface PromptRow {
+  question:  string;
+  platform:  string;
+  bucket:    PromptBucket;
+  /** Owned URL paths this answer cited (cited rows only). */
+  ownedUrls: string[];
+  /** Who else the answer cited, in order. */
+  cites:     string[];
+}
+
+export interface PromptBreakdown {
+  rows:   PromptRow[];
+  counts: { cited: number; named: number; absent: number; total: number };
+  /** Owned URL → the prompts whose answers cite it, most-cited first. */
+  byUrl:  Array<{ url: string; prompts: string[] }>;
+}
+
+/**
+ * Classify every recorded answer on a node and roll the citations up per owned URL.
+ * Pure — reads only the stored rows (Const I.1); both the panel and any export read
+ * THIS function so a prompt can never be bucketed two ways (II.7).
+ */
+export function buildPromptBreakdown(scan: StoredCatScan | null, clientDomain: string, brandTerms: string[] = []): PromptBreakdown | null {
+  if (!scan || !Array.isArray(scan.rows) || scan.rows.length === 0) return null;
+  const clientNorm = normSovDomain(clientDomain);
+  const brandToks  = buildBrandTokens(clientDomain, brandTerms);
+  const urlMap = new Map<string, string[]>();
+  const rows: PromptRow[] = scan.rows.map(r => {
+    const bucket = promptBucket(r, clientNorm, brandToks);
+    const ownedUrls: string[] = [];
+    for (const s of (r.sources ?? [])) {
+      if (normSovDomain(s.domain) !== clientNorm) continue;
+      const path = String(s.url ?? '').replace(/^https?:\/\/[^/]*/, '').split('#')[0] || '/';
+      if (!ownedUrls.includes(path)) ownedUrls.push(path);
+      const list = urlMap.get(path); if (list) { if (!list.includes(r.question)) list.push(r.question); } else urlMap.set(path, [r.question]);
+    }
+    return {
+      question: r.question, platform: r.platform, bucket, ownedUrls,
+      cites: Array.from(new Set((r.sources ?? []).map(s => normSovDomain(s.domain)).filter(Boolean))),
+    };
+  });
+  const counts = { cited: 0, named: 0, absent: 0, total: rows.length };
+  for (const r of rows) counts[r.bucket]++;
+  const order: Record<PromptBucket, number> = { cited: 0, named: 1, absent: 2 };
+  rows.sort((a, b) => order[a.bucket] - order[b.bucket] || a.question.localeCompare(b.question));
+  const byUrl = Array.from(urlMap.entries())
+    .map(([url, prompts]) => ({ url, prompts }))
+    .sort((a, b) => b.prompts.length - a.prompts.length);
+  return { rows, counts, byUrl };
 }
 
 /**
