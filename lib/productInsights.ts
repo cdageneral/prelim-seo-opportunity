@@ -28,9 +28,65 @@ export interface StoredMentionRow {
   searchResultDomains: string[]; brandEntities: string[];
   aiSearchVolume: number | null; webSearchBased: boolean | null; lastResponseAt: string | null;
 }
+export interface StoredScanPlatform {
+  platform:   string;
+  /** Total matches in the index for this platform; null = that request failed. */
+  totalCount: number | null;
+  /** Rows actually fetched for this platform; null = request failed, 0 = genuinely none. */
+  fetched:    number | null;
+  costUSD:    number;
+}
+
 export interface StoredCatScan {
   category: string; query: string; scannedAt: string; totalCount: number;
   fetched: number; costUSD: number; provider: string; rows: StoredMentionRow[];
+  /** v7.435: per-platform provenance. Absent on scans stored before v7.435 — those
+   *  were a single unfiltered request, so the mix is derived from the rows and the
+   *  UI says the platform split is "as returned" rather than per-platform measured. */
+  platforms?: StoredScanPlatform[];
+}
+
+export const PLATFORM_LABEL: Record<string, string> = { google: 'AI Overview', chat_gpt: 'ChatGPT' };
+
+export interface PlatformMix {
+  platform: string;
+  label:    string;
+  rows:     number;          // rows on file for this platform
+  cited:    number;          // …that cite an owned URL
+  named:    number;          // …that name the brand without linking
+  total:    number | null;   // matches in the index (null = unknown / pre-v7.435)
+  measured: boolean;         // did THIS platform get its own request?
+  failed:   boolean;         // its request errored — unmeasured, not zero (I.5)
+}
+
+/**
+ * v7.435 — the platform split, per node. Counts come from the stored rows; whether a
+ * platform was actually REQUESTED comes from `scan.platforms`, so "0 ChatGPT rows"
+ * can be told apart from "ChatGPT was never asked" (Const I.5 — absence is not zero).
+ */
+export function buildPlatformMix(scan: StoredCatScan | null, clientDomain: string, brandTerms: string[] = []): PlatformMix[] {
+  if (!scan) return [];
+  const clientNorm = normSovDomain(clientDomain);
+  const brandToks  = buildBrandTokens(clientDomain, brandTerms);
+  const keys = new Set<string>([
+    ...(scan.platforms ?? []).map(p => p.platform),
+    ...scan.rows.map(r => r.platform).filter(Boolean),
+  ]);
+  return Array.from(keys).map(pf => {
+    const rows = scan.rows.filter(r => r.platform === pf);
+    const meta = (scan.platforms ?? []).find(p => p.platform === pf) ?? null;
+    let cited = 0, named = 0;
+    for (const r of rows) {
+      const b = promptBucket(r, clientNorm, brandToks);
+      if (b === 'cited') cited++; else if (b === 'named') named++;
+    }
+    return {
+      platform: pf, label: PLATFORM_LABEL[pf] ?? pf, rows: rows.length, cited, named,
+      total: meta ? meta.totalCount : null,
+      measured: !!meta,
+      failed: !!meta && meta.fetched === null,
+    };
+  }).sort((a, b) => b.rows - a.rows);
 }
 
 export interface LadderEntry { domain: string; kind: 'client' | 'tracked' | 'rival'; p1Vol: number; p1Kw: number; measuredKw: number }
@@ -477,11 +533,20 @@ export interface CatNode {
   allKws:     NodeKw[];
 }
 
-export interface NodeKw { keyword: string; searchVolume: number; position: number | null; url?: string }
+export interface NodeKw {
+  keyword: string; searchVolume: number; position: number | null; url?: string;
+  // v7.435: provenance carried verbatim from the SAME canonical pool the Keyword list
+  // panel renders (buildKwPool -> buildCanonicalClusterTopics). Nothing here is derived:
+  // `origin:'demand'` = surfaced by the deep-journey demand build (no client ranking row
+  // exists for it), `isGap` = a competitor-held keyword the client's export does not rank.
+  // Without these, a null position reads as one undifferentiated "unranked" (Const I.5).
+  origin?: 'footprint' | 'demand'; isGap?: boolean;
+}
 
 export interface BuildCategoryTreeOpts {
   breakdown:        any;              // semrushSnapshot._categoryBreakdown (keywordPaths + categories)
-  poolKeywords:     Array<{ keyword: string; searchVolume: number; position: number | null; url?: string }>;
+  poolKeywords:     Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
+                            origin?: 'footprint' | 'demand'; isGap?: boolean }>;
   uploadedKeywords: any[];
   serpPositions:    Record<string, Array<{ keyword: string; position: number }>>;
   storedScans:      StoredCatScan[];  // keyed by node key (' › ' path) OR legacy top-level name
