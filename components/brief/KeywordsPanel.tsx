@@ -438,12 +438,15 @@ function Pill({ active, cited, label }: { active: boolean; cited: boolean; label
 
 function SourceBadge({ source }: { source: KwSource }) {
   if (source === 'semrush') return null;
+  // v7.441 (Wayne): the `csv` badge is gone. Since v7.438 every row already says
+  // "original footprint", which covers the uploaded CSV — the second chip repeated it.
+  // `custom` stays: a hand-added row is genuinely different from an uploaded one.
+  if (source === 'csv') return null;
   // v7.438: theme-aware tokens. The old Tailwind palette classes (bg-blue-500/10 +
   // text-blue-400) do not follow the theme, so every chip on this row washed out to
   // near-invisible on the Warm Paper light surface (the v7.400 class of defect).
   const tone: Record<string, { bg: string; fg: string; bd: string }> = {
     custom: { bg: 'var(--ca-167-139-250-0_1)', fg: 'var(--c-a78bfa)', bd: 'var(--ca-167-139-250-0_1)' },
-    csv:    { bg: 'var(--ca-56-189-248-0_1)',  fg: 'var(--c-38bdf8)', bd: 'var(--ca-56-189-248-0_1)' },
   };
   const t = tone[source];
   if (!t) return null;
