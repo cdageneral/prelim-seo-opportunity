@@ -1,3 +1,29 @@
+## v7.450 - the scan cost/time confirmation opens where you clicked
+
+**Wayne:** *"i am clicking the scan ai button and nothing is happening"* -> *"ahh i see the notice about
+cost and notification was up top and not seen. It should be inline on where the user is at when they
+selected the button"*
+
+**The button was never dead.** Clicking Scan AI opens a confirm-and-price step first - nothing is
+spent until you confirm it - and that card rendered once, at the top of the panel. Open it from a
+sub-category row roughly 800px further down and the card appeared off-screen, which is
+indistinguishable from a button that does nothing. The cost and time notice went unread for the same
+reason.
+
+**The plan now records which control opened it, and the card renders there.** The panel-header CTA
+still shows it at the top; a product-line control shows it directly under that row; a sub-category
+control shows it at that row, indented to match. Live progress - X of N, elapsed, ETA and Stop -
+follows the same anchor, so a run started deep in the drill stays visible where it was started
+(Const IV.4: the action lives where the data lives).
+
+Nothing about what is scanned or what it costs changed: one card definition, one call site per
+anchor, with the projected cost, projected time and the Run button all inside it.
+
+**Verified.** Real project tsc + real next build clean; retained suite 156 checks (21 new) all pass;
+historical suite re-run with real Chromium on both sides - FAIL sets byte-identical to the pristine
+base, zero regression delta. The two v7.444/v7.445 checks that pinned the old planScan call signature
+were amended with dated notes, never deleted (Const V.6) - what they assert is unchanged.
+
 ## v7.449 - Content Footprint by Brand: how much ranking content each brand holds, per product line
 
 **Wayne:** *"I want to know how much content each brand has published in each product line. So what the
