@@ -1,3 +1,18 @@
+## v7.454 - the verification can finish on a big domain
+
+v7.453 removed the pagination bug, and then the honesty guard it added fired on every run:
+synchrony.com has more than 10,000 organic placements at ranks 1-20, so the answer came back capped
+and the route correctly refused to write anything. Right call, unusable feature.
+
+**The pull is now floored at the lowest search volume among the rows actually being verified.** On
+Synchrony that floor is 3,600 - every one of the 241 rows needing a basis sits at or above it, so no
+target can fall outside the query. What gets dropped is long-tail organic rows that could never have
+matched a target in the first place. This is not a sample and not an unrequested cap (Const I.6): the
+floor is derived from the data being checked, and the floor used is returned with the result so the
+basis is inspectable.
+
+The capped refusal stays exactly as it was - if a page ever still comes back full, nothing is written.
+
 ## v7.453 - the organic pull stopped paginating
 
 **Wayne, running the fix:** *"got an error"* -
