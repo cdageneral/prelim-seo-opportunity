@@ -1,3 +1,18 @@
+## v7.452 - Verify positions could not see the rows it was built to fix
+
+v7.451's live check reported **0 unverified** on a project that holds **241** of them. The route
+filtered client rows with `isNull(domain)`, but client keywords are stored under the canonical
+BLANK domain (v7.143) - which is the empty string, not NULL. Synchrony has 589 client rows with
+`domain = ''` and none with NULL, so the filter matched nothing and the fix looked like it had
+already run.
+
+Now it accepts both spellings of "no competitor domain", exactly as `buildKwPool`'s `!k.domain`
+test always has. Competitor rows are still excluded, and a row whose basis is already known is still
+never re-bought.
+
+Caught by the release's own live verification, before it reached anyone - a green build and matching
+file hashes had both passed. Four retained checks now pin the filter.
+
 ## v7.451 - a SERP-feature box is not a #1 ranking
 
 **Wayne:** *"you are reporting that the term Gross Income is ranked number 1. However looking at google
