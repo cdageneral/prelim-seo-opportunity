@@ -17,7 +17,7 @@
  * per request) and land progressively with an outstanding-count in the header.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 
 interface Line { provider: string; unit: string; usage: number; baseline: number; total: number; calls: number; }
@@ -83,6 +83,41 @@ function lineKey(l: Line) { return `${l.provider}|${l.unit}`; }
  */
 type KwCount = number | null | 'error';
 
+/**
+ * v7.447 — Hours Saved. Wayne's 24-activity delivery scope, credited per project
+ * ONLY where the project carries the deliverable's own data (lib/hours/gates.ts).
+ * Every project's full credited/withheld line list comes back with the totals, so
+ * the drill-down can say which activities were withheld and why — a bare number
+ * invites "how did you get that?" and the honest answer names the gaps (I.5).
+ */
+interface HoursLine {
+  key: string; label: string; hours: number; group: 'base' | 'local';
+  gateKey: string; gateLabel: string; reads: string;
+  credited: boolean; unregistered: boolean; proxy: boolean;
+}
+interface HoursProject {
+  projectId: string; projectName: string;
+  hours: number; ceilingHours: number;
+  creditedCount: number; totalCount: number; proxyHours: number;
+  lines: HoursLine[];
+}
+interface HoursPayload {
+  asOf: string; grandHours: number; projectCount: number;
+  scope: { base: number; local: number; total: number };
+  activitiesUpdatedAt: string | null; usingSeed: boolean;
+  unregistered: string[]; projects: HoursProject[];
+}
+
+/** A 200 is not a contract — only a body carrying every field the render reads is. */
+function isHoursPayload(h: any): h is HoursPayload {
+  return !!h && typeof h === 'object'
+    && Array.isArray(h.projects)
+    && Array.isArray(h.unregistered)
+    && !!h.scope && typeof h.scope === 'object'
+    && typeof h.scope.total === 'number'
+    && typeof h.grandHours === 'number';
+}
+
 export default function UsageRollup() {
   const [data, setData]       = useState<RollupPayload | null>(null);
   const [cost, setCost]       = useState<CostPayload | null>(null);
@@ -95,13 +130,18 @@ export default function UsageRollup() {
   // blanking the column behind a spinner (Const IV.4).
   const [kwCounts, setKwCounts]   = useState<Record<string, KwCount>>({});
   const [kwPending, setKwPending] = useState(0);
+  // v7.447: one request for every project — the gates are presence tests, so
+  // they are measured in SQL and no snapshot ever crosses the wire.
+  const [hours, setHours] = useState<HoursPayload | null>(null);
+  const [hoursOpen, setHoursOpen] = useState<string | null>(null);   // projectId whose breakdown is expanded
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [res, costRes] = await Promise.all([
+      const [res, costRes, hoursRes] = await Promise.all([
         fetch('/api/usage', { cache: 'no-store' }),
         fetch('/api/usage/cost', { cache: 'no-store' }),
+        fetch('/api/usage/hours', { cache: 'no-store' }),
       ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
@@ -109,6 +149,17 @@ export default function UsageRollup() {
       // Cost is additive provenance — never let its failure block the usage view.
       if (costRes.ok) { try { setCost(await costRes.json()); } catch { setCost(null); } }
       else setCost(null);
+      // Hours is additive too — a failure here must never blank the spend view.
+      // A 200 carrying the WRONG SHAPE is the dangerous case, not a 500: reading
+      // `payload.scope.total` off it throws inside render and takes the entire
+      // dashboard down with it. So the body is shape-checked before it is trusted,
+      // and anything unrecognised degrades to "no hours column" (Const I.5).
+      if (hoursRes.ok) {
+        try {
+          const h = await hoursRes.json();
+          setHours(isHoursPayload(h) ? h : null);
+        } catch { setHours(null); }
+      } else setHours(null);
     } catch (e) {
       setError((e as any)?.message ?? 'Failed to load usage');
     } finally {
@@ -166,6 +217,9 @@ export default function UsageRollup() {
   const kwLoaded = Object.values(kwCounts).filter((v): v is number => typeof v === 'number');
   const kwTotal  = kwLoaded.reduce((s, n) => s + n, 0);
   const kwDone   = kwPending === 0;
+  // v7.447 per-project hours, keyed to the usage rollup's project ids.
+  const hoursByProject = new Map<string, HoursProject>();
+  (Array.isArray(hours?.projects) ? hours!.projects : []).forEach(p => hoursByProject.set(p.projectId, p));
 
   return (
     <div>
@@ -219,6 +273,20 @@ export default function UsageRollup() {
       {hasAny && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+            {/* v7.447 — Hours Saved leads the cards: it is the only figure here that
+                answers "what did this buy?" rather than "what did this consume". */}
+            {hours && (
+              <div className="orbit-card p-4 border border-orbit-accent/25">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <i className="ti ti-clock-hour-4 text-orbit-accent" aria-hidden="true" />
+                  <span className="text-orbit-secondary text-xs font-semibold">Hours Saved</span>
+                </div>
+                <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(hours.grandHours)}</div>
+                <div className="text-[11px] text-orbit-secondary mt-0.5">
+                  hours · {hours.projectCount} {hours.projectCount === 1 ? 'project' : 'projects'}
+                </div>
+              </div>
+            )}
             {grand.map(l => (
               <div key={lineKey(l)} className="orbit-card p-4">
                 <div className="flex items-center gap-2 mb-1.5">
@@ -287,6 +355,25 @@ export default function UsageRollup() {
             </div>
           )}
 
+          {/* v7.447 — an activity with no registered gate silently SUBTRACTS hours,
+              exactly like an unpriced API source silently subtracts dollars. Same
+              fail-closed discipline, same loud alarm. */}
+          {hours && (hours.unregistered?.length ?? 0) > 0 && (
+            <div className="orbit-card p-4 mb-4 border border-orbit-red/40 bg-orbit-red/10">
+              <h3 className="text-orbit-red text-sm font-semibold mb-2 flex items-center gap-2">
+                <i className="ti ti-alert-triangle" aria-hidden="true" />
+                Activity with no evidence gate — its hours are never credited
+              </h3>
+              <p className="text-orbit-secondary text-xs leading-relaxed">
+                <strong className="text-orbit-primary">{hours.unregistered.join(', ')}</strong>{' '}
+                {hours.unregistered.length === 1 ? 'names a gate that is' : 'name gates that are'} not in the registry, so
+                {hours.unregistered.length === 1 ? ' its' : ' their'} hours are
+                <strong className="text-orbit-primary"> missing from every figure below</strong>. Pick a registered gate in
+                Admin → Hours Saved, or add one in <code className="text-orbit-primary">lib/hours/gates.ts</code>.
+              </p>
+            </div>
+          )}
+
           {/* Per-project breakdown */}
           <div className="orbit-card p-4">
             <h3 className="text-orbit-primary text-sm font-semibold mb-3 flex items-center gap-2">
@@ -308,6 +395,11 @@ export default function UsageRollup() {
                         {kwDone ? 'all keywords' : `counting · ${kwPending} left`}
                       </span>
                     </th>
+                    {/* v7.447: hours credited on real evidence, expandable per project. */}
+                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                      Hours Saved
+                      <span className="block text-[10px] text-orbit-tertiary font-normal">of {fmt(hours?.scope?.total ?? 0)} in scope</span>
+                    </th>
                     {grand.map(l => (
                       <th key={lineKey(l)} className="py-2 px-3 font-medium text-right whitespace-nowrap">
                         {PROVIDER_LABEL[l.provider] ?? l.provider}
@@ -327,8 +419,11 @@ export default function UsageRollup() {
                     const nameCell = proj.projectId
                       ? <Link href={`/projects/${proj.projectId}`} className="text-orbit-primary hover:text-orbit-accent font-medium transition-colors">{proj.projectName}</Link>
                       : <span className="text-orbit-tertiary italic">{proj.projectName}</span>;
+                    const hp = proj.projectId ? hoursByProject.get(proj.projectId) : undefined;
+                    const open = !!proj.projectId && hoursOpen === proj.projectId;
                     return (
-                      <tr key={proj.projectId ?? 'unattributed'} className="border-b border-orbit-border/40">
+                      <Fragment key={proj.projectId ?? 'unattributed'}>
+                      <tr className="border-b border-orbit-border/40">
                         <td className="py-2 pr-4">{nameCell}</td>
                         <td className="py-2 px-3 text-right tabular-nums text-orbit-secondary">
                           {(() => {
@@ -339,6 +434,20 @@ export default function UsageRollup() {
                             if (v === null)        return <span className="text-orbit-tertiary" title="No analysis with keyword data yet">—</span>;
                             return fmt(v);
                           })()}
+                        </td>
+                        <td className="py-2 px-3 text-right tabular-nums">
+                          {!hp
+                            ? <span className="text-orbit-tertiary" title={proj.projectId ? 'No analysis with data for this project yet' : 'Calls made outside a project have no delivery scope'}>—</span>
+                            : (
+                              <button
+                                onClick={() => setHoursOpen(open ? null : proj.projectId!)}
+                                className="inline-flex items-center gap-1 text-orbit-primary hover:text-orbit-accent transition-colors tabular-nums"
+                                title={`${hp.creditedCount} of ${hp.totalCount} activities evidenced — click for the breakdown`}
+                              >
+                                {fmt(hp.hours)}
+                                <i className={`ti ti-chevron-${open ? 'up' : 'down'} text-[10px]`} aria-hidden="true" />
+                              </button>
+                            )}
                         </td>
                         {columns.map(col => {
                           const l = byKey.get(col);
@@ -353,6 +462,40 @@ export default function UsageRollup() {
                         </td>
                         <td className="py-2 pl-3 text-right text-orbit-tertiary whitespace-nowrap">{fmtTime(proj.lastActivity)}</td>
                       </tr>
+                      {/* v7.447 — the breakdown. Withheld activities are listed with the
+                          dataset that would have earned them, so the number is auditable
+                          rather than asserted (Const I.5). */}
+                      {open && hp && (
+                        <tr className="border-b border-orbit-border/40">
+                          <td colSpan={columns.length + 4} className="py-3 px-3 bg-orbit-muted/20">
+                            <div className="text-[11px] text-orbit-secondary mb-2">
+                              <strong className="text-orbit-primary">{fmt(hp.hours)} hrs</strong> credited from{' '}
+                              <strong className="text-orbit-primary">{hp.creditedCount}</strong> of {hp.totalCount} activities
+                              ({fmt(hp.ceilingHours)} hrs in full scope)
+                              {hp.proxyHours > 0 && (
+                                <> · <span className="text-orbit-amber">{fmt(hp.proxyHours)} hrs</span> credited on a proxy signal</>
+                              )}
+                            </div>
+                            <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
+                              {hp.lines.map(l => (
+                                <div key={l.key} className="flex items-baseline gap-2 text-[11px]" title={l.reads}>
+                                  <i className={`ti ti-${l.credited ? 'check text-orbit-green' : 'minus text-orbit-tertiary'} text-[11px]`} aria-hidden="true" />
+                                  <span className={l.credited ? 'text-orbit-primary' : 'text-orbit-tertiary'}>{l.label}</span>
+                                  {l.proxy && l.credited && <span className="text-orbit-amber text-[10px]">proxy</span>}
+                                  {l.unregistered && <span className="text-orbit-red text-[10px]">no gate</span>}
+                                  <span className="flex-1 border-b border-dotted border-orbit-border/60" />
+                                  <span className={`tabular-nums ${l.credited ? 'text-orbit-primary' : 'text-orbit-tertiary line-through'}`}>{fmt(l.hours)}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="text-[10px] text-orbit-tertiary mt-2">
+                              A struck-through line means this project has no stored data for that activity, so its hours are not claimed.
+                              Hover any line to see exactly which field is read.
+                            </p>
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                   {/* Grand total row */}
@@ -364,6 +507,9 @@ export default function UsageRollup() {
                         : <span title={kwDone ? undefined : `Subtotal of ${kwLoaded.length} project(s) counted so far`}>
                             {fmt(kwTotal)}{kwDone ? '' : '…'}
                           </span>}
+                    </td>
+                    <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
+                      {hours ? fmt(hours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
                     </td>
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
@@ -377,6 +523,18 @@ export default function UsageRollup() {
           </div>
 
           <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
+            <strong className="text-orbit-secondary">Hours Saved</strong> is the manual effort this project would have taken
+            a team to deliver by hand, at the rates set in Admin &rarr; Hours Saved
+            {hours?.activitiesUpdatedAt ? ` (last edited ${fmtTime(hours.activitiesUpdatedAt)})` : ''}. The hours are a
+            declared rate card, not a measurement — but <em>which</em> activities are counted is measured: each one is
+            credited only where this project actually holds that deliverable&rsquo;s stored data, so a project with no
+            backlink scan is never credited for a backlink profile. Click any figure for the credited-and-withheld
+            breakdown. Full scope is {fmt(hours?.scope?.total ?? 0)} hrs ({fmt(hours?.scope?.base ?? 0)} core +{' '}
+            {fmt(hours?.scope?.local ?? 0)} local); no project is expected to reach it.
+            {hours?.usingSeed && <> <span className="text-orbit-amber">The stored activity list was empty, so the built-in defaults are in use.</span></>}
+          </p>
+
+          <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
             <strong className="text-orbit-secondary">Keywords</strong> is each project's Keyword Landscape
             &ldquo;All Keywords&rdquo; figure — the client&rsquo;s full ranked footprint plus every competitor-gap
             keyword attributed to a competitor domain, with no volume floor, read off the same pool the panel
