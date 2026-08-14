@@ -1,3 +1,33 @@
+## v7.449 - Content Footprint by Brand: how much ranking content each brand holds, per product line
+
+**Wayne:** *"I want to know how much content each brand has published in each product line. So what the
+client has and what each competitor has for every product and child category."*
+
+**The new card.** Inside every expanded product line on Product Insights, between the page-1 ladder and
+the sub-category drill: a brand x sub-category matrix counting each brand's DISTINCT RANKING URLS -
+"pages ranking", never "pages published". Client URLs come from the canonical pool (Semrush URL / page
+map), competitor URLs from uploaded footprint rows (project_keywords.url). Zero new API cost - every
+row was already on file. URL identity is normalized (protocol / www / trailing slash / #fragment), so
+one page written three ways counts once.
+
+**Honesty rules (Const I.5).** A brand whose uploaded rows carry no URL column reads "no URL data",
+never 0 - absence is not zero - and every brand shows its coverage ("url data: N/M ranked kw"). SERP
+rivals carry positions only, so they are NAMED as uncounted rather than silently omitted. A GAP flag
+(client verifiably 0 ranking URLs while a competitor holds 10+, threshold stated in the legend) is
+never raised on a client coverage hole.
+
+**Click any count** for the URL list behind it - each page with its keyword count and best rank, from
+the same shared computation, so the list always reconciles with the cell.
+
+**The Assessment PDF section ships in the same release (Const II.6b).** lib/productInsights.buildContentFootprint
+is the ONE shared basis; the PDF route computes it and the template READS the result verbatim (II.6a) -
+your pages vs the line leader per product, plus flagged sub-category gaps.
+
+**Verified.** Real project tsc + real next build clean; retained suite 120 checks (33 new for this
+release) with zero A/B delta vs the pristine base; historical suite FAIL sets byte-identical to base;
+dual-theme contrast gate + real-Chromium renders in both themes (URL-drawer secondary text upgraded
+c-6a6a90 -> c-8a8aa8 after the gate measured 3.82:1 dark).
+
 ## v7.448 - Hours Saved is internal, and the card says so
 
 **Wayne:** *"do not put the hours saved on the PDF report. This is an admin feature only. also add the
