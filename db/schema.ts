@@ -195,6 +195,13 @@ export const projectKeywords = pgTable('project_keywords', {
   source:       text('source').notNull(),              // 'custom' | 'csv' | 'blocked'
   domain:       text('domain'),                        // null = client keyword; set = competitor domain (uploaded footprints)
   url:          text('url'),                            // v7.251: real ranking/landing URL from the uploaded CSV (Semrush "URL" column); null = column absent
+  // v7.451: Semrush "Position Type" — 'Organic' or a SERP-feature name (People also ask,
+  // Things to know, …). A feature placement exports with Position = 1, so without this the
+  // pool counted boxes as #1 rankings (Const I.4). NULL = pre-v7.451 row, basis UNKNOWN —
+  // never silently read as organic; see lib/keywords/positionBasis.ts.
+  positionType: text('position_type'),
+  // v7.451: when this row's position was checked against Semrush's organic index.
+  positionVerifiedAt: timestamp('position_verified_at'),
   serpFeatures: text('serp_features'),                 // v7.103: raw Semrush "SERP Features by Keyword" cell; null = column absent in upload
   createdAt:    timestamp('created_at').defaultNow().notNull(),
 });
