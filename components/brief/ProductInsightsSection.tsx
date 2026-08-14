@@ -48,6 +48,8 @@ import {
   // v7.444: cascade scanning — a level includes every level below it
   buildScanPlan, projectedScanCost, projectedScanTime, scanQueryFor, type ScanTarget,
   type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
+  // v7.449: Content Footprint by Brand — the shared basis the Assessment PDF also reads (II.6b)
+  buildContentFootprint, contentUrlList, CONTENT_GAP_MIN, type ContentFootprint, type NodeKw,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
 // of the shared row builder) keep working unchanged (V.6).
@@ -115,6 +117,8 @@ export default function ProductInsightsSection({
   }, [scanning]);
   const [openKwAll, setOpenKwAll]     = useState<Set<string>>(new Set());   // v7.433: per-node keyword list expanded
   const [promptView, setPromptView]   = useState<Record<string, 'cited' | 'named' | 'absent' | 'urls' | null>>({});   // v7.434
+  // v7.449: which content-footprint cell's URL list is open ({ childIdx: -1 } = the line total)
+  const [cfCell, setCfCell] = useState<{ childIdx: number; domain: string } | null>(null);
 
   // ── data: uploaded keywords (same fetch every canonical consumer uses) ──
   useEffect(() => {
@@ -228,6 +232,36 @@ export default function ProductInsightsSection({
       });
     } catch { return null; }
   }, [openProduct, built, analysis, uploadedKeywords, stored, domain, brandTerms]);
+
+  // ── v7.449: Content Footprint by Brand for the OPEN line (shared basis, II.7) ──
+  // Falls back to a flat line-level node when no stored taxonomy exists (honest
+  // gap, I.5 — totals only, nothing inferred from keyword text).
+  const openCfNode = useMemo((): { name: string; allKws: NodeKw[]; children: CatNode[] } | null => {
+    if (!openProduct || uploadedKeywords === null) return null;
+    if (openTree) return openTree;
+    const p = built.products.find(x => x.name === openProduct);
+    if (!p) return null;
+    const allKws: NodeKw[] = []; const seen = new Set<string>();
+    for (const t of p.topics) for (const k of t.keywords as any[]) {
+      const kk = String(k?.keyword ?? '').toLowerCase().trim();
+      if (!kk || seen.has(kk)) continue;
+      seen.add(kk);
+      allKws.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: (k as any).url,
+        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+    }
+    return { name: p.name, allKws, children: [] };
+  }, [openProduct, openTree, built, uploadedKeywords]);
+  const openCf: ContentFootprint | null = useMemo(() => {
+    if (!openCfNode) return null;
+    try {
+      return buildContentFootprint({
+        node: openCfNode,
+        uploadedKeywords: uploadedKeywords ?? [],
+        serpPositions: ((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+        clientDomain: domain,
+      });
+    } catch { return null; }
+  }, [openCfNode, uploadedKeywords, analysis, domain]);
 
   // ── KPI totals + headline insight ──
   const kpi = built.kpi;
@@ -639,7 +673,7 @@ export default function ProductInsightsSection({
           return (
             <div key={p.name}>
               <div
-                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); }}
+                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); }}
                 style={{ display: 'grid', gridTemplateColumns: '22px minmax(140px,1.2fr) 152px 180px 180px 214px 96px', gap: '10px', alignItems: 'center',
                   background: 'var(--c-111120)', border: `1px solid ${isOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
                   borderRadius: isOpen ? '10px 10px 0 0' : '10px', padding: '10px 14px', marginBottom: isOpen ? 0 : '7px', cursor: 'pointer' }}
@@ -778,6 +812,115 @@ export default function ProductInsightsSection({
                       )}
                     </div>
                   </div>
+
+                  {/* ── v7.449: Content Footprint by Brand — pages ranking, per child category ── */}
+                  {openCf && (
+                    <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px', marginBottom: '14px' }}>
+                      <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '2px' }}>
+                        CONTENT FOOTPRINT BY BRAND — PAGES RANKING (MEASURED)
+                        <span style={{ fontWeight: 400, letterSpacing: 0, color: 'var(--c-55557a)' }}>
+                          {'  '}· a page = a distinct URL holding a stored rank on this line's keywords · read from data already on file, no new API cost · click any count for the URL list behind it
+                        </span>
+                      </div>
+                      {(() => {
+                        const cf = openCf;
+                        const maxTotal = Math.max(1, ...cf.brands.map(b => b.total.urls));
+                        const colMax = cf.children.map((_, i) => Math.max(1, ...cf.brands.map(b => b.perChild[i].urls)));
+                        const cellFor = (b: typeof cf.brands[number], cell: { urls: number; rankedKw: number; urlKw: number }, ci: number) => {
+                          const noUrlData = cell.rankedKw > 0 && cell.urlKw === 0;
+                          const isGap = b.kind === 'client' && ci >= 0 && cf.gapChildIdx.includes(ci);
+                          const sel = cfCell && cfCell.childIdx === ci && cfCell.domain === b.domain;
+                          if (noUrlData) return (
+                            <span title={`Ranks on ${cell.rankedKw} keyword${cell.rankedKw === 1 ? '' : 's'} here, but the uploaded rows carry no URL column — pages unknown, not zero`}
+                              style={{ fontSize: '9.5px', color: 'var(--c-55557a)' }}>no URL data</span>
+                          );
+                          return (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setCfCell(sel ? null : { childIdx: ci, domain: b.domain }); }}
+                              title={`${b.domain}: ${cell.urls} distinct ranking URL${cell.urls === 1 ? '' : 's'} · url data on ${cell.urlKw}/${cell.rankedKw} ranked keywords — click for the URL list`}
+                              style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px', minWidth: '52px',
+                                background: 'transparent', border: sel ? '1px solid var(--ca-108-99-255-0_45)' : '1px solid transparent',
+                                borderRadius: '6px', padding: '2px 6px', cursor: 'pointer' }}
+                            >
+                              <span style={{ fontSize: '12px', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                                color: isGap ? 'var(--c-f87171)' : b.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
+                                {cell.urls}{isGap ? ' · GAP' : ''}
+                              </span>
+                              <span style={{ width: '100%', height: '4px', borderRadius: '2px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
+                                <span style={{ display: 'block', height: '100%', width: `${Math.min(100, (cell.urls / (ci >= 0 ? colMax[ci] : maxTotal)) * 100)}%`,
+                                  background: b.kind === 'client' ? 'var(--c-6c63ff)' : 'var(--c-46cce0)' }} />
+                              </span>
+                            </button>
+                          );
+                        };
+                        const gridCols = `minmax(170px,1.3fr) 120px${cf.children.map(() => ' minmax(96px,1fr)').join('')}`;
+                        return (
+                          <div style={{ overflowX: 'auto' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px',
+                              fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)', borderBottom: '1px solid var(--c-1e1e34)' }}>
+                              <span>BRAND</span>
+                              <span>TOTAL PAGES</span>
+                              {cf.children.map(c => (
+                                <span key={c.key}>{c.name.toUpperCase()}<br />
+                                  <span style={{ fontWeight: 400, letterSpacing: 0 }}>{c.kwCount.toLocaleString()} kws</span>
+                                </span>
+                              ))}
+                            </div>
+                            {cf.brands.length === 0 && (
+                              <div style={{ fontSize: '11px', color: 'var(--c-55557a)', padding: '8px 4px' }}>
+                                No brand holds a stored rank on this line's keywords.
+                              </div>
+                            )}
+                            {cf.brands.map((b, bi) => (
+                              <div key={b.domain} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'center',
+                                padding: '6px 4px', borderBottom: bi < cf.brands.length - 1 ? '1px solid var(--c-1e1e34)' : 'none' }}>
+                                <span>
+                                  <span style={{ fontSize: '11.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                    display: 'block', color: b.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
+                                    {bi + 1} · {b.kind === 'client' ? `${b.domain} (you)` : b.domain}
+                                  </span>
+                                  <span style={{ fontSize: '9px', color: 'var(--c-55557a)' }}>url data: {b.total.urlKw}/{b.total.rankedKw} ranked kw</span>
+                                </span>
+                                {cellFor(b, b.total, -1)}
+                                {cf.children.map((c, ci) => <span key={c.key}>{cellFor(b, b.perChild[ci], ci)}</span>)}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      {/* URL drill — the list behind the clicked count (same basis, contentUrlList) */}
+                      {cfCell && openCfNode && (() => {
+                        const kws = cfCell.childIdx >= 0 ? (openCfNode.children[cfCell.childIdx]?.allKws ?? []) : openCfNode.allKws;
+                        const scopeName = cfCell.childIdx >= 0 ? (openCf.children[cfCell.childIdx]?.name ?? '') : `${p.name} (whole line)`;
+                        const urls = contentUrlList({ kws, domain: cfCell.domain, clientDomain: domain, uploadedKeywords: uploadedKeywords ?? [] });
+                        return (
+                          <div style={{ marginTop: '8px', border: '1px solid var(--ca-108-99-255-0_25)', borderRadius: '8px', padding: '8px 10px', background: 'var(--c-0a0a14)' }}>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '5px' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-9b96ff)' }}>
+                                {cfCell.domain} — {urls.length} RANKING URL{urls.length === 1 ? '' : 'S'} · {scopeName.toUpperCase()}
+                              </span>
+                              <button onClick={() => setCfCell(null)} style={{ marginLeft: 'auto', fontSize: '9.5px', background: 'transparent', border: 'none', color: 'var(--c-8a8aa8)', cursor: 'pointer' }}>close ✕</button>
+                            </div>
+                            {urls.length === 0 && <div style={{ fontSize: '10.5px', color: 'var(--c-55557a)' }}>No URL-bearing ranked rows for this brand in this scope.</div>}
+                            <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+                              {urls.map(u => (
+                                <div key={u.url} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '2px 0', fontSize: '10.5px' }}>
+                                  <span style={{ flex: 1, color: 'var(--c-c8c8e8)', wordBreak: 'break-all' }}>{u.url}</span>
+                                  <span style={{ flexShrink: 0, color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{u.kwCount} kw · best #{u.bestPos}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      <div style={{ marginTop: '7px', fontSize: '9.5px', color: 'var(--c-55557a)' }}>
+                        GAP = you verifiably hold 0 ranking URLs where a competitor holds {CONTENT_GAP_MIN}+ · counts measure RANKING content ("pages ranking", never "pages published") · client URLs from the canonical pool, competitor URLs from uploaded footprint rows
+                        {openCf.unlistedRivals.length > 0 && (
+                          <> · no URL source for {openCf.unlistedRivals.join(', ')} — SERP-rival positions carry no URLs, so their pages are uncounted (not zero)</>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── v7.432: sub-category drill — every stored level, its own measured metrics ── */}
                   <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', margin: '2px 0 6px' }}>
