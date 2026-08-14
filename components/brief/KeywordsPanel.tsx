@@ -1573,12 +1573,13 @@ export default function KeywordsPanel({
         return (
           <div style={{ margin: '10px 14px 0', padding: '10px 13px', borderRadius: '9px', fontSize: '12px',
             background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--c-f59e0b)' }}>
-            <b>{cov.unknown.toLocaleString()} of {cov.total.toLocaleString()} stored positions have an unverified basis.</b>{' '}
+            <b>{cov.unknown.toLocaleString()} of {cov.total.toLocaleString()} positions at rank 1&ndash;20 have an unverified basis.</b>{' '}
             <span style={{ color: 'var(--c-c8c8e8)' }}>
               These rows were uploaded without Semrush&rsquo;s &ldquo;Position Type&rdquo; column, so a real organic ranking
               cannot be told apart from a SERP-feature placement &mdash; Semrush exports a People-also-ask or
               Things-to-know slot as <b>position 1</b>. Until they are verified, page-1 share, best rank and
-              Share of Voice on this project may read high.
+              Share of Voice on this project may read high. Rows deeper than #20 are not counted here: a
+              SERP feature never exports as a deep position, so their basis cannot be in doubt.
             </span>
             <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               {!verifyPlan && !verifyBusy && (
