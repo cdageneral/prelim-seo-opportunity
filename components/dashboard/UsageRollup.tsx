@@ -9,6 +9,12 @@
  * projects rank by spend; calls with no project context roll up under
  * "Unattributed". In-place refresh CTA (Art. IV.4) + as-of timestamp (Art.
  * IV.5). Theme-aware via orbit-* tokens (Art. IV.6).
+ *
+ * v7.446 — a Keywords column sits beside the spend: each project's Keyword
+ * Landscape "All Keywords" count, so the table answers "what did this project
+ * cost, and how big is it?" in one place. The counts are fetched per project
+ * (lib/keywordLandscape is the shared basis; see the route for why one project
+ * per request) and land progressively with an outstanding-count in the header.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -69,11 +75,26 @@ function fmtTime(iso: string | null): string {
 }
 function lineKey(l: Line) { return `${l.provider}|${l.unit}`; }
 
+/**
+ * v7.446 — per-project Keyword Landscape size.
+ *   number → the project's "All Keywords" count
+ *   null   → the project has no analysis with keyword data (honest gap, Const I.5)
+ *   'error'→ the count request failed; never shown as 0
+ */
+type KwCount = number | null | 'error';
+
 export default function UsageRollup() {
   const [data, setData]       = useState<RollupPayload | null>(null);
   const [cost, setCost]       = useState<CostPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
+  // v7.446: keyword counts arrive one project at a time (see the route header — a
+  // cross-project query would have to load every keyword snapshot in one response
+  // and would 507 on the biggest accounts). Each cell fills in as its own request
+  // lands, and the header states how many are still outstanding rather than
+  // blanking the column behind a spinner (Const IV.4).
+  const [kwCounts, setKwCounts]   = useState<Record<string, KwCount>>({});
+  const [kwPending, setKwPending] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -97,6 +118,40 @@ export default function UsageRollup() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ── v7.446: fan out the per-project keyword counts ──────────────────────────
+  // Bounded concurrency (4) keeps at most four keyword snapshots in flight at
+  // once — the whole point of one-project-per-request is that these never stack
+  // up into a single oversized response. Re-runs whenever the rollup reloads, so
+  // Refresh refreshes this column too.
+  useEffect(() => {
+    const ids = (data?.projects ?? []).map(p => p.projectId).filter((id): id is string => !!id);
+    if (ids.length === 0) { setKwCounts({}); setKwPending(0); return; }
+
+    let cancelled = false;
+    setKwCounts({});
+    setKwPending(ids.length);
+
+    const queue = [...ids];
+    const worker = async () => {
+      for (;;) {
+        const id = queue.shift();
+        if (!id || cancelled) return;
+        let value: KwCount = 'error';
+        try {
+          const res  = await fetch(`/api/projects/${id}/keyword-count`, { cache: 'no-store' });
+          const json = await res.json();
+          if (res.ok) value = json?.hasAnalysis ? (json.keywordCount ?? 0) : null;
+        } catch { /* leaves 'error' — an unknown count is never rendered as zero */ }
+        if (cancelled) return;
+        setKwCounts(prev => ({ ...prev, [id]: value }));
+        setKwPending(n => Math.max(0, n - 1));
+      }
+    };
+    Promise.all([...Array(Math.min(4, ids.length))].map(worker));
+
+    return () => { cancelled = true; };
+  }, [data]);
+
   const grand = data?.grandTotals ?? [];
   const projects = data?.projects ?? [];
   // Stable column order for the per-project table = the grand-total lines present.
@@ -105,6 +160,12 @@ export default function UsageRollup() {
   // Per-project USD, keyed to match the usage rollup's project ids.
   const costByProject = new Map<string, number>();
   (cost?.projects ?? []).forEach(p => costByProject.set(p.projectId ?? 'unattributed', p.costUSD));
+  // v7.446: the column total is the sum of the counts we actually have. While
+  // requests are outstanding it is labelled a running subtotal, never presented
+  // as the final cross-project figure.
+  const kwLoaded = Object.values(kwCounts).filter((v): v is number => typeof v === 'number');
+  const kwTotal  = kwLoaded.reduce((s, n) => s + n, 0);
+  const kwDone   = kwPending === 0;
 
   return (
     <div>
@@ -237,6 +298,16 @@ export default function UsageRollup() {
                 <thead>
                   <tr className="text-orbit-tertiary text-left border-b border-orbit-border">
                     <th className="py-2 pr-4 font-medium">Project</th>
+                    {/* v7.446: Keyword Landscape size, read off the panel's own basis. */}
+                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                      Keywords
+                      {/* The idle label matches its sibling sub-labels; the LIVE progress
+                          steps up to text-orbit-secondary, because orbit-tertiary measures
+                          2.50:1 on the dark card and progress has to be readable (Art. IV.4). */}
+                      <span className={`block text-[10px] font-normal ${kwDone ? 'text-orbit-tertiary' : 'text-orbit-secondary'}`}>
+                        {kwDone ? 'all keywords' : `counting · ${kwPending} left`}
+                      </span>
+                    </th>
                     {grand.map(l => (
                       <th key={lineKey(l)} className="py-2 px-3 font-medium text-right whitespace-nowrap">
                         {PROVIDER_LABEL[l.provider] ?? l.provider}
@@ -259,6 +330,16 @@ export default function UsageRollup() {
                     return (
                       <tr key={proj.projectId ?? 'unattributed'} className="border-b border-orbit-border/40">
                         <td className="py-2 pr-4">{nameCell}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-orbit-secondary">
+                          {(() => {
+                            if (!proj.projectId) return <span className="text-orbit-tertiary" title="Calls made outside a project have no keyword landscape">—</span>;
+                            const v = kwCounts[proj.projectId];
+                            if (v === undefined)   return <span className="text-orbit-tertiary" aria-label="counting">···</span>;
+                            if (v === 'error')     return <span className="text-orbit-amber" title="Couldn't read this project's keyword count">?</span>;
+                            if (v === null)        return <span className="text-orbit-tertiary" title="No analysis with keyword data yet">—</span>;
+                            return fmt(v);
+                          })()}
+                        </td>
                         {columns.map(col => {
                           const l = byKey.get(col);
                           return (
@@ -277,6 +358,13 @@ export default function UsageRollup() {
                   {/* Grand total row */}
                   <tr className="border-t-2 border-orbit-border font-semibold">
                     <td className="py-2 pr-4 text-orbit-primary">All projects</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
+                      {kwLoaded.length === 0
+                        ? <span className="text-orbit-tertiary font-normal">—</span>
+                        : <span title={kwDone ? undefined : `Subtotal of ${kwLoaded.length} project(s) counted so far`}>
+                            {fmt(kwTotal)}{kwDone ? '' : '…'}
+                          </span>}
+                    </td>
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
                     ))}
@@ -289,6 +377,14 @@ export default function UsageRollup() {
           </div>
 
           <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
+            <strong className="text-orbit-secondary">Keywords</strong> is each project's Keyword Landscape
+            &ldquo;All Keywords&rdquo; figure — the client&rsquo;s full ranked footprint plus every competitor-gap
+            keyword attributed to a competitor domain, with no volume floor, read off the same pool the panel
+            itself counts. It is a database read, so refreshing it costs no API credit. A dash means that project
+            has no analysis with keyword data yet.
+          </p>
+
+          <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
             <strong className="text-orbit-secondary">How this is counted:</strong> Semrush units = rows returned × published
             per-line rate (domain/URL 10, competitor-discovery &amp; demand 40); SerpAPI = searches; Profound = calls;
             Anthropic/OpenAI = tokens (OpenAI portraits = images). Counting began when v7.225 deployed; set per-project
