@@ -1,3 +1,29 @@
+## v7.448 - Hours Saved is internal, and the card says so
+
+**Wayne:** *"do not put the hours saved on the PDF report. This is an admin feature only. also add the
+total hours saved in a summary card here. Make it slightly a different color"*
+
+**The card is green now.** Every other card in that row is accent-indigo because they all measure the
+same thing - consumption. Hours Saved measures the opposite, so it no longer looks like one of them:
+green tint, green border, green label, with the number itself left on the primary text colour so it
+stays the most legible thing on the card. The tint is capped at **8%** and the cap is pinned by a
+check, not by taste: at 10%, `text-orbit-secondary` measures 4.50:1 on the dark card and falls below
+AA. The card also carries an **"admin only"** marker on its face - the cheapest guard against it being
+screenshotted into a client deck.
+
+**It stays out of the PDF, and that is now enforced rather than remembered.** Under the existing rule
+a new metric goes into the client-facing Assessment PDF by default, and skipping it is a dated
+deferral - a note a future release can quietly ignore. That is the wrong shape for this figure,
+because the reason is permanent: Hours Saved describes what the platform saved **us**, not what the
+client received, and a client reading "9,265 hours saved" is being told about our margin.
+
+So the constitution gains **Art. II.6c** (v0.27): a metric can be declared internal, and internal
+means it renders only on operator surfaces AND the exclusion is proved by a check in the retained
+suite. The check is source-level - it walks `lib/pdf/*`, `lib/export/*` and `app/api/reports/*` and
+fails on any import edge into `lib/hours/`, plus a negative control proving the matcher can actually
+detect one, plus a word-level check so a hand-written heading cannot leak the concept without an
+import. A note in a changelog decays. A failing check does not.
+
 ## v7.447 - Hours Saved, and only for work the data can prove
 
 **Wayne:** *"Now I want to have a new summary card Labeled 'Hours Saved' and then for each project
