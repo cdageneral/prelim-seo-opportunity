@@ -102,7 +102,13 @@ export default function ProductInsightsSection({
   const [nodeScanning] = useState<string | null>(null);
   // v7.444: a cascade run — the plan is built and PRICED before anything is spent,
   // and can be stopped mid-run (skipped nodes stay unscanned, so it resumes cleanly).
-  const [plan, setPlan]           = useState<{ label: string; targets: ScanTarget[]; rescanTargets: ScanTarget[]; alreadyDone: number } | null>(null);
+  // v7.450 `anchor` (Wayne: "the notice about cost ... should be inline on where the user is"):
+  // the confirm-and-price step used to render once at the top of the panel, so opening it
+  // from a sub-category row ~800px below looked like a dead button. The plan now records
+  // WHICH control opened it and the card renders at that row (Const IV.4 — the action lives
+  // where the data lives). 'panel' = the header CTA, 'p:<product>' = a product line row,
+  // 'n:<nodeKey>' = a sub-category row.
+  const [plan, setPlan]           = useState<{ label: string; anchor: string; targets: ScanTarget[]; rescanTargets: ScanTarget[]; alreadyDone: number } | null>(null);
   const [planIdx, setPlanIdx]     = useState(0);
   const [planStop, setPlanStop]   = useState(false);
   const [planStart, setPlanStart] = useState(0);
@@ -314,15 +320,15 @@ export default function ProductInsightsSection({
     all = everything.length;
     targets.sort((a, b) => a.depth - b.depth);
     everything.sort((a, b) => a.depth - b.depth);
-    setPlan({ label: `all ${products.length} product categories`, targets, rescanTargets: everything, alreadyDone: all - targets.length });
+    setPlan({ label: `all ${products.length} product categories`, anchor: 'panel', targets, rescanTargets: everything, alreadyDone: all - targets.length });
     setPlanIdx(0); setPlanStop(false); setScanErrors([]);
   }, [products, treeFor, stored]);
 
-  const planScan = useCallback((label: string, root: CatNode | null) => {
+  const planScan = useCallback((label: string, root: CatNode | null, anchor = 'panel') => {
     if (!root) return;
     const all      = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[], { skipScanned: false });
     const targets  = buildScanPlan(root, (stored?.categories ?? []) as StoredCatScan[]);
-    setPlan({ label, targets, rescanTargets: all, alreadyDone: all.length - targets.length });
+    setPlan({ label, anchor, targets, rescanTargets: all, alreadyDone: all.length - targets.length });
     setPlanIdx(0); setPlanStop(false); setScanErrors([]);
   }, [stored]);
 
@@ -375,45 +381,12 @@ export default function ProductInsightsSection({
     noAiData: () => chip('transparent', 'var(--c-55557a)', 'var(--c-2a2a40)', 'NO AI DATA YET'),
   };
 
-  return (
-    <div className="flex-1 min-h-0 overflow-y-auto" data-panel="product-insights">
-      <div style={{ padding: '18px 22px 60px', maxWidth: '1240px' }}>
-
-        {/* ── header: title + last-scan + CTA (IV.4 / IV.5) ── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '4px' }}>
-          <h2 style={{ fontSize: '17px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>Product Insights</h2>
-          <span style={{ fontSize: '11px', color: 'var(--c-6a6a90)' }}>
-            {storedAt ? `Recorded AI answers last scanned ${new Date(storedAt).toLocaleString()}` : 'Recorded AI answers: not scanned yet'}
-          </span>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {!scanning && (
-              <button
-                onClick={() => planScanAll()}
-                disabled={loading || products.length === 0 || !providerOk}
-                title={providerOk ? 'Pull real recorded AI answers (ChatGPT + Google AI Overviews) for every product category' : 'DataForSEO is not configured'}
-                style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
-                  background: 'var(--ca-108-99-255-0_1)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}
-              >
-                ↻ Scan recorded AI answers
-              </button>
-            )}
-          </div>
-        </div>
-        <p style={{ fontSize: '12px', color: 'var(--c-8a8aa8)', marginBottom: '12px' }}>
-          Every product category with search and AI visibility measured together — and per topic, whether your ranking authority is
-          reflected in the AI answers around it. This panel reads the same canonical pool and stored taxonomy as every other panel.
-        </p>
-
-        {/* provider not configured (honest gap, I.5) */}
-        {!providerOk && (
-          <div style={{ padding: '9px 12px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--c-f59e0b)' }}>
-            DataForSEO is not configured (DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD) — the recorded-answer scan is unavailable.
-            Search metrics and the analysis-time LLM probe below are unaffected.
-          </div>
-        )}
-
-        {/* v7.444: cascade plan — priced from THIS project's measured history before a cent is spent (I.5b) */}
-        {plan && !scanning && (() => {
+  // v7.450 (Wayne): the confirm-and-price card renders AT the control that opened it —
+  // the header CTA, a product row, or a sub-category row — never only at the panel top,
+  // where a click from 800px down looked like a dead button (Const IV.4).
+  const planCard = (at: string) => {
+    if (!(plan && !scanning && plan.anchor === at)) return null;
+    return ((() => {
           const n    = plan.targets.length;
           const cost = projectedScanCost((stored?.categories ?? []) as StoredCatScan[], n);
           const time = projectedScanTime((stored?.categories ?? []) as StoredCatScan[], n);
@@ -491,10 +464,14 @@ export default function ProductInsightsSection({
               </div>
             </div>
           );
-        })()}
+    })());
+  };
 
-        {/* v7.444: cascade progress — X of N, elapsed, ETA and a working Stop (IV.2/IV.3) */}
-        {plan && scanning && (() => {
+  // v7.450: live progress renders at the same anchor as its confirm card, so the run is
+  // visible from wherever it was started (Const IV.2).
+  const progressCard = (at: string) => {
+    if (!(plan && scanning && plan.anchor === at)) return null;
+    return ((() => {
           const n       = plan.targets.length;
           const doneN   = Math.max(0, planIdx - 1);
           const elapsed = planStart ? (Date.now() - planStart) / 1000 : 0;
@@ -523,7 +500,49 @@ export default function ProductInsightsSection({
               </div>
             </div>
           );
-        })()}
+    })());
+  };
+
+  return (
+    <div className="flex-1 min-h-0 overflow-y-auto" data-panel="product-insights">
+      <div style={{ padding: '18px 22px 60px', maxWidth: '1240px' }}>
+
+        {/* ── header: title + last-scan + CTA (IV.4 / IV.5) ── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '4px' }}>
+          <h2 style={{ fontSize: '17px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>Product Insights</h2>
+          <span style={{ fontSize: '11px', color: 'var(--c-6a6a90)' }}>
+            {storedAt ? `Recorded AI answers last scanned ${new Date(storedAt).toLocaleString()}` : 'Recorded AI answers: not scanned yet'}
+          </span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {!scanning && (
+              <button
+                onClick={() => planScanAll()}
+                disabled={loading || products.length === 0 || !providerOk}
+                title={providerOk ? 'Pull real recorded AI answers (ChatGPT + Google AI Overviews) for every product category' : 'DataForSEO is not configured'}
+                style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
+                  background: 'var(--ca-108-99-255-0_1)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}
+              >
+                ↻ Scan recorded AI answers
+              </button>
+            )}
+          </div>
+        </div>
+        <p style={{ fontSize: '12px', color: 'var(--c-8a8aa8)', marginBottom: '12px' }}>
+          Every product category with search and AI visibility measured together — and per topic, whether your ranking authority is
+          reflected in the AI answers around it. This panel reads the same canonical pool and stored taxonomy as every other panel.
+        </p>
+
+        {/* provider not configured (honest gap, I.5) */}
+        {!providerOk && (
+          <div style={{ padding: '9px 12px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--c-f59e0b)' }}>
+            DataForSEO is not configured (DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD) — the recorded-answer scan is unavailable.
+            Search metrics and the analysis-time LLM probe below are unaffected.
+          </div>
+        )}
+
+        {/* v7.444: cascade plan — priced from THIS project's measured history before a cent is spent (I.5b) */}
+        {planCard('panel')}
+        {progressCard('panel')}
 
         {scanErrors.length > 0 && !scanning && (
           <div style={{ padding: '9px 12px', marginBottom: '12px', borderRadius: '8px', fontSize: '12px', background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.3)', color: 'var(--c-f87171)' }}>
@@ -721,7 +740,7 @@ export default function ProductInsightsSection({
                       bubble or the button would toggle the drill instead. */}
                   {!scanning && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); planScan(p.name, treeFor(p.name)); }}
+                      onClick={(e) => { e.stopPropagation(); planScan(p.name, treeFor(p.name), `p:${p.name}`); }}
                       disabled={!providerOk}
                       title={`Scan recorded AI answers for ${p.name} and every sub-category beneath it`}
                       style={{ marginTop: '4px', padding: '3px 8px', fontSize: '9.5px', fontWeight: 700, borderRadius: '6px',
@@ -752,6 +771,10 @@ export default function ProductInsightsSection({
                   <div style={{ fontSize: '9px', color: 'var(--c-6a6a90)', lineHeight: 1.25 }}>Google yes, AI no</div>
                 </div>
               </div>
+
+              {/* v7.450: the plan opened from THIS product line's control renders here, under it */}
+              {planCard(`p:${p.name}`)}
+              {progressCard(`p:${p.name}`)}
 
               {/* ── crosswalk (expanded) ── */}
               {isOpen && (
@@ -1006,7 +1029,7 @@ export default function ProductInsightsSection({
                               {scanning
                                 ? <span style={{ fontSize: '10px', color: 'var(--c-9b96ff)', fontWeight: 700 }}>Scanning…</span>
                                 : (
-                                    <button onClick={() => planScan(node.name, node)} disabled={!providerOk}
+                                    <button onClick={() => planScan(node.name, node, `n:${node.key}`)} disabled={!providerOk}
                                       title={providerOk
                                         ? (node.children.length > 0
                                             ? `Scan ${node.name} and every level beneath it`
@@ -1020,6 +1043,14 @@ export default function ProductInsightsSection({
                                   )}
                             </div>
                           </div>
+                          {/* v7.450: the plan opened from THIS sub-category row renders right here,
+                              indented to the row, so the cost/time notice is where the click was */}
+                          {(plan?.anchor === `n:${node.key}`) && (
+                            <div style={{ marginLeft: `${node.depth * 18}px` }}>
+                              {planCard(`n:${node.key}`)}
+                              {progressCard(`n:${node.key}`)}
+                            </div>
+                          )}
                           {/* v7.433: the keywords behind this level — position, volume, ranking page */}
                           {isOpen && (() => {
                             const own = node.kws.length > 0 ? node.kws : node.allKws;
