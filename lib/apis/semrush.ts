@@ -390,6 +390,58 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
 
 // ─── Top SERP rivals (page-1 ranks on the client footprint) ───────────────────
 
+// ─── v7.451: the client's TRUE organic placements ────────────────────────────
+// Wayne, 2026-08-14, seeing "gross income #1" with no Synchrony result on Google:
+// a Semrush Positions CSV exports a SERP-feature slot (People also ask, Things to
+// know, …) with Position = 1, and the uploaded rows carried no Position Type, so
+// boxes were stored as #1 rankings.
+//
+// `domain_organic` returns ORGANIC placements only — no feature rows — so this is
+// the authoritative answer to "what does this domain actually rank for". Filtered
+// to positions 1..maxPos, it is small and cheap: the reconciliation only needs the
+// window where the error lives (a feature never exports as #40).
+//
+// Returns the BEST organic position per keyword (a domain can rank several URLs
+// for one term — v7.405 best-position-wins, same rule as the upload merge).
+export async function getOrganicPositions(
+  domain:   string,
+  maxPos    = 20,
+  database  = 'us',
+  pageLimit = 5000,
+): Promise<{ byKeyword: Map<string, { position: number; url: string }>; rowsRead: number }> {
+  const byKeyword = new Map<string, { position: number; url: string }>();
+  let rowsRead = 0;
+  let offset = 0;
+  // Semrush caps a page at 1000 rows for this report; walk until a short page.
+  while (rowsRead < pageLimit) {
+    const want = Math.min(1000, pageLimit - rowsRead);
+    const raw = await semrushGet({
+      type:    'domain_organic',
+      domain,
+      database,
+      display_limit: String(want),
+      ...(offset > 0 ? { display_offset: String(offset) } : {}),
+      display_sort: 'po_asc',
+      display_filter: `+|Po|Lt|${maxPos + 1}`,
+      export_columns: 'Ph,Po,Nq,Ur',
+    });
+    const parsed = parseSemrushCSV(raw);
+    if (parsed.length === 0) break;
+    for (const row of parsed) {
+      const kw = String(row['Keyword'] ?? '').toLowerCase().trim();
+      const pos = parseInt(row['Position'] ?? '0');
+      if (!kw || !pos || pos < 1) continue;
+      const url = row['Url'] ?? row['URL'] ?? '';
+      const prev = byKeyword.get(kw);
+      if (!prev || pos < prev.position) byKeyword.set(kw, { position: pos, url });
+    }
+    rowsRead += parsed.length;
+    if (parsed.length < want) break;
+    offset = rowsRead;
+  }
+  return { byKeyword, rowsRead };
+}
+
 // v7.323 — SINGLE SOURCE OF TRUTH for the snapshot's `serpCompetitorPositions`.
 // Given the CLIENT footprint keywords and a set of competitor domains each carrying
 // their full organic rows (with positions), keep, per domain, the competitor's page-1
