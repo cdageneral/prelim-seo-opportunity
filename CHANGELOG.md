@@ -1,3 +1,42 @@
+## v7.451 - a SERP-feature box is not a #1 ranking
+
+**Wayne:** *"you are reporting that the term Gross Income is ranked number 1. However looking at google
+- i dont see the client in the top 10 or page 1 of google. Is this rank data coming from our keyword
+list and csv file upload?"* -> *"so all of the rank data is wrong?"*
+
+**It was coming from the CSV, and the top of it was wrong.** A Semrush Positions export carries a
+"Position Type" column - Organic, or a SERP-feature name like People also ask or Things to know - and
+a FEATURE placement is exported with **Position = 1**. The upload parser never read that column, so
+boxes entered the canonical pool as organic #1s. That is Const I.4: two different lenses blended into
+one number.
+
+Checked against Semrush the same day: synchrony.com held **no organic placement at all** for "gross
+income" (its page holds a People-also-ask slot for a variant), and its true best for "high yield
+savings account" was **#20**, not the stored #1. Its real organic #1s are all branded or partner
+pages. Deep positions were never affected - a feature does not export as #40 - so the body of the
+data was sound and the error concentrated at the top, exactly where page-1 share, best rank and Share
+of Voice are read.
+
+**What changed.** `lib/keywords/positionBasis.ts` is now the single place that decides whether a
+stored row is an organic ranking, and `buildKwPool` is the chokepoint every read site passes
+through, so no panel can reintroduce the blend. A feature placement enters the pool with no position
+and its feature name beside it - the signal is kept, it just stops masquerading as a rank. A page
+that really ranks #20 shows #20 with a badge that it also holds a box.
+
+**Nothing is retro-scored.** Rows uploaded before this release carry no basis, so they keep their
+stored position and the Keyword panel says plainly how many are unverified rather than quietly
+changing numbers.
+
+**Verify positions** (new, per project) reconciles those rows without a re-upload: one Semrush
+organic pull answers what the domain truly ranks for, and each stored claim at 1-20 is confirmed,
+corrected, or retyped as a feature placement. Priced before it runs and posted to the API Usage
+ledger. Uploads from now on read the column directly, and a file missing it is flagged at upload.
+
+**Verified.** Real project tsc + real next build clean; retained suite 188 checks (33 new); historical
+suite re-run with real Chromium - FAIL sets byte-identical to base, zero regression delta. The new
+checks were run against the pre-fix code as a negative control and 11 correctly failed there,
+including the pool assertion that reproduces this defect.
+
 ## v7.450 - the scan cost/time confirmation opens where you clicked
 
 **Wayne:** *"i am clicking the scan ai button and nothing is happening"* -> *"ahh i see the notice about
