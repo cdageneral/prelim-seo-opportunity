@@ -1,3 +1,26 @@
+## v7.456 - the biggest books can be verified too
+
+Verification ran across the whole portfolio and **11 of 16 projects completed**. Five - Amex,
+HSBC UK, both U.S. Bank books and First Citizens Physician Loan - filled the 10,000-row page even
+with the volume floor applied, so v7.453's completeness guard correctly refused to write and those
+projects could not be verified at all.
+
+Semrush forbids offset-based paging on this report (ERROR 605, v7.453), but it does filter on
+volume. The pull now **walks descending volume bands**: each pass takes the band strictly below the
+previous page's lowest volume, down to the floor. Bands are disjoint, best-rank-wins dedupe holds
+across them, and the walk stops on a short page. A band that cannot be split further - every row
+sharing one volume - still reports `capped` and still writes nothing.
+
+This reaches MORE of the footprint than the single pull ever did, so Const I.6 is satisfied in the
+direction that matters: nothing the caller needs is trimmed.
+
+**What the completed runs found across 8,636 verified positions: 1,870 confirmed, 4,474 corrected,
+2,292 were SERP-feature placements. 78% of the top-20 rank data checked so far was wrong.**
+
+Two v7.453 checks were amended with dated notes (Const V.6): a bounded walk is now correct, and
+`capped` is set inside it rather than computed from one page's length. What they assert - no offset
+paging, and an incomplete answer changes nothing - is unchanged.
+
 ## v7.455 - the corrected positions actually reach the panels
 
 **Wayne, after the verification run reported 241 rows fixed:** *"i went to click the verify button
