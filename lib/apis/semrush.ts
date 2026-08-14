@@ -403,43 +403,40 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
 //
 // Returns the BEST organic position per keyword (a domain can rank several URLs
 // for one term — v7.405 best-position-wins, same rule as the upload merge).
+// v7.453: ONE request, no pagination. The v7.451 loop paged with
+// `display_offset = rowsRead` against `display_limit = want`, and Semrush rejects that
+// outright — ERROR 605, "display_offset must be a positive integer and less than
+// display_limit". (The same constraint is already noted at the topKeywords loop, v7.164.)
+// Paging is not needed here by construction: the query is filtered to positions 1..maxPos
+// for ONE domain, which is a small set — Semrush returns it in a single page. If the page
+// ever comes back completely full the result is reported as `capped`, so a truncated
+// answer is stated rather than silently treated as the whole truth (Const I.5/I.6).
 export async function getOrganicPositions(
   domain:   string,
   maxPos    = 20,
   database  = 'us',
-  pageLimit = 5000,
-): Promise<{ byKeyword: Map<string, { position: number; url: string }>; rowsRead: number }> {
+  rowLimit  = 10000,
+): Promise<{ byKeyword: Map<string, { position: number; url: string }>; rowsRead: number; capped: boolean }> {
   const byKeyword = new Map<string, { position: number; url: string }>();
-  let rowsRead = 0;
-  let offset = 0;
-  // Semrush caps a page at 1000 rows for this report; walk until a short page.
-  while (rowsRead < pageLimit) {
-    const want = Math.min(1000, pageLimit - rowsRead);
-    const raw = await semrushGet({
-      type:    'domain_organic',
-      domain,
-      database,
-      display_limit: String(want),
-      ...(offset > 0 ? { display_offset: String(offset) } : {}),
-      display_sort: 'po_asc',
-      display_filter: `+|Po|Lt|${maxPos + 1}`,
-      export_columns: 'Ph,Po,Nq,Ur',
-    });
-    const parsed = parseSemrushCSV(raw);
-    if (parsed.length === 0) break;
-    for (const row of parsed) {
-      const kw = String(row['Keyword'] ?? '').toLowerCase().trim();
-      const pos = parseInt(row['Position'] ?? '0');
-      if (!kw || !pos || pos < 1) continue;
-      const url = row['Url'] ?? row['URL'] ?? '';
-      const prev = byKeyword.get(kw);
-      if (!prev || pos < prev.position) byKeyword.set(kw, { position: pos, url });
-    }
-    rowsRead += parsed.length;
-    if (parsed.length < want) break;
-    offset = rowsRead;
+  const raw = await semrushGet({
+    type:    'domain_organic',
+    domain,
+    database,
+    display_limit: String(rowLimit),
+    display_sort: 'po_asc',
+    display_filter: `+|Po|Lt|${maxPos + 1}`,
+    export_columns: 'Ph,Po,Nq,Ur',
+  });
+  const parsed = parseSemrushCSV(raw);
+  for (const row of parsed) {
+    const kw = String(row['Keyword'] ?? '').toLowerCase().trim();
+    const pos = parseInt(row['Position'] ?? '0');
+    if (!kw || !pos || pos < 1) continue;
+    const url = row['Url'] ?? row['URL'] ?? '';
+    const prev = byKeyword.get(kw);
+    if (!prev || pos < prev.position) byKeyword.set(kw, { position: pos, url });
   }
-  return { byKeyword, rowsRead };
+  return { byKeyword, rowsRead: parsed.length, capped: parsed.length >= rowLimit };
 }
 
 // v7.323 — SINGLE SOURCE OF TRUTH for the snapshot's `serpCompetitorPositions`.
