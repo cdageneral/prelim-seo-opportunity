@@ -511,6 +511,25 @@ export function buildKwPool({
   const pool: KwPoolItem[] = [];
   const seen  = new Set<string>();
 
+  // ── v7.455: VERIFIED uploaded rows outrank the snapshot's copy ─────────────
+  // An upload-sourced project materialises its client footprint into
+  // `semrushSnapshot.topKeywords` as well as `project_keywords`, so the same keyword
+  // exists twice. §1 below runs first and `seen` blocks §2, which means the SNAPSHOT
+  // copy wins — and Verify positions only ever corrected project_keywords. Result:
+  // the keyword table said "no organic rank · People also ask" while every panel still
+  // rendered "#1" from the stale twin (Wayne, 2026-08-14: "i still see high yield
+  // savings account as listed as number 1 which its not").
+  // A row whose basis has been VERIFIED (positionType captured) is the better fact, so
+  // it overrides the snapshot's position here. An unverified row changes nothing — this
+  // never invents or downgrades data, it only lets a checked answer win over an
+  // unchecked duplicate of itself.
+  const uploadedClientByKw = new Map<string, any>();
+  for (const k of uploaded) {
+    if ((k?.source ?? '') === 'blocked' || k?.type === 'gap') continue;
+    const kk = (k?.keyword ?? '').toLowerCase().trim();
+    if (kk && !uploadedClientByKw.has(kk)) uploadedClientByKw.set(kk, k);
+  }
+
   // ── 1. Client ranked keywords ──────────────────────────────────────────────
   for (const k of (snap?.topKeywords ?? [])) {
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
@@ -520,10 +539,18 @@ export function buildKwPool({
     if (isExcludedBrand(k.keyword)) continue;   // v7.208: user blocklist (even client-ranked competitor-brand terms)
     if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
     seen.add(kwLow);
+    // v7.455: prefer the verified uploaded twin's basis when one exists (see note above).
+    const upTwin = uploadedClientByKw.get(kwLow);
+    const twinType = upTwin?.positionType ?? upTwin?.position_type ?? null;
+    const twinVerified = !!twinType;
     pool.push({
       keyword:      k.keyword,
       searchVolume: k.searchVolume ?? 0,
-      position:     k.position    ?? null,
+      position:     twinVerified
+                      ? organicPositionOf(upTwin.position ?? null, twinType)
+                      : (k.position ?? null),
+      featurePlacement: twinVerified ? (featureLabelOf(twinType) ?? undefined) : undefined,
+      positionBasisRaw: twinVerified ? String(twinType) : undefined,
       isGap:        false,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
