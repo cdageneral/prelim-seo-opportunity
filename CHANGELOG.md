@@ -1,3 +1,32 @@
+## v7.446 - how big is this project, next to what it cost
+
+**Wayne:** *"lets add a column in front where it lists the total keyword count for each project. This
+is from the keyword list panel."*
+
+The API Usage dashboard could tell you what every project had spent but not how much work that spend
+had bought. The **By project** table now opens with a **Keywords** column, so cost and landscape size
+sit on the same row.
+
+The number is the Keyword Landscape panel's own **All Keywords** figure - the client's full ranked
+footprint plus every competitor-gap keyword attributed to a competitor domain, no volume floor. Two
+details decide whether a second implementation agrees with that card or quietly drifts from it: gap
+rows with no attributed competitor domain are excluded, and the basis is the unfloored footprint, not
+the volume-filtered table the panel renders below the cards. Rather than restate either one, both the
+panel and the new route now call the same predicates in `lib/keywordLandscape.ts`, and the panel's own
+`kwSummary` was switched over to them - so the column cannot define "All Keywords" differently from
+the card it is quoting.
+
+**One project per request, deliberately.** A single keyword snapshot runs to millions of bytes on a
+large account, which is exactly the shape that produced v7.445's `HTTP 507: response is too large`. A
+route that answered for every project at once would have to load every snapshot into one response and
+would fail first on the biggest clients. So each count is its own request, at most four in flight, and
+the cells fill in as they land. The header says how many are still outstanding rather than hiding the
+whole column behind a spinner, and the total row marks itself as a running subtotal until the last one
+arrives. It is a database read start to finish - refreshing the column costs no API credit.
+
+Where a project has never completed an analysis the cell shows a dash, not a zero: we have not counted
+none, we have not counted.
+
 ## v7.445 - the SERP scan's 507, and one button instead of two
 
 **Wayne:** *"why is there two buttons?"* and *"the serp features run seems to have broken. I hit
