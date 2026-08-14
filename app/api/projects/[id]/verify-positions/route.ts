@@ -59,6 +59,7 @@ async function loadTargets(projectId: string) {
       id: projectKeywords.id,
       keyword: projectKeywords.keyword,
       position: projectKeywords.position,
+      searchVolume: projectKeywords.searchVolume,   // v7.454: sets the pull's volume floor
       positionType: projectKeywords.positionType,
       serpFeatures: projectKeywords.serpFeatures,
     })
@@ -119,7 +120,15 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
 
     const db2 = String((proj as any)?.database ?? 'us') || 'us';
-    const { byKeyword, rowsRead, capped } = await getOrganicPositions(domain, WINDOW, db2);
+    // v7.454: floor the pull at the lowest volume among the rows being verified. Every
+    // target is still covered (nothing above the floor is excluded); only long-tail rows
+    // that could never match one are left out, which is what keeps the answer complete.
+    const minVol = targets.reduce((m, t: any) => {
+      const v = Number((t as any).searchVolume ?? 0);
+      return v > 0 && v < m ? v : m;
+    }, Number.MAX_SAFE_INTEGER);
+    const floor = Number.isFinite(minVol) && minVol !== Number.MAX_SAFE_INTEGER ? minVol : 0;
+    const { byKeyword, rowsRead, capped } = await getOrganicPositions(domain, WINDOW, db2, 10000, floor);
     // v7.453: if Semrush returned a full page the organic set may be incomplete, and a
     // keyword missing from a TRUNCATED answer must not be retyped as a feature placement
     // — that would assert "no organic ranking" from data we know is partial (Const I.5).
@@ -154,7 +163,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
 
     return NextResponse.json({
-      verified: targets.length, confirmed, corrected, featureOnly, rowsRead, capped, window: WINDOW, domain,
+      verified: targets.length, confirmed, corrected, featureOnly, rowsRead, capped, volumeFloor: floor, window: WINDOW, domain,
       note: `${confirmed} confirmed, ${corrected} corrected to their real organic rank, ${featureOnly} were SERP-feature placements and now show as presence rather than a ranking.`,
     });
   } catch (err: any) {
