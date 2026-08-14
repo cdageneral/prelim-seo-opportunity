@@ -1,3 +1,25 @@
+## v7.453 - the organic pull stopped paginating
+
+**Wayne, running the fix:** *"got an error"* -
+`Semrush API error 400: ERROR 605 :: Invalid display_offset parameter, must be a positive integer
+number and less than display_limit or it should be skipped`
+
+v7.451's `getOrganicPositions` walked pages with `display_offset = rowsRead` against
+`display_limit = want`, so the second page always violated Semrush's rule that the offset must be
+**less than** the limit - the same constraint already noted at the topKeywords loop back in v7.164.
+The first page succeeded and the run then died, so Verify positions never completed a single time.
+
+Paging was never needed: the query is filtered server-side to one domain at positions 1-20, which
+Semrush returns in a single page. It is now one request, no offset, no loop.
+
+**A truncated answer now changes nothing.** If the page ever comes back completely full, the result
+is flagged `capped` and the route refuses to write - a keyword missing from a partial answer must
+not be retyped as a SERP-feature placement, because that would assert "no organic ranking" from data
+known to be incomplete (Const I.5). It returns 409 and says so instead.
+
+Seven retained checks pin this: no `display_offset`, no loop, the server-side rank filter intact,
+the capped flag, and the route's refusal.
+
 ## v7.452 - Verify positions could not see the rows it was built to fix
 
 v7.451's live check reported **0 unverified** on a project that holds **241** of them. The route
