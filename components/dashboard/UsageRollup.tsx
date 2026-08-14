@@ -274,12 +274,22 @@ export default function UsageRollup() {
         <>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
             {/* v7.447 — Hours Saved leads the cards: it is the only figure here that
-                answers "what did this buy?" rather than "what did this consume". */}
+                answers "what did this buy?" rather than "what did this consume".
+                v7.448 — and it is coloured to say so. The provider cards are all
+                accent-indigo because they measure CONSUMPTION; this one is green
+                because it measures value delivered, so the two never read as the
+                same kind of number at a glance (Wayne, 2026-08-14).
+                The tint is capped at 8%: at 10% `text-orbit-secondary` measures
+                4.50:1 on the dark card and drops below AA — see the theme gate. */}
             {hours && (
-              <div className="orbit-card p-4 border border-orbit-accent/25">
+              <div className="orbit-card p-4 border border-orbit-green/30 bg-orbit-green/[0.08]">
                 <div className="flex items-center gap-2 mb-1.5">
-                  <i className="ti ti-clock-hour-4 text-orbit-accent" aria-hidden="true" />
-                  <span className="text-orbit-secondary text-xs font-semibold">Hours Saved</span>
+                  <i className="ti ti-clock-hour-4 text-orbit-green" aria-hidden="true" />
+                  <span className="text-orbit-green text-xs font-semibold">Hours Saved</span>
+                  {/* Const II.6c — this figure never leaves the internal dashboard.
+                      Saying so on the card is the cheapest guard against it being
+                      screenshotted into a client deck. */}
+                  <span className="ml-auto text-[10px] text-orbit-green/80 font-medium">admin only</span>
                 </div>
                 <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(hours.grandHours)}</div>
                 <div className="text-[11px] text-orbit-secondary mt-0.5">
@@ -531,6 +541,9 @@ export default function UsageRollup() {
             backlink scan is never credited for a backlink profile. Click any figure for the credited-and-withheld
             breakdown. Full scope is {fmt(hours?.scope?.total ?? 0)} hrs ({fmt(hours?.scope?.base ?? 0)} core +{' '}
             {fmt(hours?.scope?.local ?? 0)} local); no project is expected to reach it.
+            <strong className="text-orbit-secondary">This figure is internal.</strong> It is deliberately absent from the
+            client-facing Assessment PDF and every delivery export (Wayne, 2026-08-14; Const II.6c) — it describes what the
+            platform saved <em>us</em>, not what the client received.
             {hours?.usingSeed && <> <span className="text-orbit-amber">The stored activity list was empty, so the built-in defaults are in use.</span></>}
           </p>
 
