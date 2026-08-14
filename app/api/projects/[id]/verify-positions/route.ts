@@ -29,7 +29,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db }              from '@/db';
 import { projectKeywords, projects } from '@/db/schema';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import { getOrganicPositions } from '@/lib/apis/semrush';
 import { setUsageProject } from '@/lib/usage/context';
 import { positionBasisOf } from '@/lib/keywords/positionBasis';
@@ -65,9 +65,13 @@ async function loadTargets(projectId: string) {
     .from(projectKeywords)
     .where(and(
       eq(projectKeywords.projectId, projectId),
-      // client rows only — a competitor row's position is the COMPETITOR's rank and
-      // is not what this project's organic pull can speak to.
-      isNull(projectKeywords.domain),
+      // Client rows only — a competitor row's position is the COMPETITOR's rank and is
+      // not what this project's organic pull can speak to.
+      // v7.452: client rows are stored under the canonical BLANK domain (v7.143), which
+      // is the empty string, not NULL — `isNull` alone matched nothing, so v7.451 reported
+      // "0 unverified" on a project with 241 unverified rows. Accept both spellings of
+      // "no competitor domain", exactly as buildKwPool's `!k.domain` test does.
+      or(isNull(projectKeywords.domain), eq(projectKeywords.domain, '')),
     ));
   return rows.filter(r =>
     (r as any).position != null &&
