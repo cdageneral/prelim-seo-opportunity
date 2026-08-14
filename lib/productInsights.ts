@@ -814,3 +814,182 @@ export function projectedScanCost(
   return { usd: avg * nodes, avgUsd: avg, basedOn: priced.length };
 }
 
+
+// ─── v7.449: Content Footprint by Brand (Wayne, 2026-08-14) ──────────────────
+// "I want to know how much content each brand has published in each product
+// line … what the client has and what each competitor has for every product
+// and child category."
+//
+// Basis (stated on every surface): a "page" is a DISTINCT URL that holds a
+// stored ranking on at least one of the node's keywords — client URLs come from
+// the canonical pool (Semrush `Ur` / page map, Const I.1), competitor URLs from
+// uploaded footprint rows (`project_keywords.url`, v7.251). This measures
+// RANKING content, never "everything published" — the label is "pages ranking",
+// and it costs zero new API calls because every row is already on file.
+//
+// Honesty rules (Const I.5):
+//  - A domain whose ranked rows carry NO url column shows "no URL data",
+//    never 0 — absence is not zero. Coverage ("url data: N/M kw") is shown
+//    per brand so a thin upload reads as a data gap, not a thin library.
+//  - SERP rivals (`serpCompetitorPositions`) carry positions only — they are
+//    NAMED as uncounted rather than silently omitted.
+//  - This is a rollup over data already read by this panel (II.6a): both the
+//    panel and the Assessment PDF call THIS builder (II.6b), never their own.
+
+/** Display threshold from the approved 2026-08-14 mockup: a sub-category is
+ *  flagged a GAP when the client verifiably holds 0 ranking URLs while some
+ *  competitor holds at least this many. Stated in the on-panel legend. */
+export const CONTENT_GAP_MIN = 10;
+
+export interface ContentCell {
+  /** Distinct ranking URLs held by this domain on the node's keywords. */
+  urls:     number;
+  /** Distinct keywords of the node this domain holds a stored rank on. */
+  rankedKw: number;
+  /** …of which the source row carried a URL (coverage; 0 with rankedKw>0 = no URL data). */
+  urlKw:    number;
+}
+export interface ContentBrandRow { domain: string; kind: 'client' | 'tracked'; total: ContentCell; perChild: ContentCell[] }
+export interface ContentFootprint {
+  children:       Array<{ key: string; name: string; kwCount: number }>;
+  brands:         ContentBrandRow[];        // sorted by total.urls desc; client always present
+  /** Child indexes flagged GAP: client verifiably 0 URLs, best competitor >= CONTENT_GAP_MIN. */
+  gapChildIdx:    number[];
+  /** SERP rivals with rank data on this node but no URL-bearing source — uncounted, named (I.5). */
+  unlistedRivals: string[];
+}
+
+/** One URL identity: strip protocol/www/hash/trailing slash, lowercase. Query kept
+ *  (Semrush landing URLs rarely carry one; when they do it distinguishes real pages). */
+export const normContentUrl = (u: string): string => {
+  let s = String(u ?? '').trim().toLowerCase();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
+  s = s.split('#')[0];
+  while (s.endsWith('/')) s = s.slice(0, -1);
+  return s;
+};
+
+interface CfAcc { urls: Set<string>; rankedKw: Set<string>; urlKw: Set<string> }
+const newAcc = (): CfAcc => ({ urls: new Set(), rankedKw: new Set(), urlKw: new Set() });
+const accToCell = (a: CfAcc): ContentCell => ({ urls: a.urls.size, rankedKw: a.rankedKw.size, urlKw: a.urlKw.size });
+
+export interface BuildContentFootprintOpts {
+  /** The product-line node (or any CatNode). A no-taxonomy fallback may pass
+   *  `{ name, allKws, children: [] }` built from the same canonical pool. */
+  node:             Pick<CatNode, 'name' | 'allKws' | 'children'>;
+  uploadedKeywords: any[];
+  serpPositions:    Record<string, Array<{ keyword: string; position: number }>>;
+  clientDomain:     string;
+}
+
+export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentFootprint {
+  const { node, uploadedKeywords, serpPositions, clientDomain } = opts;
+  const clientNorm = normSovDomain(clientDomain);
+  const children = (node.children ?? []).map(c => ({ key: c.key, name: c.name, kwCount: c.kwCount }));
+
+  // keyword → child index (a keyword's most-specific home is one node, III.6/I.3,
+  // so children's allKws are disjoint; keywords filed AT the line level map to -1)
+  const kwToChild = new Map<string, number>();
+  (node.children ?? []).forEach((c, i) => { for (const k of c.allKws) kwToChild.set(k.keyword.toLowerCase().trim(), i); });
+  const nodeKws = new Set<string>();
+  for (const k of node.allKws) nodeKws.add(k.keyword.toLowerCase().trim());
+
+  // ── client cells, from the canonical pool rows (position + url per keyword) ──
+  const cTotal = newAcc();
+  const cChild = children.map(() => newAcc());
+  for (const k of node.allKws) {
+    const kw = k.keyword.toLowerCase().trim();
+    const p = k.position;
+    if (p == null || p < 1) continue;
+    const ci = kwToChild.get(kw);
+    const tgts = [cTotal, ...(ci !== undefined ? [cChild[ci]] : [])];
+    for (const t of tgts) {
+      t.rankedKw.add(kw);
+      if (k.url) { t.urlKw.add(kw); const u = normContentUrl(k.url); if (u) t.urls.add(u); }
+    }
+  }
+
+  // ── competitor cells, from uploaded footprint rows ──
+  const comp = new Map<string, { total: CfAcc; child: CfAcc[] }>();
+  for (const r of (uploadedKeywords ?? [])) {
+    if (r?.source === 'blocked') continue;
+    const dom = normSovDomain(r?.domain ?? '');
+    if (!dom || dom === clientNorm) continue;
+    const p = r?.position;
+    if (p == null || p < 1) continue;
+    const kw = String(r?.keyword ?? '').toLowerCase().trim();
+    if (!kw || !nodeKws.has(kw)) continue;
+    let e = comp.get(dom); if (!e) { e = { total: newAcc(), child: children.map(() => newAcc()) }; comp.set(dom, e); }
+    const ci = kwToChild.get(kw);
+    const tgts = [e.total, ...(ci !== undefined ? [e.child[ci]] : [])];
+    for (const t of tgts) {
+      t.rankedKw.add(kw);
+      if (r?.url) { t.urlKw.add(kw); const u = normContentUrl(String(r.url)); if (u) t.urls.add(u); }
+    }
+  }
+
+  const brands: ContentBrandRow[] = [];
+  if (clientNorm) brands.push({ domain: clientNorm, kind: 'client', total: accToCell(cTotal), perChild: cChild.map(accToCell) });
+  comp.forEach((e, dom) => {
+    if (e.total.rankedKw.size === 0) return;
+    brands.push({ domain: dom, kind: 'tracked', total: accToCell(e.total), perChild: e.child.map(accToCell) });
+  });
+  brands.sort((a, b) => (b.total.urls - a.total.urls) || (b.total.rankedKw - a.total.rankedKw) || a.domain.localeCompare(b.domain));
+
+  // ── GAP flags: client verifiably 0 (not a coverage hole), best rival >= threshold ──
+  const client = brands.find(b => b.kind === 'client') ?? null;
+  const gapChildIdx: number[] = [];
+  children.forEach((_, i) => {
+    if (!client) return;
+    const cc = client.perChild[i];
+    const unknown = cc.rankedKw > 0 && cc.urlKw === 0;   // ranks but upload had no URL column — unknown, never a gap claim
+    if (cc.urls !== 0 || unknown) return;
+    const best = Math.max(0, ...brands.filter(b => b.kind !== 'client').map(b => b.perChild[i].urls));
+    if (best >= CONTENT_GAP_MIN) gapChildIdx.push(i);
+  });
+
+  // ── rivals with rank data but no URL-bearing source (named, not counted — I.5) ──
+  const unlistedRivals: string[] = [];
+  for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
+    const dom = normSovDomain(rawDom);
+    if (!dom || dom === clientNorm || comp.has(dom)) continue;
+    if ((positions ?? []).some(pos => nodeKws.has(String(pos?.keyword ?? '').toLowerCase().trim()))) unlistedRivals.push(dom);
+  }
+  unlistedRivals.sort();
+
+  return { children, brands, gapChildIdx, unlistedRivals };
+}
+
+/** The URL list BEHIND a cell (Wayne's mockup: "click any cell → the URL list").
+ *  Same sources as buildContentFootprint — one basis, two zoom levels (II.7). */
+export function contentUrlList(opts: {
+  kws: NodeKw[]; domain: string; clientDomain: string; uploadedKeywords: any[];
+}): Array<{ url: string; kwCount: number; bestPos: number }> {
+  const { kws, domain, clientDomain, uploadedKeywords } = opts;
+  const clientNorm = normSovDomain(clientDomain);
+  const domNorm = normSovDomain(domain);
+  const kwSet = new Set(kws.map(k => k.keyword.toLowerCase().trim()));
+  const byUrl = new Map<string, { kws: Set<string>; bestPos: number }>();
+  const add = (rawUrl: string, kw: string, pos: number) => {
+    const u = normContentUrl(rawUrl); if (!u) return;
+    let e = byUrl.get(u); if (!e) { e = { kws: new Set(), bestPos: pos }; byUrl.set(u, e); }
+    e.kws.add(kw);
+    if (pos < e.bestPos) e.bestPos = pos;
+  };
+  if (domNorm === clientNorm) {
+    for (const k of kws) { if (k.position != null && k.position >= 1 && k.url) add(k.url, k.keyword.toLowerCase().trim(), k.position); }
+  } else {
+    for (const r of (uploadedKeywords ?? [])) {
+      if (r?.source === 'blocked') continue;
+      if (normSovDomain(r?.domain ?? '') !== domNorm) continue;
+      const p = r?.position; if (p == null || p < 1 || !r?.url) continue;
+      const kw = String(r?.keyword ?? '').toLowerCase().trim();
+      if (!kw || !kwSet.has(kw)) continue;
+      add(String(r.url), kw, p);
+    }
+  }
+  return Array.from(byUrl.entries())
+    .map(([url, e]) => ({ url, kwCount: e.kws.size, bestPos: e.bestPos }))
+    .sort((a, b) => (b.kwCount - a.kwCount) || (a.bestPos - b.bestPos) || a.url.localeCompare(b.url));
+}
