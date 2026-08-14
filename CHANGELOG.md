@@ -1,3 +1,29 @@
+## v7.455 - the corrected positions actually reach the panels
+
+**Wayne, after the verification run reported 241 rows fixed:** *"i went to click the verify button
+and it said it was verified and nothing to verify, however i still see high yield savings account as
+listed as number 1 which its not"*
+
+**A client keyword's position is stored in TWO places.** `project_keywords` holds the uploaded row;
+`semrushSnapshot.topKeywords` holds a materialised COPY of the same client footprint. `buildKwPool`
+reads the snapshot first and its `seen` set then skips the uploaded row - so on an upload-sourced
+project the snapshot copy wins every panel. Verify positions had only ever corrected
+`project_keywords`, so the keyword table read "no organic rank - People also ask" while Product
+Insights, Share of Voice and the report all kept rendering **#1** from the stale twin.
+
+A row whose basis has been **verified** now overrides the snapshot's copy. Deliberately narrow: an
+unverified row changes nothing, so this never invents or downgrades data - it only lets a checked
+answer beat an unchecked duplicate of itself. Writing corrections back into the snapshot was
+rejected; that would create a third place for the same fact to drift.
+
+**The banner no longer cries wolf.** It counted unverified rows at any depth, so after a clean run it
+still flagged 348 - every one of them deeper than #20, where a SERP feature cannot occur, on a
+project whose page-1 numbers were by then correct. It is now scoped to ranks 1-20 and says why.
+
+Nine retained checks: a verified row overrides the twin, an unverified one does not, a verified
+feature placement clears the snapshot's #1 while keeping its demand volume, and deep rows are never
+counted as unverified.
+
 ## v7.454 - the verification can finish on a big domain
 
 v7.453 removed the pagination bug, and then the honesty guard it added fired on every run:
