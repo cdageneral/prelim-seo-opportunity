@@ -51,6 +51,14 @@ async function ensureTable() {
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS url TEXT
     `);
+    // v7.451: organic-vs-SERP-feature basis. MUST exist before the drizzle .select()
+    // below — drizzle lists schema columns explicitly.
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS position_type TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS position_verified_at TIMESTAMP
+    `);
   } catch {
     // Table already exists or DB not available — safe to continue
   }
