@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * /admin  (v7.373, groups v7.418) — Users, roles, groups, per-project grants,
- * and the activity log.
+ * /admin  (v7.373, groups v7.418, hours v7.447) — Users, roles, groups,
+ * per-project grants, the activity log, and the Hours Saved rate card.
  * Owner/admin only (middleware enforces when AUTH_ENFORCED is on). Styled with
  * orbit-* tokens for light/dark parity (Const IV.6); every list is a real DB read
  * with an honest empty state (Const I.1/I.5).
@@ -28,7 +28,7 @@ interface Ev {
   meta: Record<string, unknown> | null; ip: string | null; userAgent: string | null; createdAt: string;
 }
 
-type Tab = 'users' | 'groups' | 'add' | 'activity';
+type Tab = 'users' | 'groups' | 'add' | 'activity' | 'hours';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '—';
@@ -115,7 +115,7 @@ export default function AdminPage() {
         </div>
 
         <div className="flex gap-1 border-b border-orbit-border mb-6">
-          {([['users', 'Users & Access'], ['groups', 'Groups'], ['add', 'Add User'], ['activity', 'Activity Log']] as [Tab, string][]).map(([k, label]) => (
+          {([['users', 'Users & Access'], ['groups', 'Groups'], ['add', 'Add User'], ['activity', 'Activity Log'], ['hours', 'Hours Saved']] as [Tab, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)}
               className={`font-mono text-[12px] px-4 py-2.5 border-b-2 -mb-px transition-colors ${
                 tab === k ? 'text-orbit-accent border-orbit-accent' : 'text-orbit-secondary border-transparent hover:text-orbit-primary'}`}>
@@ -128,6 +128,7 @@ export default function AdminPage() {
         {tab === 'groups'   && <GroupsTab />}
         {tab === 'add'      && <AddUserTab projects={projects} onDone={() => { setTab('users'); load(); }} />}
         {tab === 'activity' && <ActivityTab />}
+        {tab === 'hours'    && <HoursTab />}
       </div>
     </Shell>
   );
@@ -762,4 +763,172 @@ function shortUA(ua: string | null): string {
   const os = /Windows/.test(ua) ? 'Windows' : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /iPhone|iPad|iOS/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Linux/.test(ua) ? 'Linux' : '';
   const br = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /Firefox\//.test(ua) ? 'Firefox' : '';
   return [br, os].filter(Boolean).join(' · ');
+}
+
+
+// ─── Hours Saved (v7.447) ─────────────────────────────────────────────────────
+// Wayne's delivery scope: what each activity costs a team in manual hours, and
+// which stored dataset proves this project actually carries it. The HOURS are
+// his business input and live here so they change without a release; the GATE
+// list is code, because whether a deliverable exists is measured, not declared.
+
+interface HActivity {
+  key: string; label: string; hours: number; gateKey: string;
+  group: 'base' | 'local'; sortOrder: number; active: boolean;
+}
+interface HGate { key: string; label: string; reads: string; proxy: boolean }
+
+function HoursTab() {
+  const [rows, setRows]       = useState<HActivity[]>([]);
+  const [gates, setGates]     = useState<HGate[]>([]);
+  const [scope, setScope]     = useState<{ base: number; local: number; total: number } | null>(null);
+  const [updatedAt, setUpd]   = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const [msg, setMsg]         = useState<string | null>(null);
+  const [dirty, setDirty]     = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/admin/hours', { cache: 'no-store' });
+      const j = await r.json();
+      setRows(j.activities ?? []); setGates(j.gates ?? []);
+      setScope(j.scope ?? null);   setUpd(j.updatedAt ?? null);
+      setDirty(false);
+    } catch { setMsg('Couldn’t load the activity list.'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const gateBy = new Map(gates.map(g => [g.key, g]));
+  const edit = (i: number, patch: Partial<HActivity>) => {
+    setRows(rs => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+    setDirty(true); setMsg(null);
+  };
+  const addRow = () => {
+    const next = Math.max(0, ...rows.map(r => r.sortOrder)) + 10;
+    setRows(rs => [...rs, { key: `activity_${next}`, label: 'New activity', hours: 0, gateKey: 'always', group: 'base', sortOrder: next, active: true }]);
+    setDirty(true);
+  };
+  const removeRow = (i: number) => { setRows(rs => rs.filter((_, n) => n !== i)); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const r = await fetch('/api/admin/hours', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activities: rows }),
+      });
+      const j = await r.json();
+      if (!r.ok) { setMsg(typeof j?.error === 'string' ? j.error : 'Save rejected — check the highlighted rows.'); return; }
+      setRows(j.activities ?? []); setScope(j.scope ?? null); setUpd(j.updatedAt ?? null);
+      setDirty(false); setMsg('Saved. Every project’s Hours Saved figure recomputes on the next dashboard load.');
+    } catch { setMsg('Save failed.'); }
+    finally { setSaving(false); }
+  };
+
+  const active = rows.filter(r => r.active);
+  const liveScope = {
+    base:  active.filter(r => r.group === 'base').reduce((s, r) => s + (Number(r.hours) || 0), 0),
+    local: active.filter(r => r.group === 'local').reduce((s, r) => s + (Number(r.hours) || 0), 0),
+  };
+
+  if (loading) return <div className="orbit-card p-8 text-center text-orbit-secondary text-sm">Loading activities…</div>;
+
+  return (
+    <div>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-lg font-semibold text-orbit-primary">Hours Saved — delivery scope</h2>
+          <p className="text-orbit-secondary text-sm mt-1 max-w-3xl">
+            The manual hours each activity would take a team. These figures are your input, not a measurement — what the
+            app measures is the <strong className="text-orbit-primary">gate</strong>: the stored dataset that proves a
+            project actually carries that deliverable. An activity is only credited to a project when its gate passes, so
+            a project with no backlink scan is never credited for a backlink profile.
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          <button onClick={save} disabled={saving || !dirty}
+            className="text-sm font-medium px-4 py-2 rounded-lg bg-orbit-accent text-white disabled:opacity-40 hover:opacity-90 transition-opacity">
+            {saving ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+          </button>
+          <span className="text-[11px] text-orbit-tertiary">
+            {updatedAt ? `Last edited ${new Date(updatedAt).toLocaleString()}` : 'Built-in defaults — never edited'}
+          </span>
+        </div>
+      </div>
+
+      {msg && <div className="orbit-card p-3 mb-4 text-sm text-orbit-secondary border border-orbit-accent/30">{msg}</div>}
+
+      <div className="orbit-card p-3 mb-4 flex flex-wrap gap-x-6 gap-y-1 text-[12px] text-orbit-secondary">
+        <span>Core scope <strong className="text-orbit-primary tabular-nums">{liveScope.base.toLocaleString()}</strong> hrs</span>
+        <span>Local scope <strong className="text-orbit-primary tabular-nums">{liveScope.local.toLocaleString()}</strong> hrs</span>
+        <span>Full scope <strong className="text-orbit-primary tabular-nums">{(liveScope.base + liveScope.local).toLocaleString()}</strong> hrs</span>
+        <span className="text-orbit-tertiary">No project is expected to reach the full scope.</span>
+      </div>
+
+      <div className="orbit-card overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="text-orbit-tertiary text-left border-b border-orbit-border">
+              <th className="py-2 px-3 font-medium">Activity</th>
+              <th className="py-2 px-3 font-medium text-right w-24">Hours</th>
+              <th className="py-2 px-3 font-medium w-28">Group</th>
+              <th className="py-2 px-3 font-medium">Evidence gate — what must exist</th>
+              <th className="py-2 px-3 font-medium text-center w-20">Active</th>
+              <th className="py-2 px-3 w-10" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const g = gateBy.get(r.gateKey);
+              return (
+                <tr key={r.key} className="border-b border-orbit-border/40 align-top">
+                  <td className="py-2 px-3">
+                    <input value={r.label} onChange={e => edit(i, { label: e.target.value })}
+                      className="w-full bg-transparent border border-orbit-border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none" />
+                    <span className="block font-mono text-[10px] text-orbit-tertiary mt-1">{r.key}</span>
+                  </td>
+                  <td className="py-2 px-3 text-right">
+                    <input type="number" min={0} value={r.hours}
+                      onChange={e => edit(i, { hours: Math.max(0, parseInt(e.target.value || '0', 10)) })}
+                      className="w-20 bg-transparent border border-orbit-border rounded px-2 py-1 text-right tabular-nums text-orbit-primary focus:border-orbit-accent outline-none" />
+                  </td>
+                  <td className="py-2 px-3">
+                    <select value={r.group} onChange={e => edit(i, { group: e.target.value as 'base' | 'local' })}
+                      className="w-full bg-orbit-bg border border-orbit-border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none">
+                      <option value="base">Core</option>
+                      <option value="local">Local</option>
+                    </select>
+                  </td>
+                  <td className="py-2 px-3">
+                    <select value={r.gateKey} onChange={e => edit(i, { gateKey: e.target.value })}
+                      className={`w-full bg-orbit-bg border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none ${g ? 'border-orbit-border' : 'border-orbit-red'}`}>
+                      {!g && <option value={r.gateKey}>{r.gateKey} — NOT REGISTERED</option>}
+                      {gates.map(gg => <option key={gg.key} value={gg.key}>{gg.label}</option>)}
+                    </select>
+                    <span className={`block text-[10px] mt-1 leading-snug ${g ? 'text-orbit-tertiary' : 'text-orbit-red'}`}>
+                      {g ? g.reads : 'No gate by this name is registered — these hours are never credited to any project.'}
+                    </span>
+                  </td>
+                  <td className="py-2 px-3 text-center">
+                    <input type="checkbox" checked={r.active} onChange={e => edit(i, { active: e.target.checked })} className="accent-current" />
+                  </td>
+                  <td className="py-2 px-3 text-center">
+                    <button onClick={() => removeRow(i)} title="Remove this activity"
+                      className="text-orbit-tertiary hover:text-orbit-red transition-colors">
+                      <i className="ti ti-trash" aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <button onClick={addRow} className="mt-3 text-sm text-orbit-accent hover:underline">+ Add activity</button>
+    </div>
+  );
 }
