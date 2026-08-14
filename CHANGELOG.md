@@ -1,3 +1,46 @@
+## v7.447 - Hours Saved, and only for work the data can prove
+
+**Wayne:** *"Now I want to have a new summary card Labeled 'Hours Saved' and then for each project
+the total hours saved"* - with a 24-activity delivery scope: 787 hours of core work, plus 44 hours
+of local work that only applies where a project has local data.
+
+The API Usage dashboard leads with a **Hours Saved** card, and the **By project** table carries a
+per-project figure beside the spend. Clicking any figure opens the breakdown.
+
+**The hours are declared; which ones count is measured.** Crediting all 787 to every project would
+have been a modeled number wearing a measured number's clothes. The app can see perfectly well that
+a project never had a backlink scan, and "Backlink profile - 4 hrs" on that project is a claim a
+client can disprove in one question. So every activity is credited only where the project actually
+holds that deliverable's stored data, and `lib/hours/gates.ts` records for each one the exact field
+it reads - `authority_snapshot.domains[].anchors` for anchor text, `_localScan.locations[].reviewsFetchedAt`
+for review ratings, a `reports` row of type PDF for the assessment, and so on. The breakdown lists
+what was withheld, struck through, with the dataset that would have earned it. A number nobody can
+audit is the thing this release exists to avoid.
+
+The registry **fails closed**, exactly like the API rate registry: an activity pointing at a gate
+that does not exist is never credited and raises a red banner, because silence has to cost hours
+rather than award them.
+
+**Two figures are honest proxies and say so.** The app stores no LOB strategy document and no GEO
+roadmap artifact - together 338 of the 787 hours. The LOB plan is credited on the multi-level
+product-line taxonomy it is built from; the roadmap on the stored scope selections whose year
+placement is derived at render. Both are flagged "proxy" wherever they are counted, and both gates
+are changeable without a release.
+
+**The list lives in Admin, not in the code.** Admin -> Hours Saved edits every activity's hours,
+its evidence gate, and whether it counts at all. Changing "LOB SEO Strategy Plan" from 230 to 180
+should not need a deploy; what stays in code is the measurement, not the business input.
+
+**It costs one query, not one per project.** Every gate is a presence test, and presence can be
+measured inside Postgres - so the evidence for all 17 projects comes back as about thirty integers
+each, and no keyword snapshot ever crosses the wire. That is the v7.445 `HTTP 507: response is too
+large` failure made structurally impossible rather than merely avoided.
+
+**One defect found in verification and fixed:** a 200 response carrying an unexpected body made the
+render read `scope.total` off it and threw, taking the entire dashboard down - spend view included.
+The payload is now shape-checked before it is trusted, and a retained check serves the wrong shape
+deliberately to prove the dashboard survives it.
+
 ## v7.446 - how big is this project, next to what it cost
 
 **Wayne:** *"lets add a column in front where it lists the total keyword count for each project. This
