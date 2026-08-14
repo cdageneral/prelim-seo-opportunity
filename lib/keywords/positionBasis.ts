@@ -109,10 +109,18 @@ export interface BasisCoverage {
  * have not been verified" banner — a project is only clean once every client row
  * carries a captured type (uploaded with the column, or set by verification).
  */
-export function basisCoverage(rows: Array<{ positionType?: string | null; position?: number | null }>): BasisCoverage {
+export function basisCoverage(
+  rows: Array<{ positionType?: string | null; position?: number | null }>,
+  // v7.455: only positions inside the RISK WINDOW count. A SERP feature is exported at
+  // position 1, so a row at #35 cannot be one — counting it as "unverified" made the
+  // banner cry wolf after a successful run (348 flagged, every one of them deeper than
+  // #20, on a project whose page-1 numbers were by then correct).
+  window = 20,
+): BasisCoverage {
   let organic = 0, feature = 0, unknown = 0;
   for (const r of rows) {
     if (r?.position == null) continue;
+    if (window > 0 && Number(r.position) > window) continue;
     const b = positionBasisOf(r.positionType);
     if (b === 'organic') organic++; else if (b === 'feature') feature++; else unknown++;
   }
