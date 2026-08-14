@@ -425,28 +425,54 @@ export async function getOrganicPositions(
   rowLimit  = 10000,
   minVolume = 0,
 ): Promise<{ byKeyword: Map<string, { position: number; url: string }>; rowsRead: number; capped: boolean }> {
+  // v7.456: walk DOWN in volume bands instead of one flat pull. Five projects (Amex,
+  // HSBC, both U.S. Bank books, First Citizens Physician Loan) filled the 10,000-row page
+  // even with the floor applied, so the completeness guard blocked them every time and
+  // they could not be verified at all. Semrush forbids offset-based paging here (ERROR
+  // 605, v7.453), but it DOES filter on volume — so each pass takes the next band below
+  // the previous one's lowest volume. Bands are disjoint, the map dedupes to best rank,
+  // and the walk ends when a page comes back short. Const I.6: nothing the caller needs
+  // is trimmed; this reaches MORE of the footprint than the single pull could.
   const byKeyword = new Map<string, { position: number; url: string }>();
-  const filters = [`+|Po|Lt|${maxPos + 1}`];
-  if (minVolume > 0) filters.push(`+|Nq|Gt|${minVolume - 1}`);
-  const raw = await semrushGet({
-    type:    'domain_organic',
-    domain,
-    database,
-    display_limit: String(rowLimit),
-    display_sort: 'po_asc',
-    display_filter: filters.join('|'),
-    export_columns: 'Ph,Po,Nq,Ur',
-  });
-  const parsed = parseSemrushCSV(raw);
-  for (const row of parsed) {
-    const kw = String(row['Keyword'] ?? '').toLowerCase().trim();
-    const pos = parseInt(row['Position'] ?? '0');
-    if (!kw || !pos || pos < 1) continue;
-    const url = row['Url'] ?? row['URL'] ?? '';
-    const prev = byKeyword.get(kw);
-    if (!prev || pos < prev.position) byKeyword.set(kw, { position: pos, url });
+  let rowsRead = 0;
+  let ceiling: number | null = null;   // exclusive upper volume bound for the next band
+  let capped = false;
+  for (let pass = 0; pass < 12; pass++) {
+    const filters = [`+|Po|Lt|${maxPos + 1}`];
+    if (minVolume > 0) filters.push(`+|Nq|Gt|${minVolume - 1}`);
+    if (ceiling !== null) filters.push(`+|Nq|Lt|${ceiling}`);
+    const raw = await semrushGet({
+      type:    'domain_organic',
+      domain,
+      database,
+      display_limit: String(rowLimit),
+      display_sort: 'nq_desc',        // volume descending — the band boundary is the last row
+      display_filter: filters.join('|'),
+      export_columns: 'Ph,Po,Nq,Ur',
+    });
+    const parsed = parseSemrushCSV(raw);
+    if (parsed.length === 0) break;
+    let lowest = Number.MAX_SAFE_INTEGER;
+    for (const row of parsed) {
+      const kw = String(row['Keyword'] ?? '').toLowerCase().trim();
+      const pos = parseInt(row['Position'] ?? '0');
+      const vol = parseInt(row['Search Volume'] ?? '0');
+      if (vol > 0 && vol < lowest) lowest = vol;
+      if (!kw || !pos || pos < 1) continue;
+      const url = row['Url'] ?? row['URL'] ?? '';
+      const prev = byKeyword.get(kw);
+      if (!prev || pos < prev.position) byKeyword.set(kw, { position: pos, url });
+    }
+    rowsRead += parsed.length;
+    if (parsed.length < rowLimit) break;               // short page => the walk is complete
+    // A full page whose rows all share one volume cannot be split further by volume —
+    // stop and report it rather than loop (the caller then writes nothing, I.5).
+    if (lowest === Number.MAX_SAFE_INTEGER || (ceiling !== null && lowest >= ceiling)) { capped = true; break; }
+    ceiling = lowest;                                   // next band sits strictly below this
+    if (minVolume > 0 && ceiling <= minVolume) break;   // reached the floor — done
+    if (pass === 11) capped = true;                     // safety stop
   }
-  return { byKeyword, rowsRead: parsed.length, capped: parsed.length >= rowLimit };
+  return { byKeyword, rowsRead, capped };
 }
 
 // v7.323 — SINGLE SOURCE OF TRUTH for the snapshot's `serpCompetitorPositions`.
