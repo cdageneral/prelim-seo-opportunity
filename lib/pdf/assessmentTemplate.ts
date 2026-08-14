@@ -28,6 +28,7 @@
  */
 
 import type { SovComputed } from '@/lib/sov/model';
+import { CONTENT_GAP_MIN } from '@/lib/productInsights';   // v7.449: the stated gap threshold, one constant (II.7)
 import {
   landGrabInsight, shadowCompetitorInsight, earnedFastPathInsight,
   localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight,
@@ -214,6 +215,18 @@ export interface AssessmentData {
       // than a per-platform measurement — the panel and this table say so either way.
       platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
       platformsMissing?: string[] }>;
+    // v7.449 (Const II.6b): Content Footprint by Brand — per product line, the
+    // distinct ranking URLs each brand holds (client + leader + gap children),
+    // computed by the route via the SAME lib/productInsights.buildContentFootprint
+    // the panel renders. Never re-derived here (II.6a).
+    contentByProduct?: Array<{
+      product: string;
+      you: { urls: number; rankedKw: number; urlKw: number } | null;
+      leader: { domain: string; urls: number; isClient: boolean } | null;
+      brandCount: number;
+      gaps: Array<{ child: string; bestDomain: string; bestUrls: number }>;
+      rivalsUncounted: number;
+    }>;
   } | null;
 }
 
@@ -777,6 +790,27 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         </tr>`).join('')}
       </table>
       <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run. Each scan queries Google AI Overviews and ChatGPT separately (one request per platform), so the platform counts under each figure are what was actually measured on each; a platform listed as not measured is unknown, not zero.</div>`;
+    // v7.449 (Const II.6b): Content Footprint by Brand — reads the route-computed
+    // shared basis verbatim; a missing you-row or leader renders as its honest
+    // absence, never a zero (I.5). ASCII-safe glyphs only (the v7.414 rule).
+    const cfRows = (pi.contentByProduct ?? []).filter(c => c.leader).slice(0, 8);
+    const cfHtml = cfRows.length === 0 ? '' : `
+      <div class="h2" style="margin-top:14px;">Content footprint by brand - distinct ranking URLs per product line</div>
+      <table class="dt">
+        <tr><th>Product</th><th style="width:1.0in;">Your pages</th><th style="width:1.5in;">Line leader</th><th>Sub-category gaps (you 0, rival ${CONTENT_GAP_MIN}+)</th></tr>
+        ${cfRows.map(c => {
+          const youTxt = c.you
+            ? (c.you.rankedKw > 0 && c.you.urlKw === 0 ? 'no URL data' : `${n0(c.you.urls)}`)
+            : 'no ranked rows';
+          const leadTxt = c.leader
+            ? (c.leader.isClient ? `You - ${n0(c.leader.urls)} pages` : `${esc(c.leader.domain)} - ${n0(c.leader.urls)} pages`)
+            : '-';
+          const gapTxt = c.gaps.length === 0 ? 'none flagged'
+            : c.gaps.map((g: any) => `${esc(g.child)} (${esc(g.bestDomain)} holds ${n0(g.bestUrls)})`).join('; ');
+          return `<tr><td><b>${esc(c.product)}</b></td><td>${youTxt}</td><td>${leadTxt}</td><td>${gapTxt}</td></tr>`;
+        }).join('')}
+      </table>
+      <div style="font-size:8px; color:var(--muted); margin-top:3px;">A page is a distinct URL holding a stored rank on the line's keywords - client URLs from the canonical pool (Semrush), competitor URLs from uploaded footprint rows. This measures ranking content, never everything a brand has published. A brand whose rows carry no URL column reads "no URL data" - unknown, not zero. SERP rivals without uploaded footprints carry positions only and are uncounted. Same shared computation as the panel's Content Footprint card.</div>`;
     pages.push(pageWrap('PRODUCT INSIGHTS — SEARCH AND AI BY PRODUCT', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">Where ranking authority is not yet an AI answer.</h1>
       <div class="lede">Each product line measured on both axes: share of search demand held on page 1, and presence in AI answers. <b>${n0(pi.kpi.arb)} topics</b> already rank on page 1 while the AI side is weak — the authority exists; the AI answer is what is missing.${ownedShare !== null ? ` Across ${n0(pi.kpi.citesTotal)} recorded citations, ${esc(d.clientName)} holds <b>${p1(ownedShare)}</b>.` : ''}</div>
@@ -787,6 +821,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${pi.products.length > 8 ? `<div style="font-size:8.5px; color:var(--muted);">Showing the top 8 of ${pi.products.length} product lines by demand — the full set lives on the Product Insights panel.</div>` : ''}
       ${citedHtml}
       ${subHtml}
+      ${cfHtml}
       <div class="src">Source: canonical keyword pool + stored taxonomy (page-1 share and the brand field are measured volume at positions 1-10 — no click model); AI probe = unbranded prompts at analysis time; recorded answers = DataForSEO LLM Mentions index (ChatGPT + Google AI Overviews, first ${anyScan ? '100' : '100'} per category with full match counts shown)${pi.scannedAt ? `, last scanned ${esc(new Date(pi.scannedAt).toLocaleDateString('en-US'))}` : ' — not yet scanned'}. Verdict thresholds: weak below 30%, strong at 50%+. This section reads the same shared computation as the Product Insights panel.</div>`));
   }
 
