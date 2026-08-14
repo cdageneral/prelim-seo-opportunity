@@ -12,6 +12,7 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-s
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
 import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
 import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape';   // v7.446: ONE All-Keywords membership basis, shared with the cross-project usage rollup
+import { basisCoverage } from '@/lib/keywords/positionBasis';   // v7.451: organic rank vs SERP-feature placement
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +101,10 @@ interface DbKeyword {
   source:       string;
   domain?:      string | null;   // competitor domain for uploaded gap rows (v7.31+); present at runtime
   serpFeatures?: string | null;  // v7.103: raw "SERP Features by Keyword" cell from a Semrush CSV upload; present at runtime
+  // v7.451: Semrush "Position Type" — 'Organic' or a SERP-feature name. null = basis was
+  // never captured (pre-v7.451 upload), which is UNKNOWN, never "organic".
+  positionType?: string | null;
+  positionVerifiedAt?: string | null;
 }
 
 interface Props {
@@ -545,6 +550,10 @@ export default function KeywordsPanel({
   const clientName        = clientDomain || 'keywords';
 
   const [dbKeywords,  setDbKeywords]  = useState<DbKeyword[]>([]);
+  // v7.451: position-basis verification (organic rank vs SERP-feature placement)
+  const [verifyPlan, setVerifyPlan] = useState<{ unverified: number; window: number; note: string } | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyMsg,  setVerifyMsg]  = useState<string | null>(null);
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
@@ -1362,6 +1371,12 @@ export default function KeywordsPanel({
       return idx >= 0 ? idx : -1; // -1 = not found
     })();
     const typeCol = headerCols.findIndex((h: string) => h === 'type');
+    // v7.451: Semrush "Position Type" — 'Organic' or a SERP-feature name. THE column that
+    // tells a real ranking apart from a People-also-ask / Things-to-know box, which Semrush
+    // exports with Position = 1. Absent => every position in this file is of unknown basis
+    // and is flagged as such downstream (never silently counted as organic, Const I.4/I.5).
+    const posTypeCol = headerCols.findIndex((h: string) =>
+      h === 'position type' || h === 'position_type' || h === 'positiontype' || h === 'type of position');
     // v7.103: Semrush "SERP Features by Keyword" column (optional)
     const featCol = headerCols.findIndex((h: string) =>
       h === 'serp features by keyword' || h === 'serp features' || h === 'serp_features');
@@ -1385,7 +1400,7 @@ export default function KeywordsPanel({
       return result;
     }
 
-    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null }> = [];
+    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }> = [];
     for (const line of dataLines) {
       const cols  = splitCsvLine(line);
       const kwText = (cols[kwCol] ?? '').replace(/^"|"$/g, '').trim();
@@ -1398,9 +1413,11 @@ export default function KeywordsPanel({
       const branded = isBranded(kwText, clientDomain, competitorDomains, brandTerms);
       // v7.103: raw Semrush feature list, e.g. "AI Overview, People also ask, Video"
       const feats   = featCol >= 0 ? ((cols[featCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
+      // v7.451: the basis of this row's position, verbatim from the export.
+      const posType = posTypeCol >= 0 ? ((cols[posTypeCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
       // v7.251: real ranking/landing URL for this keyword (real data only, Const I.1)
       const kurl    = urlCol >= 0 ? ((cols[urlCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
-      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded, serpFeatures: feats, url: kurl });
+      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded, serpFeatures: feats, url: kurl, positionType: posType });
     }
 
     if (parsed.length === 0) {
@@ -1432,13 +1449,14 @@ export default function KeywordsPanel({
       const payload = JSON.stringify({
         domain: '',
         source: 'csv',
-        keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null }) => ({
+        keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }) => ({
           keyword:      row.keyword,
           searchVolume: row.searchVolume,
           position:     row.position,
           type:         row.type,
           serpFeatures: row.serpFeatures,
           url:          row.url,
+          positionType: row.positionType,   // v7.451
         })),
       });
       let saved = false;
@@ -1489,9 +1507,15 @@ export default function KeywordsPanel({
       serpNote = ` (No SERP-features column detected in this file.)`;
     }
     const detail = parts.length ? ` (${parts.join(' · ')})` : '';
+    // v7.451: the Position Type column decides whether a stored position is a real
+    // ranking or a SERP-feature box (Semrush exports a feature as Position 1). Say so
+    // at upload time — a file without it leaves every position of unknown basis.
+    const posTypeNote = posTypeCol >= 0
+      ? ` Position Type read on ${parsed.filter(r => r.positionType).length.toLocaleString()} row${parsed.filter(r => r.positionType).length !== 1 ? 's' : ''} — organic rankings and SERP-feature placements are kept apart.`
+      : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export with Position Type included, or run Verify positions on this project.`;
     setCsvStatus({
-      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0)) ? 'error' : 'success',
-      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.${serpNote}`,
+      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || posTypeCol < 0) ? 'error' : 'success',
+      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.${serpNote}${posTypeNote}`,
     });
     setTimeout(() => setCsvStatus(null), 15000);
   }
@@ -1536,6 +1560,80 @@ export default function KeywordsPanel({
   // normal flow at their natural height and the root scrolls the whole panel.
   return (
     <div className="flex-1 min-h-0 overflow-y-auto animate-fade-in">
+
+      {/* ── v7.451: position-basis banner. A Semrush CSV exports a SERP-feature slot
+           (People also ask, Things to know, …) with Position = 1, so a file uploaded
+           without the "Position Type" column leaves every position of UNKNOWN basis.
+           Say so plainly (Const I.5) and offer the one-call fix rather than quietly
+           rendering boxes as #1 rankings (Const I.4). ── */}
+      {(() => {
+        const clientRows = dbKeywords.filter(k => !k.domain && k.source !== 'blocked');
+        const cov = basisCoverage(clientRows as any);
+        if (cov.total === 0 || cov.unknown === 0) return null;
+        return (
+          <div style={{ margin: '10px 14px 0', padding: '10px 13px', borderRadius: '9px', fontSize: '12px',
+            background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--c-f59e0b)' }}>
+            <b>{cov.unknown.toLocaleString()} of {cov.total.toLocaleString()} stored positions have an unverified basis.</b>{' '}
+            <span style={{ color: 'var(--c-c8c8e8)' }}>
+              These rows were uploaded without Semrush&rsquo;s &ldquo;Position Type&rdquo; column, so a real organic ranking
+              cannot be told apart from a SERP-feature placement &mdash; Semrush exports a People-also-ask or
+              Things-to-know slot as <b>position 1</b>. Until they are verified, page-1 share, best rank and
+              Share of Voice on this project may read high.
+            </span>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {!verifyPlan && !verifyBusy && (
+                <button
+                  onClick={async () => {
+                    setVerifyMsg(null);
+                    try {
+                      const r = await fetch(`/api/projects/${projectId}/verify-positions`);
+                      const d = await r.json();
+                      if (!r.ok) { setVerifyMsg(d.error ?? 'Could not read the verification plan.'); return; }
+                      setVerifyPlan({ unverified: d.unverified, window: d.window, note: d.note });
+                    } catch (e: any) { setVerifyMsg(String(e?.message ?? e)); }
+                  }}
+                  style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer',
+                    background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}
+                >Verify positions</button>
+              )}
+              {verifyBusy && <span style={{ color: 'var(--c-9b96ff)', fontWeight: 700 }}>Checking against Semrush&rsquo;s organic index…</span>}
+            </div>
+            {verifyPlan && !verifyBusy && (
+              <div style={{ marginTop: '8px', padding: '9px 11px', borderRadius: '8px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)' }}>
+                <b style={{ color: 'var(--c-e8e8ff)' }}>Verify {verifyPlan.unverified.toLocaleString()} position{verifyPlan.unverified === 1 ? '' : 's'} at rank 1&ndash;{verifyPlan.window}?</b>
+                <div style={{ marginTop: '3px', color: 'var(--c-8a8aa8)', fontSize: '11.5px' }}>
+                  {verifyPlan.note} Semrush publishes no per-unit price, so this is charged in API units
+                  (10 per returned line) and posts to this project&rsquo;s API Usage ledger. Rows deeper than
+                  #{verifyPlan.window} are left untouched &mdash; a SERP feature never exports as a deep position.
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  {verifyPlan.unverified > 0 && (
+                    <button
+                      onClick={async () => {
+                        setVerifyBusy(true); setVerifyMsg(null);
+                        try {
+                          const r = await fetch(`/api/projects/${projectId}/verify-positions`, { method: 'POST' });
+                          const d = await r.json();
+                          setVerifyMsg(r.ok ? d.note : (d.error ?? 'Verification failed.'));
+                          if (r.ok) { setVerifyPlan(null); await fetchDb(); }
+                        } catch (e: any) { setVerifyMsg(String(e?.message ?? e)); }
+                        finally { setVerifyBusy(false); }
+                      }}
+                      style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer',
+                        background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}
+                    >Run verification</button>
+                  )}
+                  <button onClick={() => setVerifyPlan(null)}
+                    style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>
+                    {verifyPlan.unverified > 0 ? 'Cancel' : 'Close'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {verifyMsg && <div style={{ marginTop: '7px', fontSize: '11.5px', color: 'var(--c-c8c8e8)' }}>{verifyMsg}</div>}
+          </div>
+        );
+      })()}
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-orbit-border shrink-0" style={{ background: 'var(--c-0d0d18)' }}>
