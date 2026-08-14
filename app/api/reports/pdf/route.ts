@@ -29,7 +29,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
-import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL } from '@/lib/productInsights';   // v7.427/v7.432: the panel's shared basis (Const II.6b)
+import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
 
   // ── v7.427: Product Insights — the SAME shared basis the panel renders (Const II.6b) ──
   // Inputs are all already loaded above; a build failure omits the section honestly.
-  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[] } | null = null;
+  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[] } | null = null;
   try {
     if (journeyTopics && journeyTopics.length > 0) {
       const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
@@ -153,6 +153,8 @@ export async function POST(req: NextRequest) {
           dfsShare: number | null; scanned: boolean;
           platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
           platformsMissing?: string[] }> = [];
+        // v7.449: per-product content footprint for the PDF (shared basis, II.6b)
+        const contentByProduct: any[] = [];
         for (const prod of built.products) {
           const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
       origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
@@ -173,6 +175,32 @@ export async function POST(req: NextRequest) {
             clientDomain,
             brandTerms:       (((project as any).brandTerms ?? []) as string[]),
           });
+          // v7.449: Content Footprint by Brand — SAME shared builder the panel calls
+          // (Const II.6b). Works without a stored taxonomy (flat line-level node).
+          try {
+            const cfNode = tree ?? { name: prod.name, allKws: poolKeywords as NodeKw[], children: [] as any[] };
+            const cf = buildContentFootprint({
+              node: cfNode as any,
+              uploadedKeywords: kwRows,
+              serpPositions: ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+              clientDomain,
+            });
+            const you = cf.brands.find(b => b.kind === 'client') ?? null;
+            const top = cf.brands[0] ?? null;
+            contentByProduct.push({
+              product: prod.name,
+              you: you ? { urls: you.total.urls, rankedKw: you.total.rankedKw, urlKw: you.total.urlKw } : null,
+              leader: top ? { domain: top.domain, urls: top.total.urls, isClient: top.kind === 'client' } : null,
+              brandCount: cf.brands.length,
+              gaps: cf.gapChildIdx.map(i => {
+                const best = cf.brands.filter(b => b.kind !== 'client')
+                  .reduce<{ domain: string; urls: number } | null>((acc, b) =>
+                    (!acc || b.perChild[i].urls > acc.urls) ? { domain: b.domain, urls: b.perChild[i].urls } : acc, null);
+                return { child: cf.children[i]?.name ?? '', bestDomain: best?.domain ?? '', bestUrls: best?.urls ?? 0 };
+              }),
+              rivalsUncounted: cf.unlistedRivals.length,
+            });
+          } catch { /* section row omitted honestly (I.5) */ }
           if (!tree) continue;
           for (const n of flattenNodes(tree)) {
             const lead = n.ladder[0] ?? null;
@@ -196,7 +224,7 @@ export async function POST(req: NextRequest) {
           }
         }
         subNodes.sort((a, b) => b.demand - a.demand);
-        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes };
+        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct };
       }
     }
   } catch (err) {
