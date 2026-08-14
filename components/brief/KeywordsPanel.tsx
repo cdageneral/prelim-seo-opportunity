@@ -11,6 +11,7 @@ import { normSovDomain } from '@/lib/sov/model';   // v7.419: ONE domain normali
 import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-source product/pre-product split (same classifier as Journey + Cluster panels)
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
 import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
+import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape';   // v7.446: ONE All-Keywords membership basis, shared with the cross-project usage rollup
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -896,8 +897,11 @@ export default function KeywordsPanel({
   // All on the full-footprint basis (summaryRows = no volume floors). The table
   // below stays volume-filtered, so cards can read higher than the visible rows.
   const kwSummary = useMemo(() => {
-    const clientRows   = scopedSummaryRows.filter(r => r.type !== 'gap');               // client footprint
-    const gapRows      = scopedSummaryRows.filter(r => r.type === 'gap' && !!r.competitor); // competitor gap
+    // v7.446: the two membership tests now come from lib/keywordLandscape — the SAME
+    // predicates the cross-project API Usage table's Keywords column counts with, so a
+    // rollup can never quietly define "All Keywords" differently from this card (Const II.6a).
+    const clientRows   = scopedSummaryRows.filter(isClientFootprintRow);   // client footprint
+    const gapRows      = scopedSummaryRows.filter(isCompetitorGapRow);     // competitor gap
     const brandedRows  = clientRows.filter(r =>  r.branded);                      // client branded only
     const nonBrandRows = clientRows.filter(r => !r.branded);                      // client non-branded only
     const ann          = (rows: KeywordRow[]) => rows.reduce((s, r) => s + r.searchVolume, 0) * 12;
