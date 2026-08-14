@@ -119,7 +119,15 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
 
     const db2 = String((proj as any)?.database ?? 'us') || 'us';
-    const { byKeyword, rowsRead } = await getOrganicPositions(domain, WINDOW, db2);
+    const { byKeyword, rowsRead, capped } = await getOrganicPositions(domain, WINDOW, db2);
+    // v7.453: if Semrush returned a full page the organic set may be incomplete, and a
+    // keyword missing from a TRUNCATED answer must not be retyped as a feature placement
+    // — that would assert "no organic ranking" from data we know is partial (Const I.5).
+    if (capped) {
+      return NextResponse.json({
+        error: `Semrush returned the maximum ${rowsRead.toLocaleString()} rows for ${domain}, so its organic set may be incomplete. Nothing was changed — a keyword missing from a truncated answer cannot be called a SERP-feature placement.`,
+      }, { status: 409 });
+    }
 
     let corrected = 0, featureOnly = 0, confirmed = 0;
     const now = new Date();
@@ -146,7 +154,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     }
 
     return NextResponse.json({
-      verified: targets.length, confirmed, corrected, featureOnly, rowsRead, window: WINDOW, domain,
+      verified: targets.length, confirmed, corrected, featureOnly, rowsRead, capped, window: WINDOW, domain,
       note: `${confirmed} confirmed, ${corrected} corrected to their real organic rank, ${featureOnly} were SERP-feature placements and now show as presence rather than a ranking.`,
     });
   } catch (err: any) {
