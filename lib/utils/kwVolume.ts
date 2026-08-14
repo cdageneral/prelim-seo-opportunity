@@ -33,6 +33,12 @@ export interface KwPoolItem {
   // is deduped to ONE row (no double-counted volume); if it exists in both layers
   // the footprint row is kept and flagged `inDemand` (it is also demand-validated).
   origin:       'footprint' | 'demand';
+  // v7.451: this row's client placement held a SERP feature (e.g. "People also ask").
+  // Real, valuable presence — reported BESIDE the organic position, never as one
+  // (Const I.4). Absent = no feature captured, or basis unknown (pre-v7.451 upload).
+  featurePlacement?: string;
+  /** Raw Semrush "Position Type" cell, kept so a surface can state the basis verbatim. */
+  positionBasisRaw?: string;
   inDemand?:    boolean;     // appears in the deep-journey demand universe
   demandSeeds?: string[];    // seed phrase(s) that surfaced it in the demand universe
   // v7.251: real client ranking/landing URL for this keyword, when known — from the
@@ -446,6 +452,12 @@ export function buildCompetitorBrandDropTest(
  * Competitor brands are auto-derived from competitor domains + uploaded gap CSV
  * domains; the client's OWN brand footprint is always kept.
  */
+// v7.451: organic-vs-SERP-feature basis. THE chokepoint — a stored position only
+// becomes a `position` in the canonical pool when its basis is not a feature
+// placement, so no panel can reintroduce the blend (same single-source discipline
+// as the III.1d scope gate).
+import { organicPositionOf, featureLabelOf } from '@/lib/keywords/positionBasis';
+
 export function buildKwPool({
   semrushSnapshot:    snap,
   uploadedKeywords:   uploaded   = [],
@@ -559,7 +571,14 @@ export function buildKwPool({
     pool.push({
       keyword:      k.keyword,
       searchVolume: k.search_volume ?? k.searchVolume ?? 0,
-      position:     k.position ?? null,
+      // v7.451: a SERP-feature placement (People also ask, Things to know, …) exports
+      // from Semrush with Position = 1. It is presence, not a ranking — so it enters
+      // the pool with NO position and its feature label beside it. A row whose basis
+      // was never captured (pre-v7.451 upload) keeps its stored position and is
+      // reported as unverified rather than silently re-scored (Const I.5).
+      position:     organicPositionOf(k.position ?? null, k.positionType ?? k.position_type ?? null),
+      featurePlacement: featureLabelOf(k.positionType ?? k.position_type ?? null) ?? undefined,
+      positionBasisRaw: (k.positionType ?? k.position_type ?? null) || undefined,
       isGap:        false,
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
       competitor:   null,
