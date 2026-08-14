@@ -411,20 +411,30 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
 // for ONE domain, which is a small set — Semrush returns it in a single page. If the page
 // ever comes back completely full the result is reported as `capped`, so a truncated
 // answer is stated rather than silently treated as the whole truth (Const I.5/I.6).
+// v7.454: a volume floor keeps the answer COMPLETE for big domains. v7.453 pulled every
+// organic placement at 1..maxPos and synchrony.com filled the 10,000-row page, so the run
+// correctly refused to write and the feature could never finish. The floor is not a
+// sample: it is set to the LOWEST volume among the rows actually being verified, so every
+// target keyword is still inside the query by construction — it only drops long-tail rows
+// that could never match a target. Const I.6 (no unrequested cap) holds: nothing the
+// caller needs is trimmed, and a still-full page is reported as `capped`.
 export async function getOrganicPositions(
   domain:   string,
   maxPos    = 20,
   database  = 'us',
   rowLimit  = 10000,
+  minVolume = 0,
 ): Promise<{ byKeyword: Map<string, { position: number; url: string }>; rowsRead: number; capped: boolean }> {
   const byKeyword = new Map<string, { position: number; url: string }>();
+  const filters = [`+|Po|Lt|${maxPos + 1}`];
+  if (minVolume > 0) filters.push(`+|Nq|Gt|${minVolume - 1}`);
   const raw = await semrushGet({
     type:    'domain_organic',
     domain,
     database,
     display_limit: String(rowLimit),
     display_sort: 'po_asc',
-    display_filter: `+|Po|Lt|${maxPos + 1}`,
+    display_filter: filters.join('|'),
     export_columns: 'Ph,Po,Nq,Ur',
   });
   const parsed = parseSemrushCSV(raw);
