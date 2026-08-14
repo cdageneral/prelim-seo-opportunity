@@ -70,6 +70,14 @@ async function ensureTable() {
     await db.execute(sql`
       ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS url TEXT
     `);
+    // v7.451: organic-vs-SERP-feature basis. MUST exist before the drizzle .select()
+    // below — drizzle lists schema columns explicitly.
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS position_type TEXT
+    `);
+    await db.execute(sql`
+      ALTER TABLE project_keywords ADD COLUMN IF NOT EXISTS position_verified_at TIMESTAMP
+    `);
   } catch {
     // Safe to continue — table exists or DB unavailable
   }
@@ -185,6 +193,7 @@ export async function POST(
     .select({
       keyword:      projectKeywords.keyword,
       serpFeatures: projectKeywords.serpFeatures,
+      positionType: projectKeywords.positionType,   // v7.451
       position:     projectKeywords.position,
       searchVolume: projectKeywords.searchVolume,
       url:          projectKeywords.url,
@@ -198,6 +207,8 @@ export async function POST(
     ));
   const existingSet  = new Set(existing.map((r: any) => r.keyword));
   const existingFeat = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.serpFeatures ?? null]));
+  // v7.451: prior Position Type per keyword, unioned across chunks like serp-features
+  const existingPosType = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.positionType ?? null]));
   const existingFacts = new Map<string, { position: number | null; searchVolume: number; url: string | null }>(
     existing.map((r: any) => [r.keyword, {
       position:     r.position ?? null,
@@ -226,6 +237,17 @@ export async function POST(
     const kurl = typeof k.url === 'string' && k.url.trim().length > 0
       ? k.url.trim().slice(0, 500)
       : null;
+    // v7.451: Semrush "Position Type" — 'Organic' or a SERP-feature name. Absent =>
+    // NULL, which reads as an UNVERIFIED basis downstream, never as organic
+    // (lib/keywords/positionBasis.ts). A duplicate keyword's types are unioned for the
+    // same reason serp-features are (v7.288): one export lists a keyword once per
+    // placement, so keeping only the last would drop the organic row of a keyword that
+    // also holds a box — or vice versa.
+    const rowPosType = typeof k.positionType === 'string' && k.positionType.trim().length > 0
+      ? k.positionType.trim().slice(0, 200)
+      : null;
+    const priorPosType = byKw.has(kw) ? (byKw.get(kw).positionType as string | null) : (existingPosType.get(kw) ?? null);
+    const posType = mergeSerpFeatures(priorPosType, rowPosType);
     // v7.405: BEST-position-wins across duplicate rows — prior state is the earlier
     // occurrence in THIS payload, or (first time seen here) the stored row from a
     // previous chunk/upload. Until now this was last-occurrence-wins: an export
@@ -246,6 +268,7 @@ export async function POST(
       position:     merged.position,
       serpFeatures: feats,
       url:          merged.url,
+      positionType: posType,   // v7.451
       // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
       // Competitor rows are ALWAYS 'gap' — their position is the competitor's
       // rank, kept for Share of Voice, not a client ranking.
