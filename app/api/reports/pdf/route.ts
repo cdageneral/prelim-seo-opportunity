@@ -184,6 +184,9 @@ export async function POST(req: NextRequest) {
               uploadedKeywords: kwRows,
               serpPositions: ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
               clientDomain,
+              // v7.458: the line's canonical topics → journey requirement in the SAME
+              // shared builder the panel reads (II.6a/II.6b), never re-derived here.
+              topics: prod.topics as any,
             });
             const you = cf.brands.find(b => b.kind === 'client') ?? null;
             const top = cf.brands[0] ?? null;
@@ -192,6 +195,8 @@ export async function POST(req: NextRequest) {
               you: you ? { urls: you.total.urls, rankedKw: you.total.rankedKw, urlKw: you.total.urlKw } : null,
               leader: top ? { domain: top.domain, urls: top.total.urls, isClient: top.kind === 'client' } : null,
               brandCount: cf.brands.length,
+              // v7.458: journey pages the full funnel needs (null = unknown, never 0 — I.5)
+              journeyTotal: cf.journey && cf.journey.total > 0 ? cf.journey.total : null,
               gaps: cf.gapChildIdx.map(i => {
                 const best = cf.brands.filter(b => b.kind !== 'client')
                   .reduce<{ domain: string; urls: number } | null>((acc, b) =>
