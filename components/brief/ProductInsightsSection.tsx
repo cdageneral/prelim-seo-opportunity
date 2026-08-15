@@ -991,7 +991,9 @@ export default function ProductInsightsSection({
                         // v7.460: the line-level bucket gets its own column whenever it holds
                         // topics, so journey + every brand row sum visibly across the grid.
                         const hasLine = !!(jr && jr.atLine > 0);
-                        const gridCols = `minmax(170px,1.3fr) ${jr ? '132px' : '120px'}${cf.children.map(() => ' minmax(96px,1fr)').join('')}${hasLine ? ' minmax(96px,1fr)' : ''}`;
+                        // fixed tracks: every row is its own grid, so flexible fr tracks would
+                        // resolve per-row and drift out of alignment once rows size to content.
+                        const gridCols = `minmax(200px,1fr) ${jr ? '132px' : '120px'} repeat(${cf.children.length + (hasLine ? 1 : 0)}, 128px)`;
                         return (
                           <div style={{ overflowX: 'auto' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px', minWidth: 'max-content',
