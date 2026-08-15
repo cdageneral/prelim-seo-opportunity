@@ -93,6 +93,36 @@ export async function ensureAuthTables(): Promise<void> {
   )`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC)`);
 
+  // v7.461: operator → user broadcast notices. A notice is written once by an
+  // admin and shown to every active user until each one closes it; the dismissal
+  // row IS the read receipt (Const I.1 — never inferred from a login time).
+  await db.execute(sql`DO $$ BEGIN
+    CREATE TYPE notice_severity AS ENUM ('info','warning','success');
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS notices (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    title           text NOT NULL,
+    body            text NOT NULL,
+    severity        notice_severity NOT NULL DEFAULT 'info',
+    active          boolean   NOT NULL DEFAULT true,
+    starts_at       timestamp,
+    ends_at         timestamp,
+    created_by      uuid,
+    created_by_name text,
+    created_at      timestamp NOT NULL DEFAULT now(),
+    updated_at      timestamp NOT NULL DEFAULT now()
+  )`);
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS notice_dismissals (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    notice_id    uuid NOT NULL REFERENCES notices(id)   ON DELETE CASCADE,
+    user_id      uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    dismissed_at timestamp NOT NULL DEFAULT now()
+  )`);
+  // The unique index is what makes dismissNotice() idempotent (ON CONFLICT).
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS notice_dismissals_notice_user_uq
+    ON notice_dismissals(notice_id, user_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS notices_active_idx ON notices(active, created_at)`);
+
   ensured = true;
 }
 
