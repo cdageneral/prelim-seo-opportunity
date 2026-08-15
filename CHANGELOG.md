@@ -1,3 +1,54 @@
+## v7.461 - notices: one message, every user, dismissed once each
+
+Wayne: *"in the admin panel is there a way to send a message to all users? can we have a notice
+message appear when they login next time... and when they dismiss or close it then its gone? I
+need a way to communicate with all users."*
+
+**Admin > Notices** is a full manager, not a single message slot. Write as many notices as you
+like, each with a title, a message (line breaks preserved exactly as typed), a type - Notice /
+Important / Update - and an optional show-from / stop-after window. Leave both dates blank and it
+goes live immediately and stays live until you turn it off. Every notice can be edited, switched
+off, deleted, or re-sent ("Show again to everyone", which clears the receipts so people who
+already closed it see it once more - always an explicit choice, never automatic).
+
+Users see it as a dialog on whatever page they land on after signing in - dashboard, a project,
+or the usage dashboard - because the gate is mounted once in the root layout rather than bolted
+onto one page. Multiple notices queue oldest-first with an "n of 2" counter so nobody is
+surprised by a second dialog, and the last one says so ("This won't show again"). Closing it -
+button or Escape - writes one real dismissal row for that person and it never returns.
+
+**Dismissal is per user.** One person closing a notice never silences it for anyone else, which
+is the whole point of a broadcast. The unique (notice, user) index makes a double-click or a
+second browser tab a no-op rather than a duplicate receipt.
+
+**The read receipts are measured, not modeled** (Const I.1). The Manage drawer lists who closed
+it and when, from real `notice_dismissals` rows, and lists the active users who have not - marked
+"not yet", with a line stating that a blank means no record exists, not that the person ignored
+it. There is no read-rate percentage anywhere, because nothing in the data can support one.
+
+**Internal by declaration** (Const II.6c). Notices are an operator surface: they render in the app
+shell and the Admin panel and nowhere else. A retained check enumerates every client-deliverable
+module (`lib/pdf/*`, `lib/export/*`, `app/api/reports/*`) and fails on any import edge into
+`lib/notices` - with a negative control asserting the enumeration is non-empty, so the check can
+never pass by looking at nothing.
+
+**Also: the Dashboard button now lives on the Admin header.** It was on the projects header only,
+so reaching the usage dashboard from Admin meant a round trip through Projects.
+
+Verified: real project `tsc` + real `next build` clean (V.1a); retained suite **1617 pass / 30
+pre-existing / zero regression delta** with 74 new checks; dual-theme gate computed from the real
+`--orbit-*` tokens in both themes - it caught three dark-mode failures before ship (posted-date and
+counter captions at 2.50:1 and the Off/Expired chip at 4.11:1, both lifted onto readable tokens);
+jsdom render of the REAL NoticeGate in both themes driven through close -> next -> empty, asserting
+exactly two dismissal POSTs. **Known item logged, not silently accepted:** white-on-accent primary
+CTAs measure **4.32:1 in dark** - below AA. That is the byte-identical class string on all 14
+shipped primary CTAs (New Project, Create group, Add User, Publish), so it is allowlisted here with
+a dated note rather than fixed for one button in isolation; it wants its own pass.
+
+II.6a/II.6b review: this release changes no panel metric and adds no client-facing metric, so no
+Assessment PDF section applies - the new capability is declared internal under II.6c instead, with
+the containment check above standing in for a PDF section.
+
 ## v7.460 - the line-level bucket gets its own column
 
 Wayne, on the v7.459 HYSA card: *"the numbers for the journey requirement and each brand still
