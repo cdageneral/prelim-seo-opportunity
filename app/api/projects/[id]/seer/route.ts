@@ -17,6 +17,16 @@
  *  - Absence is never zero (Const I.5): tools distinguish "no rows stored"
  *    from a measured 0, and the prompt requires that distinction in answers.
  *  - Access-walled: checkProjectAccess gates every request (v7.418).
+ *  - v7.463 MECHANICAL grounding (Wayne, 2026-08-15: "this feature can NOT make
+ *    up numbers"): prompt rules alone did not stop fabrication in the field, so
+ *    the route now ENFORCES them. (a) A DATA CENSUS of every panel/section is
+ *    collected server-side and injected before the model's first turn, so every
+ *    answer starts from ALL stored data, not whichever tool it chose to call.
+ *    (b) Every number in the draft answer is verified VERBATIM against the tool
+ *    results actually returned this request; unverified numbers trigger up to
+ *    two forced re-query/rewrite turns, and an answer that still fails is
+ *    replaced with an honest could-not-ground message. Fail-closed: a number
+ *    the tools never returned cannot reach the user.
  *
  * Streaming: the response is NDJSON lines —
  *   {type:'status', label}   one per pipeline step / tool call (Const IV.2/IV.3:
@@ -323,6 +333,55 @@ function toolGetCategory(ctx: SeerContext, args: any): any {
   };
 }
 
+// ─── v7.463: all-panels data census ──────────────────────────────────────────
+// Collected by the SERVER before the model's first turn: the project overview
+// (pool aggregates + guarded category tree) plus a preview of every stored
+// section. This is what makes "every data point is considered" structural
+// rather than hopeful — the model cannot skip a panel it was already handed.
+
+function buildCensus(ctx: SeerContext): { census: any; payload: string } {
+  const sectionPreviews: Record<string, any> = {};
+  for (const key of Object.keys(ctx.sections)) {
+    try { sectionPreviews[key] = toolGetSection(ctx, { section: key, limit: 5 }); }
+    catch { sectionPreviews[key] = { error: 'preview failed' }; }
+  }
+  const census = {
+    _note: 'DATA CENSUS: headline metrics + previews from EVERY panel/section stored for this project, auto-collected before your first turn. Drill into any of them with the tools.',
+    overview: toolProjectOverview(ctx),
+    sectionPreviews,
+  };
+  return { census, payload: capJson(census) };
+}
+
+// ─── v7.463: fail-closed number-grounding verifier ───────────────────────────
+// Every numeric token in the answer must appear verbatim (comma/percent
+// normalized, digit-boundary matched) in a tool result returned THIS request,
+// or in the user's own question/history. Single digits are structural (list
+// indices, "page 1") and exempt; everything else is checked.
+
+function extractNumberTokens(text: string): string[] {
+  const cleaned = text.replace(/\*\*/g, ' ');
+  const matches = cleaned.match(/\d[\d,]*(?:\.\d+)?/g) ?? [];
+  const out: string[] = [];
+  for (const m of matches) {
+    const norm = m.replace(/,/g, '');
+    if (norm.replace(/\./g, '').length < 2) continue;   // single digits are structural
+    out.push(norm);
+  }
+  return Array.from(new Set(out));
+}
+
+function findUngrounded(answer: string, groundedHaystack: string): string[] {
+  const hay = groundedHaystack.replace(/,/g, '');
+  const bad: string[] = [];
+  for (const tok of extractNumberTokens(answer)) {
+    const esc = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(?<![\\d.])' + esc + '(?![\\d])');
+    if (!re.test(hay)) bad.push(tok);
+  }
+  return bad;
+}
+
 // ─── Anthropic tool schemas ──────────────────────────────────────────────────
 
 const TOOLS: Anthropic.Tool[] = [
@@ -409,13 +468,15 @@ function systemPrompt(ctx: SeerContext, activePanel?: string): string {
     activePanel ? `The user currently has the "${activePanel}" panel open.` : '',
     '',
     'NON-NEGOTIABLE RULES (the platform constitution — violating any of these is a critical failure):',
-    '1. GROUNDED ONLY. Every number in your answer must come verbatim from a tool result in this conversation. Never compute a number the tools did not return, beyond exact arithmetic on returned values (sums, differences, ratios of returned numbers are fine — label them as computed from the stored rows).',
+    '1. GROUNDED ONLY — MACHINE ENFORCED. Every number in your answer must appear VERBATIM in a tool result from this conversation (or in the user\'s own question). Do NOT compute numbers yourself — no self-calculated sums, ratios, percentages, or roundings; if you need an aggregate, call query_keywords with an aggregate. Write numbers exactly as the tools returned them (never abbreviate 1200 as 1.2K). A server-side grounding check rejects any answer containing a number the tools did not return.',
     '2. NO ESTIMATES, EVER. Never project, forecast, model, or estimate (no traffic projections, no revenue estimates, no "likely" numbers). If asked, refuse the estimate plainly, state what stored data IS available, and suggest what the stored data can answer instead. Start such an answer with the exact marker line: [NOT-IN-STORED-DATA]',
     '3. ABSENCE IS NEVER ZERO. If a data section does not exist or a tool reports no rows, say the data is not stored/unmeasured — never report it as 0.',
     '4. CITE EVERYTHING. End the answer with a line starting "SOURCES:" listing the stored data behind it, separated by " | " (e.g. "SOURCES: Keyword pool · 4,120 rows | Category tree · Certificates of Deposit"). Mention the panel that owns a number when clear (Keyword Landscape, Google Ranks, AI Answer Engines, Product Insights, Local Search, Authority).',
     '5. BRAND SAFETY. Competitor brands appear only as competitor domains/gap attribution — never present a competitor brand category as client data. The category tree you receive is already guarded.',
     '6. ORGANIC vs FEATURES. A row with featurePlacement holds a SERP feature (People also ask, etc.), not an organic rank. Never blend the two; state the distinction when relevant.',
     '7. SYNTHESIS OUTPUT vs MEASURED DATA. Content from synthesis_narrative (personas, opportunities, narrative) is LLM-generated analysis stored at analysis time — cite it as "stored synthesis output", never as measured data.',
+    '8. ALL PANELS, NOT ONE. The DATA CENSUS below already contains headline metrics and previews from EVERY panel and stored section of this project. An analytical, comparative, or summary answer must consider every section whose data bears on the question — drill into each relevant one with tools; never answer from a single panel when others hold related data. Name each panel you drew on in SOURCES.',
+    '9. USER CORRECTIONS ARE NOT DATA. If the user corrects a number or supplies their own figure, do not adopt it — re-query the tools and answer from what is actually stored, stating any difference plainly.',
     '',
     'STYLE: Be direct and concise. Short paragraphs. Use a markdown table when comparing rows. Bold the key numbers. Plain language — the reader is a marketing team, not an engineer.',
     'WORKFLOW: Call project_overview first to learn what exists. Then use the narrowest tool queries that answer the question. Prefer aggregates over dumping rows.',
@@ -463,13 +524,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         setUsageProject(projectId);
         const client = instrumentAnthropic(new Anthropic({ apiKey }), 'seer');
 
+        // v7.463: collect the all-panels census BEFORE the first model turn.
+        emit({ type: 'status', label: 'Collecting data from every panel' });
+        const { payload: censusPayload } = buildCensus(ctx);
+        // Every tool payload of this request — the grounding haystack. The
+        // user's own words (question + prior turns) are admissible too: a
+        // number the user typed, or one already delivered in a prior verified
+        // answer, is not a fabrication.
+        const groundedPayloads: string[] = [censusPayload, question, ...history.map(h => h.content)];
+
         const messages: Anthropic.MessageParam[] = [
           ...history.map(h => ({ role: h.role, content: h.content } as Anthropic.MessageParam)),
-          { role: 'user', content: question },
+          { role: 'user', content: question + '\n\n<data_census>\n' + censusPayload + '\n</data_census>' },
         ];
 
         emit({ type: 'status', label: 'Consulting the data' });
         let answerText = '';
+        let repairs = 0;
+        const MAX_REPAIRS = 2;
         for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
           const resp: Anthropic.Message = await client.messages.create({
             model: SEER_MODEL,
@@ -483,8 +555,33 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           const textBlocks = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
 
           if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) {
-            answerText = textBlocks.map(b => b.text).join('\n').trim();
-            break;
+            const draft = textBlocks.map(b => b.text).join('\n').trim();
+            // ── v7.463 grounding gate: every number must exist in a tool result ──
+            const bad = findUngrounded(draft, groundedPayloads.join('\n'));
+            if (bad.length === 0 || repairs >= MAX_REPAIRS) {
+              answerText = draft;
+              if (bad.length > 0) {
+                // Two repairs failed — fail CLOSED: never deliver unverified numbers.
+                emit({
+                  type: 'answer',
+                  answer: 'I drafted an answer but could not verify these numbers against the stored data: ' + bad.join(', ') + ' — so I am not showing it (grounding is enforced, not assumed). Try narrowing the question, or ask for the underlying rows directly.',
+                  sources: [],
+                  refusal: true,
+                  verified: 0,
+                });
+                controller.close();
+                return;
+              }
+              break;
+            }
+            repairs++;
+            emit({ type: 'status', label: 'Grounding check failed — re-querying (' + repairs + '/' + MAX_REPAIRS + ')' });
+            messages.push({ role: 'assistant', content: draft });
+            messages.push({
+              role: 'user',
+              content: 'GROUNDING CHECK FAILED. These numbers in your draft do not appear in any tool result from this conversation: ' + bad.join(', ') + '. Re-query the tools to obtain real stored values, or rewrite the answer without those numbers. Never estimate and never compute your own aggregates.',
+            });
+            continue;
           }
 
           messages.push({ role: 'assistant', content: resp.content });
@@ -494,7 +591,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
             let out: any;
             try { out = runTool(ctx, tu.name, tu.input); }
             catch (e: any) { out = { error: `Tool failed: ${e?.message ?? 'unknown'}` }; }
-            results.push({ type: 'tool_result', tool_use_id: tu.id, content: capJson(out) });
+            const payload = capJson(out);
+            groundedPayloads.push(payload);
+            results.push({ type: 'tool_result', tool_use_id: tu.id, content: payload });
           }
           messages.push({ role: 'user', content: results });
 
@@ -512,6 +611,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           }
         }
 
+        // Final gate for the out-of-turns path (the break path was already gated).
+        const finalBad = findUngrounded(answerText, groundedPayloads.join('\n'));
+        if (finalBad.length > 0) {
+          emit({
+            type: 'answer',
+            answer: 'I drafted an answer but could not verify these numbers against the stored data: ' + finalBad.join(', ') + ' — so I am not showing it (grounding is enforced, not assumed). Try narrowing the question, or ask for the underlying rows directly.',
+            sources: [],
+            refusal: true,
+            verified: 0,
+          });
+          controller.close();
+          return;
+        }
+
         // Parse the trailing SOURCES line into chips.
         let sources: string[] = [];
         const m = answerText.match(/\nSOURCES:\s*(.+)\s*$/i) ?? answerText.match(/^SOURCES:\s*(.+)\s*$/im);
@@ -522,7 +635,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const refusal = /^\s*\[NOT-IN-STORED-DATA\]/.test(answerText);
         if (refusal) answerText = answerText.replace(/^\s*\[NOT-IN-STORED-DATA\]\s*/, '').trim();
 
-        emit({ type: 'answer', answer: answerText || 'No answer was produced — try rephrasing the question.', sources, refusal });
+        emit({
+          type: 'answer',
+          answer: answerText || 'No answer was produced — try rephrasing the question.',
+          sources,
+          refusal,
+          // real count of numeric tokens checked and found in tool results (IV/I.1: measured, not asserted)
+          verified: extractNumberTokens(answerText).length,
+        });
       } catch (e: any) {
         emit({ type: 'error', error: e?.message ?? 'Seer failed — try again' });
       } finally {
