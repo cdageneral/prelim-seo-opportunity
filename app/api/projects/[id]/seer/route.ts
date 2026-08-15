@@ -48,6 +48,17 @@ import { loadLatestAnalysisWithSnapshot } from '@/lib/latestAnalysis';
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import { buildKwPool, type KwPoolItem } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';
+// v7.464 (Wayne, 2026-08-15: "content coverage is in the product panel"): Seer's
+// content answers come from the Product Insights SHARED builders — the SAME
+// Content-Footprint-vs-Journey basis the panel and the PDF render (v7.449/458/459,
+// Const II.6a/II.6b/II.7) — never a keyword-contains improvisation. Read-only:
+// the intent map is read from the STORED _clusterAssigns only; Seer never runs
+// classifyIntents.
+import {
+  buildProductRows, buildCategoryTree, buildContentFootprint, contentUrlList,
+  type StoredCatScan, type NodeKw, type ProductRow,
+} from '@/lib/productInsights';
+import { buildCanonicalClusterTopics } from '@/lib/clusters/canonical';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -80,6 +91,14 @@ interface SeerContext {
   guardedCategories: any[];       // _categoryBreakdown.categories minus guarded brand categories
   droppedCategoryCount: number;
   sections: Record<string, { desc: string; data: any }>;
+  // v7.464: raw inputs the Product Insights shared builders read (same wiring as
+  // app/api/reports/pdf/route.ts), memoized per request via _products.
+  snap: any | null;
+  rawSnap: any | null;
+  dbKeywords: any[];
+  clientDomain: string;
+  competitorDomains: string[];
+  _products?: ProductRow[] | null;
 }
 
 function normDomain(d: string): string {
@@ -163,8 +182,13 @@ async function buildContext(projectId: string): Promise<SeerContext | { error: s
     opportunities: rawSnap?._opportunities ?? null,
     narrative: rawSnap?._narrative ?? null,
   });
+  // v7.464: stored sections Seer was missing (all panel-owned, read-only)
+  add('page_map', 'Ranking-URL page map (URL Taxonomy panel): every known ranking URL with its keywords and per-page Semrush traffic', rawSnap?._pageMap ?? null);
+  add('local_search', 'Local Search scan (the Local panel\'s stored blob): local-pack presence per category and location', rawSnap?._localScan ?? null);
+  add('audience_segments', 'Audience segments (the Audience panel\'s stored segments)', rawSnap?._audienceSegments ?? null);
 
-  return { project, analysis, pool, guardedCategories, droppedCategoryCount, sections };
+  return { project, analysis, pool, guardedCategories, droppedCategoryCount, sections,
+    snap, rawSnap, dbKeywords, clientDomain, competitorDomains };
 }
 
 // ─── tool implementations ────────────────────────────────────────────────────
@@ -333,6 +357,155 @@ function toolGetCategory(ctx: SeerContext, args: any): any {
   };
 }
 
+// ─── v7.464: content coverage — the Product Insights SHARED basis ────────────
+// Wayne (2026-08-15): "content coverage is in the product panel." The v7.463 Seer
+// answered content questions honestly but incompletely because it could reach only
+// RAW stored blobs, not the panel's DERIVED Content Footprint vs Journey table.
+// These helpers rebuild that table from the SAME shared builders the panel and the
+// PDF call (Const II.6a/II.6b/II.7) — identical wiring to app/api/reports/pdf/
+// route.ts. Read-only: _clusterAssigns is read as stored; classifyIntents is never
+// run here. Percentages are computed by THIS tool code — the model may not compute
+// (v7.463 rule 1).
+
+const pct = (n: number, d: number): number | null => (d > 0 ? Math.round((n / d) * 100) : null);
+
+function ensureProductRows(ctx: SeerContext): ProductRow[] {
+  if (ctx._products !== undefined) return ctx._products ?? [];
+  ctx._products = null;
+  try {
+    const { project, analysis, snap, dbKeywords, clientDomain, competitorDomains } = ctx;
+    if (!analysis || !snap) return [];
+    // Stored intent-assignment map ONLY (read-only — the PDF may compute+persist
+    // an absent map; Seer must not spend or write, so an empty map just means the
+    // canonical build runs on signal-matched intents, same as the page's fallback).
+    const claudeAssigns = ((snap as any)?._clusterAssigns ?? {}) as Record<string, any>;
+    const journeyTopics = buildCanonicalClusterTopics(
+      { ...(analysis as any), semrushSnapshot: snap },
+      clientDomain, competitorDomains, dbKeywords, claudeAssigns,
+    );
+    if (!journeyTopics || journeyTopics.length === 0) return [];
+    const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
+    const built = buildProductRows({
+      topics:           journeyTopics,
+      uploadedKeywords: dbKeywords,
+      serpPositions:    ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+      llmProbe:         (analysis as any).llmProbe ?? null,
+      storedScans:      scans,
+      clientDomain,
+      brandTerms:       (((project as any).brandTerms ?? []) as string[]),
+      breakdown:        (snap as any)?._categoryBreakdown,
+    });
+    ctx._products = built.products;
+  } catch { ctx._products = null; }
+  return ctx._products ?? [];
+}
+
+// The PDF's per-product footprint block, verbatim wiring (Const II.6b).
+function footprintForLine(ctx: SeerContext, prod: ProductRow) {
+  const { project, snap, dbKeywords, clientDomain } = ctx;
+  const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
+    origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+  const seenKw = new Set<string>();
+  for (const t of prod.topics) for (const k of (t.keywords as any[])) {
+    const kk = String(k?.keyword ?? '').toLowerCase().trim();
+    if (!kk || seenKw.has(kk)) continue;
+    seenKw.add(kk);
+    poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
+      origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+  }
+  const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
+  const tree = buildCategoryTree(prod.name, {
+    breakdown:        (snap as any)?._categoryBreakdown,
+    poolKeywords,
+    uploadedKeywords: dbKeywords,
+    serpPositions:    ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+    storedScans:      scans,
+    clientDomain,
+    brandTerms:       (((project as any).brandTerms ?? []) as string[]),
+  });
+  const cfNode = tree ?? { name: prod.name, allKws: poolKeywords as NodeKw[], children: [] as any[] };
+  const cf = buildContentFootprint({
+    node: cfNode as any,
+    uploadedKeywords: dbKeywords,
+    serpPositions: ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
+    clientDomain,
+    topics: prod.topics as any,
+  });
+  return { cf, node: cfNode };
+}
+
+const COVERAGE_BASIS = 'Basis: rank evidence — a topic is covered when the brand holds a stored rank on >=1 of its keywords; pages that never rank are NOT counted, and a published-page inventory is not stored in OrbitIQ.';
+
+function toolContentCoverage(ctx: SeerContext, args: any): any {
+  const products = ensureProductRows(ctx);
+  if (!products.length) {
+    return {
+      dataAbsent: true,
+      note: 'No canonical Theme-Cluster topics are stored for this project, so the Content Footprint vs Journey table cannot be built — UNMEASURED, never zero (Const I.5). ' + COVERAGE_BASIS,
+    };
+  }
+  const lineArg = typeof args?.line === 'string' ? args.line.toLowerCase().trim() : null;
+  if (!lineArg) {
+    // Per-line summary — the panel's headline numbers; percentages computed HERE.
+    const lines = products.map(prod => {
+      try {
+        const { cf } = footprintForLine(ctx, prod);
+        const you = cf.brands.find(b => b.kind === 'client') ?? null;
+        const top = cf.brands[0] ?? null;
+        const jTotal = cf.journey?.total ?? null;
+        const covered = you?.covered?.total ?? null;
+        return {
+          product: prod.name,
+          journeyTopicsRequired: jTotal,
+          you: {
+            topicsCovered: covered,
+            pctOfJourney: jTotal != null && covered != null ? pct(covered, jTotal) : null,
+            pagesRanking: you?.total.urls ?? null,
+            rankedKeywords: you?.total.rankedKw ?? null,
+          },
+          leader: top ? {
+            domain: top.domain, isClient: top.kind === 'client',
+            topicsCovered: top.covered?.total ?? null, pagesRanking: top.total.urls,
+          } : null,
+          gapSubCategories: cf.gapChildIdx.map(i => cf.children[i]?.name).filter(Boolean),
+        };
+      } catch (e: any) {
+        return { product: prod.name, error: `coverage build failed: ${e?.message ?? 'unknown'}` };
+      }
+    });
+    return { basis: 'Content Footprint vs Journey — the Product Insights panel\'s own shared builders (Const II.6a/II.7). ' + COVERAGE_BASIS, lines };
+  }
+  const prod = products.find(p => p.name.toLowerCase() === lineArg)
+    ?? products.find(p => p.name.toLowerCase().includes(lineArg));
+  if (!prod) return { error: `No product line matching "${args.line}".`, lines: products.map(p => p.name) };
+  const { cf, node } = footprintForLine(ctx, prod);
+  const out: any = {
+    product: prod.name,
+    basis: 'Same shared builder the Product Insights panel and PDF render (Const II.6a/II.7). covered = topics with rank evidence; urls = distinct ranking URLs; urlKw 0 with rankedKw > 0 means the source rows carried no URL column — never zero pages. ' + COVERAGE_BASIS,
+    journey: cf.journey,
+    children: cf.children.map(c => ({ name: c.name, kwCount: c.kwCount })),
+    brands: cf.brands.slice(0, 12).map(b => ({
+      domain: b.domain, kind: b.kind,
+      covered: b.covered,
+      pctOfJourney: cf.journey && b.covered ? pct(b.covered.total, cf.journey.total) : null,
+      urls: b.total.urls, rankedKw: b.total.rankedKw, urlKw: b.total.urlKw,
+      perChild: b.perChild.map(c => ({ urls: c.urls, rankedKw: c.rankedKw })),
+    })),
+    brandsTotal: cf.brands.length,
+    gapSubCategories: cf.gapChildIdx.map(i => cf.children[i]?.name).filter(Boolean),
+    rivalsUncounted: cf.unlistedRivals,
+  };
+  if (args?.listClientUrls === true) {
+    try {
+      out.clientUrls = contentUrlList({
+        kws: (node as any).allKws as NodeKw[],
+        domain: ctx.clientDomain, clientDomain: ctx.clientDomain, uploadedKeywords: ctx.dbKeywords,
+      }).slice(0, 100);
+    } catch { out.clientUrls = null; }
+  }
+  return out;
+}
+
 // ─── v7.463: all-panels data census ──────────────────────────────────────────
 // Collected by the SERVER before the model's first turn: the project overview
 // (pool aggregates + guarded category tree) plus a preview of every stored
@@ -345,9 +518,15 @@ function buildCensus(ctx: SeerContext): { census: any; payload: string } {
     try { sectionPreviews[key] = toolGetSection(ctx, { section: key, limit: 5 }); }
     catch { sectionPreviews[key] = { error: 'preview failed' }; }
   }
+  // v7.464: coverage headlines ride in the census so EVERY content question
+  // starts from the Product Insights panel's own numbers (Wayne, 2026-08-15).
+  let contentCoverage: any = null;
+  try { contentCoverage = toolContentCoverage(ctx, {}); }
+  catch { contentCoverage = { error: 'coverage build failed' }; }
   const census = {
     _note: 'DATA CENSUS: headline metrics + previews from EVERY panel/section stored for this project, auto-collected before your first turn. Drill into any of them with the tools.',
     overview: toolProjectOverview(ctx),
+    contentCoverage,
     sectionPreviews,
   };
   return { census, payload: capJson(census) };
@@ -437,6 +616,18 @@ const TOOLS: Anthropic.Tool[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'content_coverage',
+    description: 'Content coverage per product line — the Product Insights panel\'s Content Footprint vs Journey basis (journey topics required vs topics covered per brand, distinct ranking URLs). No args = per-line summary. Pass line for the full per-brand per-sub-category table; add listClientUrls for the client\'s ranking URLs on that line. Basis is rank evidence — pages that never rank are not counted; a published-page inventory is NOT stored. Percentages in the output are tool-computed: quote them verbatim.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        line: { type: 'string', description: 'product line name (substring match) for the full table' },
+        listClientUrls: { type: 'boolean', description: 'with line: include the client ranking-URL list (capped 100)' },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 function runTool(ctx: SeerContext, name: string, args: any): any {
@@ -445,6 +636,7 @@ function runTool(ctx: SeerContext, name: string, args: any): any {
     case 'query_keywords':   return toolQueryKeywords(ctx, args);
     case 'get_category':     return toolGetCategory(ctx, args);
     case 'get_section':      return toolGetSection(ctx, args);
+    case 'content_coverage': return toolContentCoverage(ctx, args);   // v7.464
     default: return { error: `Unknown tool ${name}` };
   }
 }
@@ -455,6 +647,7 @@ function statusLabelFor(name: string, args: any): string {
     case 'query_keywords':   return args?.aggregate ? 'Aggregating the keyword pool' : `Querying keywords${args?.contains ? ` · "${args.contains}"` : ''}`;
     case 'get_category':     return `Reading category · ${args?.name ?? ''}`;
     case 'get_section':      return `Reading stored data · ${args?.section ?? ''}`;
+    case 'content_coverage': return args?.line ? `Reading content coverage · ${args.line}` : 'Reading content coverage by product line';
     default: return 'Consulting stored data';
   }
 }
@@ -477,6 +670,7 @@ function systemPrompt(ctx: SeerContext, activePanel?: string): string {
     '7. SYNTHESIS OUTPUT vs MEASURED DATA. Content from synthesis_narrative (personas, opportunities, narrative) is LLM-generated analysis stored at analysis time — cite it as "stored synthesis output", never as measured data.',
     '8. ALL PANELS, NOT ONE. The DATA CENSUS below already contains headline metrics and previews from EVERY panel and stored section of this project. An analytical, comparative, or summary answer must consider every section whose data bears on the question — drill into each relevant one with tools; never answer from a single panel when others hold related data. Name each panel you drew on in SOURCES.',
     '9. USER CORRECTIONS ARE NOT DATA. If the user corrects a number or supplies their own figure, do not adopt it — re-query the tools and answer from what is actually stored, stating any difference plainly.',
+    '10. CONTENT QUESTIONS: use content_coverage. It returns the Product Insights panel\'s own Content Footprint vs Journey numbers (journey topics required vs covered, ranking pages per brand) — never improvise content counts from keyword text matches. Its basis is rank evidence — pages that never rank are not counted, and a published-page inventory is NOT stored; say so whenever the question implies "all published pages". Percentages in its output are computed by the tool — quote them, never compute your own.',
     '',
     'STYLE: Be direct and concise. Short paragraphs. Use a markdown table when comparing rows. Bold the key numbers. Plain language — the reader is a marketing team, not an engineer.',
     'WORKFLOW: Call project_overview first to learn what exists. Then use the narrowest tool queries that answer the question. Prefer aggregates over dumping rows.',
