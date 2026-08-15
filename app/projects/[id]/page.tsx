@@ -27,6 +27,7 @@ import ExecutiveSummarySection from '@/components/brief/ExecutiveSummarySection'
 import ScopeSection          from '@/components/brief/ScopeSection';
 import LocalSearchSection     from '@/components/brief/LocalSearchSection';
 import ApiUsageSection        from '@/components/brief/ApiUsageSection';
+import SeerDrawer             from '@/components/seer/SeerDrawer';   // v7.462: OrbitIQ Seer — in-project Q&A over stored data
 import GoogleRankAuthoritySection from '@/components/brief/GoogleRankAuthoritySection';   // v7.367
 import AuthorityCalculatorSection from '@/components/brief/AuthorityCalculatorSection';    // v7.370
 import { getMarket } from '@/lib/utils/markets';
@@ -291,6 +292,40 @@ export default function ProjectBriefPage() {
   const [showEditProject,   setShowEditProject]   = useState(false);
   const [showCompetitors,   setShowCompetitors]   = useState(false);   // v7.101: global Competitors manager
   const [kwVersion,         setKwVersion]         = useState(0);      // v7.107: bumped when Competitors modal closes -> all panels refetch /keywords
+
+  // ── v7.462: OrbitIQ Seer + role-gated Operations nav ────────────────────────
+  // Seer is the in-project Q&A drawer (sidebar pin or ⌘K). The API Usage nav
+  // item and the cross-project usage Dashboard link are ADMIN-ONLY surfaces
+  // (Wayne, 2026-08-15: project teams never see API usage): when auth is
+  // enforced they render only for owner/admin; when enforcement is off the app
+  // behaves as before (open access, matching the v7.373 bootstrap behaviour).
+  const [seerOpen, setSeerOpen] = useState(false);
+  const [meRole,     setMeRole]     = useState<string | null>(null);
+  const [meEnforced, setMeEnforced] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res  = await fetch('/api/auth/me', { cache: 'no-store' });
+        const data = await res.json();
+        if (!alive) return;
+        setMeRole(data.user?.role ?? null);
+        setMeEnforced(Boolean(data.enforced));
+      } catch { /* auth optional — leave defaults (open) */ }
+    })();
+    return () => { alive = false; };
+  }, []);
+  const showOps = !meEnforced || meRole === 'owner' || meRole === 'admin';
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSeerOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // ── v7.132: background SERP scan runner (lifted out of KeywordsPanel) ──────
   // The loop lives HERE, in the always-mounted project shell, so it keeps
@@ -1202,6 +1237,19 @@ export default function ProjectBriefPage() {
         </div>
       )}
 
+      {/* ── v7.462: OrbitIQ Seer drawer — in-project Q&A over stored data ── */}
+      <SeerDrawer
+        projectId={projectId}
+        projectName={project.clientName}
+        activePanelLabel={
+          NAV_ITEMS.find(i => i.id === activeSection)?.label
+            ?? ({ viewScope: 'View Scope', contentPlan: 'Content Plan', authorityCalc: 'Authority Calculator', llm: 'LLM Visibility' } as Record<string, string>)[activeSection]
+            ?? 'Executive Summary'
+        }
+        open={seerOpen}
+        onClose={() => setSeerOpen(false)}
+      />
+
       {/* ════ GLOBAL HEADER ════ */}
       <header className="flex-shrink-0 h-14 border-b border-orbit-border bg-orbit-surface/80 backdrop-blur-sm flex items-center justify-between px-5 z-40">
         <div className="flex items-center gap-2">
@@ -1219,7 +1267,8 @@ export default function ProjectBriefPage() {
         <div className="flex items-center gap-2">
           {/* v7.185: global dark/light theme toggle */}
           <ThemeToggle />
-          {/* v7.225: global Dashboard button — cross-project API usage */}
+          {/* v7.225: global Dashboard button — cross-project API usage. v7.462: admin-only. */}
+          {showOps && (
           <Link
             href="/usage"
             className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
@@ -1227,6 +1276,7 @@ export default function ProjectBriefPage() {
             <i className="ti ti-gauge" aria-hidden="true" />
             Dashboard
           </Link>
+          )}
           <button
             onClick={() => setShowEditProject(true)}
             className="text-xs text-orbit-secondary hover:text-orbit-primary border border-orbit-border hover:border-orbit-muted px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
@@ -1459,9 +1509,25 @@ export default function ProjectBriefPage() {
             )}
           </div>
 
+          {/* ── v7.462: OrbitIQ Seer pin — ask questions about this project's data ── */}
+          <div className="px-2.5 pt-2.5 pb-1 flex-shrink-0">
+            <button
+              onClick={() => setSeerOpen(true)}
+              className="w-full text-left rounded-lg px-3 py-2 transition-all text-white shadow-md hover:opacity-90"
+              style={{ background: 'var(--c-6c63ff)', backgroundImage: 'linear-gradient(rgba(0,0,0,0.22), rgba(0,0,0,0.22))' }}
+            >
+              <span className="flex items-center gap-2 text-[12.5px] font-bold">
+                <span aria-hidden="true">&#9678;</span> Ask Seer
+                <span className="ml-auto text-[9px] font-bold rounded px-1 py-0.5 bg-white/20">&#8984;K</span>
+              </span>
+              <span className="block text-[10px] mt-0.5 text-white/85">Ask anything about this project&apos;s data</span>
+            </button>
+          </div>
+
           <nav className="flex-1 overflow-y-auto py-1.5">
             {NAV_GROUPS.map(group => {
-              const items = NAV_ITEMS.filter(i => i.group === group);
+              // v7.462: Operations (API Usage) is admin-only — hidden from project-team roles.
+              const items = NAV_ITEMS.filter(i => i.group === group && (showOps || i.id !== 'usage'));
               return (
                 <div key={group} className="mb-0.5">
                   {group && (
