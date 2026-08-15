@@ -1,3 +1,16 @@
+## v7.462 — 2026-08-15
+
+### OrbitIQ Seer (beta) — ask questions about your project's data
+
+- New **Ask Seer** pin in the project sidebar (also ⌘K) opens a drawer that answers questions about THIS project's stored data: keywords, categories, competitors, rankings, AI answer-engine visibility, demand.
+- Grounded by construction: Seer reads the same canonical keyword pool and guarded category tree the panels read (scope-gated, competitor-brand-guarded, tombstoned), plus the stored sections (SERP snapshot, AI visibility, Product Insights, authority, demand universe, synthesis output). Answers cite their sources.
+- **Seer never estimates.** Asked for a projection or modeled number, it declines with a "not in stored data" banner and states what stored data can answer instead (Const I.1/I.5).
+- Live progress while it works: each data query Seer runs shows as a changing step label with elapsed seconds (IV.2/IV.3).
+- Server-side only: the Claude API key never reaches the browser. Every call is metered into the API Usage ledger under the project (I.5b; model claude-sonnet-4-6, registered rate).
+- API Usage is now an admin-only surface in the project UI: the Operations nav item and the cross-project usage Dashboard link no longer render for project-team roles (Wayne, 2026-08-15). No cost/token figures appear anywhere in the Seer drawer.
+- Verification: real-project tsc + real next build clean; retained suite 1,563 pass / 31 pre-existing / zero regression delta with 21 new v7.462 checks; real-Chromium dual-theme render — all contrast pairings pass in BOTH themes (three theme-gate catches fixed pre-ship); tool layer driven at real scale (5,000-row pool).
+- II.6b review: Seer is an interactive query surface over already-reported metrics — it introduces NO new stored metric, so there is no number to serialize into the Assessment PDF; recorded here as the release-note conclusion (containment check added: no pdf/export/reports module imports Seer).
+
 ## v7.461 - notices: one message, every user, dismissed once each
 
 Wayne: *"in the admin panel is there a way to send a message to all users? can we have a notice
