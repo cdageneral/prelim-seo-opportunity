@@ -1,3 +1,55 @@
+## v7.458 - the journey tells you how many pages you are missing
+
+Wayne: *"based on the theme cluster panel data - how many pages are there in total per category
+for the whole journey of that category. So we then have a journey required vs actual."*
+
+**Journey required, from data already on file.** The Theme Cluster panel's canonical topics are
+the requirement: one topic (intent cluster) = one intended page (Const III.5), and the count is
+the same "N topics" every line header already shows - never a new derivation (II.7). Each topic
+is filed under the sub-category holding the majority of its keywords; a topic whose keywords stop
+at the line level files at the line and is disclosed, so child columns not summing to the total is
+explained, not mysterious (I.5).
+
+**What changed on the panel.**
+- The product-line header regrouped under named lenses, in Wayne's order: **GOOGLE RANK DEMAND**
+  (demand + page-1 share), then **LLM & AI VISIBILITY** (probes, recorded answers, gap chips),
+  then a new **PAGES - JOURNEY VS ACTUAL** chip: "5 of 42", a coverage bar, "37 pages missing /
+  12% of journey covered". Ranked rows with no URL column read "no URL data", never 0.
+- The Content Footprint card became **Content Footprint vs Journey**: a gold "Journey required"
+  row pinned above the brands carries the per-child topic counts and the line total; every brand's
+  total pages reads "N / 42" with "% of journey" centered under its bar. The per-child brand cells
+  stay plain counts - the requirement row above does the math (Wayne's mockup revisions).
+- One shared builder feeds all of it: `buildJourneyRequirement` + the `topics` input on
+  `buildContentFootprint`, plus `clientPagesForTopics` so the collapsed header chip is
+  byte-for-byte the footprint card's client total (II.6a - the chip can never disagree
+  with the card).
+
+**PDF parity in the same release (II.6a/II.6b).** The assessment report's footprint table gained
+a "Journey pages" column and "your pages" now reads "5 of 42 (12%)"; a line without a topic set
+reads "not derived", never zero. The route feeds the same `prod.topics` through the same builder.
+
+**Verification.** Real-project tsc + real `next build` clean. Retained suite A/B against the
+pristine base: FAIL sets byte-identical (30 pre-existing), 49 new v7.458 checks all green,
+including a real-Chromium render of the REAL ProductInsightsSection in BOTH themes (header
+order, chip, journey row all asserted on rendered text). Dual-theme contrast gate measured
+every new pairing >= 4.5:1 in both themes and keeps the old label token as a negative
+control - it caught three colours before ship (--c-6a6a90 labels at 3.22/3.62 dark; the green
+covered-state text at 4.47 light on the tinted chip).
+
+Suite-harness repairs (dated, no checks deleted): the carried run.sh died mid-tail on an
+apostrophe inside a bash-quoted node script (v7.450 comment amendment) and on a missing
+`.runs/` workdir - both fixed, which un-broke the v443-fn/v444-plan/theme gates for every
+future release.
+
+## v7.457 - the API balance is read, never guessed (entry backfilled in v7.458)
+
+Shipped live earlier today without its changelog entry; recorded here from its commit record.
+`getApiUnitsBalance()` reads the real Semrush unit balance and the position-verification dry run
+reports it before any spend; requests are sized against the balance so a metered endpoint is
+never driven past what the account holds (Semrush pre-authorises 10 units per row against
+`display_limit`, so an oversized request is refused as "BALANCE IS ZERO" even with units on the
+account).
+
 ## v7.456 - the biggest books can be verified too
 
 Verification ran across the whole portfolio and **11 of 16 projects completed**. Five - Amex,
