@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import NoticeGate from '@/components/NoticeGate';
 
 export const metadata: Metadata = {
   title:       'OrbitIQ — Organic Growth Intelligence',
@@ -25,6 +26,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-screen bg-orbit-bg text-orbit-primary antialiased">
         {children}
+        {/* v7.461: admin notices. Mounted once here so a broadcast reaches the
+            user on whatever page they land on after signing in. Renders nothing
+            when there is no signed-in user or no undismissed notice. */}
+        <NoticeGate />
       </body>
     </html>
   );
