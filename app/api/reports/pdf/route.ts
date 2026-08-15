@@ -190,18 +190,31 @@ export async function POST(req: NextRequest) {
             });
             const you = cf.brands.find(b => b.kind === 'client') ?? null;
             const top = cf.brands[0] ?? null;
+            const jOn = !!(cf.journey && cf.journey.total > 0);
             contentByProduct.push({
               product: prod.name,
               you: you ? { urls: you.total.urls, rankedKw: you.total.rankedKw, urlKw: you.total.urlKw } : null,
               leader: top ? { domain: top.domain, urls: top.total.urls, isClient: top.kind === 'client' } : null,
               brandCount: cf.brands.length,
               // v7.458: journey pages the full funnel needs (null = unknown, never 0 — I.5)
-              journeyTotal: cf.journey && cf.journey.total > 0 ? cf.journey.total : null,
+              journeyTotal: jOn ? cf.journey!.total : null,
+              // v7.459 (Wayne): topics COVERED — same unit as the requirement, rank
+              // evidence, read from the SAME shared builder the panel renders (II.6a).
+              youCovered:    jOn && you?.covered ? you.covered.total : null,
+              leaderCovered: jOn && top?.covered ? { domain: top.domain, covered: top.covered.total, isClient: top.kind === 'client' } : null,
               gaps: cf.gapChildIdx.map(i => {
+                // v7.459: with a journey the gap is coverage-based; report the rival's
+                // covered-topic count. Without one, the v7.449 URL rule and counts.
+                if (jOn) {
+                  const best = cf.brands.filter(b => b.kind !== 'client')
+                    .reduce<{ domain: string; n: number } | null>((acc, b) =>
+                      (!acc || (b.covered?.perChild[i] ?? 0) > acc.n) ? { domain: b.domain, n: b.covered?.perChild[i] ?? 0 } : acc, null);
+                  return { child: cf.children[i]?.name ?? '', bestDomain: best?.domain ?? '', bestUrls: best?.n ?? 0, basis: 'covered' as const };
+                }
                 const best = cf.brands.filter(b => b.kind !== 'client')
                   .reduce<{ domain: string; urls: number } | null>((acc, b) =>
                     (!acc || b.perChild[i].urls > acc.urls) ? { domain: b.domain, urls: b.perChild[i].urls } : acc, null);
-                return { child: cf.children[i]?.name ?? '', bestDomain: best?.domain ?? '', bestUrls: best?.urls ?? 0 };
+                return { child: cf.children[i]?.name ?? '', bestDomain: best?.domain ?? '', bestUrls: best?.urls ?? 0, basis: 'urls' as const };
               }),
               rivalsUncounted: cf.unlistedRivals.length,
             });
