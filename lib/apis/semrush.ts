@@ -151,6 +151,32 @@ async function semrushGet(params: Record<string, string>): Promise<string> {
   return body;
 }
 
+// ─── v7.457: how many API units are actually left ────────────────────────────
+// Wayne, 2026-08-14, after a portfolio run died mid-way: *"there are still credits left
+// to my knowledge"* — and he was right. Semrush bills **10 units per returned row**, and
+// it PRE-AUTHORISES a request against `display_limit`: asking for 10,000 rows reserves
+// ~100,000 units, so with 62,340 on the account the whole request is refused and the
+// error reads `ERROR 132 :: API UNITS BALANCE IS ZERO`. "Zero" means *not enough for
+// this request*, not an empty account.
+//
+// Reading the balance turns that into something the app can act on: price the run,
+// refuse what cannot be funded, and never size a request the account cannot pay for
+// (Const I.5b — priced before a cent is spent, fail-closed).
+export async function getApiUnitsBalance(): Promise<number | null> {
+  const API_KEY = process.env.SEMRUSH_API_KEY;
+  if (!API_KEY) return null;
+  try {
+    const res = await fetch(`https://www.semrush.com/users/countapiunits.html?key=${encodeURIComponent(API_KEY)}`,
+      { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) return null;
+    const n = parseInt((await res.text()).trim(), 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch { return null; }
+}
+
+/** Semrush's verified per-row rate for the organic reports used here. */
+export const SEMRUSH_UNITS_PER_ROW = 10;
+
 // ─── Domain Overview ──────────────────────────────────────────────────────────
 
 // v7.99: all report functions accept a Semrush regional database code
@@ -437,6 +463,19 @@ export async function getOrganicPositions(
   let rowsRead = 0;
   let ceiling: number | null = null;   // exclusive upper volume bound for the next band
   let capped = false;
+  // v7.457: never REQUEST more rows than the balance can pay for. Semrush reserves
+  // display_limit x 10 units up front, so an unaffordable limit is refused outright even
+  // when plenty of units remain for a smaller page.
+  const balance = await getApiUnitsBalance();
+  if (balance !== null) {
+    const affordable = Math.floor((balance * 0.9) / SEMRUSH_UNITS_PER_ROW);   // 10% headroom
+    if (affordable < 50) {
+      throw new Error(
+        `Semrush has ${balance.toLocaleString()} API units left — not enough to verify this domain ` +
+        `(each returned row costs ${SEMRUSH_UNITS_PER_ROW}). Nothing was requested and nothing was spent.`);
+    }
+    rowLimit = Math.min(rowLimit, affordable);
+  }
   for (let pass = 0; pass < 12; pass++) {
     const filters = [`+|Po|Lt|${maxPos + 1}`];
     if (minVolume > 0) filters.push(`+|Nq|Gt|${minVolume - 1}`);
