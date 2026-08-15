@@ -993,7 +993,7 @@ export default function ProductInsightsSection({
                         const hasLine = !!(jr && jr.atLine > 0);
                         // fixed tracks: every row is its own grid, so flexible fr tracks would
                         // resolve per-row and drift out of alignment once rows size to content.
-                        const gridCols = `minmax(200px,1fr) ${jr ? '132px' : '120px'} repeat(${cf.children.length + (hasLine ? 1 : 0)}, 128px)`;
+                        const gridCols = `220px ${jr ? '132px' : '120px'} repeat(${cf.children.length + (hasLine ? 1 : 0)}, 128px)`;   // ALL tracks fixed — the one flexible track still let long labels push a row out of line
                         return (
                           <div style={{ overflowX: 'auto' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px', minWidth: 'max-content',
