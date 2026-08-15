@@ -1,3 +1,24 @@
+## v7.460 - the line-level bucket gets its own column
+
+Wayne, on the v7.459 HYSA card: *"the numbers for the journey requirement and each brand still
+are not totaling the total sum."* He was right about what the eye can check: topics that file at
+the LINE level (no sub-category home) were counted in every total but disclosed only in prose on
+the journey row - and not at all on brand rows. HYSA journey read 34 with visible columns summing
+30; Synchrony read 18 with 17 visible. The arithmetic was correct and invisible - which is the
+same thing as wrong, on a client-facing surface.
+
+Fix: whenever the line-level bucket is non-empty it renders as a real column - "LINE LEVEL - no
+sub-category" - on the journey-required row AND every brand row, with the same click-through drill
+(scope: "line level (no sub-category)"). Every row now sums on screen with no footnote required;
+the basis line states it: each topic files in exactly ONE column, sub-category or LINE LEVEL.
+
+Two files: the panel (column + ci=-2 cell semantics) and one drill-filter line in the shared lib.
+No basis change - the same stored numbers, now all visible - so no PDF change (II.6a reviewed:
+the PDF prints line totals only, which were already correct).
+
+Verification: tsc + real next build clean (shipped tree); suite A/B FAIL-delta clean with 10 new
+v7.460 checks (drill -2 scope behavioral + column/source assertions); dual-theme render 20/20.
+
 ## v7.459 - the columns add up, and the parser stops eating URLs
 
 Wayne caught both, hours after v7.458 shipped. First: *"Synchrony 2+1+4 = 7 not 5. Why is
