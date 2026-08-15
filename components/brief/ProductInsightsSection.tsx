@@ -994,7 +994,7 @@ export default function ProductInsightsSection({
                         const gridCols = `minmax(170px,1.3fr) ${jr ? '132px' : '120px'}${cf.children.map(() => ' minmax(96px,1fr)').join('')}${hasLine ? ' minmax(96px,1fr)' : ''}`;
                         return (
                           <div style={{ overflowX: 'auto' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px',
+                            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px', minWidth: 'max-content',
                               fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)', borderBottom: '1px solid var(--c-1e1e34)' }}>
                               <span>BRAND</span>
                               <span>{jr ? 'TOPICS COVERED' : 'TOTAL PAGES'}</span>
@@ -1014,7 +1014,7 @@ export default function ProductInsightsSection({
                                 = one intended page), each filed under the child holding most of
                                 its keywords. Never a new derivation (II.7). ── */}
                             {jr && (
-                              <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'center',
+                              <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'center', minWidth: 'max-content',
                                 padding: '6px 4px', background: 'rgba(245,158,11,0.08)', borderLeft: '2px solid var(--c-f59e0b)',
                                 borderBottom: '1px solid rgba(245,158,11,0.3)' }}>
                                 <span>
@@ -1055,7 +1055,7 @@ export default function ProductInsightsSection({
                               </div>
                             )}
                             {cf.brands.map((b, bi) => (
-                              <div key={b.domain} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'center',
+                              <div key={b.domain} style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'center', minWidth: 'max-content',
                                 padding: '6px 4px', borderBottom: bi < cf.brands.length - 1 ? '1px solid var(--c-1e1e34)' : 'none' }}>
                                 <span>
                                   <span style={{ fontSize: '11.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
