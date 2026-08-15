@@ -24,6 +24,8 @@ interface SeerMsg {
   sources?: string[];
   refusal?: boolean;
   error?: boolean;
+  /** v7.463: how many numeric values in this answer the server verified verbatim against tool results. */
+  verified?: number;
 }
 
 interface SeerDrawerProps {
@@ -198,6 +200,7 @@ export default function SeerDrawer({ projectId, projectName, activePanelLabel, o
               text: String(evt.answer ?? ''),
               sources: Array.isArray(evt.sources) ? evt.sources : [],
               refusal: Boolean(evt.refusal),
+              verified: typeof evt.verified === 'number' ? evt.verified : undefined,
             }]);
           } else if (evt.type === 'error') {
             setMessages(prev => [...prev, { role: 'assistant', text: String(evt.error ?? 'Seer failed'), error: true }]);
@@ -303,6 +306,12 @@ export default function SeerDrawer({ projectId, projectName, activePanelLabel, o
                     {m.sources.map((s, si) => (
                       <span key={si} className="text-[9.5px] font-semibold text-orbit-secondary border border-orbit-border rounded px-1.5 py-0.5">{s}</span>
                     ))}
+                  </div>
+                )}
+                {/* v7.463: the grounding check is machine-enforced server-side; this states its real result */}
+                {!m.error && !m.refusal && typeof m.verified === 'number' && m.verified > 0 && (
+                  <div className="text-[9.5px] font-semibold mt-1.5" style={{ color: 'var(--c-22c55e)' }}>
+                    &#10003; {m.verified} number{m.verified === 1 ? '' : 's'} verified against stored data
                   </div>
                 )}
               </div>
