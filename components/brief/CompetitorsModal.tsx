@@ -37,6 +37,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { parseKeywordCsv } from '@/lib/keywords/csvParse';   // v7.459: THE shared CSV parser (Const II.7)
 
 interface Competitor {
   id:        string;
@@ -81,50 +82,23 @@ function normDomain(url: string): string {
   return url.trim().toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/^www\./, '').split('/')[0];
 }
 
-interface ParsedKw { keyword: string; searchVolume: number; position: number | null; serpFeatures: string | null; }
+interface ParsedKw { keyword: string; searchVolume: number; position: number | null; serpFeatures: string | null; url: string | null; positionType: string | null }
 
-/** v7.92 header-aware competitor CSV parser (same column detection as client uploads). */
+/** v7.459: competitor CSVs parse through THE shared parser (lib/keywords/csvParse.ts,
+ *  Const II.7). The private v7.92 fork this replaces never learned the URL (v7.251) or
+ *  Position Type (v7.451) columns — five Synchrony competitors uploaded through this
+ *  modal lost every landing URL their Semrush export carried (positions survived, so
+ *  the ladder looked fine while the Content Footprint honestly read "no URL data").
+ *  One parser, no drift; the batch route stores url + positionType for any domain. */
 function parseCompetitorCsv(text: string): ParsedKw[] {
-  const lines = text.replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  if (lines.length < 2) return [];
-  const headerCols = (lines[0] ?? '').toLowerCase().split(',').map(c => c.replace(/^"|"$/g, '').trim());
-  const findIdx = (names: string[], fallback: number) => {
-    const i = headerCols.findIndex(h => names.includes(h));
-    return i >= 0 ? i : fallback;
-  };
-  const kwIdx  = findIdx(['keyword', 'keywords', 'ph', 'query'], 0);
-  const volIdx = findIdx(['search volume', 'search_volume', 'searchvolume', 'volume', 'monthly volume', 'nq'], 1);
-  const posIdxRaw = headerCols.findIndex(h => ['position', 'rank', 'ranking position', 'pos', 'po'].includes(h));
-  // v7.103: Semrush "SERP Features by Keyword" column (optional)
-  const featIdx = headerCols.findIndex(h => ['serp features by keyword', 'serp features', 'serp_features'].includes(h));
-
-  function splitLine(line: string): string[] {
-    const result: string[] = [];
-    let cur = ''; let inQuote = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') { inQuote = !inQuote; }
-      else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
-      else { cur += ch; }
-    }
-    result.push(cur.replace(/\r$/, '').trim());
-    return result;
-  }
-
-  return lines.slice(1)
-    .filter(l => l.trim().length > 0)
-    .map(line => {
-      const cols   = splitLine(line);
-      const posRaw = posIdxRaw >= 0 ? cols[posIdxRaw] : undefined;
-      const pos    = posRaw != null && posRaw !== '' && !isNaN(Number(posRaw)) ? Number(posRaw) : null;
-      return {
-        keyword:      (cols[kwIdx] ?? '').replace(/^"|"$/g, '').trim().toLowerCase(),
-        searchVolume: parseInt(cols[volIdx] ?? '0') || 0,
-        position:     pos,
-        serpFeatures: featIdx >= 0 ? ((cols[featIdx] ?? '').replace(/^"|"$/g, '').trim() || null) : null,
-      };
-    })
-    .filter(r => r.keyword.length > 0);
+  return parseKeywordCsv(text).map(r => ({
+    keyword:      r.keyword.toLowerCase(),   // modal lineage lowercased here; server normalises either way
+    searchVolume: r.searchVolume,
+    position:     r.position,
+    serpFeatures: r.serpFeatures,
+    url:          r.url,
+    positionType: r.positionType,
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

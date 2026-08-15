@@ -12,6 +12,7 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-s
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
 import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
 import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape';   // v7.446: ONE All-Keywords membership basis, shared with the cross-project usage rollup
+import { parseKeywordCsvMeta } from '@/lib/keywords/csvParse';   // v7.459: THE shared CSV parser (Const II.7) — same columns for every upload path
 import { basisCoverage } from '@/lib/keywords/positionBasis';   // v7.451: organic rank vs SERP-feature placement
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1356,69 +1357,27 @@ export default function KeywordsPanel({
       return;
     }
 
-    // Parse CSV — detect column layout from header row
-    // Supports: simple (keyword, search_volume, type) AND Semrush Positions export
-    const headerLine = lines[0] ?? '';
-    const headerCols = headerLine.split(',').map((c: string) => c.replace(/^\"|"$/g, '').trim().toLowerCase());
-    const kwCol   = Math.max(0, headerCols.findIndex((h: string) => h === 'keyword' || h === 'keywords'));
-    const volCol  = (() => {
-      const idx = headerCols.findIndex((h: string) =>
-        h === 'search volume' || h === 'search_volume' || h === 'searchvolume' || h === 'volume' || h === 'monthly volume');
-      return idx >= 0 ? idx : 1; // fallback: col 1
-    })();
-    const posCol  = (() => {
-      const idx = headerCols.findIndex((h: string) => h === 'position' || h === 'rank' || h === 'ranking position');
-      return idx >= 0 ? idx : -1; // -1 = not found
-    })();
-    const typeCol = headerCols.findIndex((h: string) => h === 'type');
-    // v7.451: Semrush "Position Type" — 'Organic' or a SERP-feature name. THE column that
-    // tells a real ranking apart from a People-also-ask / Things-to-know box, which Semrush
-    // exports with Position = 1. Absent => every position in this file is of unknown basis
-    // and is flagged as such downstream (never silently counted as organic, Const I.4/I.5).
-    const posTypeCol = headerCols.findIndex((h: string) =>
-      h === 'position type' || h === 'position_type' || h === 'positiontype' || h === 'type of position');
-    // v7.103: Semrush "SERP Features by Keyword" column (optional)
-    const featCol = headerCols.findIndex((h: string) =>
-      h === 'serp features by keyword' || h === 'serp features' || h === 'serp_features');
-    // v7.251: ranking/landing URL column (optional). Semrush Positions export = "URL";
-    // also accept common variants from Ahrefs / GSC / other exports.
-    const urlCol = headerCols.findIndex((h: string) =>
-      h === 'url' || h === 'ranking url' || h === 'landing page' || h === 'page' ||
-      h === 'page url' || h === 'address' || h === 'current url' || h === 'target url');
-
-    // Parse CSV rows using a proper quoted-field splitter
-    function splitCsvLine(line: string): string[] {
-      const result: string[] = [];
-      let cur = ''; let inQuote = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (ch === '"') { inQuote = !inQuote; }
-        else if (ch === ',' && !inQuote) { result.push(cur.trim()); cur = ''; }
-        else { cur += ch; }
-      }
-      result.push(cur.replace(/\r$/, '').trim());
-      return result;
-    }
-
-    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }> = [];
-    for (const line of dataLines) {
-      const cols  = splitCsvLine(line);
-      const kwText = (cols[kwCol] ?? '').replace(/^"|"$/g, '').trim();
-      if (!kwText) continue;
-      const vol     = parseInt(cols[volCol] ?? '0') || 0;
-      const pos     = posCol >= 0 ? (parseInt(cols[posCol] ?? '') || null) : null;
-      const kwType: 'ranked' | 'gap' = typeCol >= 0
-        ? ((cols[typeCol] ?? '').toLowerCase().trim() === 'ranked' ? 'ranked' : 'gap')
-        : (pos !== null && pos <= 100 ? 'ranked' : 'gap');
-      const branded = isBranded(kwText, clientDomain, competitorDomains, brandTerms);
-      // v7.103: raw Semrush feature list, e.g. "AI Overview, People also ask, Video"
-      const feats   = featCol >= 0 ? ((cols[featCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
-      // v7.451: the basis of this row's position, verbatim from the export.
-      const posType = posTypeCol >= 0 ? ((cols[posTypeCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
-      // v7.251: real ranking/landing URL for this keyword (real data only, Const I.1)
-      const kurl    = urlCol >= 0 ? ((cols[urlCol] ?? '').replace(/^"|"$/g, '').trim() || null) : null;
-      parsed.push({ keyword: kwText, searchVolume: vol, position: pos, type: kwType, branded, serpFeatures: feats, url: kurl, positionType: posType });
-    }
+    // Parse CSV — v7.459: THE shared header-aware parser (lib/keywords/csvParse.ts,
+    // Const II.7). One column detection for every upload path — the Competitors
+    // modal kept a private v7.92 fork that never learned the URL (v7.251) or
+    // Position Type (v7.451) columns and silently dropped both; sharing this
+    // module ends the drift. Branded/type classification stays HERE because it
+    // needs this project's domains + brand terms.
+    const csvMeta = parseKeywordCsvMeta(text);
+    const baseRows = csvMeta.rows;
+    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }> =
+      baseRows.map(r => ({
+        keyword:      r.keyword,
+        searchVolume: r.searchVolume,
+        position:     r.position,
+        type:         (r.typeRaw !== null
+          ? (r.typeRaw === 'ranked' ? 'ranked' : 'gap')
+          : (r.position !== null && r.position <= 100 ? 'ranked' : 'gap')) as 'ranked' | 'gap',
+        branded:      isBranded(r.keyword, clientDomain, competitorDomains, brandTerms),
+        serpFeatures: r.serpFeatures,
+        url:          r.url,
+        positionType: r.positionType,
+      }));
 
     if (parsed.length === 0) {
       setCsvStatus({ type: 'error', msg: 'No valid rows found. Expected columns: keyword, search_volume, type' });
@@ -1510,11 +1469,11 @@ export default function KeywordsPanel({
     // v7.451: the Position Type column decides whether a stored position is a real
     // ranking or a SERP-feature box (Semrush exports a feature as Position 1). Say so
     // at upload time — a file without it leaves every position of unknown basis.
-    const posTypeNote = posTypeCol >= 0
+    const posTypeNote = csvMeta.hasPositionType
       ? ` Position Type read on ${parsed.filter(r => r.positionType).length.toLocaleString()} row${parsed.filter(r => r.positionType).length !== 1 ? 's' : ''} — organic rankings and SERP-feature placements are kept apart.`
       : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export with Position Type included, or run Verify positions on this project.`;
     setCsvStatus({
-      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || posTypeCol < 0) ? 'error' : 'success',
+      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || !csvMeta.hasPositionType) ? 'error' : 'success',
       msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.${serpNote}${posTypeNote}`,
     });
     setTimeout(() => setCsvStatus(null), 15000);

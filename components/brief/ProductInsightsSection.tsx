@@ -49,9 +49,12 @@ import {
   buildScanPlan, projectedScanCost, projectedScanTime, scanQueryFor, type ScanTarget,
   type TopicVerdict, type TopicRow, type StoredCatScan, type ProductRow, type CatNode,
   // v7.449: Content Footprint by Brand — the shared basis the Assessment PDF also reads (II.6b)
-  buildContentFootprint, contentUrlList, CONTENT_GAP_MIN, type ContentFootprint, type NodeKw,
+  buildContentFootprint, contentUrlList, CONTENT_GAP_MIN, COVER_GAP_MIN, type ContentFootprint, type NodeKw,
   // v7.458: journey required vs actual — same canonical topics, one filing math (II.7)
-  clientPagesForTopics, type ContentCell,
+  // v7.459 (Wayne): actual measured in the requirement's own unit — topics covered
+  // (rank evidence), so columns sum exactly and the 7≠5 confusion is gone.
+  // clientPagesForTopics (v7.458) still lives in the lib for the page-level lens.
+  clientTopicsCovered, coveredTopicList,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
 // of the shared row builder) keep working unchanged (V.6).
@@ -274,12 +277,14 @@ export default function ProductInsightsSection({
     } catch { return null; }
   }, [openCfNode, uploadedKeywords, analysis, domain, built, openProduct]);
 
-  // ── v7.458: journey-vs-actual pages per line, for the collapsed header chip.
-  // Same math as the footprint card's client total (clientPagesForTopics, II.6a);
-  // journey total = the line's canonical topic count already shown in its header.
-  const linePages = useMemo(() => {
-    const m = new Map<string, ContentCell>();
-    for (const p of built.products) { try { m.set(p.name, clientPagesForTopics(p.topics as any)); } catch { /* chip hides itself (I.5) */ } }
+  // ── v7.458/v7.459: journey-vs-actual per line, for the collapsed header chip.
+  // v7.459 (Wayne): actual = topics COVERED — the same unit as the requirement
+  // (one topic = one intended page; covered = the client ranks on >=1 of its
+  // keywords). Rank evidence, so rows without a URL column still measure. The
+  // footprint card's client coverage applies the identical test (II.6a).
+  const lineCovered = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of built.products) { try { m.set(p.name, clientTopicsCovered(p.topics as any)); } catch { /* chip hides itself (I.5) */ } }
     return m;
   }, [built]);
 
@@ -797,44 +802,38 @@ export default function ProductInsightsSection({
                 </div>
                   </div>
                 </div>
-                {/* ── v7.458: Pages — journey vs actual. Journey = this line's canonical
-                    Theme-Cluster topic count (one topic = one intended page, II.7);
-                    actual = distinct ranking URLs, same math as the footprint card's
-                    client total (clientPagesForTopics, II.6a). No URL column on the
-                    ranked rows reads "no URL data", never 0 (I.5). ── */}
+                {/* ── v7.459 (Wayne): Pages — journey vs actual, in ONE unit. Journey =
+                    this line's canonical Theme-Cluster topics (one topic = one intended
+                    page, II.7); actual = topics COVERED — the client ranks on >=1 of the
+                    topic's keywords. Rank evidence: a stored rank always has a page
+                    behind it, so rows without a URL column still measure (the URL shows
+                    in the drill when known). Same test as the footprint card (II.6a). ── */}
                 {(() => {
                   const jTotal = p.topics.length;
-                  const cell = linePages.get(p.name) ?? null;
-                  if (jTotal === 0 || !cell) return <div />;
-                  const noUrl = cell.rankedKw > 0 && cell.urlKw === 0;
-                  const covered = Math.min(100, Math.round((cell.urls / jTotal) * 100));
-                  const missing = Math.max(0, jTotal - cell.urls);
+                  const covered = lineCovered.get(p.name);
+                  if (jTotal === 0 || covered === undefined) return <div />;
+                  const pct = Math.min(100, Math.round((covered / jTotal) * 100));
+                  const missing = Math.max(0, jTotal - covered);
                   return (
                     <div
-                      title={`The full ${p.name} journey needs ${jTotal} pages (Theme-Cluster topics — one per intent cluster). ${noUrl ? 'Your ranked rows carry no URL column, so your page count is unknown — not zero.' : `You hold ${cell.urls} ranking page${cell.urls === 1 ? '' : 's'} (v7.449 pages-ranking basis).`}`}
+                      title={`The full ${p.name} journey needs ${jTotal} pages (Theme-Cluster topics — one per intent cluster). You cover ${covered} topic${covered === 1 ? '' : 's'} — measured from rank evidence: a topic counts when you hold a stored rank on at least one of its keywords.`}
                       style={{ border: '1px solid var(--ca-108-99-255-0_25)', background: 'var(--ca-108-99-255-0_12)', borderRadius: '9px', padding: '7px 10px' }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
                         <span style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-8a8aa8)' }}>PAGES · JOURNEY VS ACTUAL</span>
-                        {noUrl
-                          ? <span style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>no URL data</span>
-                          : <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--c-9b96ff)', fontVariantNumeric: 'tabular-nums' }}>
-                              {cell.urls} <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-8a8aa8)' }}>of {jTotal}</span>
-                            </span>}
+                        <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--c-9b96ff)', fontVariantNumeric: 'tabular-nums' }}>
+                          {covered} <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--c-8a8aa8)' }}>of {jTotal}</span>
+                        </span>
                       </div>
-                      {!noUrl && (
-                        <>
-                          <div style={{ height: '6px', borderRadius: '3px', background: 'var(--c-1e1e34)', overflow: 'hidden', marginTop: '5px' }}>
-                            <div style={{ height: '100%', width: `${covered}%`, background: 'var(--c-6c63ff)' }} />
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '9px' }}>
-                            <span style={{ fontWeight: 800, color: missing > 0 ? 'var(--c-f87171)' : 'var(--c-8a8aa8)' }}>
-                              {missing > 0 ? `${missing} page${missing === 1 ? '' : 's'} missing` : '✓ journey covered'}
-                            </span>
-                            <span style={{ color: 'var(--c-8a8aa8)' }}>{covered}% of journey</span>
-                          </div>
-                        </>
-                      )}
+                      <div style={{ height: '6px', borderRadius: '3px', background: 'var(--c-1e1e34)', overflow: 'hidden', marginTop: '5px' }}>
+                        <div style={{ height: '100%', width: `${pct}%`, background: 'var(--c-6c63ff)' }} />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '9px' }}>
+                        <span style={{ fontWeight: 800, color: missing > 0 ? 'var(--c-f87171)' : 'var(--c-8a8aa8)' }}>
+                          {missing > 0 ? `${missing} page${missing === 1 ? '' : 's'} missing` : '✓ journey covered'}
+                        </span>
+                        <span style={{ color: 'var(--c-8a8aa8)' }}>{pct}% of journey</span>
+                      </div>
                     </div>
                   );
                 })()}
@@ -909,23 +908,21 @@ export default function ProductInsightsSection({
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px', marginBottom: '14px' }}>
                       <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '2px' }}>
                         {openCf.journey && openCf.journey.total > 0
-                          ? 'CONTENT FOOTPRINT VS JOURNEY — PAGES REQUIRED & RANKING (MEASURED)'
+                          ? 'CONTENT FOOTPRINT VS JOURNEY — TOPICS REQUIRED & COVERED (MEASURED)'
                           : 'CONTENT FOOTPRINT BY BRAND — PAGES RANKING (MEASURED)'}
                         <span style={{ fontWeight: 400, letterSpacing: 0, color: 'var(--c-55557a)' }}>
                           {openCf.journey && openCf.journey.total > 0
-                            ? '  · journey required = this line’s Theme-Cluster topics (one topic = one intended page) · actual = distinct URLs holding a stored rank (v7.449 basis) · no new API cost · click any count for the URL list behind it'
+                            ? '  · journey required = this line’s Theme-Cluster topics (one topic = one intended page) · covered = the brand holds a stored rank on the topic’s keywords (rank evidence — every rank has a page behind it) · every topic files in ONE sub-category, so columns sum exactly · no new API cost · click any count for the topics behind it'
                             : '  · a page = a distinct URL holding a stored rank on this line’s keywords · read from data already on file, no new API cost · click any count for the URL list behind it'}
                         </span>
                       </div>
                       {(() => {
                         const cf = openCf;
-                        // v7.458: with a journey requirement, every total bar is scaled against
-                        // the journey (the requirement row reads 100%); without one, against the
-                        // biggest brand as before.
                         const jr = cf.journey && cf.journey.total > 0 ? cf.journey : null;
                         const maxTotal = Math.max(1, ...cf.brands.map(b => b.total.urls));
                         const totalDen = jr ? Math.max(1, jr.total) : maxTotal;
                         const colMax = cf.children.map((_, i) => Math.max(1, ...cf.brands.map(b => b.perChild[i].urls)));
+                        // v7.449 URL cell — the fallback when no journey is on file.
                         const cellFor = (b: typeof cf.brands[number], cell: { urls: number; rankedKw: number; urlKw: number }, ci: number) => {
                           const noUrlData = cell.rankedKw > 0 && cell.urlKw === 0;
                           const isGap = b.kind === 'client' && ci >= 0 && cf.gapChildIdx.includes(ci);
@@ -934,8 +931,6 @@ export default function ProductInsightsSection({
                             <span title={`Ranks on ${cell.rankedKw} keyword${cell.rankedKw === 1 ? '' : 's'} here, but the uploaded rows carry no URL column — pages unknown, not zero`}
                               style={{ fontSize: '9.5px', color: 'var(--c-55557a)' }}>no URL data</span>
                           );
-                          const isTot = ci < 0;
-                          const covered = isTot && jr ? Math.min(100, Math.round((cell.urls / jr.total) * 100)) : null;
                           return (
                             <button
                               onClick={(e) => { e.stopPropagation(); setCfCell(sel ? null : { childIdx: ci, domain: b.domain }); }}
@@ -946,14 +941,44 @@ export default function ProductInsightsSection({
                             >
                               <span style={{ fontSize: '12px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'left',
                                 color: isGap ? 'var(--c-f87171)' : b.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
-                                {cell.urls}{isTot && jr ? <span style={{ fontSize: '9.5px', fontWeight: 600, color: 'var(--c-8a8aa8)' }}> / {jr.total}</span> : null}{isGap ? ' · GAP' : ''}
+                                {cell.urls}{isGap ? ' · GAP' : ''}
                               </span>
                               <span style={{ width: '100%', height: '4px', borderRadius: '2px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
                                 <span style={{ display: 'block', height: '100%', width: `${Math.min(100, (cell.urls / (ci >= 0 ? colMax[ci] : totalDen)) * 100)}%`,
                                   background: b.kind === 'client' ? 'var(--c-6c63ff)' : 'var(--c-46cce0)' }} />
                               </span>
-                              {covered !== null && (
-                                <span style={{ fontSize: '8.5px', fontWeight: 600, color: 'var(--c-8a8aa8)', textAlign: 'center' }}>{covered}% of journey</span>
+                            </button>
+                          );
+                        };
+                        // v7.459 coverage cell — topics covered vs required, the SAME unit as
+                        // the journey row, so every column sums exactly (Wayne). Rank evidence:
+                        // a brand with rank rows but no URL column still measures here.
+                        const covCellFor = (b: typeof cf.brands[number], ci: number) => {
+                          if (!jr || !b.covered) return <span style={{ fontSize: '9.5px', color: 'var(--c-55557a)' }}>—</span>;
+                          const n = ci >= 0 ? b.covered.perChild[ci] : b.covered.total;
+                          const den = ci >= 0 ? Math.max(1, jr.perChild[ci]) : jr.total;
+                          const isGap = b.kind === 'client' && ci >= 0 && cf.gapChildIdx.includes(ci);
+                          const sel = cfCell && cfCell.childIdx === ci && cfCell.domain === b.domain;
+                          const isTot = ci < 0;
+                          const pct = Math.min(100, Math.round((n / den) * 100));
+                          return (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setCfCell(sel ? null : { childIdx: ci, domain: b.domain }); }}
+                              title={`${b.domain}: covers ${n} of ${ci >= 0 ? jr.perChild[ci] : jr.total} journey topic${n === 1 ? '' : 's'} here — a topic counts when this brand holds a stored rank on at least one of its keywords. Click for the covered topics and their evidence.`}
+                              style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'stretch', gap: '3px', minWidth: '52px',
+                                background: 'transparent', border: sel ? '1px solid var(--ca-108-99-255-0_45)' : '1px solid transparent',
+                                borderRadius: '6px', padding: '2px 6px', cursor: 'pointer' }}
+                            >
+                              <span style={{ fontSize: '12px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'left',
+                                color: isGap ? 'var(--c-f87171)' : b.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
+                                {n}{isTot ? <span style={{ fontSize: '9.5px', fontWeight: 600, color: 'var(--c-8a8aa8)' }}> / {jr.total}</span> : null}{isGap ? ' · GAP' : ''}
+                              </span>
+                              <span style={{ width: '100%', height: '4px', borderRadius: '2px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
+                                <span style={{ display: 'block', height: '100%', width: `${pct}%`,
+                                  background: b.kind === 'client' ? 'var(--c-6c63ff)' : 'var(--c-46cce0)' }} />
+                              </span>
+                              {isTot && (
+                                <span style={{ fontSize: '8.5px', fontWeight: 600, color: 'var(--c-8a8aa8)', textAlign: 'center' }}>{pct}% of journey</span>
                               )}
                             </button>
                           );
@@ -964,7 +989,7 @@ export default function ProductInsightsSection({
                             <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px',
                               fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)', borderBottom: '1px solid var(--c-1e1e34)' }}>
                               <span>BRAND</span>
-                              <span>TOTAL PAGES</span>
+                              <span>{jr ? 'TOPICS COVERED' : 'TOTAL PAGES'}</span>
                               {cf.children.map(c => (
                                 <span key={c.key}>{c.name.toUpperCase()}<br />
                                   <span style={{ fontWeight: 400, letterSpacing: 0 }}>{c.kwCount.toLocaleString()} kws</span>
@@ -1015,19 +1040,54 @@ export default function ProductInsightsSection({
                                     display: 'block', color: b.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
                                     {bi + 1} · {b.kind === 'client' ? `${b.domain} (you)` : b.domain}
                                   </span>
-                                  <span style={{ fontSize: '9px', color: 'var(--c-55557a)' }}>url data: {b.total.urlKw}/{b.total.rankedKw} ranked kw</span>
+                                  <span style={{ fontSize: '9px', color: 'var(--c-55557a)' }}>
+                                    url data: {b.total.urlKw}/{b.total.rankedKw} ranked kw{jr && b.total.rankedKw > 0 && b.total.urlKw === 0 ? ' · landing URLs unknown — coverage from rank evidence' : ''}
+                                  </span>
                                 </span>
-                                {cellFor(b, b.total, -1)}
-                                {cf.children.map((c, ci) => <span key={c.key}>{cellFor(b, b.perChild[ci], ci)}</span>)}
+                                {jr ? covCellFor(b, -1) : cellFor(b, b.total, -1)}
+                                {cf.children.map((c, ci) => <span key={c.key}>{jr ? covCellFor(b, ci) : cellFor(b, b.perChild[ci], ci)}</span>)}
                               </div>
                             ))}
                           </div>
                         );
                       })()}
-                      {/* URL drill — the list behind the clicked count (same basis, contentUrlList) */}
+                      {/* drill — v7.459: with a journey, the clicked count opens the covered
+                          TOPICS with their rank evidence (best rank + covering URL when the
+                          source row carried one — "url unknown" stated, never invented, I.5);
+                          without one, the v7.449 URL list as before. */}
                       {cfCell && openCfNode && (() => {
-                        const kws = cfCell.childIdx >= 0 ? (openCfNode.children[cfCell.childIdx]?.allKws ?? []) : openCfNode.allKws;
                         const scopeName = cfCell.childIdx >= 0 ? (openCf.children[cfCell.childIdx]?.name ?? '') : `${p.name} (whole line)`;
+                        const jrOn = openCf.journey && openCf.journey.total > 0;
+                        if (jrOn) {
+                          const prodTopics = built.products.find(x => x.name === openProduct)?.topics ?? [];
+                          const rows = coveredTopicList({
+                            topics: prodTopics as any, children: openCfNode.children,
+                            childIdx: cfCell.childIdx, domain: cfCell.domain, clientDomain: domain,
+                            node: openCfNode, uploadedKeywords: uploadedKeywords ?? [],
+                          });
+                          return (
+                            <div style={{ marginTop: '8px', border: '1px solid var(--ca-108-99-255-0_25)', borderRadius: '8px', padding: '8px 10px', background: 'var(--c-0a0a14)' }}>
+                              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '5px' }}>
+                                <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-9b96ff)' }}>
+                                  {cfCell.domain} — {rows.length} COVERED TOPIC{rows.length === 1 ? '' : 'S'} · {scopeName.toUpperCase()}
+                                </span>
+                                <button onClick={() => setCfCell(null)} style={{ marginLeft: 'auto', fontSize: '9.5px', background: 'transparent', border: 'none', color: 'var(--c-8a8aa8)', cursor: 'pointer' }}>close ✕</button>
+                              </div>
+                              {rows.length === 0 && <div style={{ fontSize: '10.5px', color: 'var(--c-55557a)' }}>No covered topics for this brand in this scope.</div>}
+                              <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+                                {rows.map(r => (
+                                  <div key={r.topic + r.bestPos} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '2px 0', fontSize: '10.5px' }}>
+                                    <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.topic}</span>
+                                    <span style={{ flexShrink: 0, color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>
+                                      {r.kwCount} kw · best #{r.bestPos} · {r.url ?? 'url unknown (no URL column in the upload)'}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }
+                        const kws = cfCell.childIdx >= 0 ? (openCfNode.children[cfCell.childIdx]?.allKws ?? []) : openCfNode.allKws;
                         const urls = contentUrlList({ kws, domain: cfCell.domain, clientDomain: domain, uploadedKeywords: uploadedKeywords ?? [] });
                         return (
                           <div style={{ marginTop: '8px', border: '1px solid var(--ca-108-99-255-0_25)', borderRadius: '8px', padding: '8px 10px', background: 'var(--c-0a0a14)' }}>
@@ -1050,12 +1110,17 @@ export default function ProductInsightsSection({
                         );
                       })()}
                       <div style={{ marginTop: '7px', fontSize: '9.5px', color: 'var(--c-55557a)' }}>
-                        GAP = you verifiably hold 0 ranking URLs where a competitor holds {CONTENT_GAP_MIN}+ · counts measure RANKING content ("pages ranking", never "pages published") · client URLs from the canonical pool, competitor URLs from uploaded footprint rows
-                        {openCf.journey && openCf.journey.total > 0 && (
-                          <> · journey required = this line's canonical Theme-Cluster topics (the same "{openCf.journey.total} topics" in the line header), each filed under the sub-category holding most of its keywords — "% of journey" uses ranking pages as a floor for coverage</>
+                        {openCf.journey && openCf.journey.total > 0 ? (
+                          <>
+                            Journey required = this line's canonical Theme-Cluster topics (the same "{openCf.journey.total} topics" in the line header), each filed in exactly ONE sub-category by majority keywords — so a brand's columns always sum to its total. Covered = the brand holds a stored rank on ≥1 of the topic's keywords: rank evidence — a measured FLOOR (content that exists but never ranks is not counted). GAP = you cover 0 of a sub-category's topics while a competitor covers at least half of them (min {COVER_GAP_MIN}).
+                          </>
+                        ) : (
+                          <>
+                            GAP = you verifiably hold 0 ranking URLs where a competitor holds {CONTENT_GAP_MIN}+ · counts measure RANKING content ("pages ranking", never "pages published") · client URLs from the canonical pool, competitor URLs from uploaded footprint rows
+                          </>
                         )}
                         {openCf.unlistedRivals.length > 0 && (
-                          <> · no URL source for {openCf.unlistedRivals.join(', ')} — SERP-rival positions carry no URLs, so their pages are uncounted (not zero)</>
+                          <> · SERP-rival positions on file for {openCf.unlistedRivals.join(', ')} are 5-keyword scans, not full footprints — those brands are named, never charted</>
                         )}
                       </div>
                     </div>
