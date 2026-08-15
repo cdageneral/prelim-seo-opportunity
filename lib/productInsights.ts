@@ -841,6 +841,10 @@ export function projectedScanCost(
  *  competitor holds at least this many. Stated in the on-panel legend. */
 export const CONTENT_GAP_MIN = 10;
 
+/** v7.459: coverage-basis GAP floor — a child is flagged when the client covers 0
+ *  of its topics while a rival covers at least half of them (never fewer than this). */
+export const COVER_GAP_MIN = 2;
+
 export interface ContentCell {
   /** Distinct ranking URLs held by this domain on the node's keywords. */
   urls:     number;
@@ -849,7 +853,16 @@ export interface ContentCell {
   /** …of which the source row carried a URL (coverage; 0 with rankedKw>0 = no URL data). */
   urlKw:    number;
 }
-export interface ContentBrandRow { domain: string; kind: 'client' | 'tracked'; total: ContentCell; perChild: ContentCell[] }
+export interface ContentBrandRow {
+  domain: string; kind: 'client' | 'tracked'; total: ContentCell; perChild: ContentCell[];
+  /** v7.459 (Wayne): topics COVERED — the same unit as the journey requirement, so
+   *  columns sum exactly. A topic is covered when this brand holds a stored rank on
+   *  >=1 of its keywords: rank evidence — a rank always has a landing page behind it,
+   *  so a brand whose uploaded rows carry no URL column still measures (the URL is
+   *  extra evidence shown in the drill when known, never the gate). null when the
+   *  caller passed no topics (unknown, never 0 — I.5). */
+  covered: { total: number; perChild: number[]; atLine: number } | null;
+}
 
 /** v7.458 (Wayne, 2026-08-14): the journey requirement for a line — how many
  *  pages the full journey needs, from the SAME canonical Theme-Cluster topics
@@ -909,27 +922,70 @@ export interface BuildContentFootprintOpts {
 /** v7.458: file topics under children by majority keyword home — the ONE
  *  shared journey-requirement math (Const II.7). Exported so the header chip,
  *  the footprint card and the PDF all read this and never re-derive. */
-export function buildJourneyRequirement(
+/** v7.459: the per-topic filing — which child each topic belongs to (-1 = the line
+ *  level). THE one filing math (Const II.7): buildJourneyRequirement counts it,
+ *  brand coverage reads it, the drill lists it — never three derivations. */
+export function fileTopics(
   topics: JourneyTopicLike[],
   children: Array<Pick<CatNode, 'allKws'>>,
-): JourneyRequirement {
+): number[] {
   const kwToChild = new Map<string, number>();
   children.forEach((c, i) => { for (const k of c.allKws) kwToChild.set(k.keyword.toLowerCase().trim(), i); });
-  const perChild = children.map(() => 0);
-  let atLine = 0;
-  for (const t of topics) {
+  return topics.map(t => {
     const votes = children.map(() => 0);
     let any = false;
     for (const k of (t.keywords ?? [])) {
       const ci = kwToChild.get(String(k?.keyword ?? '').toLowerCase().trim());
       if (ci !== undefined) { votes[ci]++; any = true; }
     }
-    if (!any) { atLine++; continue; }
+    if (!any) return -1;
     let best = 0;
     for (let i = 1; i < votes.length; i++) if (votes[i] > votes[best]) best = i;   // tie → first child (deterministic)
-    perChild[best]++;
-  }
+    return best;
+  });
+}
+
+export function buildJourneyRequirement(
+  topics: JourneyTopicLike[],
+  children: Array<Pick<CatNode, 'allKws'>>,
+): JourneyRequirement {
+  const filing = fileTopics(topics, children);
+  const perChild = children.map(() => 0);
+  let atLine = 0;
+  for (const ci of filing) { if (ci < 0) atLine++; else perChild[ci]++; }
   return { total: topics.length, perChild, atLine };
+}
+
+/** v7.459: topics covered by a ranked-keyword set (rank evidence — a stored rank
+ *  always has a page behind it, known URL or not). Same filing as the requirement,
+ *  so brand columns and the journey row are in the SAME unit and sum exactly. */
+export function coverageForRankedSet(
+  topics: JourneyTopicLike[],
+  filing: number[],
+  childCount: number,
+  rankedKws: ReadonlySet<string>,
+): { total: number; perChild: number[]; atLine: number } {
+  const perChild = Array.from({ length: childCount }, () => 0);
+  let total = 0, atLine = 0;
+  topics.forEach((t, i) => {
+    const hit = (t.keywords ?? []).some(k => rankedKws.has(String(k?.keyword ?? '').toLowerCase().trim()));
+    if (!hit) return;
+    total++;
+    if (filing[i] < 0) atLine++; else perChild[filing[i]]++;
+  });
+  return { total, perChild, atLine };
+}
+
+/** v7.459: the collapsed header chip's covered-topics count straight from a line's
+ *  canonical topics — a topic is covered when the client ranks on >=1 of its
+ *  keywords. Same test coverageForRankedSet applies inside the footprint, so the
+ *  chip can never disagree with the card (II.6a). */
+export function clientTopicsCovered(topics: Array<{ keywords: any[] }>): number {
+  let n = 0;
+  for (const t of topics) {
+    if ((t.keywords as any[] ?? []).some(k => { const p = k?.position; return p != null && p >= 1; })) n++;
+  }
+  return n;
 }
 
 /** v7.458: the client's line-total pages cell straight from a line's canonical
@@ -957,8 +1013,16 @@ export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentF
   const children = (node.children ?? []).map(c => ({ key: c.key, name: c.name, kwCount: c.kwCount }));
 
   // ── v7.458: journey requirement from the caller's canonical topics (II.7) ──
-  const journey: JourneyRequirement | null =
-    topics ? buildJourneyRequirement(topics, node.children ?? []) : null;
+  // v7.459: the per-topic filing is computed ONCE and shared by the requirement
+  // and every brand's coverage — one unit, columns sum exactly (Wayne).
+  const filing: number[] | null = topics ? fileTopics(topics, node.children ?? []) : null;
+  const journey: JourneyRequirement | null = (() => {
+    if (!topics || !filing) return null;
+    const perChild = (node.children ?? []).map(() => 0);
+    let atLine = 0;
+    for (const ci of filing) { if (ci < 0) atLine++; else perChild[ci]++; }
+    return { total: topics.length, perChild, atLine };
+  })();
 
   // keyword → child index (a keyword's most-specific home is one node, III.6/I.3,
   // so children's allKws are disjoint; keywords filed AT the line level map to -1)
@@ -1001,19 +1065,39 @@ export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentF
     }
   }
 
+  // v7.459: per-brand coverage in the requirement's own unit (topics), from rank
+  // evidence — a brand whose rows carry no URL column still measures here.
+  const covFor = (rankedKws: ReadonlySet<string>) =>
+    (topics && filing) ? coverageForRankedSet(topics, filing, children.length, rankedKws) : null;
+
   const brands: ContentBrandRow[] = [];
-  if (clientNorm) brands.push({ domain: clientNorm, kind: 'client', total: accToCell(cTotal), perChild: cChild.map(accToCell) });
+  if (clientNorm) brands.push({ domain: clientNorm, kind: 'client', total: accToCell(cTotal), perChild: cChild.map(accToCell), covered: covFor(cTotal.rankedKw) });
   comp.forEach((e, dom) => {
     if (e.total.rankedKw.size === 0) return;
-    brands.push({ domain: dom, kind: 'tracked', total: accToCell(e.total), perChild: e.child.map(accToCell) });
+    brands.push({ domain: dom, kind: 'tracked', total: accToCell(e.total), perChild: e.child.map(accToCell), covered: covFor(e.total.rankedKw) });
   });
-  brands.sort((a, b) => (b.total.urls - a.total.urls) || (b.total.rankedKw - a.total.rankedKw) || a.domain.localeCompare(b.domain));
+  // v7.459: with a journey on file, rank the board by topics covered (the card's
+  // unit); the URL count breaks ties. Without one, by distinct URLs as before.
+  brands.sort((a, b) =>
+    ((b.covered?.total ?? -1) - (a.covered?.total ?? -1)) ||
+    (b.total.urls - a.total.urls) || (b.total.rankedKw - a.total.rankedKw) || a.domain.localeCompare(b.domain));
 
-  // ── GAP flags: client verifiably 0 (not a coverage hole), best rival >= threshold ──
+  // ── GAP flags ──
+  // v7.459 (coverage basis): flagged when the client covers 0 of a child's topics
+  // while some rival covers at least half of them (min COVER_GAP_MIN). Coverage is
+  // rank-evidence-based, so "0" here is measured, never a URL-column hole.
+  // Without a journey, the v7.449 URL rule stands unchanged.
   const client = brands.find(b => b.kind === 'client') ?? null;
   const gapChildIdx: number[] = [];
   children.forEach((_, i) => {
     if (!client) return;
+    if (journey && client.covered) {
+      if (client.covered.perChild[i] !== 0) return;
+      const req = journey.perChild[i];
+      const best = Math.max(0, ...brands.filter(b => b.kind !== 'client').map(b => b.covered?.perChild[i] ?? 0));
+      if (req > 0 && best >= Math.max(COVER_GAP_MIN, Math.ceil(req / 2))) gapChildIdx.push(i);
+      return;
+    }
     const cc = client.perChild[i];
     const unknown = cc.rankedKw > 0 && cc.urlKw === 0;   // ranks but upload had no URL column — unknown, never a gap claim
     if (cc.urls !== 0 || unknown) return;
@@ -1031,6 +1115,56 @@ export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentF
   unlistedRivals.sort();
 
   return { children, brands, gapChildIdx, unlistedRivals, journey };
+}
+
+/** v7.459: the covered-topic list BEHIND a coverage cell — each topic with its
+ *  rank evidence (ranked-kw count, best position, covering URL when the source
+ *  row carried one; "url unknown" is stated, never fabricated — I.5). Same
+ *  filing + coverage test as buildContentFootprint (II.7). */
+export interface CoveredTopicRow { topic: string; kwCount: number; bestPos: number; url: string | null }
+export function coveredTopicList(opts: {
+  topics: Array<JourneyTopicLike & { product?: string; parentName?: string }>;
+  children: Array<Pick<CatNode, 'allKws'>>;
+  childIdx: number;                       // -1 = the whole line
+  domain: string; clientDomain: string;
+  node: Pick<CatNode, 'allKws'>;
+  uploadedKeywords: any[];
+}): CoveredTopicRow[] {
+  const { topics, children, childIdx, domain, clientDomain, node, uploadedKeywords } = opts;
+  const clientNorm = normSovDomain(clientDomain);
+  const domNorm = normSovDomain(domain);
+  // this brand's rank evidence per keyword (best position wins; its URL rides along)
+  const ev = new Map<string, { pos: number; url: string | null }>();
+  const add = (kw: string, pos: number, url: string | null) => {
+    const e = ev.get(kw);
+    if (!e || pos < e.pos) ev.set(kw, { pos, url });
+  };
+  if (domNorm === clientNorm) {
+    for (const k of node.allKws) { if (k.position != null && k.position >= 1) add(k.keyword.toLowerCase().trim(), k.position, k.url ?? null); }
+  } else {
+    for (const r of (uploadedKeywords ?? [])) {
+      if (r?.source === 'blocked') continue;
+      if (normSovDomain(r?.domain ?? '') !== domNorm) continue;
+      const p = r?.position; if (p == null || p < 1) continue;
+      const kw = String(r?.keyword ?? '').toLowerCase().trim();
+      if (kw) add(kw, p, (typeof r?.url === 'string' && r.url.trim()) ? String(r.url) : null);
+    }
+  }
+  const filing = fileTopics(topics, children);
+  const rows: CoveredTopicRow[] = [];
+  topics.forEach((t, i) => {
+    if (childIdx >= 0 && filing[i] !== childIdx) return;
+    let kwCount = 0; let best: { pos: number; url: string | null } | null = null;
+    for (const k of (t.keywords ?? [])) {
+      const e = ev.get(String(k?.keyword ?? '').toLowerCase().trim());
+      if (!e) continue;
+      kwCount++;
+      if (!best || e.pos < best.pos) best = e;
+    }
+    if (kwCount === 0 || !best) return;
+    rows.push({ topic: (t as any).product ?? (t as any).parentName ?? 'topic', kwCount, bestPos: best.pos, url: best.url ? normContentUrl(best.url) : null });
+  });
+  return rows.sort((a, b) => (a.bestPos - b.bestPos) || (b.kwCount - a.kwCount) || a.topic.localeCompare(b.topic));
 }
 
 /** The URL list BEHIND a cell (Wayne's mockup: "click any cell → the URL list").
