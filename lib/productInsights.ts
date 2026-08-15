@@ -1154,6 +1154,7 @@ export function coveredTopicList(opts: {
   const rows: CoveredTopicRow[] = [];
   topics.forEach((t, i) => {
     if (childIdx >= 0 && filing[i] !== childIdx) return;
+    if (childIdx === -2 && filing[i] !== -1) return;   // v7.460: -2 = the LINE-LEVEL bucket (topics with no child home)
     let kwCount = 0; let best: { pos: number; url: string | null } | null = null;
     for (const k of (t.keywords ?? [])) {
       const e = ev.get(String(k?.keyword ?? '').toLowerCase().trim());
