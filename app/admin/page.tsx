@@ -28,7 +28,7 @@ interface Ev {
   meta: Record<string, unknown> | null; ip: string | null; userAgent: string | null; createdAt: string;
 }
 
-type Tab = 'users' | 'groups' | 'add' | 'activity' | 'hours';
+type Tab = 'users' | 'groups' | 'add' | 'activity' | 'hours' | 'notices';
 
 function timeAgo(iso: string | null): string {
   if (!iso) return '—';
@@ -110,12 +110,12 @@ export default function AdminPage() {
         <div className="mb-6">
           <h1 className="text-2xl font-semibold">Users &amp; Access</h1>
           <p className="text-orbit-secondary text-sm mt-1">
-            Add people, set their role, grant projects, and see who’s logging in and what they touch.
+            Add people, set their role, grant projects, broadcast a notice to everyone, and see who’s logging in and what they touch.
           </p>
         </div>
 
         <div className="flex gap-1 border-b border-orbit-border mb-6">
-          {([['users', 'Users & Access'], ['groups', 'Groups'], ['add', 'Add User'], ['activity', 'Activity Log'], ['hours', 'Hours Saved']] as [Tab, string][]).map(([k, label]) => (
+          {([['users', 'Users & Access'], ['groups', 'Groups'], ['add', 'Add User'], ['notices', 'Notices'], ['activity', 'Activity Log'], ['hours', 'Hours Saved']] as [Tab, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setTab(k)}
               className={`font-mono text-[12px] px-4 py-2.5 border-b-2 -mb-px transition-colors ${
                 tab === k ? 'text-orbit-accent border-orbit-accent' : 'text-orbit-secondary border-transparent hover:text-orbit-primary'}`}>
@@ -127,6 +127,7 @@ export default function AdminPage() {
         {tab === 'users'    && <UsersTab loading={loading} users={users} projects={projects} projName={projName} reload={load} />}
         {tab === 'groups'   && <GroupsTab />}
         {tab === 'add'      && <AddUserTab projects={projects} onDone={() => { setTab('users'); load(); }} />}
+        {tab === 'notices'  && <NoticesTab />}
         {tab === 'activity' && <ActivityTab />}
         {tab === 'hours'    && <HoursTab />}
       </div>
@@ -147,6 +148,12 @@ function Shell({ me, onSignOut, children }: { me: Me | null; onSignOut: () => vo
             <ThemeToggle />
             <Link href="/dashboard" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
               <i className="ti ti-layout-grid" /> Projects
+            </Link>
+            {/* v7.461: the Dashboard button now lives on Admin too — it was on
+                the projects header only, so getting to the usage dashboard from
+                here meant a round trip through Projects. */}
+            <Link href="/usage" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
+              <i className="ti ti-gauge" /> Dashboard
             </Link>
             {me ? (
               <button onClick={onSignOut} title={`${me.name} · sign out`}
@@ -929,6 +936,340 @@ function HoursTab() {
       </div>
 
       <button onClick={addRow} className="mt-3 text-sm text-orbit-accent hover:underline">+ Add activity</button>
+    </div>
+  );
+}
+
+/* ─── Notices tab (v7.461) ──────────────────────────────────────────────────
+   Wayne, 2026-08-15: "is there a way to send a message to all users? … a notice
+   with whatever message I enter would appear and when they dismiss or close it
+   then its gone."
+
+   Full manager: create/edit/delete any number of notices, each with a title,
+   message, severity and an optional start/end window. Every notice carries its
+   MEASURED read receipts — who closed it and when, as real notice_dismissals
+   rows (Const I.1) — plus the active users who have not yet, reported as an
+   honest gap rather than a modeled read-rate (I.5).                        */
+
+type Severity = 'info' | 'warning' | 'success';
+interface Receipt { userId: string; name: string; email: string; dismissedAt: string }
+interface Pending { userId: string; name: string; email: string }
+interface NoticeRow {
+  id: string; title: string; body: string; severity: Severity; active: boolean;
+  startsAt: string | null; endsAt: string | null;
+  createdByName: string | null; createdAt: string; updatedAt: string;
+  receipts: Receipt[]; pending: Pending[];
+}
+
+const SEV_LABEL: Record<Severity, string> = { info: 'Notice', warning: 'Important', success: 'Update' };
+const SEV_CHIP: Record<Severity, string> = {
+  info:    'bg-orbit-accent/12 text-orbit-accent-light border-orbit-accent/30',
+  warning: 'bg-orbit-amber/12 text-orbit-amber border-orbit-amber/30',
+  success: 'bg-orbit-green/12 text-orbit-green border-orbit-green/30',
+};
+
+/** `datetime-local` value ⇄ ISO. Empty string means "no bound". */
+function toLocalInput(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function fromLocalInput(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** What a user would see right now, given active + the optional window. */
+function liveState(n: NoticeRow): { label: string; cls: string } {
+  if (!n.active) return { label: 'Off', cls: 'bg-orbit-muted text-orbit-primary border-orbit-border' };
+  const now = Date.now();
+  if (n.startsAt && new Date(n.startsAt).getTime() > now) {
+    return { label: 'Scheduled', cls: 'bg-orbit-cyan/12 text-orbit-cyan border-orbit-cyan/30' };
+  }
+  if (n.endsAt && new Date(n.endsAt).getTime() <= now) {
+    return { label: 'Expired', cls: 'bg-orbit-muted text-orbit-primary border-orbit-border' };
+  }
+  return { label: 'Live', cls: 'bg-orbit-green/12 text-orbit-green border-orbit-green/30' };
+}
+
+function NoticesTab() {
+  const [rows, setRows]       = useState<NoticeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openId, setOpenId]   = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res  = await fetch('/api/admin/notices', { cache: 'no-store' });
+    const data = await res.json().catch(() => ({ notices: [] }));
+    setRows(data.notices ?? []);
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <p className="text-[11px] text-orbit-tertiary max-w-2xl">
+          A live notice appears for every signed-in user until each person closes it. Closing it is
+          <b> per user</b> — one person dismissing it never hides it from anyone else, and it never comes back
+          for them unless you re-send it.
+        </p>
+        <button onClick={() => setComposing(v => !v)}
+          className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-semibold px-5 py-2.5 rounded-lg shrink-0">
+          <i className={`ti ${composing ? 'ti-x' : 'ti-plus'} mr-1.5`} />{composing ? 'Cancel' : 'New notice'}
+        </button>
+      </div>
+
+      {composing && <NoticeComposer onDone={async () => { setComposing(false); await load(); }} />}
+
+      {loading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-14 bg-orbit-card rounded-lg animate-pulse" />)}</div>
+      ) : rows.length === 0 ? (
+        <div className="orbit-card text-center py-16">
+          <div className="w-12 h-12 rounded-xl bg-orbit-muted mx-auto flex items-center justify-center mb-3"><i className="ti ti-bell text-xl text-orbit-secondary" /></div>
+          <p className="text-orbit-secondary text-sm">No notices yet.</p>
+          <p className="text-orbit-tertiary text-[12px] mt-1">Write one above and everyone sees it the next time they load a page.</p>
+        </div>
+      ) : (
+        <div className="orbit-card overflow-hidden p-0">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left">
+                {['Notice', 'Type', 'State', 'Dismissed by', 'Posted', ''].map((h, i) => (
+                  <th key={i} className="font-mono text-[9.5px] uppercase tracking-wider text-orbit-tertiary px-4 py-3 border-b border-orbit-border">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(n => (
+                <NoticeRowView key={n.id} n={n}
+                  open={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} reload={load} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NoticeComposer({ onDone }: { onDone: () => void }) {
+  const [title, setTitle]       = useState('');
+  const [body, setBody]         = useState('');
+  const [severity, setSeverity] = useState<Severity>('info');
+  const [startsAt, setStartsAt] = useState('');
+  const [endsAt, setEndsAt]     = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !body.trim()) return;
+    setSaving(true); setError(null);
+    const res = await fetch('/api/admin/notices', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: title.trim(), body: body.trim(), severity, active: true,
+        startsAt: fromLocalInput(startsAt), endsAt: fromLocalInput(endsAt),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setSaving(false);
+    if (!res.ok) { setError(data.error || 'Could not publish the notice'); return; }
+    onDone();
+  }
+
+  return (
+    <form onSubmit={submit} className="orbit-card p-5 mb-5 space-y-4">
+      <div>
+        <label className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary block mb-1.5">Title</label>
+        <input value={title} onChange={e => setTitle(e.target.value)} maxLength={160}
+          placeholder="e.g. Scheduled maintenance this Saturday"
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+      </div>
+      <div>
+        <label className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary block mb-1.5">Message</label>
+        <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} maxLength={4000}
+          placeholder="What everyone needs to know. Line breaks are kept exactly as you type them."
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm text-orbit-primary outline-none focus:border-orbit-accent resize-y" />
+        <div className="text-[10px] font-mono text-orbit-tertiary mt-1">{body.length} / 4000</div>
+      </div>
+      <div className="grid sm:grid-cols-3 gap-4">
+        <div>
+          <label className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary block mb-1.5">Type</label>
+          <select value={severity} onChange={e => setSeverity(e.target.value as Severity)}
+            className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm text-orbit-primary outline-none focus:border-orbit-accent">
+            <option value="info">Notice</option>
+            <option value="warning">Important</option>
+            <option value="success">Update</option>
+          </select>
+        </div>
+        <div>
+          <label className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary block mb-1.5">Show from <span className="normal-case tracking-normal">(optional)</span></label>
+          <input type="datetime-local" value={startsAt} onChange={e => setStartsAt(e.target.value)}
+            className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+        </div>
+        <div>
+          <label className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary block mb-1.5">Stop after <span className="normal-case tracking-normal">(optional)</span></label>
+          <input type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)}
+            className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+        </div>
+      </div>
+      {error && <div className="text-[13px] text-orbit-red bg-orbit-red/10 border border-orbit-red/30 rounded-lg px-3 py-2">{error}</div>}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[11px] text-orbit-tertiary">Leave both dates blank to show it immediately and until you turn it off.</p>
+        <button type="submit" disabled={saving || !title.trim() || !body.trim()}
+          className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60 shrink-0">
+          {saving ? 'Publishing…' : 'Publish to all users'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function NoticeRowView({ n, open, onToggle, reload }:
+  { n: NoticeRow; open: boolean; onToggle: () => void; reload: () => void }) {
+  const state = liveState(n);
+  return (
+    <>
+      <tr className="hover:bg-orbit-accent/[0.03]">
+        <td className="px-4 py-3 border-b border-orbit-border max-w-[22rem]">
+          <div className="font-semibold text-orbit-primary truncate">{n.title}</div>
+          <div className="text-[11px] text-orbit-secondary truncate">{n.body}</div>
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${SEV_CHIP[n.severity]}`}>{SEV_LABEL[n.severity]}</span>
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          <span className={`font-mono text-[10px] px-2 py-0.5 rounded border ${state.cls}`}>{state.label}</span>
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          <span className="font-mono text-[11px] text-orbit-secondary">
+            {n.receipts.length} of {n.receipts.length + n.pending.length}
+          </span>
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border text-orbit-secondary text-[12px]">
+          {timeAgo(n.createdAt)}
+          {n.createdByName && <span className="text-orbit-tertiary"> · {n.createdByName}</span>}
+        </td>
+        <td className="px-4 py-3 border-b border-orbit-border text-right">
+          <button onClick={onToggle} className="font-mono text-[11px] text-orbit-accent hover:underline">
+            {open ? 'Close' : 'Manage'}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={6} className="px-4 py-5 border-b border-orbit-border bg-orbit-bg/60">
+            <NoticeDrawer n={n} reload={reload} onClose={onToggle} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function NoticeDrawer({ n, reload, onClose }: { n: NoticeRow; reload: () => void; onClose: () => void }) {
+  const [title, setTitle]       = useState(n.title);
+  const [body, setBody]         = useState(n.body);
+  const [severity, setSeverity] = useState<Severity>(n.severity);
+  const [startsAt, setStartsAt] = useState(toLocalInput(n.startsAt));
+  const [endsAt, setEndsAt]     = useState(toLocalInput(n.endsAt));
+  const [busy, setBusy]         = useState<string | null>(null);
+  const [error, setError]       = useState<string | null>(null);
+
+  async function patch(payload: Record<string, unknown>, label: string) {
+    setBusy(label); setError(null);
+    const res = await fetch(`/api/admin/notices/${n.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(null);
+    if (!res.ok) { setError(data.error || 'Could not save'); return false; }
+    reload();
+    return true;
+  }
+
+  async function remove() {
+    if (!confirm(`Delete “${n.title}”? Anyone who has not seen it never will.`)) return;
+    setBusy('delete');
+    const res = await fetch(`/api/admin/notices/${n.id}`, { method: 'DELETE' });
+    setBusy(null);
+    if (res.ok) { onClose(); reload(); }
+  }
+
+  return (
+    <div className="grid lg:grid-cols-[minmax(0,1fr)_20rem] gap-6">
+      <div className="space-y-3">
+        <input value={title} onChange={e => setTitle(e.target.value)} maxLength={160}
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+        <textarea value={body} onChange={e => setBody(e.target.value)} rows={4} maxLength={4000}
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm text-orbit-primary outline-none focus:border-orbit-accent resize-y" />
+        <div className="grid sm:grid-cols-3 gap-3">
+          <select value={severity} onChange={e => setSeverity(e.target.value as Severity)}
+            className="bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm text-orbit-primary outline-none focus:border-orbit-accent">
+            <option value="info">Notice</option>
+            <option value="warning">Important</option>
+            <option value="success">Update</option>
+          </select>
+          <input type="datetime-local" value={startsAt} onChange={e => setStartsAt(e.target.value)}
+            className="bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+          <input type="datetime-local" value={endsAt} onChange={e => setEndsAt(e.target.value)}
+            className="bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm text-orbit-primary outline-none focus:border-orbit-accent" />
+        </div>
+        {error && <div className="text-[13px] text-orbit-red bg-orbit-red/10 border border-orbit-red/30 rounded-lg px-3 py-2">{error}</div>}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <button disabled={busy !== null}
+            onClick={() => patch({ title: title.trim(), body: body.trim(), severity, startsAt: fromLocalInput(startsAt), endsAt: fromLocalInput(endsAt) }, 'save')}
+            className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-[13px] font-semibold px-4 py-2 rounded-lg disabled:opacity-60">
+            {busy === 'save' ? 'Saving…' : 'Save changes'}
+          </button>
+          <button disabled={busy !== null} onClick={() => patch({ active: !n.active }, 'toggle')}
+            className="text-[13px] px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary disabled:opacity-60">
+            {n.active ? 'Turn off' : 'Turn on'}
+          </button>
+          <button disabled={busy !== null}
+            onClick={() => { if (confirm('Show this notice again to everyone, including people who already closed it?')) patch({ resend: true }, 'resend'); }}
+            className="text-[13px] px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary disabled:opacity-60">
+            {busy === 'resend' ? 'Re-sending…' : 'Show again to everyone'}
+          </button>
+          <button disabled={busy !== null} onClick={remove}
+            className="text-[13px] px-4 py-2 rounded-lg border border-orbit-red/30 text-orbit-red hover:bg-orbit-red/10 disabled:opacity-60 ml-auto">
+            Delete
+          </button>
+        </div>
+      </div>
+
+      {/* Read receipts — real dismissal rows, never an inferred read-rate. */}
+      <div className="min-w-0">
+        <div className="font-mono text-[9.5px] uppercase tracking-wider text-orbit-tertiary mb-2">
+          Dismissed — {n.receipts.length} of {n.receipts.length + n.pending.length} active users
+        </div>
+        <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+          {n.receipts.map(r => (
+            <div key={r.userId} className="flex items-center justify-between gap-2 text-[12px]">
+              <span className="text-orbit-secondary truncate" title={r.email}>{r.name}</span>
+              <span className="font-mono text-[10px] text-orbit-secondary shrink-0">{timeAgo(r.dismissedAt)}</span>
+            </div>
+          ))}
+          {n.pending.map(p => (
+            <div key={p.userId} className="flex items-center justify-between gap-2 text-[12px]">
+              <span className="text-orbit-secondary truncate" title={p.email}>{p.name}</span>
+              <span className="font-mono text-[10px] text-orbit-secondary shrink-0">not yet</span>
+            </div>
+          ))}
+          {!n.receipts.length && !n.pending.length && (
+            <p className="text-[12px] text-orbit-tertiary">No active users to show this to yet.</p>
+          )}
+        </div>
+        <p className="text-[10px] text-orbit-secondary mt-3 leading-relaxed">
+          Each line is a real dismissal recorded when that person closed the notice — “not yet” means no
+          such record exists, not that they ignored it.
+        </p>
+      </div>
     </div>
   );
 }
