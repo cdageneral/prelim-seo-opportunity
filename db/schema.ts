@@ -435,3 +435,47 @@ export type ProjectGroupAccess = typeof projectGroupAccess.$inferSelect;
 export type AuthSession   = typeof authSessions.$inferSelect;
 export type AuditEvent    = typeof auditEvents.$inferSelect;
 export type NewAuditEvent = typeof auditEvents.$inferInsert;
+
+// ─── Notices (v7.461) ───────────────────────────────────────────────────────
+// Operator → user broadcast. An admin writes a notice; every active user sees it
+// once on their next page load and it disappears for them the moment they close
+// it. Dismissal is PER USER (one row per user per notice), so one person closing
+// it never silences it for anyone else.
+//
+// This is an INTERNAL / operator surface (Const II.6c): notices render only in
+// the app shell and the Admin panel — never in the Assessment PDF, the delivery
+// package, the PPT prompt or any client export. The retained suite asserts at
+// the source level that no client-deliverable module imports lib/notices.
+//
+// Created at runtime by ensureAuthTables() (CREATE TABLE IF NOT EXISTS), same as
+// the other auth tables — the build is `next build` only, never drizzle-kit push.
+
+export const noticeSeverityEnum = pgEnum('notice_severity', ['info', 'warning', 'success']);
+
+export const notices = pgTable('notices', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  title:     text('title').notNull(),
+  body:      text('body').notNull(),
+  severity:  noticeSeverityEnum('severity').notNull().default('info'),
+  active:    boolean('active').notNull().default(true),
+  // Optional window. null start = live immediately; null end = never expires.
+  startsAt:  timestamp('starts_at'),
+  endsAt:    timestamp('ends_at'),
+  createdBy:     uuid('created_by'),
+  createdByName: text('created_by_name'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// One row per (notice, user) the moment that user closes it. The read receipt
+// IS this row — a real event, never inferred (Const I.1).
+export const noticeDismissals = pgTable('notice_dismissals', {
+  id:          uuid('id').defaultRandom().primaryKey(),
+  noticeId:    uuid('notice_id').notNull().references(() => notices.id,  { onDelete: 'cascade' }),
+  userId:      uuid('user_id').notNull().references(() => appUsers.id,   { onDelete: 'cascade' }),
+  dismissedAt: timestamp('dismissed_at').defaultNow().notNull(),
+});
+
+export type Notice           = typeof notices.$inferSelect;
+export type NewNotice        = typeof notices.$inferInsert;
+export type NoticeDismissal  = typeof noticeDismissals.$inferSelect;
