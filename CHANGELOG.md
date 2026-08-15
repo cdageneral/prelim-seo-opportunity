@@ -1,3 +1,14 @@
+## v7.463 — 2026-08-15
+
+### Seer grounding is now machine-enforced (hotfix after a field fabrication)
+
+- Wayne caught Seer presenting numbers no tool returned — prompt rules alone did not stop it. Grounding is now MECHANICAL, not instructed: the server extracts every number from the draft answer and verifies it verbatim (comma/percent-normalized, digit-boundary matched) against the tool results actually returned in that request. An unverified number forces up to two re-query/rewrite turns; if the answer still fails, the user gets an honest could-not-ground refusal instead. Fail-closed — a fabricated number cannot render.
+- Self-computed aggregates are banned: the model may not calculate its own sums, ratios, or percentages; aggregates must come from the query tools. Abbreviations (1.2K) are rejected by the verifier by construction.
+- ALL panels, structurally: the route now builds a DATA CENSUS server-side — headline metrics plus a preview of EVERY stored section (SERP, AI visibility, Product Insights, authority, demand universe, scope, synthesis) — and injects it before the model's first turn. Breadth no longer depends on which tools the model chooses to call.
+- User corrections are not data: a figure typed by the user triggers a re-query, never adoption (new prompt rule, retained-suite pinned).
+- The drawer now states the verifier's measured result on each grounded answer: "✓ N numbers verified against stored data" (theme-mapped green, both themes pass AA).
+- Verification: real tsc + next build clean; retained suite 1,657 pass / 31 pre-existing / zero delta with 20 new v7.463 checks incl. the REAL verifier driven through esbuild (fabrication, self-computed ratio, abbreviation, digit-boundary and scale fixtures); dual-theme Chromium render green incl. the new badge.
+
 ## v7.462 — 2026-08-15
 
 ### OrbitIQ Seer (beta) — ask questions about your project's data
