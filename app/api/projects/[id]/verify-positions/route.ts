@@ -30,7 +30,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db }              from '@/db';
 import { projectKeywords, projects } from '@/db/schema';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
-import { getOrganicPositions } from '@/lib/apis/semrush';
+import { getOrganicPositions, getApiUnitsBalance, SEMRUSH_UNITS_PER_ROW } from '@/lib/apis/semrush';
 import { setUsageProject } from '@/lib/usage/context';
 import { positionBasisOf } from '@/lib/keywords/positionBasis';
 
@@ -87,10 +87,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const targets = await loadTargets(id);
     const [proj] = await db.select({ websiteUrl: projects.websiteUrl }).from(projects).where(eq(projects.id, id)).limit(1);
+    // v7.457: show what is actually LEFT before anything is spent (I.5b).
+    const balance = targets.length > 0 ? await getApiUnitsBalance() : null;
     return NextResponse.json({
       window: WINDOW,
       unverified: targets.length,
       domain: normDomain((proj as any)?.websiteUrl) || null,
+      unitsBalance: balance,
+      unitsAffordableRows: balance === null ? null : Math.floor((balance * 0.9) / SEMRUSH_UNITS_PER_ROW),
       // Semrush publishes no per-unit price (I.5b: a dated unpriced declaration), so the
       // cost is stated in UNITS actually consumed — 10 per returned line — never in dollars.
       unitsPerLine: 10,
