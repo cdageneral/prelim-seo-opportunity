@@ -850,6 +850,22 @@ export interface ContentCell {
   urlKw:    number;
 }
 export interface ContentBrandRow { domain: string; kind: 'client' | 'tracked'; total: ContentCell; perChild: ContentCell[] }
+
+/** v7.458 (Wayne, 2026-08-14): the journey requirement for a line — how many
+ *  pages the full journey needs, from the SAME canonical Theme-Cluster topics
+ *  every panel renders (one topic = one intent cluster = one intended page,
+ *  Const II.7/III.5 — the "42 topics" already shown in the line header, never a
+ *  new derivation). Each topic is filed under the child sub-category holding
+ *  the MAJORITY of its keywords; a topic whose keywords stop at the line level
+ *  files at the line (counted in `total`, listed in `atLine`, in no child). */
+export interface JourneyRequirement {
+  total:    number;    // topics on this node = pages the full journey needs
+  perChild: number[];  // topics filed per child (majority-keyword home)
+  atLine:   number;    // topics filed at the line level (no child home)
+}
+/** The keyword shape journey filing needs from a canonical Topic. */
+export interface JourneyTopicLike { keywords: Array<{ keyword: string }> }
+
 export interface ContentFootprint {
   children:       Array<{ key: string; name: string; kwCount: number }>;
   brands:         ContentBrandRow[];        // sorted by total.urls desc; client always present
@@ -857,6 +873,9 @@ export interface ContentFootprint {
   gapChildIdx:    number[];
   /** SERP rivals with rank data on this node but no URL-bearing source — uncounted, named (I.5). */
   unlistedRivals: string[];
+  /** v7.458: journey requirement from canonical Theme-Cluster topics; null when
+   *  the caller passed no topics (the requirement is then unknown, never 0 — I.5). */
+  journey:        JourneyRequirement | null;
 }
 
 /** One URL identity: strip protocol/www/hash/trailing slash, lowercase. Query kept
@@ -881,12 +900,65 @@ export interface BuildContentFootprintOpts {
   uploadedKeywords: any[];
   serpPositions:    Record<string, Array<{ keyword: string; position: number }>>;
   clientDomain:     string;
+  /** v7.458: the line's canonical Theme-Cluster topics (the SAME `p.topics` the
+   *  panel already renders). When present, the footprint carries the journey
+   *  requirement; when absent, `journey` is null — unknown, never 0 (I.5). */
+  topics?:          JourneyTopicLike[];
+}
+
+/** v7.458: file topics under children by majority keyword home — the ONE
+ *  shared journey-requirement math (Const II.7). Exported so the header chip,
+ *  the footprint card and the PDF all read this and never re-derive. */
+export function buildJourneyRequirement(
+  topics: JourneyTopicLike[],
+  children: Array<Pick<CatNode, 'allKws'>>,
+): JourneyRequirement {
+  const kwToChild = new Map<string, number>();
+  children.forEach((c, i) => { for (const k of c.allKws) kwToChild.set(k.keyword.toLowerCase().trim(), i); });
+  const perChild = children.map(() => 0);
+  let atLine = 0;
+  for (const t of topics) {
+    const votes = children.map(() => 0);
+    let any = false;
+    for (const k of (t.keywords ?? [])) {
+      const ci = kwToChild.get(String(k?.keyword ?? '').toLowerCase().trim());
+      if (ci !== undefined) { votes[ci]++; any = true; }
+    }
+    if (!any) { atLine++; continue; }
+    let best = 0;
+    for (let i = 1; i < votes.length; i++) if (votes[i] > votes[best]) best = i;   // tie → first child (deterministic)
+    perChild[best]++;
+  }
+  return { total: topics.length, perChild, atLine };
+}
+
+/** v7.458: the client's line-total pages cell straight from a line's canonical
+ *  topics — byte-for-byte the same math as buildContentFootprint's client total
+ *  (first-seen keyword wins the dedup, exactly like the panel's pool build), so
+ *  the collapsed header chip can never disagree with the footprint card (II.6a). */
+export function clientPagesForTopics(topics: Array<{ keywords: any[] }>): ContentCell {
+  const seen = new Set<string>();
+  const acc = newAcc();
+  for (const t of topics) for (const k of (t.keywords as any[] ?? [])) {
+    const kw = String(k?.keyword ?? '').toLowerCase().trim();
+    if (!kw || seen.has(kw)) continue;
+    seen.add(kw);
+    const p = k?.position;
+    if (p == null || p < 1) continue;
+    acc.rankedKw.add(kw);
+    if (k?.url) { acc.urlKw.add(kw); const u = normContentUrl(String(k.url)); if (u) acc.urls.add(u); }
+  }
+  return accToCell(acc);
 }
 
 export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentFootprint {
-  const { node, uploadedKeywords, serpPositions, clientDomain } = opts;
+  const { node, uploadedKeywords, serpPositions, clientDomain, topics } = opts;
   const clientNorm = normSovDomain(clientDomain);
   const children = (node.children ?? []).map(c => ({ key: c.key, name: c.name, kwCount: c.kwCount }));
+
+  // ── v7.458: journey requirement from the caller's canonical topics (II.7) ──
+  const journey: JourneyRequirement | null =
+    topics ? buildJourneyRequirement(topics, node.children ?? []) : null;
 
   // keyword → child index (a keyword's most-specific home is one node, III.6/I.3,
   // so children's allKws are disjoint; keywords filed AT the line level map to -1)
@@ -958,7 +1030,7 @@ export function buildContentFootprint(opts: BuildContentFootprintOpts): ContentF
   }
   unlistedRivals.sort();
 
-  return { children, brands, gapChildIdx, unlistedRivals };
+  return { children, brands, gapChildIdx, unlistedRivals, journey };
 }
 
 /** The URL list BEHIND a cell (Wayne's mockup: "click any cell → the URL list").
