@@ -28,7 +28,8 @@
  */
 
 import type { SovComputed } from '@/lib/sov/model';
-import { CONTENT_GAP_MIN } from '@/lib/productInsights';   // v7.449: the stated gap threshold, one constant (II.7)
+// v7.459: the gap statement moved to plain language (coverage basis) — the v7.449
+// CONTENT_GAP_MIN import went with it; the constant still lives in the shared lib.
 import {
   landGrabInsight, shadowCompetitorInsight, earnedFastPathInsight,
   localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight,
@@ -228,7 +229,11 @@ export interface AssessmentData {
       // topic count (one topic = one intended page), computed by the route via the
       // same shared builder (II.6a). null = unknown (no topics), never 0.
       journeyTotal?: number | null;
-      gaps: Array<{ child: string; bestDomain: string; bestUrls: number }>;
+      // v7.459 (Wayne): topics COVERED — the requirement's own unit, from rank
+      // evidence (a stored rank always has a page behind it). null = no journey.
+      youCovered?: number | null;
+      leaderCovered?: { domain: string; covered: number; isClient: boolean } | null;
+      gaps: Array<{ child: string; bestDomain: string; bestUrls: number; basis?: 'covered' | 'urls' }>;
       rivalsUncounted: number;
     }>;
   } | null;
@@ -799,25 +804,26 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     // absence, never a zero (I.5). ASCII-safe glyphs only (the v7.414 rule).
     const cfRows = (pi.contentByProduct ?? []).filter(c => c.leader).slice(0, 8);
     const cfHtml = cfRows.length === 0 ? '' : `
-      <div class="h2" style="margin-top:14px;">Content footprint vs journey - pages required and ranking per product line</div>
+      <div class="h2" style="margin-top:14px;">Content footprint vs journey - topics required and covered per product line</div>
       <table class="dt">
-        <tr><th>Product</th><th style="width:1.0in;">Journey pages</th><th style="width:1.2in;">Your pages</th><th style="width:1.5in;">Line leader</th><th>Sub-category gaps (you 0, rival ${CONTENT_GAP_MIN}+)</th></tr>
+        <tr><th>Product</th><th style="width:1.0in;">Journey pages</th><th style="width:1.3in;">You cover</th><th style="width:1.6in;">Coverage leader</th><th>Sub-category gaps</th></tr>
         ${cfRows.map(c => {
           const jT = (c as any).journeyTotal as number | null | undefined;
+          const yc = (c as any).youCovered as number | null | undefined;
+          const lc = (c as any).leaderCovered as { domain: string; covered: number; isClient: boolean } | null | undefined;
           const jTxt = jT ? `${n0(jT)}` : 'not derived';
-          const youTxt = c.you
-            ? (c.you.rankedKw > 0 && c.you.urlKw === 0 ? 'no URL data'
-              : jT ? `${n0(c.you.urls)} of ${n0(jT)} (${Math.min(100, Math.round((c.you.urls / jT) * 100))}%)` : `${n0(c.you.urls)}`)
-            : 'no ranked rows';
-          const leadTxt = c.leader
-            ? (c.leader.isClient ? `You - ${n0(c.leader.urls)} pages` : `${esc(c.leader.domain)} - ${n0(c.leader.urls)} pages`)
-            : '-';
+          const youTxt = jT
+            ? (yc != null ? `${n0(yc)} of ${n0(jT)} topics (${Math.min(100, Math.round((yc / jT) * 100))}%)` : 'no ranked rows')
+            : (c.you ? (c.you.rankedKw > 0 && c.you.urlKw === 0 ? 'no URL data' : `${n0(c.you.urls)} pages`) : 'no ranked rows');
+          const leadTxt = jT && lc
+            ? (lc.isClient ? `You - ${n0(lc.covered)} topics` : `${esc(lc.domain)} - ${n0(lc.covered)} topics`)
+            : (c.leader ? (c.leader.isClient ? `You - ${n0(c.leader.urls)} pages` : `${esc(c.leader.domain)} - ${n0(c.leader.urls)} pages`) : '-');
           const gapTxt = c.gaps.length === 0 ? 'none flagged'
-            : c.gaps.map((g: any) => `${esc(g.child)} (${esc(g.bestDomain)} holds ${n0(g.bestUrls)})`).join('; ');
+            : c.gaps.map((g: any) => `${esc(g.child)} (${esc(g.bestDomain)} covers ${n0(g.bestUrls)})`).join('; ');
           return `<tr><td><b>${esc(c.product)}</b></td><td>${jTxt}</td><td>${youTxt}</td><td>${leadTxt}</td><td>${gapTxt}</td></tr>`;
         }).join('')}
       </table>
-      <div style="font-size:8px; color:var(--muted); margin-top:3px;">Journey pages = the line's canonical Theme-Cluster topics - one topic (intent cluster) equals one intended page, the same topic count the panel header shows; "not derived" means the line carried no topic set, never zero. A page is a distinct URL holding a stored rank on the line's keywords - client URLs from the canonical pool (Semrush), competitor URLs from uploaded footprint rows. This measures ranking content, never everything a brand has published. A brand whose rows carry no URL column reads "no URL data" - unknown, not zero. SERP rivals without uploaded footprints carry positions only and are uncounted. Same shared computation as the panel's Content Footprint card.</div>`;
+      <div style="font-size:8px; color:var(--muted); margin-top:3px;">Journey pages = the line's canonical Theme-Cluster topics - one topic (intent cluster) equals one intended page, the same topic count the panel header shows; "not derived" means the line carried no topic set, never zero. Covered = the brand holds a stored rank on at least one of the topic's keywords - rank evidence, a measured floor: content that exists but never ranks is not counted, and a brand whose rows carry no URL column still measures (every rank has a page behind it). Each topic files in exactly one sub-category, so coverage columns sum exactly. A gap names a sub-category where the client covers 0 topics while the rival shown covers at least half of them. Same shared computation as the panel's Content Footprint card.</div>`;
     pages.push(pageWrap('PRODUCT INSIGHTS — SEARCH AND AI BY PRODUCT', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">Where ranking authority is not yet an AI answer.</h1>
       <div class="lede">Each product line measured on both axes: share of search demand held on page 1, and presence in AI answers. <b>${n0(pi.kpi.arb)} topics</b> already rank on page 1 while the AI side is weak — the authority exists; the AI answer is what is missing.${ownedShare !== null ? ` Across ${n0(pi.kpi.citesTotal)} recorded citations, ${esc(d.clientName)} holds <b>${p1(ownedShare)}</b>.` : ''}</div>
