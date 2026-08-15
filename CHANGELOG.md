@@ -1,3 +1,42 @@
+## v7.459 - the columns add up, and the parser stops eating URLs
+
+Wayne caught both, hours after v7.458 shipped. First: *"Synchrony 2+1+4 = 7 not 5. Why is
+nothing adding up?"* Second: *"we have all the existing urls for every brand as it is part of
+the csv upload... you should not be discarding that ranking URL."*
+
+**The parser defect (real data loss).** The Competitors modal kept its own v7.92 CSV parser,
+which never learned the URL column (v7.251) or the Position Type column (v7.451). Five Synchrony
+competitors uploaded through the modal - us.etrade, capitalone, openbank, breadfinancial,
+americanexpress - lost every landing URL their Semrush export carried: positions survived (the
+page-1 ladder looked fine, etrade leading at 29.5%) while the Content Footprint read "no URL
+data". The Keyword-panel path parsed the same files correctly, which is why ally/marcus/sofi had
+100% URL coverage. Fix: ONE shared parser, `lib/keywords/csvParse.ts` (Const II.7) - the union
+of both parsers' header aliases, URL + Position Type + SERP Features + header metadata - imported
+by BOTH paths. Recovery: re-upload the five brands' CSVs through the modal (it replaces rows).
+
+**The basis fix (Wayne's call: topics covered).** v7.458 measured the requirement in topics but
+the actual in distinct URLs - two units, so one page ranking in two sub-categories appeared in
+both columns and 2+1+4 could exceed the deduped 5. Now both sides are the SAME unit: a journey
+topic is COVERED when the brand holds a stored rank on >=1 of its keywords (rank evidence - every
+rank has a page behind it, known URL or not). Each topic files in exactly ONE sub-category, so
+every brand's columns sum exactly to its total - the confusion is structurally impossible. Bonus:
+brands whose rows lost their URLs to the parser bug still measure NOW, because coverage needs
+only rank evidence; the URL is drill-level evidence ("url unknown" stated when absent, I.5).
+
+- Header chip: "N of M" = topics covered of journey; same test as the card (II.6a).
+- Card: "Content Footprint vs Journey - topics required & covered"; board ranked by coverage;
+  cells click through to the covered TOPICS with best rank + covering URL when known.
+- GAP re-based: you cover 0 of a sub-category's topics while a rival covers at least half (min 2).
+- Coverage is a measured FLOOR and says so: content that exists but never ranks is not counted.
+  (A true rank-independent inventory would need a site crawl - a separate feature, not faked here.)
+- PDF (II.6a same release): "You cover 5 of 42 topics (12%)", coverage leader, coverage gaps.
+
+**Verification.** Real-project tsc + real `next build` clean. Suite A/B vs pristine base: FAIL
+sets identical (30 pre-existing), 26 new v7.459 checks green - including the exact-sum invariant,
+the etrade case (rank rows without URLs still measure), chip===card parity, and a parser fixture
+with quoted commas + Position Type. Two v7.458 checks amended with dated notes (chip basis, route
+expression). Real-Chromium dual-theme render of the reworked panel: 20/20.
+
 ## v7.458 - the journey tells you how many pages you are missing
 
 Wayne: *"based on the theme cluster panel data - how many pages are there in total per category
