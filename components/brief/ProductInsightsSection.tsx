@@ -953,18 +953,23 @@ export default function ProductInsightsSection({
                         // v7.459 coverage cell — topics covered vs required, the SAME unit as
                         // the journey row, so every column sums exactly (Wayne). Rank evidence:
                         // a brand with rank rows but no URL column still measures here.
+                        // v7.460 (Wayne: "still not totaling"): ci semantics — >=0 a child,
+                        // -1 the line TOTAL, -2 the LINE-LEVEL bucket (topics with no
+                        // sub-category home). Exposing -2 as a real column is what makes
+                        // every row sum ON SCREEN instead of in a footnote.
                         const covCellFor = (b: typeof cf.brands[number], ci: number) => {
                           if (!jr || !b.covered) return <span style={{ fontSize: '9.5px', color: 'var(--c-55557a)' }}>—</span>;
-                          const n = ci >= 0 ? b.covered.perChild[ci] : b.covered.total;
-                          const den = ci >= 0 ? Math.max(1, jr.perChild[ci]) : jr.total;
+                          const n = ci >= 0 ? b.covered.perChild[ci] : ci === -2 ? b.covered.atLine : b.covered.total;
+                          const req = ci >= 0 ? jr.perChild[ci] : ci === -2 ? jr.atLine : jr.total;
+                          const den = Math.max(1, req);
                           const isGap = b.kind === 'client' && ci >= 0 && cf.gapChildIdx.includes(ci);
                           const sel = cfCell && cfCell.childIdx === ci && cfCell.domain === b.domain;
-                          const isTot = ci < 0;
+                          const isTot = ci === -1;
                           const pct = Math.min(100, Math.round((n / den) * 100));
                           return (
                             <button
                               onClick={(e) => { e.stopPropagation(); setCfCell(sel ? null : { childIdx: ci, domain: b.domain }); }}
-                              title={`${b.domain}: covers ${n} of ${ci >= 0 ? jr.perChild[ci] : jr.total} journey topic${n === 1 ? '' : 's'} here — a topic counts when this brand holds a stored rank on at least one of its keywords. Click for the covered topics and their evidence.`}
+                              title={`${b.domain}: covers ${n} of ${req} journey topic${n === 1 ? '' : 's'} here — a topic counts when this brand holds a stored rank on at least one of its keywords. Click for the covered topics and their evidence.`}
                               style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'stretch', gap: '3px', minWidth: '52px',
                                 background: 'transparent', border: sel ? '1px solid var(--ca-108-99-255-0_45)' : '1px solid transparent',
                                 borderRadius: '6px', padding: '2px 6px', cursor: 'pointer' }}
@@ -983,7 +988,10 @@ export default function ProductInsightsSection({
                             </button>
                           );
                         };
-                        const gridCols = `minmax(170px,1.3fr) ${jr ? '132px' : '120px'}${cf.children.map(() => ' minmax(96px,1fr)').join('')}`;
+                        // v7.460: the line-level bucket gets its own column whenever it holds
+                        // topics, so journey + every brand row sum visibly across the grid.
+                        const hasLine = !!(jr && jr.atLine > 0);
+                        const gridCols = `minmax(170px,1.3fr) ${jr ? '132px' : '120px'}${cf.children.map(() => ' minmax(96px,1fr)').join('')}${hasLine ? ' minmax(96px,1fr)' : ''}`;
                         return (
                           <div style={{ overflowX: 'auto' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: '8px', alignItems: 'end', padding: '6px 4px 4px',
@@ -995,6 +1003,11 @@ export default function ProductInsightsSection({
                                   <span style={{ fontWeight: 400, letterSpacing: 0 }}>{c.kwCount.toLocaleString()} kws</span>
                                 </span>
                               ))}
+                              {hasLine && (
+                                <span>LINE LEVEL<br />
+                                  <span style={{ fontWeight: 400, letterSpacing: 0 }}>no sub-category</span>
+                                </span>
+                              )}
                             </div>
                             {/* ── v7.458: journey-required row — the page count the full journey
                                 needs, from this line's canonical Theme-Cluster topics (one topic
@@ -1025,6 +1038,15 @@ export default function ProductInsightsSection({
                                     </span>
                                   </span>
                                 ))}
+                                {hasLine && (
+                                  <span style={{ padding: '2px 6px' }}>
+                                    <span style={{ display: 'inline-block', minWidth: '30px', textAlign: 'center', fontSize: '11.5px', fontWeight: 800,
+                                      fontVariantNumeric: 'tabular-nums', color: 'var(--c-f59e0b)', background: 'rgba(245,158,11,0.08)',
+                                      border: '1px solid rgba(245,158,11,0.3)', borderRadius: '6px', padding: '2px 6px' }}>
+                                      {jr.atLine}
+                                    </span>
+                                  </span>
+                                )}
                               </div>
                             )}
                             {cf.brands.length === 0 && (
@@ -1046,6 +1068,7 @@ export default function ProductInsightsSection({
                                 </span>
                                 {jr ? covCellFor(b, -1) : cellFor(b, b.total, -1)}
                                 {cf.children.map((c, ci) => <span key={c.key}>{jr ? covCellFor(b, ci) : cellFor(b, b.perChild[ci], ci)}</span>)}
+                                {hasLine && <span>{covCellFor(b, -2)}</span>}
                               </div>
                             ))}
                           </div>
@@ -1056,7 +1079,8 @@ export default function ProductInsightsSection({
                           source row carried one — "url unknown" stated, never invented, I.5);
                           without one, the v7.449 URL list as before. */}
                       {cfCell && openCfNode && (() => {
-                        const scopeName = cfCell.childIdx >= 0 ? (openCf.children[cfCell.childIdx]?.name ?? '') : `${p.name} (whole line)`;
+                        const scopeName = cfCell.childIdx >= 0 ? (openCf.children[cfCell.childIdx]?.name ?? '')
+                          : cfCell.childIdx === -2 ? 'line level (no sub-category)' : `${p.name} (whole line)`;
                         const jrOn = openCf.journey && openCf.journey.total > 0;
                         if (jrOn) {
                           const prodTopics = built.products.find(x => x.name === openProduct)?.topics ?? [];
@@ -1112,7 +1136,7 @@ export default function ProductInsightsSection({
                       <div style={{ marginTop: '7px', fontSize: '9.5px', color: 'var(--c-55557a)' }}>
                         {openCf.journey && openCf.journey.total > 0 ? (
                           <>
-                            Journey required = this line's canonical Theme-Cluster topics (the same "{openCf.journey.total} topics" in the line header), each filed in exactly ONE sub-category by majority keywords — so a brand's columns always sum to its total. Covered = the brand holds a stored rank on ≥1 of the topic's keywords: rank evidence — a measured FLOOR (content that exists but never ranks is not counted). GAP = you cover 0 of a sub-category's topics while a competitor covers at least half of them (min {COVER_GAP_MIN}).
+                            Journey required = this line's canonical Theme-Cluster topics (the same "{openCf.journey.total} topics" in the line header), each filed in exactly ONE column — a sub-category by majority keywords, or LINE LEVEL when its keywords stop at the line — so every row's columns sum exactly to its total. Covered = the brand holds a stored rank on ≥1 of the topic's keywords: rank evidence — a measured FLOOR (content that exists but never ranks is not counted). GAP = you cover 0 of a sub-category's topics while a competitor covers at least half of them (min {COVER_GAP_MIN}).
                           </>
                         ) : (
                           <>
