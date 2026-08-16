@@ -1,3 +1,13 @@
+## v7.464 — 2026-08-15
+
+### Seer reads the Product Insights content-coverage basis (Wayne: "content coverage is in the product panel")
+
+- Seer answered "how much content is published for X vs Y" honestly but incompletely — it could reach only raw stored blobs, not the panel's derived Content Footprint vs Journey table, so it improvised keyword-contains counts. New `content_coverage` tool rebuilds that table from the SAME shared builders the Product Insights panel and the PDF render (buildProductRows → buildCategoryTree → buildContentFootprint, v7.449/458/459 — Const II.6a/II.6b/II.7): journey topics required vs covered per brand, distinct ranking URLs, gap sub-categories, and (on request) the client's ranking-URL list.
+- Coverage headlines now ride in the v7.463 DATA CENSUS, so every content question starts from the panel's own numbers before the model's first turn. Percentages are computed by the tool code and quoted verbatim — the model may not compute (v7.463 rule), and the grounding verifier still checks every number.
+- Read-only by construction: the intent-assignment map is read from the stored `_clusterAssigns` only — Seer never runs classifyIntents, never writes, never spends.
+- Three stored sections Seer was missing are now exposed: `page_map` (URL Taxonomy panel's ranking-URL map with per-page Semrush traffic), `local_search` (the Local panel's stored scan), `audience_segments`.
+- Honest-gap framing baked into the tool and prompt: the basis is rank evidence — pages that never rank are not counted, and a published-page inventory is NOT stored; when topics are absent the tool reports UNMEASURED, never zero (Const I.5).
+
 ## v7.463 — 2026-08-15
 
 ### Seer grounding is now machine-enforced (hotfix after a field fabrication)
