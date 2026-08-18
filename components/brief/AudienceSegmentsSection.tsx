@@ -126,43 +126,43 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 
 const SEGMENT_ACCENTS = [
   {
-    dot:    'bg-cyan-400',
-    tab:    'border-cyan-400 text-cyan-400',
-    tabOff: 'border-orbit-border text-orbit-secondary hover:border-cyan-400/40 hover:text-cyan-400/70',
-    badge:  'bg-cyan-400/10 text-cyan-400 border-cyan-400/30',
-    pill:   'bg-cyan-400/8 border-cyan-400/20 text-cyan-300',
-    heading:'text-cyan-400',
-    icon:   'text-cyan-400',
-    bar:    'bg-cyan-400',
+    dot:    'bg-seg-a',
+    tab:    'border-seg-a text-seg-a',
+    tabOff: 'border-orbit-border text-orbit-secondary hover:border-seg-a/40 hover:text-seg-a',
+    badge:  'bg-seg-a/10 text-seg-a border-seg-a/30',
+    pill:   'bg-seg-a/8 border-seg-a/20 text-seg-a',
+    heading:'text-seg-a',
+    icon:   'text-seg-a',
+    bar:    'bg-seg-a',
     rail:   'bg-orbit-cyan',
-    hex:    '#22d3ee',
-    section:'border-l-2 border-cyan-400/30 pl-3',
+    cssColor: 'rgb(var(--seg-a))',
+    section:'border-l-2 border-seg-a/30 pl-3',
   },
   {
-    dot:    'bg-violet-400',
-    tab:    'border-violet-400 text-violet-400',
-    tabOff: 'border-orbit-border text-orbit-secondary hover:border-violet-400/40 hover:text-violet-400/70',
-    badge:  'bg-violet-400/10 text-violet-400 border-violet-400/30',
-    pill:   'bg-violet-400/8 border-violet-400/20 text-violet-300',
-    heading:'text-violet-400',
-    icon:   'text-violet-400',
-    bar:    'bg-violet-400',
+    dot:    'bg-seg-b',
+    tab:    'border-seg-b text-seg-b',
+    tabOff: 'border-orbit-border text-orbit-secondary hover:border-seg-b/40 hover:text-seg-b',
+    badge:  'bg-seg-b/10 text-seg-b border-seg-b/30',
+    pill:   'bg-seg-b/8 border-seg-b/20 text-seg-b',
+    heading:'text-seg-b',
+    icon:   'text-seg-b',
+    bar:    'bg-seg-b',
     rail:   'bg-orbit-accent',
-    hex:    '#a78bfa',
-    section:'border-l-2 border-violet-400/30 pl-3',
+    cssColor: 'rgb(var(--seg-b))',
+    section:'border-l-2 border-seg-b/30 pl-3',
   },
   {
-    dot:    'bg-amber-400',
-    tab:    'border-amber-400 text-amber-400',
-    tabOff: 'border-orbit-border text-orbit-secondary hover:border-amber-400/40 hover:text-amber-400/70',
-    badge:  'bg-amber-400/10 text-amber-400 border-amber-400/30',
-    pill:   'bg-amber-400/8 border-amber-400/20 text-amber-300',
-    heading:'text-amber-400',
-    icon:   'text-amber-400',
-    bar:    'bg-amber-400',
+    dot:    'bg-seg-c',
+    tab:    'border-seg-c text-seg-c',
+    tabOff: 'border-orbit-border text-orbit-secondary hover:border-seg-c/40 hover:text-seg-c',
+    badge:  'bg-seg-c/10 text-seg-c border-seg-c/30',
+    pill:   'bg-seg-c/8 border-seg-c/20 text-seg-c',
+    heading:'text-seg-c',
+    icon:   'text-seg-c',
+    bar:    'bg-seg-c',
     rail:   'bg-orbit-amber',
-    hex:    '#fbbf24',
-    section:'border-l-2 border-amber-400/30 pl-3',
+    cssColor: 'rgb(var(--seg-c))',
+    section:'border-l-2 border-seg-c/30 pl-3',
   },
 ];
 
@@ -270,7 +270,7 @@ function SegmentExportActions({ segment, label }: {
         aria-label={`Copy ${segment.name} to clipboard`}
       >
         <i
-          className={`text-[13px] ${copied === 'ok' ? 'ti ti-check text-green-400' : copied === 'fail' ? 'ti ti-alert-triangle text-amber-400' : 'ti ti-copy'}`}
+          className={`text-[13px] ${copied === 'ok' ? 'ti ti-check text-orbit-green' : copied === 'fail' ? 'ti ti-alert-triangle text-orbit-amber' : 'ti ti-copy'}`}
           aria-hidden="true"
         />
       </button>
@@ -385,7 +385,7 @@ function SegmentDetail({ segment, accent, label, connected, cardRef }: {
         className="orbit-card p-5 relative z-10 lg:mt-8"
         style={connected
           ? { background: 'transparent', border: '2px solid transparent' }
-          : { border: `2px solid ${accent.hex}` }}
+          : { border: `2px solid ${accent.cssColor}` }}
       >
         {/* full-width header — share-of-volume pinned far right */}
         <div className="flex items-start justify-between gap-4 mb-4">
@@ -394,7 +394,7 @@ function SegmentDetail({ segment, accent, label, connected, cardRef }: {
               {label}
             </span>
             {segment.yoyGrowth && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold">
+              <span className="text-[10px] px-2 py-0.5 rounded-full border border-orbit-green/30 bg-orbit-green/10 text-orbit-green font-semibold">
                 {segment.yoyGrowth}
               </span>
             )}
@@ -598,7 +598,7 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
             Segment deep-dives — journey, prompts, experience planning
           </p>
           {showImageDiag && (
-            <p className="text-amber-400/80 text-[10px] mt-1 flex items-center gap-1.5" title="Persona-portrait generation status from the last analysis run">
+            <p className="text-orbit-amber text-[10px] mt-1 flex items-center gap-1.5" title="Persona-portrait generation status from the last analysis run">
               <i className="ti ti-photo-exclamation text-[11px]" />
               <span>Persona images — {imageStatus}</span>
             </p>
@@ -628,7 +628,7 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
               width={neck.w}
               height={neck.h}
             >
-              <path d={neck.d} fill="var(--card)" stroke={activeAcc.hex} strokeWidth={2} />
+              <path d={neck.d} fill="var(--card)" stroke={activeAcc.cssColor} strokeWidth={2} />
             </svg>
           )}
 
@@ -650,7 +650,7 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                     isAct ? '' : 'opacity-70 hover:opacity-100'
                   }`}
                   style={isAct
-                    ? (neck ? { background: 'transparent', border: '2px solid transparent' } : { border: `2px solid ${acc.hex}` })
+                    ? (neck ? { background: 'transparent', border: '2px solid transparent' } : { border: `2px solid ${acc.cssColor}` })
                     : {}}
                 >
                   {/* Card header — v7.149: AI-generated persona portrait (Option A) left */}
@@ -683,7 +683,7 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
 
                   {/* Click hint when inactive */}
                   {!isAct && (
-                    <p className={`text-[10px] font-medium ${acc.heading} opacity-60 flex items-center gap-1`}>
+                    <p className={`text-[10px] font-medium ${acc.heading} flex items-center gap-1`}>
                       <i className="ti ti-arrow-right text-[10px]" />
                       View deep-dive
                     </p>
