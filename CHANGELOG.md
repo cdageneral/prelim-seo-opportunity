@@ -1,3 +1,15 @@
+## v7.469 — 2026-08-18
+
+### Journeys: expand and collapse a branch with a + / − control (Wayne: "can you add a + and a - symbol to expand or collapse a branch of the structure?")
+
+- **Every node that has children gets a control**, drawn as a circle sitting **on the node right border** — exactly the point its children branch from, so it reads as the branch point rather than as decoration. A leaf topic gets none.
+- **− while open, + while collapsed.** Collapsing a category hides its topics and the canvas shrinks to match; collapsing the umbrella folds the whole tree down to one node. Measured on the real component: collapsing one 40-topic category took the topic column from **91 to 51 nodes** and the canvas from **6,504px to 3,774px**, and expanding restored both **exactly**.
+- **The tree still opens fully expanded.** Nothing is hidden unless you choose to hide it — collapsing is the user's call, which is the opposite of the v7.468 cap that hid rows on your behalf.
+- **Collapse is display state only.** It never touches the stored taxonomy, the Content-Plan selection, or any total (Const II.7). A branch checkbox still covers every topic under that branch whether the branch is open or shut — asserted by a retained check, because "what you see" and "what you select" disagreeing was exactly the v7.468 bug.
+- The control is a labelled button for screen readers ("Collapse Budgeting & Saving: 24 topics" / "Expand …"), and it stops event propagation so toggling a branch does not also open that node's keyword panel.
+- **Downstream trace (Const II.6a/II.6b):** no metric changed — a view-state control. No panel, PDF section, export or rollup reads collapse state. No new client-facing metric, so no new PDF section is due.
+- **Verification:** real project `tsc` clean, real `next build` compiled; retained suite **1,863 pass / 33 pre-existing / zero delta**, with **37 new v7.469 checks** run in both themes — the real component is rendered, a real click collapses a real category, and the round trip back to the original geometry is asserted. The v7.468 check on the layout memo dependency was **updated in place with a dated note** (it now depends on the user-driven collapse set, and the old cap-driven expansion set is still asserted gone) rather than deleted, per Const V.6.
+
 ## v7.468 — 2026-08-18
 
 ### Journeys: the topic cap is gone, and the undefined-token guard now covers the whole app (Wayne: "there should not be a cap. If there is a content gap it should show it")
