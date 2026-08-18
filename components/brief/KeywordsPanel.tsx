@@ -3204,7 +3204,10 @@ function RankDistributionSplit({
   );
 }
 
-function KwCategorySection({
+// v7.470: exported for the retained regression harness only (Const V.6) — the suite
+// renders the REAL component and drives real checkbox clicks, so the selection rules
+// below can never drift from what ships. No behavior change; nothing else imports it.
+export function KwCategorySection({
   cb,
   rows,
   rankFilter,
@@ -3443,13 +3446,63 @@ function KwCategorySection({
   };
 
   // ── v7.419: selection + bulk-action helpers ─────────────────────────────────
-  const nodeById = new Map<string, CatNode>();
-  for (const n of allTop) nodeById.set(n.id, n);
-  const selectedNodes   = Array.from(selected).map(id => nodeById.get(id)).filter((n): n is CatNode => !!n);
+  // v7.470 (Wayne 2026-08-18: "we should have a check box at each sub-category level as
+  // well as the parent level. This way we could delete or action a sub category"):
+  // selection is no longer top-level-only. EVERY node in the tree is indexed here, so a
+  // checkbox at any depth resolves to a real CatNode and the existing bulk actions
+  // (Move to Content Plan / Excel / hide) operate on the exact subtree that was checked.
+  const nodeById   = new Map<string, CatNode>();
+  const parentIdOf = new Map<string, string>();
+  const indexTree = (nodes: CatNode[], parentId: string | null): void => {
+    for (const n of nodes) {
+      nodeById.set(n.id, n);
+      if (parentId) parentIdOf.set(n.id, parentId);
+      if (n.children.length > 0) indexTree(n.children, n.id);
+    }
+  };
+  indexTree(allTop, null);
+
+  // v7.470: a node is COVERED when one of its ancestors is checked. A parent's totals are
+  // the exact arithmetic rollup of its descendants (aggregateCatNode), so actioning a
+  // parent AND a child of it would put the same keyword rows through twice - the
+  // double-count Const I.3 forbids. The action set is therefore the TOP-MOST checked
+  // nodes only; covered rows render checked-and-locked so what is included stays visible.
+  const coveredByAncestor = (id: string): boolean => {
+    let p = parentIdOf.get(id);
+    while (p) { if (selected.has(p)) return true; p = parentIdOf.get(p); }
+    return false;
+  };
+  const selectedNodes = Array.from(selected)
+    .map(id => nodeById.get(id))
+    .filter((n): n is CatNode => !!n && !coveredByAncestor(n.id));
   const selectedKwCount = selectedNodes.reduce((s, n) => s + n.totKw, 0);
+  const selSubCount     = selectedNodes.filter(n => n.depth > 0).length;
+  // v7.470: PARTIAL - nothing is checked at this node but something beneath it is. Drawn
+  // as the checkbox's indeterminate dash, so a COLLAPSED branch still reports that a
+  // sub-category inside it is selected (v7.469 collapse is display state; selection is
+  // not, and must never become silently invisible). One pass over the tree, not per row.
+  const partialIds = new Set<string>();
+  const markPartial = (node: CatNode): boolean => {
+    let any = false;
+    for (const c of node.children) {
+      const deeper = markPartial(c);
+      if (selected.has(c.id) || deeper) any = true;
+    }
+    if (any) partialIds.add(node.id);
+    return any;
+  };
+  for (const n of allTop) markPartial(n);
   const toggleSelect = (id: string) => setSelected(prev => {
     const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(id)) { next.delete(id); return next; }
+    next.add(id);
+    // Checking a parent subsumes everything under it - drop already-checked descendants
+    // so the stored set stays the minimal top-most cover (I.3).
+    const node = nodeById.get(id);
+    if (node) {
+      const prune = (n: CatNode): void => { for (const c of n.children) { next.delete(c.id); prune(c); } };
+      prune(node);
+    }
     return next;
   });
   const allSelected = allTop.length > 0 && allTop.every(n => selected.has(n.id));
@@ -3463,19 +3516,48 @@ function KwCategorySection({
   // A top-level node → the hidden-list entries that hide exactly it. Path nodes store the
   // STORED path key (prefix match survives display collapse); flat brand/location/Other
   // nodes store the membership name; a pre-path synthetic family hides each member leaf.
+  // v7.470: this now runs for SUB-categories too, and every depth resolves honestly:
+  //   - 'path:' nodes carry their full stored path key at EVERY depth, and the
+  //     buildKwPool hide filter matches joined === key or joined.startsWith(key + sep),
+  //     so a sub-category key hides exactly that subtree and nothing above it.
+  //   - flat 'cat:' nodes hide by stored membership name, as before.
+  //   - a DERIVED topic-split sub-cluster ('cat:...::t::...' / '...::general', built from
+  //     the canonical topic assignment) has no stored category identity of its own.
+  //     Hiding it by its parent's name would take the WHOLE category with it, so it
+  //     returns no entries and runHide says so rather than hiding the wrong thing
+  //     (Const I.1 / I.5 - an honest gap, never a wrong action).
   const hiddenEntriesFor = (node: CatNode): Array<{ name: string; key?: string; kwCount: number }> => {
     if (node.id.startsWith('path:')) return [{ name: node.name, key: node.id.slice(5), kwCount: node.totKw }];
-    if (node.id.startsWith('cat:'))  return [{ name: node.name, kwCount: node.totKw }];
-    return node.children.map(c => ({ name: c.name, kwCount: c.totKw }));
+    if (node.id.startsWith('cat:'))  return node.id.includes('::') ? [] : [{ name: node.name, kwCount: node.totKw }];
+    if (node.id.startsWith('line:')) return node.children.map(c => ({ name: c.name, kwCount: c.totKw }));
+    return [];
   };
+  // v7.470: how many of the current selections the hide filter can actually address.
+  const hideableEntries = selectedNodes.flatMap(hiddenEntriesFor);
+  const unhideableSel   = selectedNodes.filter(n => hiddenEntriesFor(n).length === 0);
 
   const runHide = async () => {
     if (!onHideCategories || selectedNodes.length === 0) { setConfirmHide(false); return; }
     setHideBusy(true);
     try {
-      const entries = selectedNodes.flatMap(hiddenEntriesFor);
+      const entries = hideableEntries;
+      // v7.470: a selected derived sub-cluster has no stored category to hide. Report that
+      // plainly instead of appearing to hide it (I.1) or hiding its parent instead.
+      if (entries.length === 0) {
+        setActionNote(
+          unhideableSel.length === 1
+            ? `Nothing was hidden — “${unhideableSel[0].name}” is a derived topic split with no stored category of its own. Select its parent category to hide the whole category, or remove its keywords with the row trash icon.`
+            : `Nothing was hidden — all ${unhideableSel.length} selected sub-categories are derived topic splits with no stored category of their own. Select a parent category instead, or remove their keywords with the row trash icons.`,
+        );
+        return;
+      }
       await onHideCategories(entries);
-      setActionNote(`${entries.length} categor${entries.length === 1 ? 'y' : 'ies'} hidden from every panel and total — restore anytime from the hidden list above.`);
+      setActionNote(
+        `${entries.length} categor${entries.length === 1 ? 'y' : 'ies'} hidden from every panel and total — restore anytime from the hidden list above.`
+        + (unhideableSel.length > 0
+            ? ` ${unhideableSel.length} selected sub-categor${unhideableSel.length === 1 ? 'y is a derived topic split' : 'ies are derived topic splits'} with no stored category — not hidden.`
+            : ''),
+      );
       setSelected(new Set());
     } catch {
       setActionNote('Hide failed — nothing was changed. Try again.');
@@ -3603,8 +3685,10 @@ function KwCategorySection({
         onAskConfirm={(id: string) => setConfirmId(id)}
         onCancelConfirm={() => setConfirmId(null)}
         onConfirmDelete={runDelete}
-        selectable={n.depth === 0}
-        checked={selected.has(n.id)}
+        selectable
+        checked={selected.has(n.id) || coveredByAncestor(n.id)}
+        covered={coveredByAncestor(n.id)}
+        partial={!selected.has(n.id) && !coveredByAncestor(n.id) && partialIds.has(n.id)}
         onToggleSelect={() => toggleSelect(n.id)}
         brand={n.depth === 0 ? (brandLadders.get(n.id) ?? null) : null}
         brandExpanded={brandOpen.has(n.id)}
@@ -3700,7 +3784,11 @@ function KwCategorySection({
       {selected.size > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '2px 20px 6px', padding: '7px 12px', borderRadius: 8, background: 'var(--ca-108-99-255-0_1)', border: '1px solid var(--ca-108-99-255-0_25)' }}>
           <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-c8c8f0)' }}>
-            {selectedNodes.length} categor{selectedNodes.length === 1 ? 'y' : 'ies'} · {selectedKwCount.toLocaleString()} keywords selected
+            {/* v7.470: the count is the TOP-MOST checked nodes — a child inside a checked
+                parent is not counted again, so the keyword total never double-counts (I.3). */}
+            {selectedNodes.length} categor{selectedNodes.length === 1 ? 'y' : 'ies'}
+            {selSubCount > 0 ? ` (${selSubCount} sub-categor${selSubCount === 1 ? 'y' : 'ies'})` : ''}
+            {' · '}{selectedKwCount.toLocaleString()} keywords selected
           </span>
           {!confirmHide ? (
             <>
@@ -3727,7 +3815,12 @@ function KwCategorySection({
           ) : (
             <>
               <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--c-f87171)' }}>
-                Hide {selectedNodes.length} categor{selectedNodes.length === 1 ? 'y' : 'ies'} from every panel and total? Keyword–category associations stay stored — restore anytime.
+                {/* v7.470: state the count the hide filter can actually address, not the raw
+                    selection — a derived sub-cluster has no stored category to hide (I.5). */}
+                Hide {hideableEntries.length} categor{hideableEntries.length === 1 ? 'y' : 'ies'} from every panel and total? Keyword–category associations stay stored — restore anytime.
+                {unhideableSel.length > 0
+                  ? ` ${unhideableSel.length} selected sub-categor${unhideableSel.length === 1 ? 'y is a derived topic split' : 'ies are derived topic splits'} with no stored category — ${unhideableSel.length === 1 ? 'it' : 'they'} cannot be hidden.`
+                  : ''}
               </span>
               <button type="button" disabled={hideBusy} onClick={() => void runHide()}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '10.5px', fontWeight: 700, color: 'var(--c-f87171)', background: 'transparent', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 10px', cursor: hideBusy ? 'default' : 'pointer' }}>
@@ -3777,7 +3870,7 @@ function KwCategorySection({
           <input
             type="checkbox"
             aria-label="Select all categories"
-            title="Select every category"
+            title="Select every top-level category — every sub-category inside them is included"
             checked={allSelected}
             onChange={toggleSelectAll}
             style={{ width: 13, height: 13, accentColor: 'var(--c-6c63ff)', cursor: 'pointer' }}
@@ -3870,6 +3963,8 @@ function KwCatRow({
   onConfirmDelete,
   selectable = false,
   checked = false,
+  covered = false,
+  partial = false,
   onToggleSelect,
   brand = null,
   brandExpanded = false,
@@ -3892,9 +3987,14 @@ function KwCatRow({
   onAskConfirm?:     (id: string) => void;
   onCancelConfirm?:  () => void;
   onConfirmDelete?:  (id: string, rows: KeywordRow[]) => void;
-  // ── v7.419: category checkbox + brand ladder (top-level rows only) ──
+  // ── v7.419: category checkbox + brand ladder (brand ladder = top-level rows only) ──
+  // v7.470: the checkbox now renders at EVERY depth. `covered` = an ancestor is checked,
+  // so this row is already included and is drawn checked-and-locked; `partial` = only
+  // something beneath this row is checked (indeterminate dash).
   selectable?:       boolean;
   checked?:          boolean;
+  covered?:          boolean;
+  partial?:          boolean;
   onToggleSelect?:   () => void;
   brand?:            { entries: CatBrandEntry[]; catKw: number } | null;
   brandExpanded?:    boolean;
@@ -3953,15 +4053,25 @@ function KwCatRow({
         background: depth > 0 ? 'var(--ca-255-255-255-0_02)' : 'transparent',
       }}
     >
-      {/* v7.419: selection checkbox — top-level categories only */}
+      {/* v7.419: selection checkbox — v7.470: at EVERY level, parent and sub-category
+          alike, so a sub-category can be actioned or hidden on its own (Wayne 2026-08-18).
+          A row whose ancestor is checked is already inside that selection: it shows checked
+          and locked rather than offering a second, double-counting check (Const I.3). */}
       <span style={{ display: 'flex', alignItems: 'center' }} onClick={e => e.stopPropagation()}>
         {selectable && (
           <input
             type="checkbox"
-            aria-label={`Select ${cat.name}`}
+            aria-label={covered ? `${cat.name} — already included by the selected parent category` : `Select ${depth === 0 ? 'category' : 'sub-category'} ${cat.name}`}
+            title={covered
+              ? 'Already included by the parent category you selected — uncheck the parent to release it'
+              : partial
+                ? `Select this ${depth === 0 ? 'category' : 'sub-category'} — part of it is selected below`
+                : `Select this ${depth === 0 ? 'category' : 'sub-category'} and its ${cat.totKw.toLocaleString()} keyword${cat.totKw === 1 ? '' : 's'}`}
             checked={checked}
-            onChange={() => onToggleSelect?.()}
-            style={{ width: 13, height: 13, accentColor: 'var(--c-6c63ff)', cursor: 'pointer' }}
+            disabled={covered}
+            ref={el => { if (el) el.indeterminate = partial; }}
+            onChange={() => { if (!covered) onToggleSelect?.(); }}
+            style={{ width: 13, height: 13, accentColor: 'var(--c-6c63ff)', cursor: covered ? 'not-allowed' : 'pointer', opacity: covered ? 0.55 : 1 }}
           />
         )}
       </span>
