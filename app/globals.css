@@ -29,6 +29,13 @@
   --orbit-primary: 240 240 255;
   --orbit-secondary: 136 136 170;
   --orbit-tertiary: 85 85 112;
+  /* v7.465 — Audience-segment accents A/B/C. Previously raw Tailwind palette
+     classes (cyan-400 / violet-400 / amber-400), which are NOT theme-mapped and
+     landed at 1.6-2.7:1 on the light Warm Paper card. Channel triplets so the
+     Tailwind seg-* classes keep their opacity modifiers. Dark values unchanged. */
+  --seg-a: 34 211 238;
+  --seg-b: 167 139 250;
+  --seg-c: 251 191 36;
   --bg: #0A0A0F;
   --surface: #111118;
   --card: #16161F;
@@ -495,6 +502,11 @@
   --orbit-primary: 43 42 48;
   --orbit-secondary: 92 89 79;
   --orbit-tertiary: 118 112 97;
+  /* v7.465 — segment accents darkened for the light theme (>=5.4:1 on card,
+     surface AND page bg). Do not lighten these back toward the -400 ramp. */
+  --seg-a: 10 114 130;
+  --seg-b: 109 40 217;
+  --seg-c: 135 98 2;
   --bg: #F0EDE5;
   --surface: #F7F5EF;
   --card: #FDFCF8;
