@@ -1,3 +1,16 @@
+## v7.467 — 2026-08-18
+
+### Audience Journeys: the topic box is outlined in its own status colour, and the BUILD badge is readable again (Wayne: "the badges for net new content build are unreadable. Also lets make the whole outline of the box the same differentiating color")
+
+- **Root cause of the unreadable badge: `--ca-248-113-113-0_1` was never defined.** An undefined `var()` makes the SVG `fill` property invalid, so the BUILD pill fell back to a **black** fill and the dark-red label sat on it at **2.18:1** in the light theme. Not a colour-choice mistake — a missing token. The same token is read by the Journey **list view**, so that badge was black there too.
+- **The whole topic box now carries the status colour.** Outline and a 5% tint are green for existing content and red for a net-new build; the 4px left status bar is retired as redundant. Category and umbrella nodes keep their level colour. The topic volume follows the status colour too — cyan text inside a green or red box read muddy.
+- **The badge is punched back to the canvas colour** rather than tinted. A tint stacked on the already-tinted box left the light-theme EXISTING label at 3.80:1; on the canvas the label measures exactly what its own outline does. Measured after compositing: BUILD **7.16:1 dark / 8.22:1 light**, EXISTING **10.31:1 dark / 4.77:1 light**.
+- **Selection moved off green onto the app accent** (`--c-6c63ff`) — green now means "existing content", so a green selection ring was ambiguous. Checked as a colour distance, not a contrast ratio: two saturated hues can share luminance.
+- Two more never-defined tokens in the same panel are fixed: `--c-c0c0dc` → `--c-c0c0d8` (typo) and `--c-2a4a5a` → `--c-2a2a45`. `--ca-167-139-250-0_2` (the segment pill border) is now defined rather than silently falling back to `currentColor`.
+- **New retained guard:** the panel may reference **zero** undefined CSS custom properties. This is the class of bug, not the instance — an undefined token fails silently and only shows up as a wrong colour in one theme.
+- **Downstream trace (Const II.6a/II.6b):** no metric changed — colour and token definitions only. The three added tokens are additive: no existing declaration was altered, so no other surface changes. The Assessment PDF renders its own print palette and is unaffected. No new panel or client-facing metric, so no new PDF section is due.
+- **Verification:** real project `tsc` clean, real `next build` compiled; retained suite **1,779 pass / 33 pre-existing / zero delta**, with **24 new v7.467 checks** — every pairing composited through box tint and badge fill in both themes, a negative control proving the old black-fill badge fails, definition checks on all three previously-missing tokens, and the undefined-token class guard. Plus 4 new v7.466-block render checks asserting the 4px bar is gone and that no topic box still strokes with the cyan level colour.
+
 ## v7.466 — 2026-08-18
 
 ### Audience Journeys: the mind map is the default view, and the tree now runs left → right (Wayne: "default this to the mind map view … rather than having the branch trees go from top to bottom, lets make them go left to right")
