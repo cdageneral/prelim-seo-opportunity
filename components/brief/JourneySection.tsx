@@ -2009,7 +2009,6 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   const [focusUmbrella, setFocusUmbrella] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());   // categories showing ALL topics (beyond cap)
 
   // v7.266: Content Plan selection now comes from the shared useContentPlanSelection hook — the
   // SAME persisted set the Content Map / Content Plan / Journey LIST view read & write (one
@@ -2063,7 +2062,10 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     return Array.from(m.entries()).map(([keyword, searchVolume]) => ({ keyword, searchVolume })).sort((a, b) => b.searchVolume - a.searchVolume);
   };
 
-  const TCAP = 8;
+  // v7.468 (Wayne 2026-08-18): NO CAP. Every topic under the focused umbrella renders.
+  // A capped tree hides exactly what the panel exists to show — "if there is a content gap
+  // it should show it" — and vertical space is cheap now that the tree runs left to right,
+  // so the canvas simply grows and the container scrolls.
   // v7.466: LEFT -> RIGHT tree (Wayne 2026-08-18). The level now drives X (three fixed
   // columns: umbrella | category | topic) and the leaf order drives Y, so the tree grows
   // DOWN and the canvas scrolls vertically instead of running off the right edge — which
@@ -2077,7 +2079,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
       padX + NW[0] + colGap + NW[1] + colGap + NW[2] / 2,
     ];
     const width = padX * 2 + NW[0] + NW[1] + NW[2] + colGap * 2;
-    type Kind = 'umbrella' | 'category' | 'topic' | 'more';
+    type Kind = 'umbrella' | 'category' | 'topic';
     type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build' };
     type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
     if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width, height: 200, NW, NH, colX };
@@ -2090,17 +2092,11 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     const catYs: number[] = [];
     cats.forEach(([cat, rs]) => {
       const sorted = rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume);
-      const showAll = expandedCats.has(cat);
-      const shown = showAll ? sorted : sorted.slice(0, TCAP);
       const childYs: number[] = [];
-      shown.forEach(r => {
+      sorted.forEach(r => {
         const cy = y; y += leafStep; childYs.push(cy);
         nodes.push({ id: r.t.id, kind: 'topic', level: 2, x: colX[2], y: cy, label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
       });
-      if (!showAll && sorted.length > TCAP) {
-        const cy = y; y += leafStep; childYs.push(cy);
-        nodes.push({ id: 'more:' + cat, kind: 'more', level: 2, x: colX[2], y: cy, label: `+${sorted.length - TCAP} more topics`, sub: '' });
-      }
       let cy: number;
       if (childYs.length) { cy = (childYs[0] + childYs[childYs.length - 1]) / 2; }
       else { cy = y; y += leafStep; }
@@ -2119,7 +2115,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     for (const cy of catYs) edges.push({ id: `e0:${cy}`, x1: colX[0] + NW[0] / 2, y1: rootY, x2: colX[1] - NW[1] / 2, y2: cy, level: 1 });
     const height = Math.max(240, maxY + NH / 2 + 24);
     return { nodes, edges, width, height, NW, NH, colX };
-  }, [focused, expandedCats]);
+  }, [focused]);
 
   // selected node → keywords + volume (Const I.1)
   const selected = useMemo(() => {
@@ -2139,17 +2135,15 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   }, [selectedId, focused, rows]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const onNodeClick = (id: string) => {
-    if (id.startsWith('more:')) { const cat = id.slice(5); setExpandedCats(prev => { const n = new Set(prev); n.add(cat); return n; }); return; }
     setSelectedId(prev => (prev === id ? null : id));
   };
 
   // ── v7.265: plan-selection cascade ──────────────────────────────────────────────
   // The content-topic ids a node represents. A topic node = its own id (= ContentTopic.id).
-  // A category/umbrella node = EVERY topic under it, INCLUDING the ones hidden behind the
-  // "+N more" cap (Wayne 2026-06-22: a branch selects the whole branch). 'more' is not a
-  // selectable target. Read from the same stored cats map the tree draws — never re-derived.
+  // A category/umbrella node = EVERY topic under it (Wayne 2026-06-22: a branch selects the
+  // whole branch). Since v7.468 there is no cap, so what the tree draws and what a branch
+  // selects are the same set. Read from the stored cats map — never re-derived.
   const idsForNode = (id: string, kind: string): string[] => {
-    if (kind === 'more') return [];
     if (kind === 'topic') return [id];
     if (!focused) return [];
     if (kind === 'umbrella') return Array.from(focused.cats.values()).flat().map(r => r.t.id);
@@ -2213,7 +2207,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
       {/* umbrella picker */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
         <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--c-585878)' }}>Branch for</span>
-        <select value={effectiveUmbrella ?? ''} onChange={e => { setFocusUmbrella(e.target.value); setSelectedId(null); setExpandedCats(new Set()); }}
+        <select value={effectiveUmbrella ?? ''} onChange={e => { setFocusUmbrella(e.target.value); setSelectedId(null); }}
           style={{ fontSize: 12, fontWeight: 600, color: 'var(--c-d8d8f0)', background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', borderRadius: 8, padding: '7px 10px', maxWidth: 380, cursor: 'pointer' }}>
           {umbrellas.map(u => (
             <option key={u.name} value={u.name}>{u.name} — {fmtVol(u.vol)}/mo · {u.cats.size} categories</option>
@@ -2244,7 +2238,6 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
             const lv = MIND_LEVEL[Math.min(n.level, 2)];
             const w = layout.NW[Math.min(n.level, 2)];
             const sel = n.id === selectedId;
-            const isMore = n.kind === 'more';
             const isTopic = n.kind === 'topic';
             const existing = n.action === 'optimize';
             const statusColor = existing ? STATE_COLOR.existing : STATE_COLOR.missing;
@@ -2260,16 +2253,16 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
             const stroke = sel ? 'var(--c-6c63ff)' : (isTopic ? statusColor : lv.border);
             const bw = existing ? 52 : 38;
             // v7.265: per-node plan checkbox (top-left). none → empty, all → check, some → dash.
-            const cbState  = isMore ? 'none' : planStateOf(n.id, n.kind);
-            const cbSaving = !isMore && isNodeSaving(n.id, n.kind);
+            const cbState  = planStateOf(n.id, n.kind);
+            const cbSaving = isNodeSaving(n.id, n.kind);
             const cbS = 15;
             const cbx = (n.x - w / 2) + (n.level === 0 ? 16 : 9);
             const cby = n.y - layout.NH / 2 + 7;
             return (
               <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
                 <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 24 : 14}
-                  style={{ fill: isMore ? 'var(--c-14142a)' : (isTopic ? boxTint : lv.bg) }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.6} strokeDasharray={isMore ? '4 3' : undefined} />
-                {!isMore && (
+                  style={{ fill: isTopic ? boxTint : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.6} />
+                {(
                   <g onClick={(e) => { e.stopPropagation(); toggleNodePlan(n.id, n.kind); }} style={{ cursor: 'pointer', opacity: cbSaving ? 0.55 : 1 }}
                      role="button" aria-label={`${cbState === 'all' ? 'Remove from' : 'Add to'} Content Plan: ${n.label}`}>
                     <rect x={cbx} y={cby} width={cbS} height={cbS} rx={4}
@@ -2279,7 +2272,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
                     {cbState === 'some' && <rect x={cbx + 3} y={cby + cbS / 2 - 1} width={cbS - 6} height={2} rx={1} style={{ fill: 'var(--c-34d399)' }} />}
                   </g>
                 )}
-                <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 26 : 24)}</text>
+                <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 26 : 24)}</text>
                 {isTopic ? (
                   <>
                     <text x={n.x - w / 2 + 12} y={n.y + 13} textAnchor="start" style={{ fill: statusColor }} fontSize={9} fontWeight={700}>{n.sub}</text>

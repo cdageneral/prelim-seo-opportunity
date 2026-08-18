@@ -950,7 +950,7 @@ export default function CompetitorsModal({
             {/* Chips */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: terms.length ? '14px' : '0' }}>
               {terms.map(t => (
-                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--c-c9aaff)', background: 'var(--ca-136-136-176-0_08)', border: '1px solid var(--c-6b3fb5)', padding: '3px 6px 3px 10px', borderRadius: '999px' }}>
+                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--c-c9aaff)', background: 'var(--ca-136-136-176-0_08)', border: '1px solid var(--c-8b5cf6)', padding: '3px 6px 3px 10px', borderRadius: '999px' }}>
                   {t}
                   <button type="button" onClick={() => removeTermLocal(t)} title="Remove"
                     style={{ border: 'none', background: 'transparent', color: 'var(--c-8888b0)', cursor: 'pointer', fontSize: '13px', lineHeight: 1, padding: 0 }}>×</button>
@@ -975,7 +975,7 @@ export default function CompetitorsModal({
                 Add
               </button>
               <button type="button" onClick={suggestBrandTerms} disabled={suggesting}
-                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--ca-136-136-176-0_08)', border: '1px solid var(--c-6b3fb5)', color: 'var(--c-c9aaff)', fontSize: '12px', fontWeight: 600, cursor: suggesting ? 'default' : 'pointer', opacity: suggesting ? 0.6 : 1 }}>
+                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--ca-136-136-176-0_08)', border: '1px solid var(--c-8b5cf6)', color: 'var(--c-c9aaff)', fontSize: '12px', fontWeight: 600, cursor: suggesting ? 'default' : 'pointer', opacity: suggesting ? 0.6 : 1 }}>
                 {suggesting ? 'Suggesting…' : '✦ Suggest with AI'}
               </button>
               <button type="button" onClick={() => saveBrandTerms(terms)}
@@ -1015,7 +1015,7 @@ export default function CompetitorsModal({
             {/* Chips */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: exTerms.length ? '14px' : '0' }}>
               {exTerms.map(t => (
-                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--c-fbbf77)', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-854f0b)', padding: '3px 6px 3px 10px', borderRadius: '999px' }}>
+                <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--c-fbbf77)', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-b45309)', padding: '3px 6px 3px 10px', borderRadius: '999px' }}>
                   {t}
                   <button type="button" onClick={() => removeExLocal(t)} title="Remove"
                     style={{ border: 'none', background: 'transparent', color: 'var(--c-a08040)', cursor: 'pointer', fontSize: '13px', lineHeight: 1, padding: 0 }}>×</button>
@@ -1040,7 +1040,7 @@ export default function CompetitorsModal({
                 Add
               </button>
               <button type="button" onClick={suggestExcludedBrandsAI} disabled={exSuggesting}
-                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-854f0b)', color: 'var(--c-fbbf77)', fontSize: '12px', fontWeight: 600, cursor: exSuggesting ? 'default' : 'pointer', opacity: exSuggesting ? 0.6 : 1 }}>
+                style={{ padding: '7px 14px', borderRadius: '8px', background: 'var(--ca-245-158-11-0_08)', border: '1px solid var(--c-b45309)', color: 'var(--c-fbbf77)', fontSize: '12px', fontWeight: 600, cursor: exSuggesting ? 'default' : 'pointer', opacity: exSuggesting ? 0.6 : 1 }}>
                 {exSuggesting ? 'Scanning…' : '✦ Suggest with AI'}
               </button>
               <button type="button" onClick={() => saveExcludedBrands(exTerms)}

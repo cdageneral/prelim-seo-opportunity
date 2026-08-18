@@ -1350,7 +1350,7 @@ export default function ExecutiveSummarySection({
                       {/* v7.390: same guard the rail uses — some evidence stamps already open with
                           their panel name (the AI source label does), and printing the prefix again
                           gave "AI Answer Engines (09) · AI Answer Engines (09) · …" on the exec. */}
-                      <p className="text-[9px]" style={{ color: 'var(--c-44446a)', margin: '2px 0 0' }}>
+                      <p className="text-[9px]" style={{ color: 'var(--c-7777a0)', margin: '2px 0 0' }}>
                         {act.evidence.startsWith(act.panel) ? act.evidence : `${act.panel} · ${act.evidence}`}
                       </p>
                     </div>

@@ -1049,7 +1049,7 @@ export function SovPanel({ analysis, competitors, dbKeywords, clientLabel, title
       <p style={{ fontSize: '9px', color: 'var(--c-383858)', margin: 0, lineHeight: 1.6, fontVariantNumeric: 'tabular-nums' }}>
         data: {clientDisplay.replace(/^www\./, '')} · {totalKwCount.toLocaleString()} landscape kws (non-branded) · {page1KwCount.toLocaleString()} client pg 1 · {fmtAnnual(page1VolMonthly)} pg-1 vol / {fmtAnnual(totalVolMonthly)} total vol·yr
       </p>
-      <p style={{ fontSize: '9px', color: 'var(--c-44446a)', margin: 0, lineHeight: 1.5 }}>
+      <p style={{ fontSize: '9px', color: 'var(--c-7777a0)', margin: 0, lineHeight: 1.5 }}>
         SoV = &Sigma;(volume &times; CTR at client position, pos 1&ndash;10) &divide; &Sigma;(volume &times; {PAGE1_CTR_SUM.toFixed(3)} page-1 CTR sum). Volume &amp; position are measured; CTR is the labeled model curve.
       </p>
       </>)}

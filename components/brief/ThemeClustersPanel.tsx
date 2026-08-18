@@ -819,7 +819,7 @@ function TopicTable({
                     onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = 'var(--c-101019)'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = open ? 'var(--c-101019)' : 'transparent'; }}
                   >
-                    <td style={{ padding: '8px 10px', paddingLeft: childPad, borderBottom: '1px solid var(--c-15152a)' }}>
+                    <td style={{ padding: '8px 10px', paddingLeft: childPad, borderBottom: '1px solid var(--c-1a1a30)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         {planEnabled && (
                           <PlanCheckbox state={planStateForIds([t.id])} saving={savingForIds([t.id])} onToggle={() => toggleIds([t.id])} label={`Add ${t.product} to Content Plan`} size={15} />
@@ -839,21 +839,21 @@ function TopicTable({
                         </div>
                       )}
                     </td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', whiteSpace: 'nowrap' }}>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)', whiteSpace: 'nowrap' }}>
                       <i className={`ti ${stm.icon}`} style={{ fontSize: 12, color: 'var(--c-6a6a90)', marginRight: 5, verticalAlign: -1 }} aria-hidden="true" />
                       <span style={{ color: 'var(--c-b8b8d8)' }}>{stm.label}</span>
                     </td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{t.keywords.length}</td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.status === 'demand' ? 'var(--c-3a3a5a)' : 'var(--c-c8c8e8)' }}>{m.status === 'demand' ? '—' : `${m.cov}%`}</td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.best === null ? 'var(--c-3a3a5a)' : 'var(--c-9b96ff)' }}>{m.best === null ? '—' : `#${m.best}`}</td>
-                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-15152a)' }}>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{t.keywords.length}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.status === 'demand' ? 'var(--c-3a3a5a)' : 'var(--c-c8c8e8)' }}>{m.status === 'demand' ? '—' : `${m.cov}%`}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: m.best === null ? 'var(--c-3a3a5a)' : 'var(--c-9b96ff)' }}>{m.best === null ? '—' : `#${m.best}`}</td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--c-1a1a30)' }}>
                       <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: stt.bg, border: `1px solid ${stt.bdr}`, color: stt.color, whiteSpace: 'nowrap' }}>{stt.label}</span>
                     </td>
                   </tr>
                   {open && (
                     <tr>
-                      <td colSpan={7} style={{ padding: '4px 12px 12px 30px', borderBottom: '1px solid var(--c-15152a)', background: 'var(--c-0c0c16)' }}>
+                      <td colSpan={7} style={{ padding: '4px 12px 12px 30px', borderBottom: '1px solid var(--c-1a1a30)', background: 'var(--c-0c0c16)' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                           {topKws.map((k, i) => (
                             <span key={i} style={{
