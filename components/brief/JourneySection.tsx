@@ -2009,6 +2009,10 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   const [focusUmbrella, setFocusUmbrella] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // v7.469: collapsed branches (Wayne 2026-08-18). Node ids, same ones the tree draws.
+  // Empty by default — the tree still opens fully expanded, so nothing is hidden unless
+  // the user chooses to hide it (that is the point of having no cap).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   // v7.266: Content Plan selection now comes from the shared useContentPlanSelection hook — the
   // SAME persisted set the Content Map / Content Plan / Journey LIST view read & write (one
@@ -2080,7 +2084,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     ];
     const width = padX * 2 + NW[0] + NW[1] + NW[2] + colGap * 2;
     type Kind = 'umbrella' | 'category' | 'topic';
-    type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build' };
+    type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build'; kids?: number; shut?: boolean };
     type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
     if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width, height: 200, NW, NH, colX };
     const cats = Array.from(focused.cats.entries()).sort((a, b) =>
@@ -2090,10 +2094,14 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     let y = topPad + NH / 2;
     let maxY = y;
     const catYs: number[] = [];
-    cats.forEach(([cat, rs]) => {
+    const umbId = 'umb:' + focused.name;
+    const umbShut = collapsed.has(umbId);
+    (umbShut ? [] : cats).forEach(([cat, rs]) => {
+      const catId = 'cat:' + cat;
+      const catShut = collapsed.has(catId);
       const sorted = rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume);
       const childYs: number[] = [];
-      sorted.forEach(r => {
+      if (!catShut) sorted.forEach(r => {
         const cy = y; y += leafStep; childYs.push(cy);
         nodes.push({ id: r.t.id, kind: 'topic', level: 2, x: colX[2], y: cy, label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
       });
@@ -2102,7 +2110,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
       else { cy = y; y += leafStep; }
       catYs.push(cy);
       const catVol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
-      nodes.push({ id: 'cat:' + cat, kind: 'category', level: 1, x: colX[1], y: cy, label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics` });
+      nodes.push({ id: catId, kind: 'category', level: 1, x: colX[1], y: cy, label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics`, kids: rs.length, shut: catShut });
       for (const ty of childYs) edges.push({ id: `e1:${cat}:${ty}`, x1: colX[1] + NW[1] / 2, y1: cy, x2: colX[2] - NW[2] / 2, y2: ty, level: 2 });
       maxY = Math.max(maxY, cy, childYs.length ? childYs[childYs.length - 1] : cy);
       y += catGap;
@@ -2111,11 +2119,11 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
     // umbrella the centroid lands a thousand-odd px down, so the root would be off-screen
     // on first paint. Categories still centre on their own (short) child spans.
     const rootY = topPad + NH / 2;
-    nodes.push({ id: 'umb:' + focused.name, kind: 'umbrella', level: 0, x: colX[0], y: rootY, label: focused.name, sub: `${fmtVol(focused.vol)}/mo` });
+    nodes.push({ id: umbId, kind: 'umbrella', level: 0, x: colX[0], y: rootY, label: focused.name, sub: `${fmtVol(focused.vol)}/mo`, kids: cats.length, shut: umbShut });
     for (const cy of catYs) edges.push({ id: `e0:${cy}`, x1: colX[0] + NW[0] / 2, y1: rootY, x2: colX[1] - NW[1] / 2, y2: cy, level: 1 });
     const height = Math.max(240, maxY + NH / 2 + 24);
     return { nodes, edges, width, height, NW, NH, colX };
-  }, [focused]);
+  }, [focused, collapsed]);
 
   // selected node → keywords + volume (Const I.1)
   const selected = useMemo(() => {
@@ -2137,6 +2145,13 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const onNodeClick = (id: string) => {
     setSelectedId(prev => (prev === id ? null : id));
   };
+  // v7.469: collapse / expand a branch. Purely a display state — it never touches the
+  // stored taxonomy, the Content-Plan selection, or any total (Const II.7).
+  const toggleCollapse = (id: string) => setCollapsed(prev => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
 
   // ── v7.265: plan-selection cascade ──────────────────────────────────────────────
   // The content-topic ids a node represents. A topic node = its own id (= ContentTopic.id).
@@ -2280,6 +2295,16 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
                     <text x={n.x + w / 2 - 8 - bw / 2} y={n.y + 12.5} textAnchor="middle" style={{ fill: statusColor }} fontSize={8} fontWeight={700} letterSpacing="0.03em">{existing ? 'EXISTING' : 'BUILD'}</text>
                   </>
                 ) : (n.sub && <text x={n.x} y={n.y + 13} textAnchor="middle" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>)}
+                {/* v7.469: expand / collapse. The control sits ON the right border, exactly
+                    where this node's children branch off, so it reads as the branch point. */}
+                {!!n.kids && (
+                  <g onClick={(e) => { e.stopPropagation(); toggleCollapse(n.id); }} style={{ cursor: 'pointer' }}
+                     role="button" aria-label={`${n.shut ? 'Expand' : 'Collapse'} ${n.label}: ${n.kids} ${n.level === 0 ? (n.kids === 1 ? 'category' : 'categories') : (n.kids === 1 ? 'topic' : 'topics')}`}>
+                    <circle cx={n.x + w / 2} cy={n.y} r={9} style={{ fill: 'var(--c-08081a)', stroke: lv.border }} strokeWidth={1.6} />
+                    <path d={`M${n.x + w / 2 - 4.5},${n.y} h9`} style={{ stroke: lv.border }} strokeWidth={1.8} strokeLinecap="round" />
+                    {n.shut && <path d={`M${n.x + w / 2},${n.y - 4.5} v9`} style={{ stroke: lv.border }} strokeWidth={1.8} strokeLinecap="round" />}
+                  </g>
+                )}
                 <title>{n.sub ? `${n.label} · ${n.sub}` : n.label}</title>
               </g>
             );
