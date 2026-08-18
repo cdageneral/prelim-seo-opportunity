@@ -2064,46 +2064,61 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   };
 
   const TCAP = 8;
+  // v7.466: LEFT -> RIGHT tree (Wayne 2026-08-18). The level now drives X (three fixed
+  // columns: umbrella | category | topic) and the leaf order drives Y, so the tree grows
+  // DOWN and the canvas scrolls vertically instead of running off the right edge — which
+  // is what hid the volume + status column on a wide umbrella. Same stored taxonomy, same
+  // nodes, same ids: only the coordinate assignment is transposed (Const II.7 / III.1b).
   const layout = useMemo(() => {
-    const NW = [174, 158, 154], NH = 56, leafStep = 176, levelH = 124, padX = 28, topPad = 22;
+    const NW = [196, 214, 252], NH = 56, leafStep = 70, colGap = 86, padX = 26, topPad = 46, catGap = 26;
+    const colX = [
+      padX + NW[0] / 2,
+      padX + NW[0] + colGap + NW[1] / 2,
+      padX + NW[0] + colGap + NW[1] + colGap + NW[2] / 2,
+    ];
+    const width = padX * 2 + NW[0] + NW[1] + NW[2] + colGap * 2;
     type Kind = 'umbrella' | 'category' | 'topic' | 'more';
     type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build' };
     type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
-    if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width: 640, height: 200, NW, NH };
+    if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width, height: 200, NW, NH, colX };
     const cats = Array.from(focused.cats.entries()).sort((a, b) =>
       b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0));
-    let leaf = 0;
     const nodes: LNode[] = [];
     const edges: LEdge[] = [];
-    const rowY = (lvl: number) => topPad + NH / 2 + lvl * levelH;
-    const catXs: number[] = [];
+    let y = topPad + NH / 2;
+    let maxY = y;
+    const catYs: number[] = [];
     cats.forEach(([cat, rs]) => {
       const sorted = rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume);
       const showAll = expandedCats.has(cat);
       const shown = showAll ? sorted : sorted.slice(0, TCAP);
-      const childXs: number[] = [];
+      const childYs: number[] = [];
       shown.forEach(r => {
-        const x = padX + (leaf++) * leafStep + leafStep / 2;
-        childXs.push(x);
-        nodes.push({ id: r.t.id, kind: 'topic', level: 2, x, y: rowY(2), label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
+        const cy = y; y += leafStep; childYs.push(cy);
+        nodes.push({ id: r.t.id, kind: 'topic', level: 2, x: colX[2], y: cy, label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
       });
       if (!showAll && sorted.length > TCAP) {
-        const x = padX + (leaf++) * leafStep + leafStep / 2;
-        childXs.push(x);
-        nodes.push({ id: 'more:' + cat, kind: 'more', level: 2, x, y: rowY(2), label: `+${sorted.length - TCAP} more topics`, sub: '' });
+        const cy = y; y += leafStep; childYs.push(cy);
+        nodes.push({ id: 'more:' + cat, kind: 'more', level: 2, x: colX[2], y: cy, label: `+${sorted.length - TCAP} more topics`, sub: '' });
       }
-      const cx = childXs.length ? (childXs[0] + childXs[childXs.length - 1]) / 2 : (padX + (leaf++) * leafStep + leafStep / 2);
-      catXs.push(cx);
+      let cy: number;
+      if (childYs.length) { cy = (childYs[0] + childYs[childYs.length - 1]) / 2; }
+      else { cy = y; y += leafStep; }
+      catYs.push(cy);
       const catVol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
-      nodes.push({ id: 'cat:' + cat, kind: 'category', level: 1, x: cx, y: rowY(1), label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics` });
-      for (const x of childXs) edges.push({ id: `e1:${cat}:${x}`, x1: cx, y1: rowY(1) + NH / 2, x2: x, y2: rowY(2) - NH / 2, level: 2 });
+      nodes.push({ id: 'cat:' + cat, kind: 'category', level: 1, x: colX[1], y: cy, label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics` });
+      for (const ty of childYs) edges.push({ id: `e1:${cat}:${ty}`, x1: colX[1] + NW[1] / 2, y1: cy, x2: colX[2] - NW[2] / 2, y2: ty, level: 2 });
+      maxY = Math.max(maxY, cy, childYs.length ? childYs[childYs.length - 1] : cy);
+      y += catGap;
     });
-    const rootX = catXs.length ? (catXs[0] + catXs[catXs.length - 1]) / 2 : padX + leafStep / 2;
-    nodes.push({ id: 'umb:' + focused.name, kind: 'umbrella', level: 0, x: rootX, y: rowY(0), label: focused.name, sub: `${fmtVol(focused.vol)}/mo` });
-    for (const cx of catXs) edges.push({ id: `e0:${cx}`, x1: rootX, y1: rowY(0) + NH / 2, x2: cx, y2: rowY(1) - NH / 2, level: 1 });
-    const width = Math.max(640, padX * 2 + leaf * leafStep);
-    const height = rowY(2) + NH;
-    return { nodes, edges, width, height, NW, NH };
+    // The umbrella is PINNED to the top row, not centred on its categories: on a tall
+    // umbrella the centroid lands a thousand-odd px down, so the root would be off-screen
+    // on first paint. Categories still centre on their own (short) child spans.
+    const rootY = topPad + NH / 2;
+    nodes.push({ id: 'umb:' + focused.name, kind: 'umbrella', level: 0, x: colX[0], y: rootY, label: focused.name, sub: `${fmtVol(focused.vol)}/mo` });
+    for (const cy of catYs) edges.push({ id: `e0:${cy}`, x1: colX[0] + NW[0] / 2, y1: rootY, x2: colX[1] - NW[1] / 2, y2: cy, level: 1 });
+    const height = Math.max(240, maxY + NH / 2 + 24);
+    return { nodes, edges, width, height, NW, NH, colX };
   }, [focused, expandedCats]);
 
   // selected node → keywords + volume (Const I.1)
@@ -2209,16 +2224,20 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
 
       {/* full-width canvas — the hierarchy map (status badge lives on each topic node) */}
       <div style={{ marginTop: 12, border: '1px solid var(--c-1a1a30)', borderRadius: 10, background: 'var(--c-08081a)', overflow: 'auto', maxHeight: 620 }}>
-        <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%', margin: '0 auto' }} role="img" aria-label="Topic hierarchy graph">
-          {/* level row labels */}
+        <svg width={layout.width} height={layout.height} style={{ display: 'block', minWidth: '100%', margin: '0 auto' }} role="img" aria-label="Topic hierarchy graph, left to right: umbrella, category, topic">
+          {/* v7.466: level labels are COLUMN headers now (the tree runs left to right) */}
           {['UMBRELLA', 'CATEGORY', 'TOPIC'].map((lab, i) => (
-            <text key={lab} x={8} y={22 + layout.NH / 2 + i * 124 + 3} style={{ fill: MIND_LEVEL[i].border }} fontSize={9} fontWeight={700} letterSpacing="0.06em">{lab}</text>
+            <g key={lab}>
+              <text x={layout.colX[i] - layout.NW[i] / 2} y={22} style={{ fill: MIND_LEVEL[i].border }} fontSize={9} fontWeight={700} letterSpacing="0.08em">{lab}</text>
+              <line x1={layout.colX[i] - layout.NW[i] / 2} y1={29} x2={layout.colX[i] + layout.NW[i] / 2} y2={29} style={{ stroke: MIND_LEVEL[i].border }} strokeWidth={1} opacity={0.35} />
+            </g>
           ))}
           {/* edges */}
           {layout.edges.map(e => {
             const col = MIND_LEVEL[e.level].border;
-            const my = (e.y1 + e.y2) / 2;
-            return <path key={e.id} d={`M${e.x1},${e.y1} C${e.x1},${my} ${e.x2},${my} ${e.x2},${e.y2}`} fill="none" style={{ stroke: col }} strokeWidth={2.2} opacity={0.6} />;
+            // v7.466: horizontal S-curve — the control points move along X, not Y.
+            const mx = (e.x1 + e.x2) / 2;
+            return <path key={e.id} d={`M${e.x1},${e.y1} C${mx},${e.y1} ${mx},${e.y2} ${e.x2},${e.y2}`} fill="none" style={{ stroke: col }} strokeWidth={2.2} opacity={0.6} />;
           })}
           {/* nodes */}
           {layout.nodes.map(n => {
@@ -2252,7 +2271,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
                     {cbState === 'some' && <rect x={cbx + 3} y={cby + cbS / 2 - 1} width={cbS - 6} height={2} rx={1} style={{ fill: 'var(--c-34d399)' }} />}
                   </g>
                 )}
-                <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 19 : 22)}</text>
+                <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 26 : 24)}</text>
                 {isTopic ? (
                   <>
                     <text x={n.x - w / 2 + 12} y={n.y + 13} textAnchor="start" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>
@@ -2405,7 +2424,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);   // v7.160: pill hover glow
   // v7.256: canonical journey has two presentations — the list (current state) and a
   // behavioral mind-map / knowledge graph. Toggle lives at the top of the canonical view.
-  const [journeyView, setJourneyView] = useState<'list' | 'mindmap'>('list');
+  // v7.466: the panel now OPENS on the mind map (Wayne 2026-08-18); list is one click away.
+  const [journeyView, setJourneyView] = useState<'list' | 'mindmap'>('mindmap');
   const [edges, setEdges] = useState<{ preProduct: [string, string][]; product: [string, string][] }>({ preProduct: [], product: [] });
   const [problemAssignments, setProblemAssignments] = useState<Record<string, string>>({});   // v7.154: kw -> AI-named pre-product theme
   const [selected, setSelected] = useState<JourneyNode | null>(null);
