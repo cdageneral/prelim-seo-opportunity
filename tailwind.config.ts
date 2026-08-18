@@ -33,6 +33,12 @@ const config: Config = {
           secondary: 'rgb(var(--orbit-secondary) / <alpha-value>)',
           tertiary:  'rgb(var(--orbit-tertiary) / <alpha-value>)',
         },
+        // v7.465 — audience-segment accents A/B/C, theme-mapped like orbit-*.
+        seg: {
+          a: 'rgb(var(--seg-a) / <alpha-value>)',
+          b: 'rgb(var(--seg-b) / <alpha-value>)',
+          c: 'rgb(var(--seg-c) / <alpha-value>)',
+        },
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

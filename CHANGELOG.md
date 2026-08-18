@@ -1,3 +1,13 @@
+## v7.465 — 2026-08-18
+
+### Audience Segments: the segment accents are darker and theme-mapped (Wayne: "the light pastel colors need to be darkened — they are difficult to read")
+
+- The A/B/C segment accents were raw Tailwind palette classes (`cyan-400` / `violet-400` / `amber-400`). Raw palette classes are NOT theme-mapped, so on the light Warm Paper card they were shipping at **1.76:1, 2.65:1 and 1.63:1** — the segment badges, the % of volume, the persona name, the stage headings, the prompt chips and the "View deep-dive" hint were all effectively unreadable. Same class of bug as v7.438 and v7.443.
+- New theme-mapped `--seg-a/b/c` channel tokens (exposed to Tailwind as `seg-a/b/c` exactly like the `orbit-*` family, so opacity modifiers still work). Dark values are unchanged; the light values are darkened to **5.47 / 6.92 / 5.41:1 on the card**, and every one clears 4.5:1 against the card, the surface AND the page background.
+- The accent handed to the inline card border and to the SVG neck connector was a frozen hex — it is now a theme var, so the active-card outline follows the theme too.
+- Also fixed in the same panel: the "View deep-dive" hint dimmed its accent to `opacity-60`, dropping it back under the bar; the CSV/copy status icons, the YoY-growth pill and the persona-image notice all used raw `green-400` / `green-500` / `amber-400` and are now `orbit-green` / `orbit-amber`. The panel now carries zero raw Tailwind palette classes.
+- Verification: real tsc + real `next build` clean; retained suite 1,683 pass / 33 pre-existing / **zero delta**, with 35 new v7.465 checks — measured contrast for all three accents on all three surfaces in BOTH themes, a negative control proving the old raw values fail on light, and a no-raw-palette-class guard on the panel. Live contrast re-measured in the browser on the deployed app.
+
 ## v7.464 — 2026-08-15
 
 ### Seer reads the Product Insights content-coverage basis (Wayne: "content coverage is in the product panel")
