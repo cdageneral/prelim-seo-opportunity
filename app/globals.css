@@ -413,6 +413,28 @@
   --ca-245-158-11-0_6: rgba(245,158,11,0.6);
   --ca-248-113-113-0_05: rgba(248,113,113,0.05);
   --ca-248-113-113-0_1: rgba(248,113,113,0.1);
+
+  /* v7.468 (2026-08-18) — tokens that panels REFERENCED but that were never declared.
+     An undefined var() invalidates the declaration, so these were rendering as a fallback
+     (black fill / inherited colour) in one or both themes. Dark = the name; light = the
+     mapping already used by the nearest declared sibling of the same role. */
+  --c-0b0b15: #0b0b15;
+  --c-67e8f9: #67e8f9;
+  --c-7878a0: #7878a0;
+  --c-7a7aa0: #7a7aa0;
+  --c-a08040: #a08040;
+  --c-a8a8cc: #a8a8cc;
+  --c-b0b0d8: #b0b0d8;
+  --c-b8b8d8: #b8b8d8;
+  --c-c08040: #c08040;
+  --c-c9aaff: #c9aaff;
+  --c-e6e6ff: #e6e6ff;
+  --c-ececff: #ececff;
+  --c-fbbf77: #fbbf77;
+  --ca-120-120-160-0_12: rgba(120,120,160,0.12);
+  --ca-167-139-250-0_25: rgba(167,139,250,0.25);
+  --ca-34-211-238-0_03: rgba(34,211,238,0.03);
+  --ca-34-211-238-0_25: rgba(34,211,238,0.25);
   --ca-248-113-113-0_2: rgba(248,113,113,0.2);
   --ca-249-115-22-0_1: rgba(249,115,22,0.1);
   --ca-249-115-22-0_25: rgba(249,115,22,0.25);
@@ -886,6 +908,25 @@
   --ca-245-158-11-0_6: rgba(206,132,8,0.6);
   --ca-248-113-113-0_05: rgba(142,7,7,0.05);
   --ca-248-113-113-0_1: rgba(142,7,7,0.1);
+
+  /* v7.468 — light mappings for the previously-undeclared tokens (see the dark block). */
+  --c-0b0b15: #F0EDE5;
+  --c-67e8f9: #035982;
+  --c-7878a0: #5C594F;
+  --c-7a7aa0: #5C594F;
+  --c-a08040: #846327;
+  --c-a8a8cc: #44413A;
+  --c-b0b0d8: #44413A;
+  --c-b8b8d8: #44413A;
+  --c-c08040: #846327;
+  --c-c9aaff: #06004e;
+  --c-e6e6ff: #2B2A30;
+  --c-ececff: #2B2A30;
+  --c-fbbf77: #876202;
+  --ca-120-120-160-0_12: rgba(92,89,79,0.12);
+  --ca-167-139-250-0_25: rgba(33,5,116,0.25);
+  --ca-34-211-238-0_03: rgba(15,175,199,0.03);
+  --ca-34-211-238-0_25: rgba(15,175,199,0.25);
   --ca-248-113-113-0_2: rgba(142,7,7,0.2);
   --ca-249-115-22-0_1: rgba(209,89,5,0.1);
   --ca-249-115-22-0_25: rgba(209,89,5,0.25);
