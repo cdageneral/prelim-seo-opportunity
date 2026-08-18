@@ -1,3 +1,19 @@
+## v7.468 — 2026-08-18
+
+### Journeys: the topic cap is gone, and the undefined-token guard now covers the whole app (Wayne: "there should not be a cap. If there is a content gap it should show it")
+
+**No cap.** `TCAP`, the `+N more topics` node and the `expandedCats` state are all removed. Every topic under the focused umbrella renders, always. A capped tree hid exactly what the panel exists to show — on the test fixture the topic column went from **36 nodes to 91**. Vertical space is cheap now that the tree runs left to right, so the canvas grows and the container scrolls. A branch checkbox and the tree now cover the identical set, so "select this branch" no longer silently includes rows you could not see.
+
+**21 more undefined CSS tokens fixed across 7 panels.** Same class of bug as the black BUILD badge in v7.467: a `var()` that was never declared invalidates the declaration, and the element silently falls back (black fill, or an inherited colour) — usually visibly wrong in only one theme, which is why they shipped.
+
+- **17 were declared** in both themes (Content Map, Theme Clusters, Keywords, Competitors modal, Content Plan, SoV model). Dark = the value the token name states; light = the mapping already used by the nearest declared sibling of the same role, so they land on the existing Warm Paper scale rather than a new invented one.
+- **4 were repointed instead of declared.** `--c-44446a`, `--c-15152a`, `--c-6b3fb5` and `--c-854f0b` would each have shipped a **dark** value under the legibility bar (2.09:1 footnote text, a 1.07:1 invisible row divider, 2.75:1 and 2.85:1 borders). Rather than mint a colour that fails its own gate, their 12 use sites now point at already-proven tokens (`--c-7777a0`, `--c-1a1a30`, `--c-8b5cf6`, `--c-b45309`). The four names are asserted gone.
+
+**New retained guard, repo-wide:** every `var(--…)` in the app must resolve against `app/globals.css`. 193 files scanned; the PDF template and `tailwind.config.ts` are the two documented exemptions (both legitimately declare their own properties). This is the class guard v7.467 introduced for one panel, promoted to all of them.
+
+- **Downstream trace (Const II.6a/II.6b):** no metric changed. The cap was a display limit, never a filter — every panel that reads the canonical pool already read the full set, so no total, rollup or export moves. Token declarations are additive; no existing declaration was altered. The Assessment PDF renders its own print palette and is untouched. No new panel or client-facing metric, so no new PDF section is due.
+- **Verification:** real project `tsc` clean, real `next build` compiled; retained suite **1,826 pass / 33 pre-existing / zero delta**, with **47 new v7.468 checks**. The v7.466 retained check that asserted the capped set (36 nodes) was **updated in place with a dated note** to assert all 91 — per Const V.6, a by-design change updates its check, it never deletes it. Contrast measured in both themes for all 17 new mappings plus the 4 repointed targets.
+
 ## v7.467 — 2026-08-18
 
 ### Audience Journeys: the topic box is outlined in its own status colour, and the BUILD badge is readable again (Wayne: "the badges for net new content build are unreadable. Also lets make the whole outline of the box the same differentiating color")
