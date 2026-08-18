@@ -1,3 +1,17 @@
+## v7.466 — 2026-08-18
+
+### Audience Journeys: the mind map is the default view, and the tree now runs left → right (Wayne: "default this to the mind map view … rather than having the branch trees go from top to bottom, lets make them go left to right")
+
+- **The panel opens on the mind map.** `journeyView` now defaults to `'mindmap'`; List view is still one click away on the same toggle, unchanged.
+- **The hierarchy tree is transposed.** The old layout let the *level* drive Y and the *leaf index* drive X, so the canvas **width grew with the topic count** — on a wide umbrella the tree ran off the right edge and took the volume + EXISTING/BUILD column with it, which is exactly what was missing from the panel. Now the level drives X (three fixed columns: umbrella | category | topic) and the leaf order drives Y. Measured on the real component: width is **886px at 17 topics and 886px at 91 topics**, while height goes 1,298 → 2,654. The canvas container's existing scroller becomes a vertical one (Const IV.1).
+- **UMBRELLA / CATEGORY / TOPIC moved from a left-hand row gutter to column headers**, each pinned above its own column on a shared baseline with a hairline rule.
+- **Edges are horizontal S-curves** — the bezier control points move along X, leaving the parent right edge and landing on the child left edge. Every edge is asserted to travel strictly left → right.
+- **The umbrella node is pinned to the top row, not centred on its categories.** Centring the root on a tall umbrella put it ~1,300px down the canvas, so the panel would open with no visible root. Categories still centre on their own (short) child spans. Caught by the render harness during this release, not in the field.
+- **Topic cards went 154px → 252px wide** (width is cheap now, height is the scarce axis), so the topic-name truncation moved 19 → 26 characters and the volume + status badge sit on one line without collision.
+- Everything else is untouched: same stored taxonomy and same node ids (nothing re-derived — Const II.7 / III.1b), same click-to-inspect keywords panel, same per-node Content-Plan checkboxes and branch-select cascade, same `+N more topics` cap (TCAP 8).
+- **Downstream trace (Const II.6a/II.6b):** no metric changed — this is a layout and default-state change, so there is no basis for any rollup to re-read. Surfaces checked: the Assessment PDF (no journey mind-map section — it renders the journey off the same canonical topics as a list/table, unaffected), the delivery package serializer and the PPT prompt (neither reads layout geometry). No new panel and no new client-facing metric, so no new PDF section is due under II.6b.
+- **Verification:** real project `tsc` clean and real `next build` compiled successfully; retained suite **1,747 pass / 33 pre-existing / zero delta**, with **64 new v7.466 checks** — the real component rendered in jsdom at two scales in **both themes**, measuring three-column placement, strictly-left-to-right edges, constant width vs growing height, column-header baselines, non-overlapping topic rows, the pinned root, and the scroll container; plus a dual-theme contrast gate on all five tree colours with a light-mapping negative control, and a no-raw-Tailwind-palette-class guard on the panel.
+
 ## v7.465 — 2026-08-18
 
 ### Audience Segments: the segment accents are darker and theme-mapped (Wayne: "the light pastel colors need to be darkened — they are difficult to read")
