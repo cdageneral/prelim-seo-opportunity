@@ -1286,7 +1286,7 @@ export function TopicJourneyMap({ graph, onSelect, onClear, selectedId }: {
           const opacity = focus ? (inFocus ? 0.95 : 0.04) : (hover ? (inc ? 0.95 : 0.06) : (isRel ? 0.3 : 0.6));
           return (
             <path key={i} d={edgePath(pos[e.from], pos[e.to])} fill="none"
-              stroke={inc ? color : (isRel ? 'var(--c-33335c)' : 'var(--c-2a4a5a)')}
+              stroke={inc ? color : (isRel ? 'var(--c-33335c)' : 'var(--c-2a2a45)')}
               strokeWidth={inc ? 2.2 : 1.4}
               strokeDasharray={isRel ? '5 4' : undefined}
               opacity={opacity} />
@@ -1927,7 +1927,7 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
                           <div key={r.t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px 6px 26px' }}>
                             <PlanCheckbox state={planStateForIds([r.t.id])} saving={savingForIds([r.t.id])} onToggle={() => toggleIds([r.t.id])} label={`Add topic to Content Plan: ${r.t.product}`} size={15} />
                             <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: STAGE_COLORS[r.t.stage].text, minWidth: 86, flexShrink: 0 }}>{JOURNEY_STAGE_LABELS[r.t.stage]}</span>
-                            <span style={{ fontSize: 11.5, color: 'var(--c-c0c0dc)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.product}</span>
+                            <span style={{ fontSize: 11.5, color: 'var(--c-c0c0d8)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.t.product}</span>
                             <span style={{ fontSize: 10, color: 'var(--c-5a5a80)', flexShrink: 0, minWidth: 54, textAlign: 'right' }}>{r.t.keywords.length} kw</span>
                             <span style={{ fontSize: 10.5, color: 'var(--c-6a6a90)', flexShrink: 0, minWidth: 66, textAlign: 'right', fontFamily: 'monospace' }}>{fmtVol(r.t.totalVolume)}/mo</span>
                             <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 4, flexShrink: 0, minWidth: 70, textAlign: 'center', color: r.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing, background: r.action === 'optimize' ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-248-113-113-0_1)', border: `1px solid ${r.action === 'optimize' ? STATE_COLOR.existing : STATE_COLOR.missing}` }}>{r.action === 'optimize' ? 'Existing' : 'Build new'}</span>
@@ -2246,9 +2246,18 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
             const sel = n.id === selectedId;
             const isMore = n.kind === 'more';
             const isTopic = n.kind === 'topic';
-            const stroke = sel ? 'var(--c-34d399)' : lv.border;
             const existing = n.action === 'optimize';
             const statusColor = existing ? STATE_COLOR.existing : STATE_COLOR.missing;
+            // v7.467: a TOPIC box is outlined and tinted in its OWN status colour — green for
+            // existing content, red for a net-new build — so coverage reads at a glance without
+            // hunting for a 4px bar (Wayne 2026-08-18). Category/umbrella keep their level colour.
+            // Selection moved off green, which now means "existing", onto the app accent.
+            const boxTint = existing ? 'var(--ca-52-211-153-0_05)' : 'var(--ca-248-113-113-0_05)';
+            // The badge is punched back to the canvas colour rather than tinted: a tint on top of
+            // the already-tinted box left the light-theme green label at 3.80:1. On the canvas the
+            // label measures exactly what its outline does, in both themes.
+            const badgeTint = 'var(--c-08081a)';
+            const stroke = sel ? 'var(--c-6c63ff)' : (isTopic ? statusColor : lv.border);
             const bw = existing ? 52 : 38;
             // v7.265: per-node plan checkbox (top-left). none → empty, all → check, some → dash.
             const cbState  = isMore ? 'none' : planStateOf(n.id, n.kind);
@@ -2259,8 +2268,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
             return (
               <g key={n.id} style={{ cursor: 'pointer' }} onClick={() => onNodeClick(n.id)}>
                 <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={w} height={layout.NH} rx={n.level === 0 ? 24 : 14}
-                  style={{ fill: isMore ? 'var(--c-14142a)' : lv.bg }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.4} strokeDasharray={isMore ? '4 3' : undefined} />
-                {isTopic && <rect x={n.x - w / 2} y={n.y - layout.NH / 2} width={4} height={layout.NH} rx={2} style={{ fill: statusColor }} opacity={0.9} />}
+                  style={{ fill: isMore ? 'var(--c-14142a)' : (isTopic ? boxTint : lv.bg) }} stroke={stroke} strokeWidth={sel ? 2.6 : 1.6} strokeDasharray={isMore ? '4 3' : undefined} />
                 {!isMore && (
                   <g onClick={(e) => { e.stopPropagation(); toggleNodePlan(n.id, n.kind); }} style={{ cursor: 'pointer', opacity: cbSaving ? 0.55 : 1 }}
                      role="button" aria-label={`${cbState === 'all' ? 'Remove from' : 'Add to'} Content Plan: ${n.label}`}>
@@ -2274,8 +2282,8 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
                 <text x={n.x} y={isTopic ? n.y - 9 : (n.sub ? n.y - 2 : n.y + 4)} textAnchor="middle" style={{ fill: isMore ? 'var(--c-9090b8)' : 'var(--c-e0e0f8)' }} fontSize={n.level === 0 ? 12 : 11} fontWeight={600}>{truncLabel(n.label, isTopic ? 26 : 24)}</text>
                 {isTopic ? (
                   <>
-                    <text x={n.x - w / 2 + 12} y={n.y + 13} textAnchor="start" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>
-                    <rect x={n.x + w / 2 - bw - 8} y={n.y + 2} width={bw} height={15} rx={7.5} style={{ fill: existing ? 'var(--ca-52-211-153-0_1)' : 'var(--ca-248-113-113-0_1)' }} stroke={statusColor} strokeWidth={0.9} />
+                    <text x={n.x - w / 2 + 12} y={n.y + 13} textAnchor="start" style={{ fill: statusColor }} fontSize={9} fontWeight={700}>{n.sub}</text>
+                    <rect x={n.x + w / 2 - bw - 8} y={n.y + 2} width={bw} height={15} rx={7.5} style={{ fill: badgeTint }} stroke={statusColor} strokeWidth={0.9} />
                     <text x={n.x + w / 2 - 8 - bw / 2} y={n.y + 12.5} textAnchor="middle" style={{ fill: statusColor }} fontSize={8} fontWeight={700} letterSpacing="0.03em">{existing ? 'EXISTING' : 'BUILD'}</text>
                   </>
                 ) : (n.sub && <text x={n.x} y={n.y + 13} textAnchor="middle" style={{ fill: lv.border }} fontSize={9} fontWeight={700}>{n.sub}</text>)}
