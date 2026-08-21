@@ -192,6 +192,25 @@ export interface AssessmentData {
   program?: ProgramData | null;              // v7.405: Part V counts (null = legacy step cards, Const I.5)
   // v7.427 (Const II.6b): Product Insights — the panel's shared basis, computed by the
   // route via lib/productInsights.buildProductRows. null = no products (section omitted).
+  // v7.471 (Const II.6b): the Insights panel ships its PDF section in the SAME
+  // release. Both fields are READ verbatim — the stored, machine-verified
+  // generated blob (projects.insights_panel) and the deterministic quadrant the
+  // panel's own shared builder computed (lib/insightsPanel/build). The template
+  // never re-derives or recomputes either (Const II.6a). null = not generated /
+  // no Profound data — section omitted honestly (I.5).
+  insightsPanel?: {
+    thesis: { headline: string; body: string; openPosition: string | null };
+    patterns: Array<{ tag: string; title: string; body: string }>;
+    playbook: Array<{ brand: string; doingWell: string; vulnerable: string; keyStat: string }>;
+    strike: Array<{ title: string; body: string; impact: string }>;
+    sources: string[]; generatedAt: string; verified: number;
+  } | null;
+  insightsQuadrant?: {
+    points: Array<{ brand: string; isClient: boolean; visibilityPct: number; citations: number; domain: string; quadrant: string }>;
+    unmatched: Array<{ brand: string; isClient: boolean; visibilityPct: number }>;
+    medians: { visibilityPct: number; citations: number };
+    basis: string;
+  } | null;
   productInsights?: {
     products: Array<{
       name: string; kwCount: number; demand: number; p1Share: number;
@@ -838,7 +857,46 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="src">Source: canonical keyword pool + stored taxonomy (page-1 share and the brand field are measured volume at positions 1-10 — no click model); AI probe = unbranded prompts at analysis time; recorded answers = DataForSEO LLM Mentions index (ChatGPT + Google AI Overviews, first ${anyScan ? '100' : '100'} per category with full match counts shown)${pi.scannedAt ? `, last scanned ${esc(new Date(pi.scannedAt).toLocaleDateString('en-US'))}` : ' — not yet scanned'}. Verdict thresholds: weak below 30%, strong at 50%+. This section reads the same shared computation as the Product Insights panel.</div>`));
   }
 
-  // AI answer layer
+  // ── v7.471 · Insights — the cross-panel story (Const II.6b: same release as the panel) ──
+  // Reads the STORED machine-verified blob + the panel's own quadrant builder output
+  // verbatim; nothing here is recomputed (II.6a).
+  const ip = d.insightsPanel ?? null;
+  const iq = d.insightsQuadrant ?? null;
+  if (ip) {
+    const tagLabel: Record<string, string> = { PATTERN: 'PATTERN', GOOD_NEWS: 'GOOD NEWS', RISK: 'RISK', OPPORTUNITY: 'OPPORTUNITY' };
+    const patternsHtml = ip.patterns.slice(0, 6).map(pt => `
+      <div style="margin-bottom:7px;">
+        <div style="font-size:9.5px; font-weight:700;"><span style="color:var(--blue); letter-spacing:.05em;">${esc(tagLabel[pt.tag] ?? pt.tag)}</span> · ${esc(pt.title)}</div>
+        <div style="font-size:9px; color:var(--muted); line-height:1.45;">${esc(pt.body)}</div>
+      </div>`).join('');
+    const playbookRows = ip.playbook.slice(0, 10).map(r => `
+      <tr><td style="font-weight:700;">${esc(r.brand)}</td><td>${esc(r.doingWell)}</td><td>${esc(r.vulnerable)}</td><td style="font-weight:700;">${esc(r.keyStat)}</td></tr>`).join('');
+    const strikeHtml = ip.strike.slice(0, 6).map((sk, i) => `
+      <div style="margin-bottom:5px; font-size:9.5px;"><b>${i + 1}. ${esc(sk.title)}</b> <span style="color:var(--muted);">(${esc(sk.impact === 'HIGH' ? 'high impact' : 'medium')})</span><br/><span style="font-size:9px; color:var(--muted);">${esc(sk.body)}</span></div>`).join('');
+    const quadLabel: Record<string, string> = {
+      answer_and_source: 'The answer + the source', named_not_cited: 'Named, not cited',
+      cited_not_named: 'Cited, never named', invisible: 'Below field median on both',
+    };
+    const quadHtml = iq && iq.points.length ? `
+      <table class="dt" style="margin-top:8px; margin-bottom:4px;">
+        <tr><th>Brand</th><th style="width:1in;">Named in prompts</th><th style="width:1in;">Citations of domain</th><th>Position</th></tr>
+        ${iq.points.slice(0, 12).map(pt => `
+        <tr${pt.isClient ? ' style="font-weight:700;"' : ''}><td>${esc(pt.brand)}${pt.isClient ? ' (you)' : ''}</td><td>${p1(pt.visibilityPct)}</td><td>${n0(pt.citations)}</td><td>${esc(quadLabel[pt.quadrant] ?? pt.quadrant)}</td></tr>`).join('')}
+      </table>
+      ${iq.unmatched.length ? `<div style="font-size:8.5px; color:var(--muted);">Not classified (no matchable cited domain in the stored export — citations unmeasured, not zero): ${iq.unmatched.map(u => esc(u.brand)).join(', ')}.</div>` : ''}` : '';
+    pages.push(pageWrap('INSIGHTS — THE CROSS-PANEL STORY', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg">${esc(ip.thesis.headline)}</h1>
+      <div class="lede">${esc(ip.thesis.body)}${ip.thesis.openPosition ? ` <b>${esc(ip.thesis.openPosition)}</b>` : ''}</div>
+      ${patternsHtml}
+      ${playbookRows ? `<table class="dt" style="margin-top:6px; margin-bottom:6px;">
+        <tr><th style="width:1.1in;">Brand</th><th>Doing well</th><th>Vulnerable</th><th style="width:1.1in;">Key stat</th></tr>${playbookRows}
+      </table>` : ''}
+      ${strikeHtml ? `<div style="font-size:10px; font-weight:700; margin-top:6px; margin-bottom:4px;">Where to strike</div>${strikeHtml}` : ''}
+      ${quadHtml}
+      <div class="src">Source: the Insights panel's stored, machine-verified narrative (every number verified verbatim against stored panel data before saving — ${n0(ip.verified)} numbers checked; generated from: ${ip.sources.map(x => esc(x)).join(' · ') || 'stored panels'}). Quadrant: ${iq ? esc(iq.basis) : 'no stored Profound export — not measured'}. This section reads the panel's stored output and shared builders; nothing is recomputed for the report.</div>`));
+  }
+
+    // AI answer layer
   if (pf) {
     const maxTop = Math.max(1, ...pf.overallTop.map(b => b.pct));
     // v7.423 — highlight the client's OWN row rather than appending a second one. Before v7.420
