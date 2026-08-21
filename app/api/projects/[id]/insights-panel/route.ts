@@ -34,7 +34,7 @@ import { checkProjectAccess } from '@/lib/auth/access';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { setUsageProject } from '@/lib/usage/context';
 import {
-  buildContext, buildCensus, extractNumberTokens, findUngrounded,
+  buildContext, buildCensus, extractNumberTokens, findUngroundedAllowRounding,
   TOOLS, runTool, statusLabelFor, SEER_MODEL, normDomain, type SeerContext,
 } from '@/lib/seer/core';
 import { buildQuadrant, buildCoverageSummary } from '@/lib/insightsPanel/build';
@@ -267,7 +267,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             const draft = textBlocks.map(b => b.text).join('\n').trim();
             emit({ type: 'status', label: 'Verifying every number against stored data', step: 4, steps: 5 });
             const parsed = parseGenerated(draft);
-            const bad = 'blob' in parsed ? findUngrounded(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
+            const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
             const problem = 'parseError' in parsed ? parsed.parseError
               : bad.length > 0 ? ('These numbers do not appear in any tool result: ' + bad.join(', ')) : null;
             if (!problem && 'blob' in parsed) {
@@ -327,7 +327,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             });
             const draft = fin.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n').trim();
             const parsed = parseGenerated(draft);
-            const bad = 'blob' in parsed ? findUngrounded(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
+            const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
             if ('blob' in parsed && bad.length === 0) {
               stored = {
                 ...tidyBlob(parsed.blob),
