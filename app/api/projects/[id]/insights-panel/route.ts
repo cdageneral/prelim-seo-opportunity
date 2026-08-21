@@ -46,7 +46,7 @@ export const maxDuration = 300;
 const JSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform' } as const;
 const NDJSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform', 'Content-Type': 'application/x-ndjson' } as const;
 
-const MAX_TOOL_TURNS = 10;
+const MAX_TOOL_TURNS = 16;
 const MAX_REPAIRS = 2;
 
 async function ensureColumns() {
@@ -290,9 +290,32 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           messages.push({ role: 'user', content: results });
 
           if (turn === MAX_TOOL_TURNS - 1 && !stored) {
-            emit({ type: 'error', error: 'Generation ran out of turns before producing a verified result — nothing was saved. Try again.' });
-            controller.close();
-            return;
+            // Out of tool turns — force a final NO-TOOLS answer from what was
+            // gathered (the Seer pattern, v7.462), then verify it like any draft.
+            emit({ type: 'status', label: 'Writing the verified insights', step: 4, steps: 5 });
+            const fin: Anthropic.Message = await client.messages.create({
+              model: SEER_MODEL,
+              max_tokens: 4000,
+              system: insightsSystemPrompt(ctx) + '\nYou have used all tool calls. Reply NOW with the single JSON object, using only numbers that appeared in the tool results above.',
+              messages,
+            });
+            const draft = fin.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n').trim();
+            const parsed = parseGenerated(draft);
+            const bad = 'blob' in parsed ? findUngrounded(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
+            if ('blob' in parsed && bad.length === 0) {
+              stored = {
+                ...parsed.blob,
+                generatedAt: new Date().toISOString(),
+                model: SEER_MODEL,
+                verified: extractNumberTokens(narrativeText(parsed.blob)).length,
+                analysisCompletedAt: ctx.analysis?.completedAt ?? null,
+              };
+            } else {
+              // Fail CLOSED — unverified output is never stored (v7.463).
+              emit({ type: 'error', error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + ('parseError' in parsed ? parsed.parseError : ('Unverified numbers: ' + bad.join(', '))) + ' Try again — nothing unverified was saved.', refusal: true });
+              controller.close();
+              return;
+            }
           }
         }
 
