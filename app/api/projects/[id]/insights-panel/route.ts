@@ -47,7 +47,7 @@ const JSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform' } as const;
 const NDJSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform', 'Content-Type': 'application/x-ndjson' } as const;
 
 const MAX_TOOL_TURNS = 16;
-const MAX_REPAIRS = 2;
+const MAX_REPAIRS = 3;
 
 async function ensureColumns() {
   try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel JSONB`); } catch { /* exists */ }
@@ -103,7 +103,7 @@ function insightsSystemPrompt(ctx: SeerContext): string {
     'Your job: find the strongest OVERARCHING, cross-panel insights this project\'s stored data proves — how search rank, AI visibility, prompts, content, sentiment, and the competitive field relate. Find real correlations and patterns (e.g. a brand winning feature prompts but losing rate prompts; content mix out of line with the traffic it returns; search coverage that does not convert to AI visibility; a rival whose visibility rests on almost no citations). State what each competitor does well and where it is vulnerable. Then say where the openings are.',
     '',
     'NON-NEGOTIABLE RULES (machine-enforced):',
-    '1. GROUNDED ONLY. Every number you write must appear VERBATIM in a tool result from this conversation. Never compute your own sums, ratios, or percentages — use tool aggregates. A server-side check rejects output containing any number the tools did not return, so an ungrounded number means the whole generation is discarded.',
+    '1. GROUNDED ONLY. Every number you write must appear VERBATIM in a tool result from this conversation. Copy numbers character-for-character — NEVER round (7.34 must not become 7.3), never abbreviate (1200 never 1.2K), never compute your own sums, ratios, or percentages. If you want a rounded or aggregate figure the tools did not return, quote the exact returned value instead. A server-side check rejects output containing any number the tools did not return, so one rounded digit discards the whole generation.',
     '2. NO ESTIMATES. Nothing modeled, projected, or assumed. If the data cannot support a claim, do not make the claim.',
     '3. ABSENCE IS NEVER ZERO. A section with no stored data is unmeasured — a pattern may note the gap, never treat it as 0.',
     '4. QUALITATIVE CLAIMS need grounding too: name the metric behind every "wins/loses/leads/trails".',
