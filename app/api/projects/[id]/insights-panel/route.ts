@@ -181,6 +181,32 @@ function parseGenerated(draft: string): { blob: z.infer<typeof GeneratedSchema> 
   return { blob: parsed.data };
 }
 
+/**
+ * v7.471: display formatter, applied AFTER verification. Stored floats carry
+ * raw precision (e.g. 7.265774378585086); the model must quote them VERBATIM
+ * to pass the gate, which reads terribly. This is a pure TS formatter — the
+ * same role as the panels' p1()/n0() — rounding long decimals to one place
+ * for display. It runs only on text whose numbers were already verified, so
+ * nothing unverified is introduced (Const I.1: format-at-render, never model
+ * math).
+ */
+function tidyNumbers(text: string): string {
+  return text.replace(/\d+\.\d{3,}/g, m => {
+    const n = Number(m);
+    return Number.isFinite(n) ? (Math.round(n * 10) / 10).toString() : m;
+  });
+}
+function tidyBlob<T extends z.infer<typeof GeneratedSchema>>(blob: T): T {
+  return {
+    ...blob,
+    thesis: { headline: tidyNumbers(blob.thesis.headline), body: tidyNumbers(blob.thesis.body),
+      openPosition: blob.thesis.openPosition ? tidyNumbers(blob.thesis.openPosition) : blob.thesis.openPosition },
+    patterns: blob.patterns.map(pt => ({ ...pt, title: tidyNumbers(pt.title), body: tidyNumbers(pt.body) })),
+    playbook: blob.playbook.map(r => ({ ...r, doingWell: tidyNumbers(r.doingWell), vulnerable: tidyNumbers(r.vulnerable), keyStat: tidyNumbers(r.keyStat) })),
+    strike: blob.strike.map(sk => ({ ...sk, title: tidyNumbers(sk.title), body: tidyNumbers(sk.body) })),
+  };
+}
+
 /** every narrative string of the blob, joined — the text the number gate checks. */
 function narrativeText(blob: z.infer<typeof GeneratedSchema>): string {
   const parts: string[] = [blob.thesis.headline, blob.thesis.body, blob.thesis.openPosition ?? ''];
@@ -246,7 +272,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
               : bad.length > 0 ? ('These numbers do not appear in any tool result: ' + bad.join(', ')) : null;
             if (!problem && 'blob' in parsed) {
               stored = {
-                ...parsed.blob,
+                ...tidyBlob(parsed.blob),
                 generatedAt: new Date().toISOString(),
                 model: SEER_MODEL,
                 verified: extractNumberTokens(narrativeText(parsed.blob)).length,
@@ -304,7 +330,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             const bad = 'blob' in parsed ? findUngrounded(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
             if ('blob' in parsed && bad.length === 0) {
               stored = {
-                ...parsed.blob,
+                ...tidyBlob(parsed.blob),
                 generatedAt: new Date().toISOString(),
                 model: SEER_MODEL,
                 verified: extractNumberTokens(narrativeText(parsed.blob)).length,
