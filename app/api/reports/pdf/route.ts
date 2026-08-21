@@ -34,6 +34,7 @@ import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
 import Anthropic                               from '@anthropic-ai/sdk';
+import { buildQuadrant }                       from '@/lib/insightsPanel/build';   // v7.471 (Const II.6b): the Insights panel's own deterministic quadrant builder
 
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 60;
@@ -337,6 +338,11 @@ export async function POST(req: NextRequest) {
     serpFeatures,
     program,
     productInsights,   // v7.427 (Const II.6b)
+    // v7.471 (Const II.6b): the Insights panel ships its PDF section in the same
+    // release — the STORED machine-verified blob + the panel's own quadrant
+    // builder over the stored Profound export. Both read verbatim (II.6a).
+    insightsPanel: (((project as any).insightsPanel) ?? null),
+    insightsQuadrant: buildQuadrant(((project as any).profoundData) ?? null),
   });
   let pdfBuffer: Buffer;
 
