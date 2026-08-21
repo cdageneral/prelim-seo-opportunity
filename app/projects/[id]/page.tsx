@@ -12,6 +12,7 @@ import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ProductInsightsSection from '@/components/brief/ProductInsightsSection';   // v7.426: Product Insights sub-view (Keyword Landscape group)
+import InsightsSection from '@/components/brief/InsightsSection';               // v7.471: Insights sub-view under Executive Summary
 import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
 // v7.337 (QC audit B4-proper, Const II.7): live SERP-feature roll-up for the nav score —
 // same shared builders the SERP Features panel + Executive Summary compute from.
@@ -93,7 +94,7 @@ interface Project {
 // ── Nav config ────────────────────────────────────────────────────────────────
 
 type NavSection =
-  | 'overview' | 'viewScope' | 'keywords' | 'audienceSegments' | 'journeys' | 'content' | 'contentPlan'
+  | 'overview' | 'viewScope' | 'insights' | 'keywords' | 'audienceSegments' | 'journeys' | 'content' | 'contentPlan'
   | 'serp' | 'serpFeatures'
   | 'llm' | 'aiEngines'
   | 'local'
@@ -1243,7 +1244,7 @@ export default function ProjectBriefPage() {
         projectName={project.clientName}
         activePanelLabel={
           NAV_ITEMS.find(i => i.id === activeSection)?.label
-            ?? ({ viewScope: 'View Scope', contentPlan: 'Content Plan', authorityCalc: 'Authority Calculator', llm: 'LLM Visibility' } as Record<string, string>)[activeSection]
+            ?? ({ viewScope: 'View Scope', insights: 'Insights', contentPlan: 'Content Plan', authorityCalc: 'Authority Calculator', llm: 'LLM Visibility' } as Record<string, string>)[activeSection]
             ?? 'Executive Summary'
         }
         open={seerOpen}
@@ -1557,7 +1558,7 @@ export default function ProjectBriefPage() {
                         {/* ── Executive Summary sub-nav (v7.267): Executive summary + View scope ── */}
                         {item.id === 'overview' && hasResults && (
                           <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
-                            {([['overview', 'Executive summary', 'ti-layout-dashboard'], ['viewScope', 'View scope', 'ti-clipboard-list']] as const).map(([sid, label, icon]) => {
+                            {([['overview', 'Executive summary', 'ti-layout-dashboard'], ['insights', 'Insights', 'ti-bulb'], ['viewScope', 'View scope', 'ti-clipboard-list']] as const).map(([sid, label, icon]) => {
                               const subActive = activeSection === sid;
                               return (
                                 <button
@@ -1928,6 +1929,14 @@ export default function ProjectBriefPage() {
               analysis={analysisForPanels}
               competitors={competitorDomains}
               claudeAssigns={pageClaudeAssigns}
+            />
+          )}
+
+          {/* ── Insights (v7.471 sub-nav under Executive Summary) ── */}
+          {hasResults && analysis && activeSection === 'insights' && (
+            <InsightsSection
+              projectId={projectId}
+              clientName={project.clientName}
             />
           )}
 
