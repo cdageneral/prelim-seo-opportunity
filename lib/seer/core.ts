@@ -506,6 +506,31 @@ export function findUngrounded(answer: string, groundedHaystack: string): string
 
 // ─── Anthropic tool schemas ──────────────────────────────────────────────────
 
+// v7.471: rounding-tolerant grounding for the Insights generator ONLY (Seer keeps
+// the strict verbatim gate above). A number passes when it appears verbatim OR is
+// a 0-3-decimal display ROUNDING of a number actually present in the tool results
+// of this request. Still fail-closed against invention: a token with no matching
+// stored value at any of those precisions is rejected. Rationale: stored floats
+// carry raw precision (7.265774378585086) and a narrative that must quote them
+// verbatim either reads badly or trips the gate on a harmless 7.3 — a rounding of
+// a REAL value is a formatting choice, not a fabrication (Const I.1).
+export function findUngroundedAllowRounding(answer: string, groundedHaystack: string): string[] {
+  const strict = findUngrounded(answer, groundedHaystack);
+  if (strict.length === 0) return strict;
+  const hayNums = groundedHaystack.replace(/,/g, '').match(/\d+(?:\.\d+)?/g) ?? [];
+  const ok = new Set<string>();
+  for (const h of hayNums) {
+    const n = Number(h);
+    if (!Number.isFinite(n)) continue;
+    for (let d = 0; d <= 3; d++) {
+      const r = n.toFixed(d);
+      ok.add(r);
+      ok.add(r.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1'));
+    }
+  }
+  return strict.filter(tok => !ok.has(tok) && !ok.has(tok.replace(/\.0+$/, '')));
+}
+
 export const TOOLS: Anthropic.Tool[] = [
   {
     name: 'project_overview',
