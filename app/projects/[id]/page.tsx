@@ -2076,7 +2076,7 @@ export default function ProjectBriefPage() {
           )}
 
           {/* ── Coming soon sections ── */}
-          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && activeSection !== 'authority' && activeSection !== 'authorityCalc' && (
+          {hasResults && analysis && activeSection !== 'overview' && activeSection !== 'viewScope' && activeSection !== 'insights' && activeSection !== 'keywords' && activeSection !== 'audienceSegments' && activeSection !== 'journeys' && activeSection !== 'content' && activeSection !== 'contentPlan' && activeSection !== 'serp' && activeSection !== 'serpFeatures' && activeSection !== 'llm' && activeSection !== 'aiEngines' && activeSection !== 'local' && activeSection !== 'usage' && activeSection !== 'authority' && activeSection !== 'authorityCalc' && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-12 h-12 rounded-xl bg-orbit-accent/10 border border-orbit-accent/20 flex items-center justify-center mx-auto mb-3">
