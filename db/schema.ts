@@ -120,6 +120,17 @@ export const projects = pgTable('projects', {
   // projects-list + [id] routes (the v7.268/v7.327 column lesson).
   productInsights:           jsonb('product_insights'),
   productInsightsUpdatedAt:  timestamp('product_insights_updated_at'),
+  // v7.471: Insights panel — the STORED, machine-verified generated narrative
+  // (thesis / patterns / competitor playbook / where-to-strike). Written only by
+  // /api/projects/[id]/insights-panel POST after the v7.463 fail-closed number
+  // verifier passes; cached until the user regenerates (Const I.1 — nothing
+  // unverified is ever stored). market_benchmarks holds USER-ENTERED external
+  // scale rows (brand, metric, value, source) displayed verbatim with their
+  // source, never computed on. All three ensured in the projects-list route
+  // (the v7.268/v7.327 column lesson).
+  insightsPanel:             jsonb('insights_panel'),
+  insightsPanelUpdatedAt:    timestamp('insights_panel_updated_at'),
+  marketBenchmarks:          jsonb('market_benchmarks'),
   // v7.342: the project's CANONICAL TAXONOMY ANCHOR (distinct canonical paths from the
   // last successful anchored-engine breakdown, capped). Lives on the PROJECT — like brand
   // terms — so it SURVIVES the full keyword reset Wayne's upload workflow runs (the reset
