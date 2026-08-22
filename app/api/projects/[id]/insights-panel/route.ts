@@ -83,13 +83,13 @@ const GeneratedSchema = z.object({
   patterns: z.array(PatternSchema).min(1).max(8),
   playbook: z.array(z.object({
     brand: z.string().min(1).max(120),
-    doingWell: z.string().min(1).max(600),
-    vulnerable: z.string().min(1).max(600),
+    doingWell: z.string().min(1).max(900),
+    vulnerable: z.string().min(1).max(900),
     keyStat: z.string().min(1).max(120),
   }).strict()).max(15),
   strike: z.array(z.object({
     title: z.string().min(1).max(200),
-    body: z.string().min(1).max(600),
+    body: z.string().min(1).max(1200),
     impact: z.enum(['HIGH', 'MEDIUM']),
   }).strict()).max(8),
   sources: z.array(z.string().max(160)).max(20),
