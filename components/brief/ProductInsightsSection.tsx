@@ -41,7 +41,7 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 // v7.430: the aggregation lives in the ONE shared basis module (Const II.7) so the
 // Assessment PDF reads the same computation this panel renders (II.6a/II.6b).
 import {
-  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella,
+  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella, probeFromAnalysis,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
   buildCategoryTree, flattenNodes, buildPromptBreakdown, buildPlatformMix,
   PLATFORM_LABEL,
@@ -177,7 +177,7 @@ export default function ProductInsightsSection({
     topics,
     uploadedKeywords: uploadedKeywords ?? [],
     serpPositions: ((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
-    llmProbe: (analysis as any)?.llmProbe ?? null,
+    llmProbe: probeFromAnalysis(analysis),   // v7.472: probe lives in profoundSnapshot
     storedScans: (stored?.categories ?? []) as StoredCatScan[],
     clientDomain: domain,
     brandTerms,
@@ -1431,7 +1431,7 @@ export default function ProductInsightsSection({
                       </div>
                       {(() => {
                         // v7.430: prompts roll up to the umbrella through the STORED taxonomy (II.8)
-                        const res: any[] = probeResultsForUmbrella((analysis as any)?.llmProbe, p.name, catToUmb);
+                        const res: any[] = probeResultsForUmbrella(probeFromAnalysis(analysis), p.name, catToUmb);   // v7.472
                         if (res.length === 0) return <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No probe prompts for this category (the probe covers the top 30 categories by demand).</div>;
                         return res.map((r: any) => (
                           <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '4px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
