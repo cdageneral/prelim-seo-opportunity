@@ -41,7 +41,7 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 // v7.430: the aggregation lives in the ONE shared basis module (Const II.7) so the
 // Assessment PDF reads the same computation this panel renders (II.6a/II.6b).
 import {
-  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella, probeFromAnalysis,
+  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella, probeFromAnalysis, probeResultsForNode, catNodeNames,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
   buildCategoryTree, flattenNodes, buildPromptBreakdown, buildPlatformMix,
   PLATFORM_LABEL,
@@ -1415,6 +1415,28 @@ export default function ProductInsightsSection({
                               )}
                             </div>
                           )}
+                          {/* v7.474: THIS node's analysis-time probe prompts — every direct
+                              sub-category carries its own term-driven prompts (Wayne, 2026-08-25);
+                              deeper levels show their own only if probed, never the line's (I.5). */}
+                          {isOpen && (() => {
+                            const pres = probeResultsForNode(probeFromAnalysis(analysis), catNodeNames(node));
+                            if (pres.length === 0) return null;
+                            const named = pres.filter((r: any) => r.mentioned).length;
+                            return (
+                              <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '8px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
+                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
+                                  LLM PROBE PROMPTS — “{node.name.toUpperCase()}” (analysis-time, unbranded) · NAMED IN {named} OF {pres.length}
+                                </div>
+                                {pres.map((r: any) => (
+                                  <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '3px 0', borderBottom: '1px solid var(--c-111120)', fontSize: '11px' }}>
+                                    <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.prompt}</span>
+                                    <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--c-55557a)' }}>{r.platform === 'claude' ? 'Claude' : 'GPT'}</span>
+                                    <span style={{ fontSize: '10px', fontWeight: 800, color: r.mentioned ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{r.mentioned ? '✓ mentioned' : '✕ absent'}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </div>,
                       );
                       if (isOpen) for (const c of node.children) render(c);
@@ -1430,16 +1452,51 @@ export default function ProductInsightsSection({
                         LLM PROBE PROMPTS — THIS CATEGORY (analysis-time, unbranded)
                       </div>
                       {(() => {
+                        // v7.474: honest partial-coverage note — a deadline-stopped probe
+                        // keeps its completed prompts; the rest were never asked (I.5).
+                        const cov = (probeFromAnalysis(analysis) as any)?.coverage;
+                        if (!cov || !(cov.completed < cov.planned)) return null;
+                        return (
+                          <div style={{ fontSize: '10px', color: 'var(--c-f59e0b)', marginBottom: '6px' }}>
+                            The probe hit its time budget: {cov.completed.toLocaleString()} of {cov.planned.toLocaleString()} planned prompt calls completed. Prompts not shown were never asked — unmeasured, not zero. The next analysis re-probes in priority order.
+                          </div>
+                        );
+                      })()}
+                      {(() => {
                         // v7.430: prompts roll up to the umbrella through the STORED taxonomy (II.8)
                         const res: any[] = probeResultsForUmbrella(probeFromAnalysis(analysis), p.name, catToUmb);   // v7.472
-                        if (res.length === 0) return <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No probe prompts for this category (the probe covers the top 30 categories by demand).</div>;
-                        return res.map((r: any) => (
-                          <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '4px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
-                            <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.prompt}</span>
-                            <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--c-55557a)' }}>{r.platform === 'claude' ? 'Claude' : 'GPT'}</span>
-                            <span style={{ fontSize: '10px', fontWeight: 800, color: r.mentioned ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{r.mentioned ? '✓ mentioned' : '✕ absent'}</span>
-                          </div>
-                        ));
+                        if (res.length === 0) return <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No probe prompts for this category (the probe covers the top 30 product lines by demand).</div>;
+                        // v7.474: grouped by NODE — the line's own prompts first, then each
+                        // direct sub-category's prompts under its name (Wayne: "every sub
+                        // category will have prompts mapped to it as well").
+                        const pLow = p.name.toLowerCase().trim();
+                        const groups: Array<{ name: string; isLine: boolean; rows: any[] }> = [];
+                        const gIdx = new Map<string, number>();
+                        for (const r of res) {
+                          const nm = String(r?.category ?? '');
+                          const low = nm.toLowerCase().trim();
+                          let gi = gIdx.get(low);
+                          if (gi === undefined) { gi = groups.length; gIdx.set(low, gi); groups.push({ name: nm, isLine: low === pLow, rows: [] }); }
+                          groups[gi].rows.push(r);
+                        }
+                        groups.sort((a, b) => (a.isLine ? 0 : 1) - (b.isLine ? 0 : 1));
+                        return groups.map(g => {
+                          const named = g.rows.filter((r: any) => r.mentioned).length;
+                          return (
+                            <div key={g.name} style={{ marginBottom: '7px' }}>
+                              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.05em', color: g.isLine ? 'var(--c-9b96ff)' : 'var(--c-6a6a90)', margin: '4px 0 2px' }}>
+                                {g.isLine ? `${g.name.toUpperCase()} — PRODUCT LINE` : g.name.toUpperCase()} · named in {named} of {g.rows.length}
+                              </div>
+                              {g.rows.map((r: any) => (
+                                <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '4px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
+                                  <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.prompt}</span>
+                                  <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--c-55557a)' }}>{r.platform === 'claude' ? 'Claude' : 'GPT'}</span>
+                                  <span style={{ fontSize: '10px', fontWeight: 800, color: r.mentioned ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{r.mentioned ? '✓ mentioned' : '✕ absent'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        });
                       })()}
                     </div>
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
