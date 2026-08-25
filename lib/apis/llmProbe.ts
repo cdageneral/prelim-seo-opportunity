@@ -93,6 +93,10 @@ export interface LLMProbeSnapshotV2 {
   probedAt:      string;
   platformsUsed: string[];              // display labels
   promptsPerPlatform: number;
+  /** v7.474: planned vs completed prompt calls across both platforms — when a
+   *  deadline stops the pool early, completed results are kept and this gap is
+   *  the honest record of what was not asked (absent, never zero — Const I.5). */
+  coverage?:     { planned: number; completed: number };
   results:       ProbeResultV2[];
   categories:    CategoryVisibilityV2[];
   unbranded: { mentions: number; total: number; score: number };   // score 0–100
@@ -113,6 +117,16 @@ export interface ProbeCategoryInput {
    *  `name`, so drawer/rollup matching against the stored taxonomy (v7.472's
    *  probeFromAnalysis path) is untouched by any label change. */
   promptLabel?:  string;
+  /** v7.474: node kind. 'line' = product-line umbrella (5 unbranded + 1 branded);
+   *  'sub' = a line's DIRECT sub-category (5 unbranded, no branded — sentiment
+   *  stays at the line level). Absent = legacy input, treated as 'line'. */
+  kind?:         'line' | 'sub';
+  /** v7.474: the node's own top ranking terms (by real search volume, from the
+   *  stored taxonomy's keyword membership) — each unbranded prompt is phrased
+   *  around one of these REAL terms ("wide leg jeans"), falling back to the
+   *  promptLabel/name when a node carries no terms. Wayne (2026-08-25): sub
+   *  prompts "match the url and existing ranking terms". */
+  terms?:        string[];
 }
 
 /**
@@ -156,7 +170,7 @@ interface PromptSpec {
   prompt:   string;
 }
 
-function buildPromptSpecs(
+export function buildPromptSpecs(
   clientName: string,
   industry:   string,
   categories: ProbeCategoryInput[],
@@ -164,34 +178,41 @@ function buildPromptSpecs(
   const specs: PromptSpec[] = [];
 
   categories.forEach((cat, i) => {
-    const c = (cat.promptLabel ?? cat.name).toLowerCase();   // v7.473: contextualized label in prompt text; stored category stays cat.name
-    // 5 unbranded framings — same category, distinct query intents, to widen
-    // the unbranded-visibility sample per category (v7.274).
+    // v7.474: each unbranded framing is phrased around one of the node's own
+    // top ranking terms (real search terms, by volume); a node with no terms
+    // falls back to its contextualized label (v7.473). With 5 terms every
+    // framing gets its own term; fewer terms cycle across the framings.
+    const label = (cat.promptLabel ?? cat.name).toLowerCase();
+    const subjects = (cat.terms ?? []).map(t => String(t).toLowerCase().trim()).filter(Boolean);
+    const subj = (n: number) => subjects.length > 0 ? subjects[n % subjects.length] : label;
     specs.push({
       key: `cat${i}:u1`, category: cat.name, intent: 'unbranded_recommendation', branded: false,
-      prompt: `What are the best companies or providers for ${c}?`,
+      prompt: `What are the best companies or providers for ${subj(0)}?`,
     });
     specs.push({
       key: `cat${i}:u2`, category: cat.name, intent: 'unbranded_consideration', branded: false,
-      prompt: `I'm considering ${c}. Which companies or providers should I look into, and why?`,
+      prompt: `I'm considering ${subj(1)}. Which companies or providers should I look into, and why?`,
     });
     specs.push({
       key: `cat${i}:u3`, category: cat.name, intent: 'unbranded_toprated', branded: false,
-      prompt: `Who are the top-rated providers for ${c} right now?`,
+      prompt: `Who are the top-rated providers for ${subj(2)} right now?`,
     });
     specs.push({
       key: `cat${i}:u4`, category: cat.name, intent: 'unbranded_shortlist', branded: false,
-      prompt: `If I'm comparing options for ${c}, which companies should be on my shortlist?`,
+      prompt: `If I'm comparing options for ${subj(3)}, which companies should be on my shortlist?`,
     });
     specs.push({
       key: `cat${i}:u5`, category: cat.name, intent: 'unbranded_wordofmouth', branded: false,
-      prompt: `What companies do people most often recommend for ${c}?`,
+      prompt: `What companies do people most often recommend for ${subj(4)}?`,
     });
-    // 1 branded prompt — retained for per-category sentiment / recognition only.
-    specs.push({
-      key: `cat${i}:b1`, category: cat.name, intent: 'branded_proscons', branded: true,
-      prompt: `What are the pros and cons of ${clientName} for ${c}?`,
-    });
+    // 1 branded prompt at the LINE level only — per-line sentiment/recognition.
+    // Sub-categories carry no branded prompt (v7.474): sentiment lives at the line.
+    if (cat.kind !== 'sub') {
+      specs.push({
+        key: `cat${i}:b1`, category: cat.name, intent: 'branded_proscons', branded: true,
+        prompt: `What are the pros and cons of ${clientName} for ${label}?`,
+      });
+    }
   });
 
   specs.push({
@@ -240,17 +261,22 @@ function detectMention(
 
 // ─── Concurrency Pool ─────────────────────────────────────────────────────────
 
-async function runPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function runPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, deadlineMs?: number): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   async function worker() {
     while (next < items.length) {
+      // v7.474: a deadline stops the pool from STARTING new items — everything
+      // already completed is kept and returned. Before this, an over-budget
+      // probe was discarded WHOLE (the v7.346 race), which at per-sub prompt
+      // volume would throw away hundreds of real, paid-for answers.
+      if (deadlineMs !== undefined && Date.now() >= deadlineMs) break;
       const i = next++;
       results[i] = await fn(items[i]);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  return results.filter(r => r !== undefined);
 }
 
 // ─── Platform Callers ─────────────────────────────────────────────────────────
@@ -305,6 +331,7 @@ async function probePlatform(
   specs:      PromptSpec[],
   clientName: string,
   domain:     string,
+  deadlineMs?: number,
 ): Promise<ProbeResultV2[]> {
   const ask = platform === 'claude' ? askClaude : askChatGPT;
 
@@ -341,7 +368,7 @@ async function probePlatform(
         recognized:   null,
       };
     }
-  });
+  }, deadlineMs);
 }
 
 // ─── Sentiment + Recognition Classification (one sonnet pass) ────────────────
@@ -489,23 +516,30 @@ export async function getLLMProbeSnapshotV2(
   domain:     string,
   industry:   string,
   categories: ProbeCategoryInput[],
+  deadlineMs?: number,
 ): Promise<LLMProbeSnapshotV2> {
   const specs = buildPromptSpecs(clientName, industry, categories);
   console.log(
-    `[LLMProbe v2] Probing "${clientName}" (${domain}) — ${categories.length} categories, ` +
-    `${specs.length} prompts/platform. OPENAI_API_KEY set: ${!!process.env.OPENAI_API_KEY}`
+    `[LLMProbe v2] Probing "${clientName}" (${domain}) — ${categories.length} categories/nodes, ` +
+    `${specs.length} prompts/platform${deadlineMs ? `, deadline in ${Math.round((deadlineMs - Date.now()) / 1000)}s` : ''}. ` +
+    `OPENAI_API_KEY set: ${!!process.env.OPENAI_API_KEY}`
   );
 
   const [claudeResults, chatgptResults] = await Promise.all([
-    probePlatform('claude', specs, clientName, domain).catch(err => {
+    probePlatform('claude', specs, clientName, domain, deadlineMs).catch(err => {
       console.error('[LLMProbe v2] Claude platform failed:', err);
       return [] as ProbeResultV2[];
     }),
-    probePlatform('chatgpt', specs, clientName, domain).catch(err => {
+    probePlatform('chatgpt', specs, clientName, domain, deadlineMs).catch(err => {
       console.error('[LLMProbe v2] ChatGPT platform failed:', err);
       return [] as ProbeResultV2[];
     }),
   ]);
+  const planned   = specs.length * 2;
+  const completed = claudeResults.length + chatgptResults.length;
+  if (completed < planned) {
+    console.warn(`[LLMProbe v2] Deadline partial: ${completed}/${planned} prompts completed — completed results are kept (real data); the rest are absent, not zero (Const I.5).`);
+  }
 
   const results = [...claudeResults, ...chatgptResults];
 
@@ -556,6 +590,7 @@ export async function getLLMProbeSnapshotV2(
     probedAt:      new Date().toISOString(),
     platformsUsed,
     promptsPerPlatform: specs.length,
+    coverage:      { planned, completed },   // v7.474: honest partial-coverage marker
     results,
     categories:    buildCategoryVisibility(results, categories),
     unbranded:     { mentions: unbrandedMentions, total: unbrandedRows.length, score: unbrandedScore },
