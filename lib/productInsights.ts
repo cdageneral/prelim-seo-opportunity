@@ -298,6 +298,19 @@ export function brandOnlyUmbrellaNames(breakdown: any): Set<string> {
   return brand;
 }
 
+/**
+ * v7.472: resolve the LLM probe snapshot from an analysis row. The probe is
+ * STORED in analyses.profoundSnapshot (source 'llm_probe_v2' — see
+ * lib/apis/llmProbe.ts); every Product Insights reader was asking for
+ * analysis.llmProbe, a field the row never carries, so the prompt drawer showed
+ * "No probe prompts for this category" for every category since v7.426 no matter
+ * how fresh the scan. One resolver (Const II.7) so the panel, the Assessment PDF
+ * and Seer can never drift on where the probe lives again.
+ */
+export function probeFromAnalysis(analysis: any): any {
+  return (analysis as any)?.llmProbe ?? (analysis as any)?.profoundSnapshot ?? null;
+}
+
 /** Probe results whose category rolls up to `umbrella` (unbranded only when asked). */
 export function probeResultsForUmbrella(
   llmProbe: any, umbrella: string, catToUmb: Map<string, string>, unbrandedOnly = true,
