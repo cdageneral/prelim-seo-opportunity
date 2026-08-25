@@ -109,6 +109,41 @@ export interface LLMProbeSnapshotV2 {
 export interface ProbeCategoryInput {
   name:          string;
   monthlyDemand: number;
+  /** v7.473: label used in PROMPT TEXT only. The stored result `category` stays
+   *  `name`, so drawer/rollup matching against the stored taxonomy (v7.472's
+   *  probeFromAnalysis path) is untouched by any label change. */
+  promptLabel?:  string;
+}
+
+/**
+ * v7.473: a leaf category name alone can be meaningless in a prompt — NYDJ's
+ * "By Fit" produced "best companies or providers for by fit" (Wayne,
+ * 2026-08-25: "the prompts by fit dont make sense as this is in context of the
+ * fit of the jeans"). Deterministic composition from the STORED taxonomy's
+ * umbrella root — pure TS, no model call, no taxonomy change:
+ *   • no umbrella, or leaf IS the umbrella                    -> leaf unchanged
+ *   • leaf already names the line (shared word stem, e.g.
+ *     "Mortgage Calculator" under "Mortgages")                -> leaf unchanged
+ *   • leaf starts with a preposition ("By Fit", "For Bad
+ *     Credit")                                                -> "<umbrella> <leaf>"  ("jeans by fit")
+ *   • attributive leaf ("Balance Transfer", "Cash Back")      -> "<leaf> <umbrella>"  ("balance transfer credit cards")
+ */
+const LEADING_PREPOSITIONS = new Set(['by', 'for', 'with', 'without', 'under', 'over', 'in', 'on', 'to', 'from', 'near', 'vs', 'per']);
+export function composePromptLabel(name: string, umbrella: string | null | undefined): string {
+  const leaf = String(name ?? '').trim();
+  const root = String(umbrella ?? '').trim();
+  if (!leaf || !root || root.toLowerCase() === leaf.toLowerCase()) return leaf;
+  // A preposition-leading leaf ("By Fit", "For Bad Credit") is a modifier phrase
+  // by construction — it ALWAYS needs the umbrella in front, even when it shares
+  // a word with it ("For Bad Credit" under "Credit Cards" -> "credit cards for
+  // bad credit"), so this rule runs BEFORE the shared-stem shortcut.
+  const first = leaf.split(/\s+/)[0]?.toLowerCase() ?? '';
+  if (LEADING_PREPOSITIONS.has(first)) return `${root} ${leaf}`;
+  const stem = (w: string) => w.toLowerCase().replace(/s$/, '');
+  const rootWords = root.split(/\s+/).map(stem).filter(w => w.length > 3);
+  const leafWords = new Set(leaf.split(/\s+/).map(stem));
+  if (rootWords.some(w => leafWords.has(w))) return leaf;
+  return `${leaf} ${root}`;
 }
 
 // ─── Prompt Generation ────────────────────────────────────────────────────────
@@ -129,7 +164,7 @@ function buildPromptSpecs(
   const specs: PromptSpec[] = [];
 
   categories.forEach((cat, i) => {
-    const c = cat.name.toLowerCase();
+    const c = (cat.promptLabel ?? cat.name).toLowerCase();   // v7.473: contextualized label in prompt text; stored category stays cat.name
     // 5 unbranded framings — same category, distinct query intents, to widen
     // the unbranded-visibility sample per category (v7.274).
     specs.push({
