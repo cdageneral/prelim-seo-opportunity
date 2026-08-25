@@ -1115,11 +1115,72 @@ export async function runFullSynthesis(
       }
       return probeDisp.get(cur) ?? name;
     };
-    const probeCategories = categoryBreakdown.categories
-      .filter(c => c.type === 'procedure' && c.name !== 'Other')
-      .sort((a, b) => b.monthlyDemand - a.monthlyDemand)
-      .slice(0, 30)
-      .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand, promptLabel: composePromptLabel(c.name, probeRootOf(c.name)) }));
+    // ── v7.474 (Wayne, 2026-08-25): two-level probe — product LINES first, then
+    // EVERY direct sub-category of those lines, each phrased around the node's
+    // own top ranking terms. "the parent category is jeans and the sub is fit,
+    // so together at the sub level it would not be fit alone it would be fit in
+    // context to the parent category jeans. So every sub category will have
+    // prompts mapped to it as well."
+    //   • Lines: top 30 procedure umbrella ROOTS by demand (the standing
+    //     Wayne-approved cap, Const I.6) — 5 unbranded + 1 branded each.
+    //   • Subs: ALL direct children of those lines — 5 unbranded each, no
+    //     branded (sentiment stays at the line).
+    //   • Terms: each node's top-5 REAL ranking terms by search volume, read
+    //     from the stored taxonomy membership (keywordPaths) — never invented.
+    //   • Order: lines by demand, then subs by demand — under the deadline the
+    //     pool covers the most important nodes first (partials kept, I.5).
+    const kwVol = new Map<string, number>();
+    for (const k of [...(semrush.topKeywords ?? []), ...(semrush.gapKeywords ?? [])]) {
+      const key = String(k?.keyword ?? '').toLowerCase().trim();
+      if (!key) continue;
+      const v = (k as any)?.searchVolume ?? 0;
+      if (v > (kwVol.get(key) ?? 0)) kwVol.set(key, v);
+    }
+    const kwPaths: Record<string, string[]> = (categoryBreakdown as any).keywordPaths ?? {};
+    const termsFor = (rootLow: string, subLow: string | null): string[] => {
+      const hits: Array<{ kw: string; vol: number }> = [];
+      for (const [kw, path] of Object.entries(kwPaths)) {
+        if (!Array.isArray(path) || path.length === 0) continue;
+        if (String(path[0] ?? '').toLowerCase().trim() !== rootLow) continue;
+        if (subLow !== null && String(path[1] ?? '').toLowerCase().trim() !== subLow) continue;
+        hits.push({ kw, vol: kwVol.get(kw) ?? 0 });
+      }
+      hits.sort((a, b) => b.vol - a.vol);
+      return hits.slice(0, 5).map(h => h.kw);
+    };
+    const procRows = categoryBreakdown.categories.filter(c => c.type === 'procedure' && c.name !== 'Other');
+    const rowByLow = new Map(procRows.map(c => [c.name.toLowerCase().trim(), c]));
+    const lineNames: string[] = [];
+    const seenLines = new Set<string>();
+    for (const c of procRows) {
+      const root = probeRootOf(c.name);
+      const low = root.toLowerCase().trim();
+      if (!seenLines.has(low)) { seenLines.add(low); lineNames.push(root); }
+    }
+    const lineDemand = (name: string) => rowByLow.get(name.toLowerCase().trim())?.monthlyDemand ?? 0;
+    const lines = lineNames
+      .sort((a, b) => lineDemand(b) - lineDemand(a))
+      .slice(0, 30);
+    const lineSet = new Set(lines.map(l => l.toLowerCase().trim()));
+    const probeCategories: Array<{ name: string; monthlyDemand: number; promptLabel: string; kind: 'line' | 'sub'; terms: string[] }> = lines.map(l => ({
+      name: l, monthlyDemand: lineDemand(l), promptLabel: composePromptLabel(l, l), kind: 'line' as const,
+      terms: termsFor(l.toLowerCase().trim(), null),
+    }));
+    const subs = procRows
+      .filter(c => {
+        const low = c.name.toLowerCase().trim();
+        const parentLow = String(c.parent ?? '').toLowerCase().trim();
+        return parentLow && parentLow !== low && lineSet.has(parentLow);
+      })
+      .sort((a, b) => b.monthlyDemand - a.monthlyDemand);
+    for (const c of subs) {
+      const root = probeDisp.get(String(c.parent).toLowerCase().trim()) ?? String(c.parent);
+      probeCategories.push({
+        name: c.name, monthlyDemand: c.monthlyDemand, promptLabel: composePromptLabel(c.name, root), kind: 'sub' as const,
+        terms: termsFor(root.toLowerCase().trim(), c.name.toLowerCase().trim()),
+      });
+    }
+    console.log(`[OrbitIQ] Probe plan: ${lines.length} lines + ${subs.length} direct sub-categories = ${probeCategories.length} nodes`);
 
     // v7.346 hotfix: TIME-BOX the probe. On a large project the probe can exceed the
     // remaining Lambda budget; before this fix the 300s hard kill fired mid-probe,
@@ -1135,9 +1196,15 @@ export async function runFullSynthesis(
       console.warn(`[OrbitIQ] LLM probe skipped this window — only ${Math.round(remainingMs / 1000)}s left; brief completes with prior/empty probe, backfills later (Const I.5)`);
       llmProbe = profound ?? null;
     } else {
+      // v7.474: the probe now receives a hard deadline and returns PARTIAL
+      // results at that point (completed prompts kept — real, paid-for data;
+      // the rest absent, never zero). The pool deadline sits 30s inside the
+      // race budget so classification + assembly finish before the backstop
+      // race (kept as a last-resort guard) could discard anything.
+      const poolDeadline = Date.now() + Math.max(20_000, remainingMs - 30_000);
       const budget = new Promise<{ __timeout: true }>(res => setTimeout(() => res({ __timeout: true }), remainingMs));
       const raced: any = await Promise.race([
-        getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories)
+        getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories, poolDeadline)
           .catch(err => { console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err); return (profound ?? null) as any; }),
         budget,
       ]);
