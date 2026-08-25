@@ -234,7 +234,10 @@ export interface AssessmentData {
       // before v7.435 was one unfiltered request, so the mix is what came back rather
       // than a per-platform measurement — the panel and this table say so either way.
       platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
-      platformsMissing?: string[] }>;
+      platformsMissing?: string[];
+      // v7.474: the node's own analysis-time probe (unbranded prompts mapped to
+      // this sub-category) — absent means not probed at this level, never zero.
+      probe?: { mentioned: number; total: number } | null }>;
     // v7.449 (Const II.6b): Content Footprint by Brand — per product line, the
     // distinct ranking URLs each brand holds (client + leader + gap children),
     // computed by the route via the SAME lib/productInsights.buildContentFootprint
@@ -814,7 +817,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
           <td>${vol(n.demand)}/mo</td>
           <td>${p0(n.p1Share * 100)}</td>
           <td>${n.leader ? (n.leader === 'you' ? `You - ${p1(n.leaderPct ?? 0)}` : `${esc(n.leader)} - ${p1(n.leaderPct ?? 0)}${n.clientRank !== null ? ` (you #${n.clientRank})` : ''}`) : 'No page-1 holds'}</td>
-          <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}${(n.platformMix && n.platformMix.length) ? `<br><span style="color:var(--muted); font-size:8px;">${n.platformMix.map(m => `${n0(m.rows)} ${esc(m.label)}`).join(' - ')}${(n.platformsMissing && n.platformsMissing.length) ? `; ${n.platformsMissing.map(esc).join(' + ')} not measured` : ''}</span>` : ''}` : 'not measured at this level'}</td>
+          <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}${(n.platformMix && n.platformMix.length) ? `<br><span style="color:var(--muted); font-size:8px;">${n.platformMix.map(m => `${n0(m.rows)} ${esc(m.label)}`).join(' - ')}${(n.platformsMissing && n.platformsMissing.length) ? `; ${n.platformsMissing.map(esc).join(' + ')} not measured` : ''}</span>` : ''}` : 'not measured at this level'}${n.probe ? `<br><span style="color:var(--muted); font-size:8px;">probe: named in ${n0(n.probe.mentioned)} of ${n0(n.probe.total)} prompts</span>` : ''}</td>
         </tr>`).join('')}
       </table>
       <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run. Each scan queries Google AI Overviews and ChatGPT separately (one request per platform), so the platform counts under each figure are what was actually measured on each; a platform listed as not measured is unknown, not zero.</div>`;
