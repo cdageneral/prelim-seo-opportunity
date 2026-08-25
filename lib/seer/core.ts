@@ -18,7 +18,7 @@ import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import { buildKwPool, type KwPoolItem } from '@/lib/utils/kwVolume';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';
 import {
-  buildProductRows, buildCategoryTree, buildContentFootprint, contentUrlList,
+  buildProductRows, buildCategoryTree, buildContentFootprint, contentUrlList, probeFromAnalysis,
   type StoredCatScan, type NodeKw, type ProductRow,
 } from '@/lib/productInsights';
 import { buildCanonicalClusterTopics } from '@/lib/clusters/canonical';
@@ -332,7 +332,7 @@ export function ensureProductRows(ctx: SeerContext): ProductRow[] {
       topics:           journeyTopics,
       uploadedKeywords: dbKeywords,
       serpPositions:    ((snap as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>,
-      llmProbe:         (analysis as any).llmProbe ?? null,
+      llmProbe:         probeFromAnalysis(analysis),   // v7.472: probe lives in profoundSnapshot
       storedScans:      scans,
       clientDomain,
       brandTerms:       (((project as any).brandTerms ?? []) as string[]),
