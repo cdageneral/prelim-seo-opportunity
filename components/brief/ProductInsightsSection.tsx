@@ -41,7 +41,7 @@ import type { Insight, InsightSeg } from '@/lib/insights';
 // v7.430: the aggregation lives in the ONE shared basis module (Const II.7) so the
 // Assessment PDF reads the same computation this panel renders (II.6a/II.6b).
 import {
-  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella, probeFromAnalysis, probeResultsForNode, catNodeNames,
+  buildProductRows, buildBrandTokens, buildCategoryToUmbrella, probeResultsForUmbrella, probeFromAnalysis, probeResultsForNode, catNodeNames, absUrl,
   buildTopicRows, topicVerdict, rowNamesClient, AI_WEAK_BELOW, AI_STRONG_FROM,
   buildCategoryTree, flattenNodes, buildPromptBreakdown, buildPlatformMix,
   PLATFORM_LABEL,
@@ -159,6 +159,13 @@ export default function ProductInsightsSection({
 
   const clientNorm = normSovDomain(domain);
   const brandToks  = useMemo(() => buildBrandTokens(domain, brandTerms), [domain, brandTerms]);
+  // v7.475 (Wayne): every URL the panel shows is a real link. A bare path
+  // resolves against the CLIENT domain (paths shown here are client-owned by
+  // construction) unless a host is given (rival footprint URLs); anything
+  // already carrying a scheme passes through untouched. Same text colors as
+  // before (theme parity untouched) — underline + pointer are the affordance.
+  const hrefFor = useCallback((u: string | null | undefined, host?: string): string | null => absUrl(u, host ?? domain), [domain]);
+  const linkStyle = { color: 'inherit', textDecoration: 'underline', textUnderlineOffset: '2px', cursor: 'pointer' } as const;
   const catToUmb   = useMemo(
     () => buildCategoryToUmbrella((analysis?.semrushSnapshot as any)?._categoryBreakdown),
     [analysis],
@@ -673,7 +680,9 @@ export default function ProductInsightsSection({
                   <div>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{t.product || t.parentName}</div>
                     <div style={{ fontSize: '9.5px', color: best.url ? 'var(--c-6a6a90)' : 'var(--c-f87171)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {best.url ? best.url.replace(/^https?:\/\/[^/]*/, '') || '/' : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
+                      {best.url
+                        ? <a href={hrefFor(best.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{best.url.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
+                        : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
                       {' '}· {t.keywords.length} kw
                     </div>
                   </div>
@@ -1105,7 +1114,9 @@ export default function ProductInsightsSection({
                                   <div key={r.topic + r.bestPos} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '2px 0', fontSize: '10.5px' }}>
                                     <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.topic}</span>
                                     <span style={{ flexShrink: 0, color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>
-                                      {r.kwCount} kw · best #{r.bestPos} · {r.url ?? 'url unknown (no URL column in the upload)'}
+                                      {r.kwCount} kw · best #{r.bestPos} · {r.url
+                                        ? <a href={hrefFor(r.url, cfCell.domain)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{r.url}</a>
+                                        : 'url unknown (no URL column in the upload)'}
                                     </span>
                                   </div>
                                 ))}
@@ -1127,7 +1138,9 @@ export default function ProductInsightsSection({
                             <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
                               {urls.map(u => (
                                 <div key={u.url} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '2px 0', fontSize: '10.5px' }}>
-                                  <span style={{ flex: 1, color: 'var(--c-c8c8e8)', wordBreak: 'break-all' }}>{u.url}</span>
+                                  <span style={{ flex: 1, color: 'var(--c-c8c8e8)', wordBreak: 'break-all' }}>
+                                    <a href={hrefFor(u.url, cfCell.domain)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{u.url}</a>
+                                  </span>
                                   <span style={{ flexShrink: 0, color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{u.kwCount} kw · best #{u.bestPos}</span>
                                 </div>
                               ))}
@@ -1197,7 +1210,9 @@ export default function ProductInsightsSection({
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{node.name}</div>
                                 <div style={{ fontSize: '9.5px', color: node.bestUrl ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {node.bestUrl ? node.bestUrl.replace(/^https?:\/\/[^/]*/, '') || '/' : (node.bestPos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
+                                  {node.bestUrl
+                                    ? <a href={hrefFor(node.bestUrl)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{node.bestUrl.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
+                                    : (node.bestPos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
                                   {' '}· {node.kwCount.toLocaleString()} kw{node.children.length > 0 ? ` · ${node.children.length} sub` : ''}
                                 </div>
                               </div>
@@ -1299,7 +1314,9 @@ export default function ProductInsightsSection({
                                     </span>
                                     <span style={{ fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{k.searchVolume.toLocaleString()}</span>
                                     <span style={{ fontSize: '9.5px', color: k.url ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                      {k.url ? k.url.replace(/^https?:\/\/[^/]*/, '') || '/' : (k.position !== null ? 'URL not in source rows' : '—')}
+                                      {k.url
+                                        ? <a href={hrefFor(k.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{k.url.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
+                                        : (k.position !== null ? 'URL not in source rows' : '—')}
                                     </span>
                                   </div>
                                 ))}
@@ -1366,7 +1383,7 @@ export default function ProductInsightsSection({
                                 {view === 'urls' && pb.byUrl.map(u => (
                                   <div key={u.url} style={{ padding: '5px 0', borderBottom: '1px solid var(--c-111120)' }}>
                                     <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-9b96ff)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                      {u.url} <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>· cited by {u.prompts.length} prompt{u.prompts.length === 1 ? '' : 's'}</span>
+                                      <a href={hrefFor(u.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{u.url}</a> <span style={{ color: 'var(--c-6a6a90)', fontWeight: 400 }}>· cited by {u.prompts.length} prompt{u.prompts.length === 1 ? '' : 's'}</span>
                                     </div>
                                     <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', marginTop: '2px', lineHeight: 1.5 }}>{u.prompts.join(' · ')}</div>
                                   </div>
@@ -1382,7 +1399,9 @@ export default function ProductInsightsSection({
                                     </div>
                                     <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                       {r.bucket === 'cited' && r.ownedUrls.length > 0
-                                        ? <span style={{ color: 'var(--c-34d399)' }}>cites your {r.ownedUrls.join(', ')}</span>
+                                        ? <span style={{ color: 'var(--c-34d399)' }}>cites your {r.ownedUrls.map((u: string, i: number) => (
+                                            <span key={u}>{i > 0 ? ', ' : ''}<a href={hrefFor(u)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{u}</a></span>
+                                          ))}</span>
                                         : <>cites: {r.cites.length > 0 ? r.cites.slice(0, 4).join(', ') : 'no sources recorded'}</>}
                                     </div>
                                   </div>
