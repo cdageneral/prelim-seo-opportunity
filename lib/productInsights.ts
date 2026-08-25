@@ -311,6 +311,29 @@ export function probeFromAnalysis(analysis: any): any {
   return (analysis as any)?.llmProbe ?? (analysis as any)?.profoundSnapshot ?? null;
 }
 
+/**
+ * v7.474: unbranded probe results filed at any of the given node names (a node
+ * and its descendants). Direct sub-categories carry their own prompts from this
+ * release on; deeper nodes inherit nothing — an empty return is an honest
+ * "not probed at this level" (Const I.5), never a rollup from the line.
+ */
+export function probeResultsForNode(llmProbe: any, nodeNames: string[]): any[] {
+  const set = new Set(nodeNames.map(n => normName(String(n ?? ''))));
+  const res: any[] = Array.isArray(llmProbe?.results) ? llmProbe.results : [];
+  return res.filter((r: any) => !r?.branded && set.has(normName(String(r?.category ?? ''))));
+}
+
+/** v7.474: a CatNode's own name plus every descendant name (for probeResultsForNode). */
+export function catNodeNames(node: { name: string; children: any[] }): string[] {
+  const out: string[] = [];
+  const walk = (n: { name: string; children: any[] }) => {
+    out.push(n.name);
+    for (const c of (n.children ?? [])) walk(c);
+  };
+  walk(node);
+  return out;
+}
+
 /** Probe results whose category rolls up to `umbrella` (unbranded only when asked). */
 export function probeResultsForUmbrella(
   llmProbe: any, umbrella: string, catToUmb: Map<string, string>, unbrandedOnly = true,
