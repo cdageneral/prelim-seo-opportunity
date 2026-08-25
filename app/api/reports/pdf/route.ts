@@ -29,7 +29,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
-import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
+import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -153,7 +153,8 @@ export async function POST(req: NextRequest) {
           p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
           dfsShare: number | null; scanned: boolean;
           platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
-          platformsMissing?: string[] }> = [];
+          platformsMissing?: string[];
+          probe?: { mentioned: number; total: number } | null }> = [];
         // v7.449: per-product content footprint for the PDF (shared basis, II.6b)
         const contentByProduct: any[] = [];
         for (const prod of built.products) {
@@ -223,7 +224,12 @@ export async function POST(req: NextRequest) {
           if (!tree) continue;
           for (const n of flattenNodes(tree)) {
             const lead = n.ladder[0] ?? null;
+            // v7.474 (Const II.6b): the node's own analysis-time probe results —
+            // same shared helper the panel's per-node drawer reads. Absent = not
+            // probed at this level (only lines + direct subs carry prompts), I.5.
+            const nodeProbe = probeResultsForNode(probeFromAnalysis(analysis), catNodeNames(n as any));
             subNodes.push({
+              probe: nodeProbe.length > 0 ? { mentioned: nodeProbe.filter((r: any) => r.mentioned).length, total: nodeProbe.length } : null,
               name: n.name, path: n.path.join(' > '), depth: n.depth, demand: n.demand, kwCount: n.kwCount,
               p1Share: n.p1Share,
               leader: lead ? (lead.kind === 'client' ? 'you' : lead.domain) : null,
