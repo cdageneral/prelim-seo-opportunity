@@ -323,6 +323,20 @@ export function probeResultsForNode(llmProbe: any, nodeNames: string[]): any[] {
   return res.filter((r: any) => !r?.branded && set.has(normName(String(r?.category ?? ''))));
 }
 
+/**
+ * v7.475: resolve a stored URL (absolute, bare path, or naked host+path) to an
+ * absolute href against the given host. Returns null when nothing usable —
+ * callers render plain text in that case, never a dead link.
+ */
+export function absUrl(u: string | null | undefined, host: string | null | undefined): string | null {
+  const t = String(u ?? '').trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  const h = String(host ?? '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  if (t.startsWith('/')) return h ? `https://${h}${t}` : null;
+  return `https://${t}`;
+}
+
 /** v7.474: a CatNode's own name plus every descendant name (for probeResultsForNode). */
 export function catNodeNames(node: { name: string; children: any[] }): string[] {
   const out: string[] = [];
