@@ -19,7 +19,7 @@ import { classifyUmbrellaScopes } from '@/lib/category/scopeModel';   // v7.326:
 import { funnelStageForFamily } from '@/lib/category/funnelMap';       // v7.347: intent-family → funnel stage (Const III.11)
 import type { SemrushSnapshot }  from '../apis/semrush';
 import type { SerpApiSnapshot }  from '../apis/serp';
-import { getLLMProbeSnapshotV2, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
+import { getLLMProbeSnapshotV2, composePromptLabel, type LLMProbeSnapshotV2 } from '../apis/llmProbe';
 
 import {
   personaPrompt,
@@ -1092,11 +1092,34 @@ export async function runFullSynthesis(
     // v7.274: cap probe input at the top 30 procedure categories by demand.
     // The probe sends 6 prompts/category (5 unbranded + 1 branded) × 2 platforms.
     // This cap is a deliberate, Wayne-requested runtime exception (Const I.6).
+    // v7.473: resolve each probe category's umbrella ROOT from the stored
+    // taxonomy (same parent-walk rule as buildCategoryToUmbrella, cycle-guarded)
+    // so prompt text can speak the product line — "jeans by fit", not "by fit"
+    // (Wayne, 2026-08-25). Labels feed PROMPT TEXT only; the stored result
+    // category stays c.name, so v7.472's read path and all rollups are untouched.
+    const probeParentOf = new Map<string, string>();
+    const probeDisp     = new Map<string, string>();
+    for (const c of categoryBreakdown.categories) {
+      const n = c.name.toLowerCase().trim();
+      probeDisp.set(n, c.name);
+      const p = String(c.parent ?? '').trim();
+      if (p && p.toLowerCase() !== n) probeParentOf.set(n, p.toLowerCase().trim());
+    }
+    const probeRootOf = (name: string): string => {
+      let cur = name.toLowerCase().trim();
+      const seen = new Set<string>([cur]);
+      while (probeParentOf.has(cur)) {
+        const next = probeParentOf.get(cur)!;
+        if (seen.has(next)) break;
+        seen.add(next); cur = next;
+      }
+      return probeDisp.get(cur) ?? name;
+    };
     const probeCategories = categoryBreakdown.categories
       .filter(c => c.type === 'procedure' && c.name !== 'Other')
       .sort((a, b) => b.monthlyDemand - a.monthlyDemand)
       .slice(0, 30)
-      .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand }));
+      .map(c => ({ name: c.name, monthlyDemand: c.monthlyDemand, promptLabel: composePromptLabel(c.name, probeRootOf(c.name)) }));
 
     // v7.346 hotfix: TIME-BOX the probe. On a large project the probe can exceed the
     // remaining Lambda budget; before this fix the 300s hard kill fired mid-probe,
