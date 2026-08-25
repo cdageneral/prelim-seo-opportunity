@@ -1,3 +1,13 @@
+## v7.475 — 2026-08-25
+
+### Fix: every URL on the Product Insights panel is a clickable link (Wayne: "all urls should be clickable")
+
+- **What changed.** All seven places the panel prints a URL now render it as a real link that opens in a new tab: the ranking-page column in the sub-category keyword tables, each drill node's best ranking URL, the topic drilldown rows, the Content Footprint URL lists (client and rival), the covered-topics rows, the cited-URL breakdown, and the "cites your /page" callouts in the recorded-answer rows. Clicks stop at the link — they no longer toggle the row they sit in.
+- **One shared resolver.** `absUrl()` in `lib/productInsights.ts` (Const II.7): an absolute URL passes through untouched; a bare path resolves against the client domain (or the rival's domain in the footprint views); a naked host+path gains a scheme; an empty or unresolvable value renders as plain text — never a dead link. All links carry `rel="noopener noreferrer"`.
+- **Theme parity untouched:** links keep the exact text colors they had; underline + pointer are the affordance, identical in both themes.
+- **Note on the probe prompts in the same feedback:** no code change was needed — v7.474 (deployed earlier today) already phrases every sub-category's prompts from its own ranking keywords with the parent line as fallback context. The prompts on screen are the stored scan from before that deploy; the next Refresh Analysis regenerates them.
+- **Verification:** real-project `tsc --noEmit` clean. Retained suite **2,048 pass / 33 pre-existing env fails / zero unexpected delta**, including **9 new v7.475 checks**: the compiled `absUrl` on all five input shapes (absolute, path, naked, scheme-carrying host, empty/hostless → null), and source assertions that all 7 sites are anchors, every link opens a new tab with noopener, and every link stops row-toggle propagation. One v7.432 retained check amended with a dated note (the owned-URL text became an anchor — same URLs, now clickable).
+
 ## v7.474 — 2026-08-25
 
 ### Feature: two-level probe — category prompts per product line, and every direct sub-category gets its own term-driven prompts (Wayne: "the parent category is jeans and the sub is fit … it would be fit in context to the parent category jeans. So every sub category will have prompts mapped to it as well")
