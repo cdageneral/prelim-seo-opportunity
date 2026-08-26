@@ -1,3 +1,22 @@
+## v7.476 — 2026-08-26
+
+### Keyword Selection — the 5-step pool-building wizard (new sub-view above Keyword list)
+
+**What changed for users**
+- New **Keyword Selection** sub-view under Keyword Landscape (listed above Keyword list): a stepper wizard where one step shows at a time — click a step box to work it.
+  1. **Upload client footprint** — CSV upload (the shared parser), status from real pool counts.
+  2. **Add competitors** — opens the Competitors modal; status = real competitor-gap rows.
+  3. **Select categories** — the category tree with a checkbox at every level (a checked parent covers all children). Unchecking moves a category out of scope for EVERY panel, total, scan and the PDF — instantly, non-destructively, restorably. Live in-scope / out-of-scope chips with exact keyword + volume rollups. Default: everything selected.
+  4. **Expand footprint (optional)** — the product-lane deep build, now BOUNDED: seeds whose category falls outside the Step-3 selection are skipped BEFORE any Semrush spend, and expansion still files only into the existing anchored tree (never a new topic).
+  5. **Pre-product journey (optional)** — the problem-lane deep build; results follow the same Step-3 boundaries at read time and never name a client product.
+
+**How it works (no new stores, no new filters)**
+- Step 3 writes the existing v7.419 hidden-categories store (project row → `_hiddenCategories` → filtered once at the buildKwPool chokepoint). Apples-to-apples with competitors by construction: their keywords categorize into the same anchored tree and pass the same filter.
+- `lib/category/selectionScope.ts` (new): tree builder with exact TS rollups + the SAME hidden-match semantics as buildKwPool (machine-proven parity) + the Step-4 seed gate.
+- demand-universe route: product seeds gated by the Step-3 selection before spend; start event reports the gated count; all-gated returns an actionable error.
+- Assessment PDF (Const II.6b, same release): the Governance page now STATES the client-selected scope — how many categories were deliberately excluded by selection and which — whenever a selection is active; silent when none.
+
+**Verification** — real-project tsc clean; retained suite 2097 PASS with 49 new v7.476 checks (buildKwPool-parity of the selection semantics, exact rollups at a 21,000-keyword fixture, seed gate before spend, one-step-at-a-time wizard render with real clicks, serialized scope writes, both-theme token audit, PDF scope statement); zero unexpected delta vs the v7.475 baseline.
 ## v7.475 — 2026-08-25
 
 ### Fix: every URL on the Product Insights panel is a clickable link (Wayne: "all urls should be clickable")
