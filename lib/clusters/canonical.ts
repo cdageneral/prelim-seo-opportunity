@@ -1113,6 +1113,11 @@ export function _canonSig(
     Array.isArray(du?.topics) ? du.topics.length : 0,
     cb?.categories?.length ?? 0,
     Object.keys(cb?.keywordCategories ?? {}).length,
+    // v7.477: the Step-3 selection and the umbrella scope CHANGE the output but left the
+    // signature unchanged — after saving a selection the cache served pre-selection topics
+    // (the second half of the Synchrony leak). Fingerprint both stores by content.
+    (Array.isArray(snap?._hiddenCategories) ? snap._hiddenCategories.map((h: any) => String(h?.key ?? h?.name ?? '')).sort().join('~') : ''),
+    JSON.stringify(snap?._scopeOverrides ?? {}),
     clientDomain,
     competitorDomains.join(','),
     uploadedKeywords.length,
