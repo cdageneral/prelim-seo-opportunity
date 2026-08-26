@@ -322,11 +322,24 @@ export async function POST(req: NextRequest) {
     (serpFeatures?.keywords ?? null) as any,
   );
 
+  // v7.476 (Const II.6b): the client-selected keyword scope — the pool above is already
+  // filtered through it (hydrateSnapshotForPool → buildKwPool), so every figure in this
+  // report obeys the selection; this block STATES it (real stored entries only, I.1).
+  const hiddenScopeEntries: any[] = Array.isArray((project as any).hiddenCategories) ? (project as any).hiddenCategories : [];
+  const keywordScope = hiddenScopeEntries.length > 0
+    ? {
+        excludedCount: hiddenScopeEntries.length,
+        excludedKw:    hiddenScopeEntries.reduce((n: number, h: any) => n + (typeof h?.kwCount === 'number' ? h.kwCount : 0), 0),
+        names:         hiddenScopeEntries.map((h: any) => String(h?.name ?? h?.key ?? '')).filter(Boolean),
+      }
+    : null;
+
   const html = buildAssessmentHTML({
     clientName:   project.clientName ?? 'Client',
     websiteUrl:   project.websiteUrl ?? '',
     industry:     project.industry ?? null,
     poolCount:    pool.length,
+    keywordScope,
     metrics,
     sov,
     profound,
