@@ -29,6 +29,7 @@ import { assignProductExpansionPaths, isFunnelStageLabel } from '@/lib/category/
 import { loadLatestAnalysisWithSnapshot } from '@/lib/latestAnalysis';   // v7.445
 import { assignPreProductPaths, isPreProductPath } from '@/lib/category/canonicalize';   // v7.339
 import { qualifySeed, rootCategoryOf } from '@/lib/category/seedQualify';               // v7.440
+import { gateSeedsByScope } from '@/lib/category/selectionScope';                       // v7.476: Step-3 category-selection boundary
 
 export const maxDuration = 300;
 
@@ -184,16 +185,32 @@ export async function POST(
   const mode: 'product' | 'pre' | 'all' =
     body?.mode === 'product' ? 'product' : body?.mode === 'pre' ? 'pre' : 'all';
   const seedsAll = mode === 'product' ? product : mode === 'pre' ? problem : [...product, ...problem];
-  const seeds = seedsAll.filter(s => !excludeSeeds.has(s.toLowerCase().trim()));
+  // v7.476: Step-3 category-selection boundary (Wayne, 2026-08-26): a PRODUCT seed whose
+  // category falls outside the selected scope (the v7.419 hidden-categories store) is
+  // dropped BEFORE any Semrush spend — expansion can never add topics outside the
+  // selection, and it never creates a new category (v7.243 filing is unchanged).
+  // Problem/pre seeds come from audience language, not categories; their results are
+  // bounded at read time by the same buildKwPool selection filter.
+  const hiddenScope = (project as any).hiddenCategories ?? [];
+  const productGate = gateSeedsByScope(product, seedMap, hiddenScope);
+  const gatedProduct = productGate.kept;
+  const gatedOutOfScope = productGate.gated.length;
+  const seedsScoped = mode === 'product' ? gatedProduct : mode === 'pre' ? problem : [...gatedProduct, ...problem];
+  const seeds = seedsScoped.filter(s => !excludeSeeds.has(s.toLowerCase().trim()));
+  if (gatedOutOfScope > 0) {
+    console.log(`[OrbitIQ] Demand-universe: ${gatedOutOfScope} product seed(s) outside the Step-3 selection skipped: ${productGate.gated.map(g => g.label).join(' | ')}`);
+  }
   const rebuiltLanes: Array<'product' | 'problem'> =
     mode === 'product' ? ['product'] : mode === 'pre' ? ['problem'] : ['product', 'problem'];
 
   if (seeds.length === 0) {
     const what = mode === 'pre'
       ? 'No problem / life-trigger seeds found on this analysis. Pre-product expansion needs audience segment language — run an analysis that builds audience segments first.'
-      : mode === 'product'
-        ? 'No procedure seeds (product categories) found on this analysis to expand.'
-        : 'No procedure or problem seeds found on this analysis to expand.';
+      : gatedOutOfScope > 0
+        ? `All ${gatedOutOfScope} product seed(s) fall outside the Step-3 category selection — widen the selection in Keyword Selection to expand them.`
+        : mode === 'product'
+          ? 'No procedure seeds (product categories) found on this analysis to expand.'
+          : 'No procedure or problem seeds found on this analysis to expand.';
     return NextResponse.json({ error: what }, { status: 400 });
   }
 
@@ -214,7 +231,7 @@ export async function POST(
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        send({ type: 'start', total: seeds.length, mode, minVolume, productCount: product.length, problemCount: problem.length });
+        send({ type: 'start', total: seeds.length, mode, minVolume, productCount: product.length, problemCount: problem.length, gatedOutOfScope });
 
         const universe = await buildDemandUniverse(seeds, linesPerSeed, database, (done, total, seed) => {
           send({ type: 'progress', done, total, seed });
