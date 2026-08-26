@@ -170,6 +170,9 @@ export interface AssessmentData {
   websiteUrl: string;
   industry?: string | null;
   poolCount: number;
+  /** v7.476 (Const II.6b): the client-selected keyword scope (Keyword Selection Step 3).
+   *  null/absent = no selection active (full footprint). Real stored entries only. */
+  keywordScope?: { excludedCount: number; excludedKw: number; names: string[] } | null;
   metrics: { totalMonthly: number; totalAnnual: number; page1Monthly: number; page1Annual: number; captureRate: number };
   sov: SovComputed | null;
   profound: ProfoundMetrics | null;
@@ -586,7 +589,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <div class="panelbox"><div class="figtitle">How the analysis is assembled</div>
         <p>Every keyword lives in one canonical pool with its real volume, rank and provenance, organized by searcher intent into a page-level architecture. Demand you already capture and demand you're missing are held to the same standard: real volumes, real positions, deduplicated so nothing is counted twice.</p></div>
       <div class="panelbox"><div class="figtitle">Rules this report will not break</div>
-        <p><b>No modeled numbers as fact.</b> The only derived metric — Share of Voice — uses a named, industry-published click-through curve over your real volumes and positions, and is labeled as an estimate wherever it appears. <b>No hidden caps:</b> the full footprint is analyzed. Missing data reads as an honest gap, never a zero.</p></div>
+        <p><b>No modeled numbers as fact.</b> The only derived metric — Share of Voice — uses a named, industry-published click-through curve over your real volumes and positions, and is labeled as an estimate wherever it appears. <b>No hidden caps:</b> the full footprint is analyzed${(d.keywordScope && d.keywordScope.excludedCount > 0) ? ` within the scope your team selected — <b>${d.keywordScope.excludedCount} categor${d.keywordScope.excludedCount === 1 ? 'y' : 'ies'}</b> (${n0(d.keywordScope.excludedKw)} keywords) ${d.keywordScope.excludedCount === 1 ? 'was' : 'were'} deliberately excluded by selection (${d.keywordScope.names.slice(0, 6).join(', ')}${d.keywordScope.names.length > 6 ? ', …' : ''}) and appear in no figure in this report` : ''}. Missing data reads as an honest gap, never a zero.</p></div>
     </div>`));
 
   // Demand & capture
