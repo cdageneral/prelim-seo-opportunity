@@ -12,6 +12,7 @@ import AnalysisRunningState from '@/components/brief/AnalysisRunningState';
 import CompetitorsModal     from '@/components/brief/CompetitorsModal';
 import KeywordsPanel        from '@/components/brief/KeywordsPanel';
 import ProductInsightsSection from '@/components/brief/ProductInsightsSection';   // v7.426: Product Insights sub-view (Keyword Landscape group)
+import KeywordSelectionSection from '@/components/brief/KeywordSelectionSection';   // v7.476: Keyword Selection wizard sub-view (Keyword Landscape group)
 import InsightsSection from '@/components/brief/InsightsSection';               // v7.471: Insights sub-view under Executive Summary
 import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
 // v7.337 (QC audit B4-proper, Const II.7): live SERP-feature roll-up for the nav score —
@@ -244,7 +245,7 @@ export default function ProjectBriefPage() {
   const [analysisError,    setAnalysisError]    = useState<string | null>(null);
   const [activeSection,    setActiveSection]    = useState<NavSection>('overview');
   const [hoveredNav,       setHoveredNav]       = useState<NavSection | null>(null);
-  const [keywordsSubView,  setKeywordsSubView]  = useState<'list' | 'insights' | 'clusters'>('list');   // v7.426: + Product Insights
+  const [keywordsSubView,  setKeywordsSubView]  = useState<'selection' | 'list' | 'insights' | 'clusters'>('list');   // v7.426: + Product Insights · v7.476: + Keyword Selection wizard
 
   // Data source state
   const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
@@ -1607,12 +1608,12 @@ export default function ProjectBriefPage() {
                         {/* ── Keywords sub-nav (v7.172: always expanded, not gated on active) ── */}
                         {item.id === 'keywords' && hasResults && (
                           <div style={{ background: 'var(--c-060610)', borderTop: '1px solid var(--c-0e0e1e)' }}>
-                            {(['list', 'insights', 'clusters'] as const).map(sv => {
+                            {(['selection', 'list', 'insights', 'clusters'] as const).map(sv => {
                               // v7.172: only highlight a sub-item when the Keyword panel is the
                               // active section — otherwise the row stays expanded but unhighlighted.
                               const subActive = isActiveItem && keywordsSubView === sv;
-                              const subLabels = { list: 'Keyword list', insights: 'Product Insights', clusters: 'Theme clusters' };   // v7.426
-                              const subIcons  = { list: 'ti-list', insights: 'ti-box', clusters: 'ti-hierarchy-2' };   // v7.426
+                              const subLabels = { selection: 'Keyword Selection', list: 'Keyword list', insights: 'Product Insights', clusters: 'Theme clusters' };   // v7.426 · v7.476
+                              const subIcons  = { selection: 'ti-adjustments-check', list: 'ti-list', insights: 'ti-box', clusters: 'ti-hierarchy-2' };   // v7.426 · v7.476
                               return (
                                 <button
                                   key={sv}
@@ -1850,6 +1851,24 @@ export default function ProjectBriefPage() {
           )}
 
           {/* ── Keyword Landscape — list or clusters sub-view ── */}
+          {/* ── v7.476: Keyword Selection — the 5-step pool-building wizard (mockup 2026-08-26) ── */}
+          {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'selection' && (
+            <KeywordSelectionSection
+              kwVersion={kwVersion}
+              projectId={projectId}
+              analysis={analysisForPanels}
+              competitors={competitorDomains}
+              brandTerms={brandTerms}
+              domain={domainDisplay}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}
+              defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
+              onOpenCompetitors={() => setShowCompetitors(true)}
+              onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}
+              onScopeChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}
+              onKeywordsChanged={() => setKwVersion(v => v + 1)}
+              onGoToKeywordList={() => setKeywordsSubView('list')}
+            />
+          )}
           {hasResults && analysis && activeSection === 'keywords' && keywordsSubView === 'list' && (
             <KeywordsPanel
               kwVersion={kwVersion}
