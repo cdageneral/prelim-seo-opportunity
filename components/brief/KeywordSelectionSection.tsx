@@ -606,7 +606,7 @@ export default function KeywordSelectionSection({
                 <button
                   onClick={saveScope}
                   disabled={scopeSaving || !draftDirty}
-                  style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--on-fill-accent)', background: draftDirty ? 'var(--c-6c63ff)' : 'var(--c-14142a)', border: 'none', borderRadius: 9, padding: '10px 22px', cursor: scopeSaving || !draftDirty ? 'default' : 'pointer', opacity: scopeSaving ? 0.6 : 1 }}>
+                  style={{ fontSize: 12.5, fontWeight: 800, color: draftDirty ? 'var(--on-fill-accent)' : 'var(--c-585878)', background: draftDirty ? 'var(--c-6c63ff)' : 'var(--c-14142a)', border: 'none', borderRadius: 9, padding: '10px 22px', cursor: scopeSaving || !draftDirty ? 'default' : 'pointer', opacity: scopeSaving ? 0.6 : 1 }}>
                   {scopeSaving ? 'Saving…' : draftDirty ? 'Confirm selection' : 'Selection saved'}
                 </button>
                 {scopeError && <span style={{ fontSize: 11.5, color: 'var(--c-f87171)' }}>{scopeError}</span>}
