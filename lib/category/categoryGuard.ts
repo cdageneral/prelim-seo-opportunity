@@ -28,10 +28,16 @@ import {
   buildExcludedBrandTokens,
   textHasCompetitorBrand,
 } from '@/lib/utils/kwVolume';
+import { hiddenMatchers, pathIsHidden, flatNameIsHidden } from '@/lib/category/selectionScope';   // v7.477: Step-3 selection
 
 export interface CategoryGuard {
-  /** True when a category (name, type) is a NON-client brand category that must NOT render. */
+  /** True when a category (name, type) must NOT render: a NON-client brand category
+   *  (Const III.1a) OR — since v7.477 — a category outside the Keyword Selection
+   *  Step-3 scope (the v7.419 hidden-categories store). One test at every read site. */
   isCompetitorBrandCategory: (name: string, type?: string) => boolean;
+  /** v7.477: true when the category falls outside the stored Step-3 selection.
+   *  (Also folded into isCompetitorBrandCategory so every existing read site enforces it.) */
+  isOutOfScopeCategory: (name: string) => boolean;
   /** Names (verbatim) from `_categoryBreakdown.categories` that this guard drops. */
   droppedCategoryNames: (categories: Array<{ name?: string; type?: string }>) => Set<string>;
 }
@@ -68,8 +74,48 @@ export function buildCategoryGuard(
   // is true for it, negating every drop condition. Empty competitor-domain list passed to
   // isBrandedKeyword on purpose — only the CLIENT brand (domain root + brandTerms
   // vocabulary, v7.335) protects a category from the drop.
+  // ── v7.477: Step-3 selection enforcement at the category level ──────────────
+  // WHY HERE: buildKwPool's selection filter drops every keyword with STORED
+  // membership in a hidden category — but a keyword with NO stored membership
+  // (some uploaded/demand rows) is lexically re-attached at the cluster layer
+  // (matchKeywordToCategory), which resurrected out-of-scope category rows on
+  // Product Insights with a handful of stray keywords (Synchrony, 2026-08-26:
+  // "Personal Loans · 3 kws" while Personal Loans was deselected). Per the
+  // III.1a doctrine the GUARD — not the synthesis output or the pool — is the
+  // category-level enforcement layer, so the selection joins the brand test
+  // here and every read site (Keyword, Cluster, Journey, Content Map, Local,
+  // Google Ranks, Seer, canonical topics) enforces it with zero per-panel code.
+  // Matching is the SAME selectionScope semantics as buildKwPool (Const II.7):
+  // name-only entries match the category name or its chain ROOT; key entries
+  // match the category's stored parent-chain path as a ' › ' prefix.
+  // No hidden entries → every test returns false → byte-identical behavior.
+  const scopeM = hiddenMatchers((snap as any)?._hiddenCategories);
+  const parentOfCat = new Map<string, string>();
+  for (const c of ((snap as any)?._categoryBreakdown?.categories ?? [])) {
+    const nm = String(c?.name ?? '').trim(); const par = String(c?.parent ?? '').trim();
+    if (nm && par) parentOfCat.set(nm.toLowerCase(), par);
+  }
+  const chainOf = (name: string): string[] => {
+    const chain: string[] = [name];
+    const seen = new Set<string>([name.toLowerCase()]);
+    let cur = name;
+    for (;;) {
+      const par = parentOfCat.get(cur.toLowerCase());
+      if (!par || seen.has(par.toLowerCase())) break;
+      chain.unshift(par); seen.add(par.toLowerCase()); cur = par;
+    }
+    return chain;
+  };
+  const isOutOfScopeCategory = (name: string): boolean => {
+    if (!name) return false;
+    if (scopeM.hiddenKeys.length === 0 && scopeM.hiddenNames.size === 0) return false;
+    if (flatNameIsHidden(name, scopeM)) return true;
+    return pathIsHidden(chainOf(name), scopeM);
+  };
+
   const isCompetitorBrandCategory = (name: string, type?: string): boolean => {
     if (!name) return false;
+    if (isOutOfScopeCategory(name)) return true;   // v7.477: Step-3 selection (see above)
     const isClientBrand = isBrandedKeyword(name, clientDomain, [], brandTerms);   // v7.335: + brand vocabulary (QC audit B7)
     if (type === 'brand' && !isClientBrand) return true;
     if (textHasCompetitorBrand(name, compBrandTokens) && !isClientBrand) return true;
@@ -88,5 +134,5 @@ export function buildCategoryGuard(
     return out;
   };
 
-  return { isCompetitorBrandCategory, droppedCategoryNames };
+  return { isCompetitorBrandCategory, isOutOfScopeCategory, droppedCategoryNames };
 }
