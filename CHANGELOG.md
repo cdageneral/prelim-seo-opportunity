@@ -1,3 +1,13 @@
+## v7.477 — 2026-08-26
+
+### Fix: the Step-3 selection now holds at every category read site (the Product Insights leak)
+
+Wayne deselected Personal Loans / Money Transfer / Stock Market on Synchrony and Product Insights kept showing them with a few keywords. Two real defects, both fixed:
+
+1. **Lexical re-attachment leak.** buildKwPool's selection filter drops every keyword with STORED membership in a deselected category — but a keyword with NO stored membership (some uploaded/demand rows) was lexically re-attached at the cluster layer (`matchKeywordToCategory`), resurrecting out-of-scope category rows with stray keywords. Per the III.1a doctrine the shared category guard is the category-level enforcement layer, so the Step-3 selection is now folded into `buildCategoryGuard` (name + stored parent-chain matching, SAME selectionScope semantics as the pool filter): every read site — Keyword, Cluster, Journey, Content Map, Local, Google Ranks, Seer, canonical topics, Product Insights — enforces it with zero per-panel code. No selection → byte-identical behavior.
+2. **Stale canonical-topics cache.** `_canonSig` did not fingerprint `_hiddenCategories` (or `_scopeOverrides`), so after saving a selection the memoized canonical topics kept serving the PRE-selection result until an unrelated input changed. Both stores are now content-fingerprinted in the signature.
+
+**Verification** — real-project tsc clean; retained suite 2107 PASS with 9 new v7.477 checks driven through the REAL guard + REAL canonical topics, including a negative control proving the fixture reproduces the leak without the fix (which also exercises the cache: two sequential builds differing only in the selection must differ).
 ## v7.476 — 2026-08-26
 
 ### Keyword Selection — the 5-step pool-building wizard (new sub-view above Keyword list)
