@@ -126,7 +126,15 @@ export default function KeywordSelectionSection({
   );
   const [hiddenDraft, setHiddenDraft] = useState<Set<string>>(() => new Set(JSON.parse(storedIdentsJson) as string[]));
   const [draftDirty,  setDraftDirty]  = useState(false);
+  // v7.478: resync ONLY when the SERVER state actually changed. The old effect also ran
+  // when draftDirty flipped false at save time — while the page refetch was still in
+  // flight — so it reset the checkboxes to the PRE-save prop and the UI looked like the
+  // save was ignored (Wayne, 2026-08-27: "when I uncheck a box and save the box stays
+  // checked"). The applied-ref gate makes a stale prop a no-op.
+  const appliedStoredRef = useRef(storedIdentsJson);
   useEffect(() => {
+    if (storedIdentsJson === appliedStoredRef.current) return;   // prop unchanged (or stale vs our save) — never clobber
+    appliedStoredRef.current = storedIdentsJson;
     if (!draftDirty) setHiddenDraft(new Set(JSON.parse(storedIdentsJson) as string[]));
   }, [storedIdentsJson, draftDirty]);
 
@@ -368,7 +376,8 @@ export default function KeywordSelectionSection({
   const compDone  = gapCount > 0;
   const hasTree   = tree.nodes.length > 0;
   const [activeStep, setActiveStep] = useState<number>(0);   // 0 = auto
-  const shownStep = activeStep > 0 ? activeStep : (!baseDone ? 1 : !compDone ? 2 : 3);
+  // v7.478: Select categories is Step 2 (before competitors — their data is bounded by it)
+  const shownStep = activeStep > 0 ? activeStep : (!baseDone ? 1 : 2);
 
   const elapsed = buildProgress ? (Date.now() - buildProgress.startedAt) / 1000 : 0;
   const eta = buildProgress && buildProgress.done > 0 && buildProgress.total > buildProgress.done
@@ -377,8 +386,8 @@ export default function KeywordSelectionSection({
 
   const steps = [
     { n: 1, title: 'Upload client footprint', sub: baseDone ? `${fmtN(clientCount)} client keywords` : 'required', done: baseDone },
-    { n: 2, title: 'Add competitors',         sub: compDone ? `${fmtN(gapCount)} gap keywords` : 'required', done: compDone },
-    { n: 3, title: 'Select categories',       sub: hasTree ? `${draftStats.inRoots} of ${draftStats.totalRoots} in scope` : 'runs after categorization', done: hasTree && !draftDirty },
+    { n: 2, title: 'Select categories',       sub: hasTree ? `${draftStats.inRoots} of ${draftStats.totalRoots} in scope` : 'runs after categorization', done: hasTree && !draftDirty },
+    { n: 3, title: 'Add competitors',         sub: compDone ? `${fmtN(gapCount)} gap keywords` : 'required', done: compDone },
     { n: 4, title: 'Expand footprint',        sub: productTopics > 0 ? `${fmtN(productTopics)} topics built` : 'optional · full-funnel', done: productTopics > 0 },
     { n: 5, title: 'Pre-product journey',     sub: preTopics > 0 ? `${fmtN(preTopics)} topics built` : 'optional · need-based', done: preTopics > 0 },
   ];
@@ -483,7 +492,7 @@ export default function KeywordSelectionSection({
           <h2 className="text-orbit-primary font-semibold" style={{ fontSize: 16 }}>Keyword Selection</h2>
           <p style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--c-8080a8)', margin: '4px 0 0', maxWidth: 760 }}>
             The workflow that builds this project&rsquo;s keyword pool. Steps 1–3 are required; steps 4 and 5 are optional expansions —
-            <b style={{ color: 'var(--c-c8c8e8)' }}> both are locked to the categories selected in Step 3</b>. The Keyword list and every panel, scan and report read only what&rsquo;s in scope.
+            <b style={{ color: 'var(--c-c8c8e8)' }}> both are locked to the categories selected in Step 2</b>. The Keyword list and every panel, scan and report read only what&rsquo;s in scope.
           </p>
         </div>
 
@@ -521,7 +530,7 @@ export default function KeywordSelectionSection({
               {dbLoaded
                 ? baseDone
                   ? <><b style={{ color: 'var(--c-34d399)' }}>{fmtN(clientCount)}</b> client keywords on file.</>
-                  : 'Upload the full Semrush export — scoping happens in Step 3, so upload everything.'
+                  : 'Upload the full Semrush export — scoping happens in Step 2, so upload everything.'
                 : 'Loading keywords…'}
             </div>
             <label style={{ ...btn('var(--c-6c63ff)'), display: 'inline-block', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}>
@@ -545,10 +554,10 @@ export default function KeywordSelectionSection({
           </div>
         )}
 
-        {/* ── Step 2 ── */}
-        {shownStep === 2 && (
+        {/* ── Step 3 · Competitors (v7.478: after category selection — bounded by it) ── */}
+        {shownStep === 3 && (
           <div style={{ ...card, maxWidth: 620 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-e8e8ff)', marginBottom: 8 }}>Step 2 · Competitor footprints</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-e8e8ff)', marginBottom: 8 }}>Step 3 · Competitor footprints</div>
             <div style={{ fontSize: 12, color: 'var(--c-9090c0)', marginBottom: 10 }}>
               {compDone
                 ? <><b style={{ color: 'var(--c-34d399)' }}>{fmtN(gapCount)}</b> competitor-gap keywords loaded{competitors.length > 0 ? <> across <b style={{ color: 'var(--c-c8c8e8)' }}>{competitors.length}</b> competitor{competitors.length === 1 ? '' : 's'}</> : null}.</>
@@ -560,13 +569,13 @@ export default function KeywordSelectionSection({
               {compDone ? 'Manage competitors' : competitors.length > 0 ? 'Upload competitor data' : 'Add competitors'}
             </button>
             <p style={{ fontSize: 10.5, color: 'var(--c-585878)', marginTop: 10 }}>
-              Competitors categorize into the same anchored tree and inherit the Step-3 selection automatically — apples to apples. Their out-of-scope keywords are excluded from every comparison and total.
+              Competitors categorize into the same anchored tree and inherit the Step-2 selection automatically — apples to apples. Their out-of-scope keywords are excluded from every comparison and total.
             </p>
           </div>
         )}
 
-        {/* ── Step 3 ── */}
-        {shownStep === 3 && (
+        {/* ── Step 2 · Select categories (v7.478) ── */}
+        {shownStep === 2 && (
           !hasTree ? (
             <div style={{ ...card, maxWidth: 620, fontSize: 12, color: 'var(--c-9090c0)' }}>
               No stored category tree yet — run an analysis (or upload a footprint) first. Categorization builds the tree this step selects from.
@@ -631,7 +640,7 @@ export default function KeywordSelectionSection({
               {productTopics > 0 ? <>Built: <b style={{ color: 'var(--c-34d399)' }}>{fmtN(productTopics)}</b> volume-backed topics{du?.status ? ` · ${du.status}` : ''}.</> : 'Not built yet.'}
               {buildGated > 0 && <span style={{ color: 'var(--c-f59e0b)' }}> {buildGated} out-of-scope seed{buildGated === 1 ? '' : 's'} skipped.</span>}
             </div>
-            {boundaryNote(<><b style={{ color: 'var(--c-c8c8e8)' }}>Boundary:</b> expansion files ONLY into the categories selected in Step 3 — it can never create a new topic or category. Out-of-scope seeds are skipped before any API spend, and every discovered keyword lands inside the existing anchored tree.</>)}
+            {boundaryNote(<><b style={{ color: 'var(--c-c8c8e8)' }}>Boundary:</b> expansion files ONLY into the categories selected in Step 2 — it can never create a new topic or category. Out-of-scope seeds are skipped before any API spend, and every discovered keyword lands inside the existing anchored tree.</>)}
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
               <button style={btn('var(--c-9b96ff)')} disabled={!!buildMode} onClick={() => runDeepBuild('product', { dryRun: true })}>
                 {productTopics > 0 ? 'Re-run expansion' : 'Run expansion'}
@@ -666,7 +675,7 @@ export default function KeywordSelectionSection({
             <div style={{ fontSize: 11.5, color: 'var(--c-9090c0)' }}>
               {preTopics > 0 ? <>Built: <b style={{ color: 'var(--c-34d399)' }}>{fmtN(preTopics)}</b> problem / trigger topics.</> : 'Not built yet.'}
             </div>
-            {boundaryNote(<><b style={{ color: 'var(--c-c8c8e8)' }}>Boundaries:</b> results follow the same Step-3 category selection — and this lane NEVER names the client&rsquo;s products or services. Any keyword mapping to a product category is kept out of the pre-product journey (need-state language only).</>)}
+            {boundaryNote(<><b style={{ color: 'var(--c-c8c8e8)' }}>Boundaries:</b> results follow the same Step-2 category selection — and this lane NEVER names the client&rsquo;s products or services. Any keyword mapping to a product category is kept out of the pre-product journey (need-state language only).</>)}
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
               <button style={btn('var(--c-22d3ee)')} disabled={!!buildMode} onClick={() => runDeepBuild('pre', { dryRun: true })}>
                 {preTopics > 0 ? 'Re-run build' : 'Run build'}
