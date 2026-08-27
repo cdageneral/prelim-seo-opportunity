@@ -1,3 +1,11 @@
+## v7.478 — 2026-08-27
+
+### Fix: Keyword Selection saves stick; category selection moved ahead of competitors
+
+- **Save-revert glitch (Wayne: "when I uncheck a box and save, the box stays checked").** The PUT was always correct — the draft-resync effect fired the moment the save cleared the dirty flag, while the page refetch was still in flight, resetting the checkboxes to the PRE-save prop. On projects with big snapshots the refetch is slow, so the revert looked permanent. The resync is now gated by an applied-ref: it runs only when the SERVER state actually changed, so a stale prop can never clobber the just-saved state. Proven by a real-click retained check that asserts the box keeps its state immediately after save, BEFORE the refetch lands (it failed on the old code).
+- **Step order (Wayne):** Select categories is now **Step 2**, Add competitors **Step 3** — competitor data is bounded by the selected categories, so the selection comes first. All boundary copy renumbered; the demand route's all-gated message no longer names a step number.
+
+**Verification** — real-project tsc clean; retained suite 2116 PASS with 9 new v7.478 checks (full check→Confirm→pre-refetch→refetch cycle in both directions, exact PUT payloads, step order); the three step-number checks from v7.476/477 updated with dated notes (V.6).
 ## v7.477 — 2026-08-26
 
 ### Fix: the Step-3 selection now holds at every category read site (the Product Insights leak)
