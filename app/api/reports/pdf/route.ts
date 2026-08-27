@@ -29,7 +29,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
-import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
+import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames, buildCategoryToUmbrella, probeResultsForUmbrella } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
 
   // ── v7.427: Product Insights — the SAME shared basis the panel renders (Const II.6b) ──
   // Inputs are all already loaded above; a build failure omits the section honestly.
-  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[] } | null = null;
+  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[]; productPrompts?: any[] } | null = null;
   try {
     if (journeyTopics && journeyTopics.length > 0) {
       const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
@@ -249,7 +249,18 @@ export async function POST(req: NextRequest) {
           }
         }
         subNodes.sort((a, b) => b.demand - a.demand);
-        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct };
+        // v7.479 (Const II.6b): the per-product probe prompts, verbatim, via the
+        // SAME shared resolver + umbrella walk the panel's prompt drawer reads
+        // (probeResultsForUmbrella over the stored parent chain, II.7). A product
+        // with no probe rows simply has no entry — not probed, never zero (I.5).
+        const catToUmb = buildCategoryToUmbrella((snap as any)?._categoryBreakdown);
+        const productPrompts = built.products.map(prod => ({
+          product: prod.name,
+          rows: probeResultsForUmbrella(probeFromAnalysis(analysis), prod.name, catToUmb)
+            .map((r: any) => ({ prompt: String(r?.prompt ?? ''), platform: String(r?.platform ?? ''), mentioned: !!r?.mentioned }))
+            .filter((r: any) => r.prompt),
+        })).filter(x => x.rows.length > 0);
+        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct, productPrompts };
       }
     }
   } catch (err) {
