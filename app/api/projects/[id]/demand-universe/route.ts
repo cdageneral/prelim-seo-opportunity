@@ -198,7 +198,7 @@ export async function POST(
   const seedsScoped = mode === 'product' ? gatedProduct : mode === 'pre' ? problem : [...gatedProduct, ...problem];
   const seeds = seedsScoped.filter(s => !excludeSeeds.has(s.toLowerCase().trim()));
   if (gatedOutOfScope > 0) {
-    console.log(`[OrbitIQ] Demand-universe: ${gatedOutOfScope} product seed(s) outside the Step-3 selection skipped: ${productGate.gated.map(g => g.label).join(' | ')}`);
+    console.log(`[OrbitIQ] Demand-universe: ${gatedOutOfScope} product seed(s) outside the category selection skipped: ${productGate.gated.map(g => g.label).join(' | ')}`);
   }
   const rebuiltLanes: Array<'product' | 'problem'> =
     mode === 'product' ? ['product'] : mode === 'pre' ? ['problem'] : ['product', 'problem'];
@@ -207,7 +207,7 @@ export async function POST(
     const what = mode === 'pre'
       ? 'No problem / life-trigger seeds found on this analysis. Pre-product expansion needs audience segment language — run an analysis that builds audience segments first.'
       : gatedOutOfScope > 0
-        ? `All ${gatedOutOfScope} product seed(s) fall outside the Step-3 category selection — widen the selection in Keyword Selection to expand them.`
+        ? `All ${gatedOutOfScope} product seed(s) fall outside the selected categories — widen the selection in Keyword Selection to expand them.`
         : mode === 'product'
           ? 'No procedure seeds (product categories) found on this analysis to expand.'
           : 'No procedure or problem seeds found on this analysis to expand.';
