@@ -261,6 +261,12 @@ export interface AssessmentData {
       gaps: Array<{ child: string; bestDomain: string; bestUrls: number; basis?: 'covered' | 'urls' }>;
       rivalsUncounted: number;
     }>;
+    // v7.479 (Const II.6b): the panel's per-product probe prompts — the exact
+    // unbranded prompts asked at analysis time, with whether the brand was
+    // named in each answer. Computed by the route via the SAME shared
+    // probeResultsForUmbrella the panel's prompt drawer reads (II.7). Absent =
+    // not probed, never zero (I.5).
+    productPrompts?: Array<{ product: string; rows: Array<{ prompt: string; platform: string; mentioned: boolean }> }>;
   } | null;
 }
 
@@ -463,7 +469,13 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // back to the legacy step cards rather than rendering an empty table.
   const prog = d.program ?? null;
 
-  const footLeft = `OrbitIQ Assessment · Provided by iQuanti, Powered by iQ.Impact · ${brandName}`;
+  // v7.479 (Wayne 2026-08-27): the report's product name is now "iQ.Impact's
+  // Opportunity Engine" at every rendered site (the former product name appears
+  // nowhere in rendered output). The v7.404 footer platform-credit folds into
+  // the product name itself; "Provided by iQuanti" attribution (v7.377) is
+  // unchanged, and the cover PROVIDED BY / governance / endbrand accountability
+  // sites stay iQuanti-only.
+  const footLeft = `iQ.Impact's Opportunity Engine · Provided by iQuanti · ${brandName}`;
 
   // ── derived (direct tallies over stored rows — no re-modeling) ─────────────
   const offPage1Monthly = Math.max(0, m.totalMonthly - m.page1Monthly);
@@ -540,7 +552,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
 
   // Cover
   pages.push(`<div class="page cover">
-    <div class="cbrand">ORBITIQ&nbsp;&nbsp;·&nbsp;&nbsp;GROWTH INTELLIGENCE</div>
+    <div class="cbrand">IQ.IMPACT&rsquo;S OPPORTUNITY ENGINE&nbsp;&nbsp;·&nbsp;&nbsp;GROWTH INTELLIGENCE</div>
     <div class="cmid">
       <div class="ck">SEARCH &amp; AI VISIBILITY ASSESSMENT</div>
       <div class="cname">${brandName}</div>
@@ -571,6 +583,88 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     <div class="tiles c3">${execTiles.slice(0, 6).join('')}</div>
     ${insightHTML(g2, 'WHAT THIS MEANS')}
     ${!pf ? gapBlock('AI visibility data', 'Upload the AI visibility exports on the AI Answer Engines panel and regenerate this report to add the full AI answer-layer assessment.') : ''}`));
+
+  // ── v7.471 · Insights — the cross-panel story (Const II.6b) ────────────────
+  // Reads the STORED machine-verified blob + the panel's own quadrant builder
+  // output verbatim; nothing here is recomputed (II.6a).
+  // v7.479 (Wayne 2026-08-27): moved to the FRONT of the report (directly after
+  // the executive summary) and split across three designed pages — the single
+  // crammed page clipped the playbook table at the fixed page edge. Every cap
+  // below limits the NUMBER of items shown (stated on-page); no item's text is
+  // ever truncated or altered.
+  const ip = d.insightsPanel ?? null;
+  const iq = d.insightsQuadrant ?? null;
+  if (ip) {
+    const tagMeta: Record<string, { label: string; color: string; bg: string }> = {
+      PATTERN:     { label: 'PATTERN',     color: 'var(--violet)',   bg: '#f3f1fb' },
+      GOOD_NEWS:   { label: 'GOOD NEWS',   color: 'var(--good)',     bg: '#eefaee' },
+      RISK:        { label: 'RISK',        color: 'var(--critical)', bg: '#fdf0ef' },
+      OPPORTUNITY: { label: 'OPPORTUNITY', color: 'var(--blue-550)', bg: '#eef4fc' },
+    };
+    const srcLine = `Source: the Insights panel's stored, machine-verified narrative (every number verified verbatim against stored panel data before saving — ${n0(ip.verified)} numbers checked; generated from: ${ip.sources.map(x => esc(x)).join(' · ') || 'stored panels'}). This section reads the panel's stored output and shared builders; nothing is recomputed for the report.`;
+    const patternCards = ip.patterns.slice(0, 6).map(pt => {
+      const tm = tagMeta[pt.tag] ?? { label: pt.tag, color: 'var(--blue-550)', bg: '#eef4fc' };
+      return `<div class="panelbox" style="border-top:3px solid ${tm.color}; padding:11px 13px;">
+        <div style="display:inline-block; font-size:7.5px; font-weight:800; letter-spacing:.09em; color:${tm.color}; background:${tm.bg}; border-radius:3px; padding:2px 7px; margin-bottom:6px;">${esc(tm.label)}</div>
+        <div style="font-size:10.5px; font-weight:800; color:var(--ink); line-height:1.3; margin-bottom:4px;">${esc(pt.title)}</div>
+        <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(pt.body)}</div>
+      </div>`;
+    }).join('');
+    const strikeHtml = ip.strike.slice(0, 6).map((sk, i) => `
+      <div style="display:grid; grid-template-columns:.3in 1fr; gap:7px; margin-bottom:7px; align-items:start;">
+        <div style="font-size:15px; font-weight:800; color:var(--blue); line-height:1.1;">${i + 1}</div>
+        <div><div style="font-size:10px; font-weight:800; color:var(--ink);">${esc(sk.title)} <span class="chip" style="background:${sk.impact === 'HIGH' ? '#fdf0ef' : '#fdf8ec'}; color:${sk.impact === 'HIGH' ? '#9c2b2b' : '#8a5a00'}; border:1px solid ${sk.impact === 'HIGH' ? '#f0c9c5' : '#ecd39a'}; margin-left:4px;">${sk.impact === 'HIGH' ? 'HIGH IMPACT' : 'MEDIUM'}</span></div>
+        <div style="font-size:9px; color:var(--ink2); line-height:1.5; margin-top:2px;">${esc(sk.body)}</div></div>
+      </div>`).join('');
+    pages.push(pageWrap('INSIGHTS — THE CROSS-PANEL STORY', 'THE HEADLINES', `
+      <h1 class="pg">${esc(ip.thesis.headline)}</h1>
+      <div class="lede">${esc(ip.thesis.body)}${ip.thesis.openPosition ? ` <b>${esc(ip.thesis.openPosition)}</b>` : ''}</div>
+      ${patternCards ? `<div class="figtitle">The patterns in the data</div>
+      <div class="figsub">Each pattern is machine-verified against the stored panel data it cites${ip.patterns.length > 6 ? ` · top 6 of ${n0(ip.patterns.length)} — the full set is on the Insights panel` : ''}</div>
+      <div class="two" style="gap:12px; margin-bottom:14px;">${patternCards}</div>` : ''}
+      ${strikeHtml ? `<div class="figtitle" style="margin-top:2px;">Where to strike first</div>
+      <div class="figsub">Ranked openings, each backed by the stored data behind this report</div>${strikeHtml}` : ''}
+      <div class="src">${srcLine}</div>`));
+
+    if (ip.playbook.length > 0) {
+      const pbCards = ip.playbook.slice(0, 5).map(r => `
+        <div class="panelbox" style="margin-bottom:10px; padding:11px 14px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--grid); padding-bottom:5px; margin-bottom:7px;">
+            <span style="font-size:11.5px; font-weight:800; color:var(--ink);">${esc(r.brand)}</span>
+            <span style="font-size:9px; font-weight:800; color:var(--blue-550); text-align:right; max-width:2.6in;">${esc(r.keyStat)}</span>
+          </div>
+          <div class="two" style="gap:14px;">
+            <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--good); margin-bottom:3px;">DOING WELL</div>
+              <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(r.doingWell)}</div></div>
+            <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--critical); margin-bottom:3px;">VULNERABLE</div>
+              <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(r.vulnerable)}</div></div>
+          </div>
+        </div>`).join('');
+      pages.push(pageWrap('INSIGHTS — THE COMPETITIVE PLAYBOOK', 'THE HEADLINES', `
+        <h1 class="pg sm">Every tracked brand, read the same way.</h1>
+        <div class="lede" style="margin-bottom:14px;">What each brand is doing well, where it is vulnerable, and the one stat that matters — verified against the same stored data as every other page of this report.${ip.playbook.length > 5 ? ` Showing the top 5 of ${n0(ip.playbook.length)} brands — the full set is on the Insights panel.` : ''}</div>
+        ${pbCards}
+        <div class="src">${srcLine}</div>`));
+    }
+
+    if (iq && iq.points.length) {
+      const quadLabel: Record<string, string> = {
+        answer_and_source: 'The answer + the source', named_not_cited: 'Named, not cited',
+        cited_not_named: 'Cited, never named', invisible: 'Below field median on both',
+      };
+      const quadRows = iq.points.slice(0, 12).map(pt => `
+        <tr${pt.isClient ? ' style="font-weight:700;"' : ''}><td>${esc(pt.brand)}${pt.isClient ? ' (you)' : ''}</td><td class="n">${p1(pt.visibilityPct)}</td><td class="n">${n0(pt.citations)}</td><td>${esc(quadLabel[pt.quadrant] ?? pt.quadrant)}</td></tr>`).join('');
+      pages.push(pageWrap('INSIGHTS — NAMED VS CITED', 'THE HEADLINES', `
+        <h1 class="pg sm">Being the answer is not the same as being the source.</h1>
+        <div class="lede">Two measured axes for every tracked brand: how often AI answers <b>name</b> it, and how often its domain is <b>cited</b> as a source. The field medians (${p1(iq.medians.visibilityPct)} named · ${n0(iq.medians.citations)} citations) split the field into four positions.</div>
+        <table class="dt" style="margin-bottom:6px;">
+          <tr><th>Brand</th><th style="width:1.1in;">Named in prompts</th><th style="width:1.1in;">Citations of domain</th><th>Position</th></tr>
+          ${quadRows}
+        </table>
+        ${iq.unmatched.length ? `<div style="font-size:8.5px; color:var(--muted);">Not classified (no matchable cited domain in the stored export — citations unmeasured, not zero): ${iq.unmatched.map(u => esc(u.brand)).join(', ')}.</div>` : ''}
+        <div class="src">Quadrant: ${esc(iq.basis)}. ${srcLine}</div>`));
+    }
+  }
 
   // Governance
   pages.push(pageWrap('GOVERNANCE &amp; INTELLIGENCE', 'HOW THIS WAS BUILT', `
@@ -759,20 +853,12 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         return cards.length > 0 ? `<div class="finds c${cards.length}">${cards.join('')}</div>` : '';
       })()}
       <div class="src">Source: live local scan — pack presence, pack leaders, listings and Google ratings are real scanned rows; volumes are real per-keyword rows.</div>`));
-  } else if (d.hasLocalIntent) {
-    // v7.407 (Wayne, 2026-08-05: "I dont see any of the local insights coming
-    // through the report"). Before this, a project WITH a local footprint but no
-    // scan on the analysis row this report was built from dropped the local page
-    // and eight further local fragments with no trace at all — the section simply
-    // vanished, which reads as a rendering bug rather than missing data. It is now
-    // an honest gap that names itself (Const I.5). Projects with no local
-    // component are unaffected: hasLocalIntent is false and nothing is emitted.
-    pages.push(pageWrap('LOCAL SEARCH — THE MAP PACK', 'PART II · THE DIAGNOSIS', `
-      <h1 class="pg">This brand competes locally. The map pack is not measured yet.</h1>
-      <div class="lede">The footprint carries a local component — locations and map-pack demand — but no local scan is attached to the analysis this report was built from, so every local figure is omitted rather than estimated.</div>
-      ${gapBlock('Local map-pack data', 'Run the local scan on the Local Search panel and regenerate this report — the assessment expands with map-pack presence and average pack rank by position band, share of local voice against the rivals actually holding the pack, the location estate and its review reputation, and a Local workstream in the recommended program.')}
-      <div class="src">Source: none — no local scan rows exist on this analysis. Nothing on this page is estimated, and no local figure appears anywhere else in this report.</div>`));
   }
+  // v7.479 (Wayne 2026-08-27): the v7.407 "competes locally — not measured yet"
+  // placeholder page is RETIRED. A project with local intent but no local scan
+  // on this analysis now omits the local section entirely (the Const I.5
+  // default: omitted, never estimated). No local figure appears anywhere else
+  // in the report in that state either way.
 
   // ── v7.427: Product Insights — search and AI by product (Const II.6b) ──────
   // Reads the SAME shared basis the panel renders (lib/productInsights via the
@@ -861,46 +947,61 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${subHtml}
       ${cfHtml}
       <div class="src">Source: canonical keyword pool + stored taxonomy (page-1 share and the brand field are measured volume at positions 1-10 — no click model); AI probe = unbranded prompts at analysis time; recorded answers = DataForSEO LLM Mentions index (ChatGPT + Google AI Overviews, first ${anyScan ? '100' : '100'} per category with full match counts shown)${pi.scannedAt ? `, last scanned ${esc(new Date(pi.scannedAt).toLocaleDateString('en-US'))}` : ' — not yet scanned'}. Verdict thresholds: weak below 30%, strong at 50%+. This section reads the same shared computation as the Product Insights panel.</div>`));
+
+    // ── v7.479 (Wayne 2026-08-27): PRODUCT BREAKDOWN — the panel's per-product
+    // detail reaches the report: who ranks (the full page-1 ladder), who AI
+    // answers cite on that line, who is winning, and the actual unbranded
+    // prompts asked. Reads the SAME ProductRow objects and the SAME probe rows
+    // (probeResultsForUmbrella via the route) the panel renders (II.6a/II.6b) —
+    // nothing re-derived here. Two products per page; caps are stated on-page.
+    const promptsByProd = new Map<string, Array<{ prompt: string; platform: string; mentioned: boolean }>>();
+    for (const pp of (pi.productPrompts ?? [])) promptsByProd.set(pp.product, pp.rows ?? []);
+    const PLAT: Record<string, string> = { claude: 'Claude', chatgpt: 'ChatGPT' };
+    const prodBlock = (p: (typeof pi.products)[number]): string => {
+      const ladder = (p.ladder ?? []).slice(0, 5);
+      const maxLad = Math.max(1, ...ladder.map(l => l.p1Vol));
+      const ladBars = ladder.map(l => barRow(l.kind === 'client' ? `${l.domain} (you)` : l.domain,
+        (l.p1Vol / maxLad) * 100, `${vol(l.p1Vol)}/mo`, l.kind === 'client' ? 'var(--blue)' : '#c9c8c1', '1.45in', '.6in')).join('');
+      const cited = (p.citedTop ?? []).slice(0, 5);
+      const maxCit = Math.max(1, ...cited.map(c => c.count));
+      const citBars = cited.map(c => barRow(c.isClient ? `${c.domain} (you)` : c.domain,
+        (c.count / maxCit) * 100, n0(c.count), c.isClient ? 'var(--blue)' : '#c9c8c1', '1.45in', '.45in')).join('');
+      const leader = p.ladder[0] ?? null;
+      const winTxt = leader
+        ? (leader.kind === 'client'
+            ? `<b>You lead page 1</b> (${p1((leader.p1Vol / Math.max(p.demand, 1)) * 100)} of demand held)`
+            : `<b>${esc(leader.domain)}</b> leads page 1${p.clientRank !== null ? ` — you rank #${p.clientRank} of ${p.ladder.length} measured brands` : ' — you hold no measured page-1 volume'}`)
+        : 'No page-1 holds measured on this line';
+      const allPrompts = promptsByProd.get(p.name) ?? [];
+      const prompts = allPrompts.slice(0, 5);
+      const promptRows = prompts.map(r => `<div style="display:flex; gap:7px; align-items:baseline; margin-bottom:3.5px;">
+          <span class="chip" style="flex:none; width:.58in; text-align:center; background:${r.mentioned ? '#eefaee' : '#f4f3ef'}; color:${r.mentioned ? 'var(--green)' : 'var(--muted)'}; border:1px solid ${r.mentioned ? '#bfe6bf' : '#e0dfd8'};">${r.mentioned ? 'NAMED' : 'ABSENT'}</span>
+          <span style="font-size:8.8px; color:var(--ink2); line-height:1.35;">&ldquo;${esc(r.prompt)}&rdquo; <span style="color:var(--muted); font-size:8px;">— ${esc(PLAT[r.platform] ?? r.platform)}</span></span>
+        </div>`).join('');
+      return `<div class="panelbox" style="margin-bottom:11px; padding:12px 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--grid); padding-bottom:5px; margin-bottom:7px;">
+          <span style="font-size:12px; font-weight:800; color:var(--ink);">${esc(p.name)}</span>
+          <span style="font-size:8.8px; color:var(--muted);">${vol(p.demand)}/mo across ${n0(p.kwCount)} keywords · page-1 share ${p0(p.p1Share * 100)}</span>
+        </div>
+        <div style="font-size:9.3px; color:var(--ink2); margin-bottom:8px;"><b style="color:var(--ink);">Who wins:</b> ${winTxt}${p.scan ? ` · AI answers name or cite you in ${p0((p.dfsShare ?? 0) * 100)} of ${n0(p.scan.fetched)} recorded answers` : ''}${p.probe ? ` · probe: named in ${n0(p.probe.mentions)} of ${n0(p.probe.total)} unbranded prompts` : ''}</div>
+        <div class="two" style="gap:14px; margin-bottom:${promptRows ? '8px' : '0'};">
+          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO RANKS — PAGE-1 VOLUME HELD</div>${ladBars || '<div style="font-size:8.8px; color:var(--muted);">No page-1 holds measured on this line.</div>'}</div>
+          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO AI ANSWERS CITE HERE</div>${citBars || '<div style="font-size:8.8px; color:var(--muted);">No recorded citations on this line yet.</div>'}</div>
+        </div>
+        ${promptRows ? `<div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">THE PROMPTS ASKED${allPrompts.length > 5 ? ` — 5 OF ${n0(allPrompts.length)}` : ''}</div>${promptRows}` : ''}
+      </div>`;
+    };
+    const bdProds = pi.products.slice(0, 8);
+    for (let bi = 0; bi < bdProds.length; bi += 2) {
+      const pair = bdProds.slice(bi, bi + 2).map(prodBlock).join('');
+      pages.push(pageWrap('PRODUCT BREAKDOWN — WHO WINS EACH LINE', 'PART II · THE DIAGNOSIS', `
+        ${bi === 0 ? `<h1 class="pg sm">Product by product: who ranks, who gets cited, who wins.</h1>
+        <div class="lede" style="margin-bottom:14px;">Each product line in detail — the brands holding page-1 volume, the domains AI answers actually cite, and the real unbranded prompts asked at analysis time${pi.products.length > 8 ? `. Showing the top 8 of ${n0(pi.products.length)} lines by demand — the full set lives on the Product Insights panel` : ''}.</div>` : ''}
+        ${pair}
+        <div class="src">Source: same shared computation as the Product Insights panel — page-1 volume held is measured volume at positions 1-10 from the canonical pool (no click model); citations are direct counts from recorded AI answers; prompts are the analysis-time unbranded probe prompts verbatim, NAMED meaning the brand appeared in that answer. Nothing here is re-derived for the report.</div>`));
+    }
   }
 
-  // ── v7.471 · Insights — the cross-panel story (Const II.6b: same release as the panel) ──
-  // Reads the STORED machine-verified blob + the panel's own quadrant builder output
-  // verbatim; nothing here is recomputed (II.6a).
-  const ip = d.insightsPanel ?? null;
-  const iq = d.insightsQuadrant ?? null;
-  if (ip) {
-    const tagLabel: Record<string, string> = { PATTERN: 'PATTERN', GOOD_NEWS: 'GOOD NEWS', RISK: 'RISK', OPPORTUNITY: 'OPPORTUNITY' };
-    const patternsHtml = ip.patterns.slice(0, 6).map(pt => `
-      <div style="margin-bottom:7px;">
-        <div style="font-size:9.5px; font-weight:700;"><span style="color:var(--blue); letter-spacing:.05em;">${esc(tagLabel[pt.tag] ?? pt.tag)}</span> · ${esc(pt.title)}</div>
-        <div style="font-size:9px; color:var(--muted); line-height:1.45;">${esc(pt.body)}</div>
-      </div>`).join('');
-    const playbookRows = ip.playbook.slice(0, 10).map(r => `
-      <tr><td style="font-weight:700;">${esc(r.brand)}</td><td>${esc(r.doingWell)}</td><td>${esc(r.vulnerable)}</td><td style="font-weight:700;">${esc(r.keyStat)}</td></tr>`).join('');
-    const strikeHtml = ip.strike.slice(0, 6).map((sk, i) => `
-      <div style="margin-bottom:5px; font-size:9.5px;"><b>${i + 1}. ${esc(sk.title)}</b> <span style="color:var(--muted);">(${esc(sk.impact === 'HIGH' ? 'high impact' : 'medium')})</span><br/><span style="font-size:9px; color:var(--muted);">${esc(sk.body)}</span></div>`).join('');
-    const quadLabel: Record<string, string> = {
-      answer_and_source: 'The answer + the source', named_not_cited: 'Named, not cited',
-      cited_not_named: 'Cited, never named', invisible: 'Below field median on both',
-    };
-    const quadHtml = iq && iq.points.length ? `
-      <table class="dt" style="margin-top:8px; margin-bottom:4px;">
-        <tr><th>Brand</th><th style="width:1in;">Named in prompts</th><th style="width:1in;">Citations of domain</th><th>Position</th></tr>
-        ${iq.points.slice(0, 12).map(pt => `
-        <tr${pt.isClient ? ' style="font-weight:700;"' : ''}><td>${esc(pt.brand)}${pt.isClient ? ' (you)' : ''}</td><td>${p1(pt.visibilityPct)}</td><td>${n0(pt.citations)}</td><td>${esc(quadLabel[pt.quadrant] ?? pt.quadrant)}</td></tr>`).join('')}
-      </table>
-      ${iq.unmatched.length ? `<div style="font-size:8.5px; color:var(--muted);">Not classified (no matchable cited domain in the stored export — citations unmeasured, not zero): ${iq.unmatched.map(u => esc(u.brand)).join(', ')}.</div>` : ''}` : '';
-    pages.push(pageWrap('INSIGHTS — THE CROSS-PANEL STORY', 'PART II · THE DIAGNOSIS', `
-      <h1 class="pg">${esc(ip.thesis.headline)}</h1>
-      <div class="lede">${esc(ip.thesis.body)}${ip.thesis.openPosition ? ` <b>${esc(ip.thesis.openPosition)}</b>` : ''}</div>
-      ${patternsHtml}
-      ${playbookRows ? `<table class="dt" style="margin-top:6px; margin-bottom:6px;">
-        <tr><th style="width:1.1in;">Brand</th><th>Doing well</th><th>Vulnerable</th><th style="width:1.1in;">Key stat</th></tr>${playbookRows}
-      </table>` : ''}
-      ${strikeHtml ? `<div style="font-size:10px; font-weight:700; margin-top:6px; margin-bottom:4px;">Where to strike</div>${strikeHtml}` : ''}
-      ${quadHtml}
-      <div class="src">Source: the Insights panel's stored, machine-verified narrative (every number verified verbatim against stored panel data before saving — ${n0(ip.verified)} numbers checked; generated from: ${ip.sources.map(x => esc(x)).join(' · ') || 'stored panels'}). Quadrant: ${iq ? esc(iq.basis) : 'no stored Profound export — not measured'}. This section reads the panel's stored output and shared builders; nothing is recomputed for the report.</div>`));
-  }
 
     // AI answer layer
   if (pf) {
@@ -1410,7 +1511,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // Appendix
   pages.push(pageWrap('APPENDIX &amp; DEFINITIONS', 'APPENDIX', `
     <h1 class="pg">The receipts.</h1>
-    <div class="lede">Definitions for every metric in this report. The full underlying data — every keyword, prompt, citation, mention, listing and pack row — is live in the OrbitIQ workspace this report was generated from.</div>
+    <div class="lede">Definitions for every metric in this report. The full underlying data — every keyword, prompt, citation, mention, listing and pack row — is live in the iQ.Impact Opportunity Engine workspace this report was generated from.</div>
     <table class="dt" style="margin-bottom:16px;">
       <tr><th style="width:1.8in;">Term</th><th>Definition as used in this report</th></tr>
       <tr><td><b>Page-1 capture</b></td><td>Volume-weighted share of tracked keywords where the client holds a position 1–10 ranking. Direct from scan rows.</td></tr>
@@ -1425,9 +1526,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${lp ? `<tr><td><b>Map-pack presence / Local Visibility Index</b></td><td>Presence, rank and ratings are real scanned pack and listing rows; the index is a fixed, documented blend of those four real ratios (40/25/20/15) — an editorial weighting, not a hidden model.</td></tr>` : ''}
     </table>
     <div class="endbrand">
-      <div><div style="font-size:12px; font-weight:800;">OrbitIQ</div>
+      <div><div style="font-size:12px; font-weight:800;">iQ.Impact&rsquo;s Opportunity Engine</div>
         <div style="font-size:9px; color:var(--muted); margin-top:2px;">An iQuanti product · every number traces to a scanned source</div></div>
-      <div style="font-size:9px; color:var(--muted); text-align:right;">Generated by OrbitIQ from live project data</div>
+      <div style="font-size:9px; color:var(--muted); text-align:right;">Generated by iQ.Impact&rsquo;s Opportunity Engine from live project data</div>
     </div>`));
 
   // ── assemble: section numbers + page numbers ───────────────────────────────
@@ -1453,6 +1554,9 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   .foot{position:absolute; left:.72in; right:.72in; bottom:.42in; display:flex; justify-content:space-between; font-size:8.5px; color:var(--muted); border-top:1px solid var(--grid); padding-top:8px;}
   .secnum{font-size:11px; font-weight:800; color:var(--blue); letter-spacing:.08em; margin-bottom:6px;}
   h1.pg{font-size:26px; line-height:1.12; font-weight:800; letter-spacing:-.01em; margin-bottom:10px;}
+  /* v7.479: .sm has been written on dense pages since v7.405 but never had a rule —
+     defining it gives those pages (and the new insights/product pages) real headroom. */
+  h1.pg.sm{font-size:21px;}
   .lede{font-size:12px; line-height:1.55; color:var(--ink2); max-width:6.4in; margin-bottom:20px;}
   .lede b{color:var(--ink);}
   p{font-size:10.5px; line-height:1.55; color:var(--ink2);}
