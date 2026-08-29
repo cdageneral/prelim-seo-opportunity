@@ -320,6 +320,35 @@ export default function KeywordSelectionSection({
     }
   }
 
+  // ── v7.480: clear a demand lane. Moved here from the Keyword list panel's old
+  // workflow bar (removed this release) — this wizard is the only place the product /
+  // pre-product lanes are built, so it is the only place they can be cleared. This is a
+  // genuine DELETE of that lane, never a hide (Const "delete, never hide"); the pool,
+  // every panel, scan and the PDF re-read the snapshot afterwards.
+  const [confirmClear, setConfirmClear] = useState<null | 'product' | 'pre'>(null);
+  const [clearingLane, setClearingLane] = useState<null | 'product' | 'pre'>(null);
+  async function clearDemandLane(mode: 'product' | 'pre') {
+    if (clearingLane || buildMode) return;
+    setClearingLane(mode); setBuildError(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error((d as any)?.error || `clear failed (${r.status})`);
+      }
+      onDeepJourneyBuilt?.();     // page refetches analysis → the lane is gone everywhere
+      onKeywordsChanged?.();
+    } catch (e) {
+      setBuildError(`Clear failed: ${String((e as any)?.message ?? e)}`);
+    } finally {
+      setClearingLane(null);
+      setConfirmClear(null);
+    }
+  }
+
   // ── Step 1: CSV upload (shared parser; same batch endpoint + retry as the panel) ──
   const csvRef = useRef<HTMLInputElement>(null);
   const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
@@ -398,6 +427,33 @@ export default function KeywordSelectionSection({
     border: `1px solid ${accent}`, borderRadius: 7, padding: '5px 12px', cursor: 'pointer',
   });
   const card: React.CSSProperties = { background: 'var(--c-0c0c16)', border: '1px solid var(--c-1e1e34)', borderRadius: 12, padding: '16px 18px' };
+
+  // v7.480: "clear this lane" — a two-tap confirm so a real DELETE is never one click.
+  const clearLaneControl = (mode: 'product' | 'pre') => {
+    const busy = clearingLane === mode;
+    if (busy) {
+      return <span style={{ fontSize: 10.5, color: 'var(--c-8080a8)' }}>Clearing…</span>;
+    }
+    if (confirmClear === mode) {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 10.5, color: 'var(--c-f87171)' }}>
+          Delete every {mode === 'pre' ? 'pre-product' : 'product'} topic?
+          <button style={btn('var(--c-f87171)')} disabled={!!buildMode} onClick={() => clearDemandLane(mode)}>Yes, delete</button>
+          <button style={btn('var(--c-585878)')} onClick={() => setConfirmClear(null)}>Cancel</button>
+        </span>
+      );
+    }
+    return (
+      <button
+        style={btn('var(--c-585878)')}
+        disabled={!!buildMode || !!clearingLane}
+        onClick={() => setConfirmClear(mode)}
+        title={`Delete the ${mode === 'pre' ? 'pre-product' : 'product'} demand lane — the topics and their volumes are removed everywhere`}
+      >
+        <i className="ti ti-trash" style={{ fontSize: 11, marginRight: 5 }} aria-hidden="true" />Clear
+      </button>
+    );
+  };
 
   const progressBar = buildProgress && (
     <div style={{ marginTop: 10 }}>
@@ -656,6 +712,7 @@ export default function KeywordSelectionSection({
                   style={{ width: 74, fontSize: 11, padding: '4px 8px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', outline: 'none' }} />
                 /mo
               </label>
+              {productTopics > 0 && clearLaneControl('product')}
             </div>
             {buildMode === 'product' && progressBar}
             {buildError && buildMode !== 'pre' && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f87171)' }}>{buildError}</div>}
@@ -680,6 +737,7 @@ export default function KeywordSelectionSection({
               <button style={btn('var(--c-22d3ee)')} disabled={!!buildMode} onClick={() => runDeepBuild('pre', { dryRun: true })}>
                 {preTopics > 0 ? 'Re-run build' : 'Run build'}
               </button>
+              {preTopics > 0 && clearLaneControl('pre')}
             </div>
             {buildMode === 'pre' && progressBar}
             {buildError && buildMode !== 'product' && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f87171)' }}>{buildError}</div>}
