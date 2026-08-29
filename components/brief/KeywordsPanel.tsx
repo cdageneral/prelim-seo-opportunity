@@ -1669,7 +1669,7 @@ export default function KeywordsPanel({
           <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-e8e8ff)', margin: 0, letterSpacing: '-0.2px' }}>Keyword Landscape Summary</h3>
         </div>
         <p style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--c-9090b8)', margin: 0, maxWidth: 760 }}>
-          One view of every keyword in scope — where each sits in the funnel, who you compete with, and which demand is still untapped. Build the workflow below to turn your uploaded list into a full-funnel landscape, then drill in by journey.
+          One view of every keyword in scope — where each sits in the funnel, who you compete with, and which demand is still untapped. The pool is built in Keyword Selection; this panel is where you drill into it by journey.
         </p>
       </div>
 
