@@ -474,7 +474,7 @@ const KW_SOURCE_TONE: Record<KeywordSource, { bg: string; fg: string; title: str
   competitor: { bg: 'var(--ca-245-158-11-0_1)',  fg: 'var(--c-f59e0b)',
                 title: 'A competitor ranks for this keyword and the client does not' },
   expanded:   { bg: 'var(--ca-34-211-238-0_1)',  fg: 'var(--c-22d3ee)',
-                title: 'Added by Step 3 "Expand product data" — not from your upload or the client footprint' },
+                title: 'Added by the Keyword Selection wizard’s "Expand footprint" step — not from your upload or the client footprint' },
 };
 
 function KeywordSourceBadge({ src }: { src: KeywordSource }) {
@@ -592,36 +592,20 @@ export default function KeywordsPanel({
   // v7.101: competitor CSV upload moved to CompetitorsModal (top global nav)
   const csvRef = useRef<HTMLInputElement>(null);
 
-  // ── v7.241: deep-journey build state for the workflow bar (buttons 3 & 4) ──────
-  // Two independent passes. Each streams determinate progress (Const IV.2) from the
-  // demand-universe endpoint with mode:'product' | 'pre'. No invented data — Semrush
-  // fills every volume (Const I.1).
-  const [buildMode,     setBuildMode]     = useState<null | 'product' | 'pre'>(null);
-  const [buildProgress, setBuildProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
-  const [buildError,    setBuildError]    = useState<string | null>(null);
-  // v7.243: per-box "Clear all" (genuinely deletes the box's data, never hides).
-  type ClearKind = 'base' | 'competitor' | 'product' | 'pre';
-  const [confirmClear, setConfirmClear] = useState<ClearKind | null>(null);
-  const [clearingBox,  setClearingBox]  = useState<ClearKind | null>(null);
+  // ── v7.243 / v7.324 / v7.480: per-summary-card "Clear all" (genuinely DELETES that
+  // card's data, never hides). Scope is client-vs-competitor only — the product /
+  // pre-product demand lanes are cleared from the Keyword Selection wizard, which owns
+  // building them (v7.480).
+  type ClearKind = 'base' | 'competitor';
+  const [clearingBox, setClearingBox] = useState<ClearKind | null>(null);
+  const [clearError,  setClearError]  = useState<string | null>(null);
   // v7.324: per-summary-card trash. Two scopes, both genuine scoped DB deletes
-  // (reuse clearBox → /keywords/clear, Const "delete, never hide"):
+  // (reuse clearBox → /keywords/clear-scope, Const "delete, never hide"):
   //   'client'     → ALL client data at once (branded + non-branded + local are
   //                  the same client footprint, so a trash on any of those three
   //                  cards erases all three together — Wayne's decision).
   //   'competitor' → all competitor-gap data (+ tracked competitor entries).
-  // Separate state from the workflow bar's confirmClear so the two don't cross-fire.
   const [cardConfirm, setCardConfirm] = useState<'client' | 'competitor' | null>(null);
-  // v7.244: shared minimum-volume floor for the product & pre-product builds (Const I.6
-  // opt-in). 0 = no floor. Applied to both "Run expansion" and "Run build".
-  const [minVolume, setMinVolume] = useState<number>(0);
-  // ── v7.440 (Wayne): Step 3 no longer commits blind ──────────────────────────
-  // `phrase_related` is OPT-IN (it produced 96% of the volume AND all of the off-domain
-  // drift), and a run is a DRY RUN first: what would be added comes back grouped by seed
-  // for review, and only the seeds left checked are actually pulled and stored.
-  const [includeRelated, setIncludeRelated] = useState(false);
-  type ReviewSeed = { seed: string; label: string; keywords: number; volume: number; sample: Array<{ keyword: string; searchVolume: number }> };
-  const [review, setReview] = useState<null | { mode: 'product' | 'pre'; includeRelated: boolean; totals: { keywords: number; volume: number }; seeds: ReviewSeed[] }>(null);
-  const [reviewRejected, setReviewRejected] = useState<Set<string>>(new Set());
 
   // ── Fetch DB keywords on mount ──
   const fetchDb = useCallback(async () => {
@@ -748,110 +732,41 @@ export default function KeywordsPanel({
     }
   }
 
-  // ── v7.241: run a single-lane deep-journey build (button 3 product / button 4 pre) ──
-  // Streams NDJSON progress from /demand-universe so the bar shows "seed X of N" + ETA
-  // (Const IV.2), never a bare spinner. On done it tells the page to refetch the
-  // analysis (onDeepJourneyBuilt) so the new Semrush-backed topics backfill into this
-  // panel and the Cluster/Journey/Content panels (Const II.3). No invented data.
-  async function runDeepBuild(mode: 'product' | 'pre', opts: { dryRun?: boolean; excludeSeeds?: string[] } = {}) {
-    if (buildMode) return;   // one pass at a time
-    const dryRun = opts.dryRun === true;
-    setBuildMode(mode);
-    setBuildError(null);
-    if (dryRun) setReview(null);
-    setBuildProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
-    try {
-      const r = await fetch(`/api/projects/${projectId}/demand-universe`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        // v7.244 volume floor · v7.440 dry run + related opt-in + rejected seeds
-        body: JSON.stringify({ mode, linesPerSeed: 50, minVolume, dryRun, includeRelated, excludeSeeds: opts.excludeSeeds ?? [] }),
-      });
-      if (!r.ok || !r.body) {
-        let msg = `Build failed (${r.status})`;
-        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
-        setBuildError(msg);
-        return;
-      }
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let ev: any;
-          try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === 'start') {
-            setBuildProgress(p => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
-          } else if (ev.type === 'progress') {
-            setBuildProgress(p => ({ done: ev.done, total: ev.total, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
-          } else if (ev.type === 'error') {
-            setBuildError(ev.error ?? 'Build failed');
-          } else if (ev.type === 'review') {
-            // v7.440: nothing was stored — this is what a commit WOULD add.
-            setReview({ mode, includeRelated: !!ev.includeRelated, totals: ev.totals ?? { keywords: 0, volume: 0 }, seeds: (ev.seeds ?? []) as ReviewSeed[] });
-            setReviewRejected(new Set());
-          } else if (ev.type === 'done') {
-            setReview(null);
-            onDeepJourneyBuilt?.();   // page refetches analysis → backfill everywhere
-          }
-        }
-      }
-    } catch (e) {
-      setBuildError(String((e as any)?.message ?? e));
-    } finally {
-      setBuildMode(null);
-      setBuildProgress(null);
-    }
-  }
 
-  // ── v7.243 / v7.325: per-box "Clear all" — genuinely DELETES that box's data ─────
+  // ── v7.243 / v7.325 / v7.480: per-card "Clear all" — genuinely DELETES that data ──
   // base       → delete ALL client data: client rows + the snapshot client footprint
   //              (topKeywords/demand/taxonomy) so clusters/journeys/exec empty too.
   // competitor → delete ALL competitor data: competitor rows + tracked competitors +
   //              the snapshot gap/competitor footprint so the Competitor Gap card → 0.
-  // product    → DELETE the product lane of the demand universe (+ its funnel paths)
-  // pre        → DELETE the pre-product lane of the demand universe
-  // v7.325 fix: base/competitor now hit /keywords/clear-scope, which clears BOTH the
+  // v7.325 fix: base/competitor hit /keywords/clear-scope, which clears BOTH the
   // uploaded rows AND the saved analysis snapshot. The old /keywords/clear only deleted
   // rows, leaving the snapshot-side count populated (the v7.324 bug: Competitor Gap
-  // stayed full while Local Intent's gap-local rows were wiped). The new route also
+  // stayed full while Local Intent's gap-local rows were wiped). The route also
   // removes the tracked competitors, so the separate DELETE /competitors call is gone.
+  // v7.480: the demand-universe lanes (product / pre) are cleared from the Keyword
+  // Selection wizard, which is the only place they are built.
   // After any clear we trigger a FULL refresh so every panel reflects the deletion.
   async function clearBox(kind: ClearKind) {
     if (clearingBox) return;
     setClearingBox(kind);
-    setBuildError(null);
+    setClearError(null);
     try {
-      if (kind === 'base' || kind === 'competitor') {
-        const scope = kind === 'base' ? 'client' : 'competitor';
-        const res = await fetch(`/api/projects/${projectId}/keywords/clear-scope`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scope }),
-        });
-        if (!res.ok) {
-          const msg = await res.json().catch(() => ({}));
-          throw new Error((msg as any)?.error || `clear ${scope} failed (${res.status})`);
-        }
-      } else {
-        await fetch(`/api/projects/${projectId}/demand-universe`, {
-          method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: kind }),
-        });
+      const scope = kind === 'base' ? 'client' : 'competitor';
+      const res = await fetch(`/api/projects/${projectId}/keywords/clear-scope`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope }),
+      });
+      if (!res.ok) {
+        const msg = await res.json().catch(() => ({}));
+        throw new Error((msg as any)?.error || `clear ${scope} failed (${res.status})`);
       }
       await fetchDb();
       onKeywordsChanged?.();      // refetch keywords across panels
       onDeepJourneyBuilt?.();     // refetch project + analysis (snapshot now cleared)
     } catch (e) {
-      setBuildError(`Clear failed: ${String((e as any)?.message ?? e)}`);
+      setClearError(`Clear failed: ${String((e as any)?.message ?? e)}`);
     } finally {
       setClearingBox(null);
-      setConfirmClear(null);
       setCardConfirm(null);       // v7.325: also close the summary-card confirm
     }
   }
@@ -1958,7 +1873,7 @@ export default function KeywordsPanel({
         const chips: Array<{ label: string; n: number; color: string; src: KeywordSource }> = [
           { label: 'your CSV upload', n: p.upload, color: 'var(--c-34d399)', src: 'footprint'  as KeywordSource },
           { label: 'Semrush crawl',   n: p.crawl,  color: 'var(--c-34d399)', src: 'footprint'  as KeywordSource },
-          { label: 'expanded · Step 3', n: p.demand, color: 'var(--c-22d3ee)', src: 'expanded' as KeywordSource },
+          { label: 'expanded · Expand footprint', n: p.demand, color: 'var(--c-22d3ee)', src: 'expanded' as KeywordSource },
           { label: 'competitor gap',  n: p.gap,    color: 'var(--c-f59e0b)', src: 'competitor' as KeywordSource },
         ].filter(c => c.n > 0);
         const dupRows = p.rawDbRows - p.distinctDb;
@@ -2008,77 +1923,6 @@ export default function KeywordsPanel({
         );
       })()}
 
-      {/* ── v7.440: Step 3/4 REVIEW — nothing is stored until you say so (Wayne) ──── */}
-      {review && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--ca-0-0-0-0_65)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
-          onClick={() => setReview(null)}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ background: 'var(--c-0d0d18)', border: '1px solid var(--c-2a2a48)', borderRadius: 12, width: 'min(920px, 96vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px var(--ca-0-0-0-0_7)' }}>
-            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--c-111120)' }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-c8c8e8)' }}>
-                Review before adding — {review.mode === 'pre' ? 'pre-product' : 'product'} expansion
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--c-8a8aa8)', marginTop: 4, lineHeight: 1.5 }}>
-                Nothing has been stored. This is exactly what would be added: <b style={{ color: 'var(--c-c8c8e8)' }}>{review.totals.keywords.toLocaleString()}</b> keywords,
-                {' '}<b style={{ color: 'var(--c-c8c8e8)' }}>{review.totals.volume.toLocaleString()}</b>/mo, grouped by the seed that produced them.
-                {' '}{review.includeRelated
-                  ? <span style={{ color: 'var(--c-f59e0b)' }}>Loosely related terms were included — check the samples carefully.</span>
-                  : <span>Questions only — the loose related report was not pulled.</span>}
-                {' '}Untick a seed to leave every one of its keywords out.
-              </div>
-            </div>
-            <div style={{ overflowY: 'auto', flex: 1, padding: '6px 10px' }}>
-              {review.seeds.length === 0 && (
-                <div style={{ padding: 20, fontSize: 12, color: 'var(--c-8a8aa8)' }}>This pass returned nothing — nothing to add.</div>
-              )}
-              {review.seeds.map(sd => {
-                const rejected = reviewRejected.has(sd.seed);
-                return (
-                  <div key={sd.seed} style={{ padding: '9px 10px', borderBottom: '1px solid var(--c-111120)', opacity: rejected ? 0.45 : 1 }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 9, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={!rejected} style={{ accentColor: 'var(--c-9b96ff)' }}
-                        onChange={() => setReviewRejected(prev => { const n = new Set(prev); if (n.has(sd.seed)) n.delete(sd.seed); else n.add(sd.seed); return n; })} />
-                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-c8c8e8)' }}>{sd.seed}</span>
-                      <span style={{ fontSize: 10, color: 'var(--c-6a6a90)' }}>{sd.label}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: 11, fontFamily: 'monospace', color: 'var(--c-8a8aa8)' }}>
-                        {sd.keywords.toLocaleString()} kw · {sd.volume.toLocaleString()}/mo
-                      </span>
-                    </label>
-                    <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', marginTop: 4, marginLeft: 27, lineHeight: 1.6 }}>
-                      {sd.sample.map(k => `${k.keyword} (${k.searchVolume.toLocaleString()})`).join(' · ')}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            {(() => {
-              const keptSeeds = review.seeds.filter(sd => !reviewRejected.has(sd.seed));
-              const keptKw  = keptSeeds.reduce((n, sd) => n + sd.keywords, 0);
-              const keptVol = keptSeeds.reduce((n, sd) => n + sd.volume, 0);
-              return (
-                <div style={{ padding: '12px 18px', borderTop: '1px solid var(--c-111120)', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 11, color: 'var(--c-8a8aa8)' }}>
-                    keeping <b style={{ color: 'var(--c-c8c8e8)' }}>{keptSeeds.length}</b> of {review.seeds.length} seeds
-                    {reviewRejected.size > 0 && <> · dropping {reviewRejected.size}</>}
-                  </span>
-                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-                    <button onClick={() => setReview(null)}
-                      style={{ fontSize: 11.5, fontWeight: 700, padding: '6px 12px', borderRadius: 7, cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a48)' }}>
-                      Cancel — add nothing
-                    </button>
-                    <button disabled={keptSeeds.length === 0 || !!buildMode}
-                      onClick={() => { const ex = Array.from(reviewRejected); const m = review.mode; setReview(null); void runDeepBuild(m, { excludeSeeds: ex }); }}
-                      style={{ fontSize: 11.5, fontWeight: 800, padding: '6px 14px', borderRadius: 7, cursor: keptSeeds.length === 0 ? 'default' : 'pointer',
-                        background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)', opacity: keptSeeds.length === 0 ? 0.5 : 1 }}>
-                      Add {keptKw.toLocaleString()} keywords · {keptVol.toLocaleString()}/mo
-                    </button>
-                  </span>
-                </div>
-              );
-            })()}
-          </div>
-        </div>
-      )}
 
       {/* ── v7.326: Adjacent verticals (competitor-only) — scope-gate staging ────── */}
       {/* Competitor gap umbrellas the client doesn't compete in. EXCLUDED from every    */}
@@ -2136,272 +1980,21 @@ export default function KeywordsPanel({
         </div>
       )}
 
-      {/* ── v7.241: Workflow bar — 4 build stages (Wayne). Sits between the summary */}
-      {/* cards and the journey toggle. (1) client base keywords — status only,     */}
-      {/* completed once base rows exist; (2) competitor data — opens the Competitors */}
-      {/* modal, active until competitor data exists; (3) Expand product data —      */}
-      {/* product-lane deep build; (4) Build pre-product journey — pre-product deep   */}
-      {/* build. Buttons 3 & 4 replace the Journey panel's old build button. Every    */}
-      {/* status is derived from REAL data; volumes come from Semrush (Const I.1).    */}
-      {(() => {
-        const baseDone = (kwSummary.clientCount ?? 0) > 0;
-        // v7.242: "Competitor data" is COMPLETE only when real competitor KEYWORD data
-        // exists (competitor-gap rows), NOT merely when competitor domains are listed.
-        // Adding a domain without uploading/pulling its keywords leaves this ACTION-NEEDED.
-        const compHasDomains = (competitorDomains?.length ?? 0) > 0;
-        const compDone       = (kwSummary.gapCount ?? 0) > 0;
-        const du       = analysis?.semrushSnapshot?._demandUniverse;
-        const duTopics: any[] = Array.isArray(du?.topics) ? du.topics : [];
-        const productTopics = duTopics.filter(t => t?.laneHint === 'product').length;
-        const preTopics     = duTopics.filter(t => t?.laneHint && t.laneHint !== 'product').length;
-        const productDone   = productTopics > 0;
-        const preDone       = preTopics > 0;
-
-        const elapsed = buildProgress ? (Date.now() - buildProgress.startedAt) / 1000 : 0;
-        const eta = buildProgress && buildProgress.done > 0 && buildProgress.total > buildProgress.done
-          ? Math.round((elapsed / buildProgress.done) * (buildProgress.total - buildProgress.done))
-          : null;
-
-        // status: 'done' (calm green) | 'building' (cyan, in-progress) | 'action' (bright accent CTA)
-        type Stage = {
-          n: number; title: string; accent: string; bgAct: string; glow: string; icon: string;
-          status: 'done' | 'building' | 'action';
-          doneLabel: string; cta: string;
-          body: React.ReactNode;
-          onClick?: () => void; disabled?: boolean;
-          clearKind: ClearKind; canClear: boolean;
-        };
-        const stages: Stage[] = [
-          {
-            n: 1, title: 'Client base keywords', accent: 'var(--c-34d399)', bgAct: 'var(--ca-52-211-153-0_1)', glow: 'var(--ca-52-211-153-0_2)', icon: 'ti-file-upload',
-            status: baseDone ? 'done' : 'action', doneLabel: 'Completed', cta: 'Upload CSV',
-            onClick: baseDone ? undefined : () => csvRef.current?.click(),
-            clearKind: 'base', canClear: baseDone,
-            body: baseDone
-              ? `${(kwSummary.clientCount ?? 0).toLocaleString()} base keywords on file (CSV)`
-              : 'Upload your base keyword CSV to begin',
-          },
-          {
-            n: 2, title: 'Competitor data', accent: 'var(--c-f59e0b)', bgAct: 'var(--ca-245-158-11-0_10)', glow: 'var(--ca-245-158-11-0_2)', icon: 'ti-users',
-            status: compDone ? 'done' : 'action', doneLabel: 'Completed', cta: compHasDomains ? 'Upload data' : 'Add competitors',
-            onClick: () => onOpenCompetitors?.(),
-            clearKind: 'competitor', canClear: compHasDomains || compDone,
-            body: compDone
-              ? `Competitor keyword data loaded — click to manage`
-              : compHasDomains
-                ? `${competitorDomains.length} competitor${competitorDomains.length === 1 ? '' : 's'} added, no keyword data yet — upload it`
-                : 'Add competitor domains & upload their keyword CSVs',
-          },
-          {
-            n: 3, title: 'Expand product data', accent: 'var(--c-9b96ff)', bgAct: 'var(--ca-155-150-255-0_10)', glow: 'var(--ca-155-150-255-0_20)', icon: 'ti-sparkles',
-            status: buildMode === 'product' ? 'building' : productDone ? 'done' : 'action', doneLabel: 'Built', cta: productDone ? 'Re-run' : 'Run expansion',
-            onClick: () => runDeepBuild('product', { dryRun: true }), disabled: !!buildMode,
-            clearKind: 'product', canClear: productDone,
-            body: productDone
-              ? `${productTopics.toLocaleString()} volume-backed topics (Semrush)`
-              : `Expand each product category into full-funnel demand${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''} · you review before anything is added`,
-          },
-          {
-            n: 4, title: 'Build pre-product journey', accent: 'var(--c-22d3ee)', bgAct: 'var(--ca-34-211-238-0_1)', glow: 'var(--ca-34-211-238-0_2)', icon: 'ti-route',
-            status: buildMode === 'pre' ? 'building' : preDone ? 'done' : 'action', doneLabel: 'Built', cta: preDone ? 'Re-run' : 'Run build',
-            onClick: () => runDeepBuild('pre', { dryRun: true }), disabled: !!buildMode,
-            clearKind: 'pre', canClear: preDone,
-            body: preDone
-              ? `${preTopics.toLocaleString()} problem / trigger topics (Semrush)`
-              : `Surface problem-aware demand before the product is known${minVolume > 0 ? ` · min ${minVolume.toLocaleString()}/mo` : ''}`,
-          },
-        ];
-        const actionCount = stages.filter(s => s.status === 'action').length;
-
-        return (
-          <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
-            {/* v7.270: enlarged title + one-line context (left column); the min-volume */}
-            {/* control keeps its place on the right via marginLeft:auto.                */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--c-e8e8ff)', letterSpacing: '-0.2px' }}>
-                    Let&rsquo;s build the workflow
-                  </span>
-                  {actionCount > 0 && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--c-f59e0b)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--c-f59e0b44)', borderRadius: 20, padding: '2px 8px' }}>
-                      {actionCount} action{actionCount === 1 ? '' : 's'} needed
-                    </span>
-                  )}
-                </div>
-                <p style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--c-8080a8)', margin: '5px 0 0', maxWidth: 680 }}>
-                  Four steps build your landscape from the ground up — <span style={{ color: 'var(--c-9090c0)' }}>base → competitors → product demand → pre-product demand</span>. Each step unlocks the next.
-                </p>
-              </div>
-
-              {/* v7.440: the loose `related` report, opt-in. Measured on the real Amex build it
-                  produced 96% of the volume AND all of the off-domain drift, so it is OFF by
-                  default; turning it on also doubles the Semrush spend for the pass. */}
-              <label title="Semrush's phrase_related report. Off = questions only, which stay anchored to the seed words. On = also pull loosely related terms; on a broad category this is where off-topic keywords come from, and it doubles the API spend."
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10, color: 'var(--c-8a8aa8)', cursor: buildMode ? 'default' : 'pointer', opacity: buildMode ? 0.55 : 1 }}>
-                <input type="checkbox" checked={includeRelated} disabled={!!buildMode}
-                  onChange={e => setIncludeRelated(e.target.checked)} style={{ accentColor: 'var(--c-9b96ff)' }} />
-                also pull loosely related terms
-              </label>
-
-              {/* v7.244: shared minimum-volume floor for steps 3 & 4 (opt-in, Const I.6). */}
-              {(() => {
-                const presets = [
-                  { label: 'None', v: 0 }, { label: '500', v: 500 }, { label: '1K', v: 1000 },
-                  { label: '1.9K', v: 1900 }, { label: '2.4K', v: 2400 }, { label: '3.6K', v: 3600 }, { label: '4.4K', v: 4400 },
-                ];
-                const disabled = !!buildMode;
-                return (
-                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', opacity: disabled ? 0.55 : 1 }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-585878)' }} title="Only pull keywords with at least this monthly search volume (steps 3 & 4)">
-                      Min volume · steps 3 &amp; 4
-                    </span>
-                    {presets.map(p => {
-                      const on = minVolume === p.v;
-                      return (
-                        <button
-                          key={p.v}
-                          type="button"
-                          disabled={disabled}
-                          onClick={() => setMinVolume(p.v)}
-                          style={{
-                            fontSize: 10.5, fontWeight: 700, lineHeight: 1, padding: '4px 8px', borderRadius: 6,
-                            cursor: disabled ? 'default' : 'pointer', whiteSpace: 'nowrap',
-                            background: on ? 'var(--c-1e1e38)' : 'transparent',
-                            border: `1px solid ${on ? 'var(--c-9b96ff)' : 'var(--c-2a2a45)'}`,
-                            color: on ? 'var(--c-c8c8e8)' : 'var(--c-9090b8)',
-                          }}
-                        >
-                          {p.label}
-                        </button>
-                      );
-                    })}
-                    <input
-                      type="number" min={0} step={100} disabled={disabled}
-                      value={minVolume > 0 ? minVolume : ''}
-                      placeholder="custom"
-                      onChange={e => setMinVolume(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                      title="Custom minimum monthly volume — keywords below this are not pulled"
-                      style={{ width: 78, fontSize: 11, padding: '4px 8px', borderRadius: 6, background: 'var(--c-14142a)', border: '1px solid var(--c-2a2a45)', color: 'var(--c-c8c8e8)', outline: 'none' }}
-                    />
-                    <span style={{ fontSize: 10, color: 'var(--c-585878)' }}>/mo</span>
-                  </div>
-                );
-              })()}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
-              {stages.map(s => {
-                const confirming = confirmClear === s.clearKind;
-                const isClearing = clearingBox === s.clearKind;
-                const clickable = !!s.onClick && !s.disabled && !confirming && !clearingBox;
-                const emphasize = s.status === 'action' || s.status === 'building';
-                const chip = s.status === 'done'
-                  ? { fg: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_12)', bd: 'var(--c-34d39955)', ic: 'ti-circle-check', label: s.doneLabel }
-                  : s.status === 'building'
-                  ? { fg: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_12)', bd: 'var(--c-22d3ee55)', ic: 'ti-loader-2', label: 'Building…' }
-                  : { fg: s.accent, bg: 'transparent', bd: s.accent, ic: 'ti-alert-circle', label: 'Action needed' };
-                return (
-                  <div
-                    key={s.n}
-                    role="button"
-                    tabIndex={clickable ? 0 : -1}
-                    onClick={clickable ? s.onClick : undefined}
-                    onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); s.onClick?.(); } }) : undefined}
-                    style={{
-                      position: 'relative', display: 'flex', flexDirection: 'column', gap: 9, alignItems: 'stretch',
-                      padding: '13px 14px 14px', borderRadius: 11, textAlign: 'left', width: '100%',
-                      background: emphasize ? s.bgAct : 'var(--c-0c0c16)',
-                      border: `1px solid ${emphasize ? s.accent : 'var(--c-1e1e34)'}`,
-                      boxShadow: s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none',
-                      cursor: clickable ? 'pointer' : 'default', outline: 'none', transition: 'all 0.15s',
-                      opacity: (s.disabled || (!!clearingBox && !isClearing)) ? 0.5 : 1,
-                    }}
-                    onMouseEnter={e => { if (clickable) (e.currentTarget as HTMLDivElement).style.boxShadow = `0 0 0 1px ${s.glow}, 0 12px 26px -8px ${s.glow}`; }}
-                    onMouseLeave={e => { if (clickable) (e.currentTarget as HTMLDivElement).style.boxShadow = s.status === 'action' ? `0 0 0 1px ${s.glow}, 0 10px 24px -10px ${s.glow}` : 'none'; }}
-                  >
-                    {/* accent stripe on action cards */}
-                    {s.status === 'action' && <span style={{ position: 'absolute', left: 0, top: 11, bottom: 11, width: 3, borderRadius: 3, background: s.accent }} aria-hidden="true" />}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                      {/* v7.270: "Step N" label (was a bare number) — makes the four-step sequence explicit */}
-                      <span style={{ display: 'inline-flex', alignItems: 'center', height: 18, borderRadius: 5, padding: '0 7px', background: emphasize ? s.accent : 'var(--c-14142a)', color: emphasize ? 'var(--c-08080f)' : s.accent, fontSize: 9, fontWeight: 800, letterSpacing: '.06em', textTransform: 'uppercase', flexShrink: 0 }}>Step {s.n}</span>
-                      <i className={`ti ${s.icon}`} style={{ fontSize: 14, color: s.accent }} aria-hidden="true" />
-                      <span style={{ fontSize: 12, fontWeight: 700, color: emphasize ? 'var(--c-e8e8ff)' : 'var(--c-c8c8e8)' }}>{s.title}</span>
-                      <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 9, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', color: chip.fg, background: chip.bg, border: `1px solid ${chip.bd}`, borderRadius: 20, padding: '2px 8px', whiteSpace: 'nowrap' }}>
-                        <i className={`ti ${chip.ic}`} style={{ fontSize: 10 }} aria-hidden="true" />{chip.label}
-                      </span>
-                      {/* Clear-all (deletes) — only when there's data to clear */}
-                      {s.canClear && s.status !== 'building' && (
-                        <button
-                          type="button"
-                          title="Clear all — permanently deletes this box's data"
-                          aria-label={`Clear ${s.title}`}
-                          onClick={e => { e.stopPropagation(); setConfirmClear(confirming ? null : s.clearKind); }}
-                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 5, border: '1px solid var(--c-2a2a40)', background: 'transparent', color: 'var(--c-8a8aa8)', cursor: 'pointer', flexShrink: 0 }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-f87171)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-f87171)'; }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = 'var(--c-8a8aa8)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--c-2a2a40)'; }}
-                        >
-                          <i className="ti ti-trash" style={{ fontSize: 11 }} aria-hidden="true" />
-                        </button>
-                      )}
-                    </div>
-                    <span style={{ fontSize: 11, color: emphasize ? 'var(--c-a8a8cc)' : 'var(--c-7a7aa0)', lineHeight: 1.45 }}>{s.body}</span>
-
-                    {/* confirm "clear all" — genuinely deletes */}
-                    {confirming ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 2 }}
-                           onClick={e => e.stopPropagation()}>
-                        <span style={{ fontSize: 10.5, color: 'var(--c-f87171)', fontWeight: 600 }}>Delete this data permanently?</span>
-                        <button type="button" disabled={isClearing}
-                          onClick={e => { e.stopPropagation(); clearBox(s.clearKind); }}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 700, color: 'var(--c-f87171)', background: 'var(--ca-248-113-113-0_2)', border: '1px solid var(--c-f87171)', borderRadius: 6, padding: '4px 9px', cursor: isClearing ? 'default' : 'pointer' }}>
-                          <i className={`ti ${isClearing ? 'ti-loader-2' : 'ti-trash'}`} style={{ fontSize: 11 }} aria-hidden="true" />{isClearing ? 'Clearing…' : 'Clear all'}
-                        </button>
-                        <button type="button" disabled={isClearing}
-                          onClick={e => { e.stopPropagation(); setConfirmClear(null); }}
-                          style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a40)', borderRadius: 6, padding: '4px 9px', cursor: 'pointer' }}>
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (<>
-                      {/* in-progress bar */}
-                      {s.status === 'building' && buildProgress && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          <div style={{ height: 5, background: 'var(--c-1a1a2c)', borderRadius: 4, overflow: 'hidden' }}>
-                            <div style={{ width: `${buildProgress.total > 0 ? Math.round((buildProgress.done / buildProgress.total) * 100) : 0}%`, height: '100%', background: s.accent, transition: 'width 0.3s' }} />
-                          </div>
-                          <span style={{ fontSize: 10, color: 'var(--c-8080a8)', fontVariantNumeric: 'tabular-nums' }}>
-                            {buildProgress.total > 0 ? `seed ${buildProgress.done}/${buildProgress.total}` : 'starting…'}
-                            {eta !== null ? ` · ~${eta}s left` : ''}
-                            {buildProgress.seed ? ` · ${buildProgress.seed}` : ''}
-                          </span>
-                        </div>
-                      )}
-
-                      {/* prominent CTA pill on action cards */}
-                      {s.status === 'action' && (
-                        <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--c-08080f)', background: s.accent, borderRadius: 7, padding: '6px 11px' }}>
-                          {s.cta} <i className="ti ti-arrow-right" style={{ fontSize: 12 }} aria-hidden="true" />
-                        </span>
-                      )}
-                      {/* re-run affordance on completed builds (3 & 4) */}
-                      {s.status === 'done' && (s.n === 3 || s.n === 4) && (
-                        <span style={{ marginTop: 2, alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10.5, fontWeight: 600, color: s.accent, border: `1px solid ${s.accent}`, borderRadius: 7, padding: '4px 9px' }}>
-                          <i className="ti ti-refresh" style={{ fontSize: 11 }} aria-hidden="true" />{s.cta}
-                        </span>
-                      )}
-                    </>)}
-                  </div>
-                );
-              })}
-            </div>
-            {buildError && (
-              <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: '8px 0 0' }}>
-                <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} aria-hidden="true" />{buildError}
-              </p>
-            )}
-          </div>
-        );
-      })()}
+      {/* ── v7.480: the 4-step build workflow LIVES IN THE KEYWORD SELECTION PANEL ── */}
+      {/* It used to be duplicated here as a workflow bar (v7.241). Since v7.476 the   */}
+      {/* Keyword Selection wizard owns pool building end to end — upload, categories, */}
+      {/* competitors, expansion, pre-product — so two UIs were driving the same       */}
+      {/* endpoints. Two UIs over one flow WILL drift (v7.459), so the bar is gone and */}
+      {/* the wizard is the single source of truth (Const II.7). This panel is now     */}
+      {/* purely the keyword LIST. Only the clear-failure notice stays, because the    */}
+      {/* summary-card trash buttons still live on this panel.                          */}
+      {clearError && (
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--c-111120)', background: 'var(--c-0a0a14)', flexShrink: 0 }}>
+          <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: 0 }}>
+            <i className="ti ti-alert-triangle" style={{ marginRight: 5 }} aria-hidden="true" />{clearError}
+          </p>
+        </div>
+      )}
 
       {/* ── v7.204: Journey scope — All / Product / Pre-product. Sits directly  */}
       {/* below the summary cards (Wayne's placement). Choosing a scope re-slices  */}
@@ -2778,7 +2371,7 @@ export default function KeywordsPanel({
         {/* v7.438: the legend now names the SOURCE badges, because that is what the rows carry */}
         <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-52-211-153-0_1)', color: 'var(--c-34d399)', border: '1px solid var(--c-34d399)', fontWeight: 700 }}>original footprint = your CSV + the client crawl</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-245-158-11-0_1)', color: 'var(--c-f59e0b)', border: '1px solid var(--c-f59e0b)', fontWeight: 700 }}>competitor = a rival ranks, the client does not</span>
-        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--c-22d3ee)', fontWeight: 700 }}>expanded = added by Step 3</span>
+        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-34-211-238-0_1)', color: 'var(--c-22d3ee)', border: '1px solid var(--c-22d3ee)', fontWeight: 700 }}>expanded = added by Expand footprint</span>
         <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'var(--ca-167-139-250-0_1)', color: 'var(--c-a78bfa)', border: '1px solid var(--c-a78bfa)', fontWeight: 700 }}>branded = client or competitor name</span>
       </div>
     </div>
