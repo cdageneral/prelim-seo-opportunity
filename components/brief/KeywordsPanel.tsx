@@ -12,7 +12,6 @@ import { buildJourneyClassifier } from './JourneySection';   // v7.204: single-s
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
 import { bigCategoryInsight } from '@/lib/insights';   // v7.366 (G9)
 import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape';   // v7.446: ONE All-Keywords membership basis, shared with the cross-project usage rollup
-import { parseKeywordCsvMeta } from '@/lib/keywords/csvParse';   // v7.459: THE shared CSV parser (Const II.7) — same columns for every upload path
 import { basisCoverage } from '@/lib/keywords/positionBasis';   // v7.451: organic rank vs SERP-feature placement
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -111,8 +110,12 @@ interface DbKeyword {
 interface Props {
   projectId:   string;
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
-  onKeywordsChanged?: () => void;   // v7.108: fired after any successful keyword mutation here (CSV upload, add, delete/block, clear) so the parent can bump kwVersion and refresh ALL panels (SOV, clusters, etc.)
-  onCleared?: () => void;   // v7.233: fired after a successful FULL RESET (Clear All) so the parent can refetch the (now empty) project and keep the user on the empty Keyword panel.
+  // v7.108: fired after any successful keyword mutation here (delete/block, scope promote)
+  // so the parent can bump kwVersion and refresh ALL panels (SOV, clusters, etc.)
+  onKeywordsChanged?: () => void;
+  // v7.481: the keyword ACTIONS (upload, add, reset) live in the Keyword Selection
+  // wizard now — this panel only points at it.
+  onGoToKeywordSelection?: () => void;
   analysis:    any;
   competitors: string[];  // competitor domains for branded detection
   brandTerms?: string[];  // v7.206: client brand vocabulary (variants a domain can't yield)
@@ -540,7 +543,7 @@ function SortHeader({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function KeywordsPanel({
-  projectId, kwVersion, onKeywordsChanged, onCleared, analysis, competitors, brandTerms = [], domain,
+  projectId, kwVersion, onKeywordsChanged, onGoToKeywordSelection, analysis, competitors, brandTerms = [], domain,
   defaultClientThreshold     = 0,
   defaultCompetitorThreshold = 0,
   serpScanResults, serpScanRunning, serpScanProgress, onStartSerpScan,
@@ -570,12 +573,6 @@ export default function KeywordsPanel({
   const [serpExtra,   setSerpExtra]   = useState<any[]>([]);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError,   setScanError]   = useState('');
-  const [showAdd,     setShowAdd]     = useState(false);
-  const [newKw,       setNewKw]       = useState('');
-  const [newVol,      setNewVol]      = useState('');
-  const [newType,     setNewType]     = useState<'ranked' | 'gap'>('gap');
-  const [addError,    setAddError]    = useState('');
-  const [addLoading,  setAddLoading]  = useState(false);
   const [deletingKey,   setDeletingKey]   = useState<string | null>(null);
   // v7.425: a keyword removal that did NOT take is stated on screen, never swallowed (Const I.5).
   const [deleteNote,    setDeleteNote]    = useState<string | null>(null);
@@ -584,13 +581,7 @@ export default function KeywordsPanel({
   // Column sort
   const [sortCol,  setSortCol]  = useState<SortCol>(null);
   const [sortDir,  setSortDir]  = useState<SortDir>('desc');
-  const [csvStatus,   setCsvStatus]   = useState<{ type: 'loading' | 'success' | 'error'; msg: string } | null>(null);
-  const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
-  const [showClearConfirm,     setShowClearConfirm]     = useState(false);
-  const [clearLoading,         setClearLoading]         = useState(false);
-  const [clearStep,            setClearStep]            = useState('');
   // v7.101: competitor CSV upload moved to CompetitorsModal (top global nav)
-  const csvRef = useRef<HTMLInputElement>(null);
 
   // ── v7.243 / v7.324 / v7.480: per-summary-card "Clear all" (genuinely DELETES that
   // card's data, never hides). Scope is client-vs-competitor only — the product /
@@ -1068,43 +1059,6 @@ export default function KeywordsPanel({
   );
 
   // ── Add keyword ──
-  async function handleAdd() {
-    const kwTrimmed = newKw.trim();
-    if (!kwTrimmed) { setAddError('Keyword is required.'); return; }
-    setAddError('');
-    setAddLoading(true);
-    try {
-      const detectedBranded = isBranded(kwTrimmed, clientDomain, competitorDomains, brandTerms);
-      const res = await fetch(`/api/projects/${projectId}/keywords`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          keyword:      kwTrimmed,
-          searchVolume: parseInt(newVol) || 0,
-          type:         newType,
-          branded:      detectedBranded,
-          source:       'custom',
-        }),
-      });
-      if (res.status === 409) {
-        setAddError('This keyword already exists in your list.');
-        return;
-      }
-      if (!res.ok) {
-        setAddError('Failed to add keyword. Try again.');
-        return;
-      }
-      setNewKw('');
-      setNewVol('');
-      setNewType('gap');
-      setShowAdd(false);
-      await fetchDb();
-      onKeywordsChanged?.();   // v7.108: refresh dependent panels
-    } finally {
-      setAddLoading(false);
-    }
-  }
-
   // ── v7.425: remove ONE keyword everywhere ───────────────────────────────────
   // A keyword can exist in TWO places at once: an uploaded row in project_keywords
   // AND a row inside the stored analysis snapshot (client footprint `topKeywords` or
@@ -1248,180 +1202,6 @@ export default function KeywordsPanel({
     return added;
   }
 
-  // ── CSV upload ──
-  async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setCsvStatus({ type: 'loading', msg: 'Uploading keywords…' });
-
-    let text: string;
-    try { text = await file.text(); } catch {
-      setCsvStatus({ type: 'error', msg: 'Could not read file.' });
-      if (csvRef.current) csvRef.current.value = '';
-      return;
-    }
-
-    // Normalise line endings (Windows \r\n or bare \r) then split
-    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-    const dataLines = lines.slice(1).filter((l: string) => l.trim().length > 0);
-
-    if (dataLines.length === 0) {
-      setCsvStatus({ type: 'error', msg: 'CSV is empty — needs a header row and at least one data row.' });
-      if (csvRef.current) csvRef.current.value = '';
-      return;
-    }
-
-    // Parse CSV — v7.459: THE shared header-aware parser (lib/keywords/csvParse.ts,
-    // Const II.7). One column detection for every upload path — the Competitors
-    // modal kept a private v7.92 fork that never learned the URL (v7.251) or
-    // Position Type (v7.451) columns and silently dropped both; sharing this
-    // module ends the drift. Branded/type classification stays HERE because it
-    // needs this project's domains + brand terms.
-    const csvMeta = parseKeywordCsvMeta(text);
-    const baseRows = csvMeta.rows;
-    const parsed: Array<{ keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }> =
-      baseRows.map(r => ({
-        keyword:      r.keyword,
-        searchVolume: r.searchVolume,
-        position:     r.position,
-        type:         (r.typeRaw !== null
-          ? (r.typeRaw === 'ranked' ? 'ranked' : 'gap')
-          : (r.position !== null && r.position <= 100 ? 'ranked' : 'gap')) as 'ranked' | 'gap',
-        branded:      isBranded(r.keyword, clientDomain, competitorDomains, brandTerms),
-        serpFeatures: r.serpFeatures,
-        url:          r.url,
-        positionType: r.positionType,
-      }));
-
-    if (parsed.length === 0) {
-      setCsvStatus({ type: 'error', msg: 'No valid rows found. Expected columns: keyword, search_volume, type' });
-      if (csvRef.current) csvRef.current.value = '';
-      return;
-    }
-
-    // Send all keywords to the batch endpoint in chunks of 500
-    // This avoids 3000+ individual DB connections and is far more reliable.
-    // v7.143: full row accounting so a silent drop is impossible to miss —
-    // we report saved vs file rows, plus dup/blank/failed breakdown.
-    let added = 0; let skipped = 0; let failed = 0;
-    let serpPrepared = 0; let serpStored = 0;   // v7.289: SERP-features write diagnosis
-    const fileRows      = dataLines.length;            // data rows in the CSV (excl. header)
-    const parsedDropped = fileRows - parsed.length;    // rows with no keyword (couldn't parse)
-    // v7.290 SCALE FIX: smaller batches + automatic retry. Big footprints (TD ≈ 5,400 rows)
-    // were posted 500 at a time; if any batch timed out server-side it was counted as failed
-    // and its rows (incl. serp_features) never saved — leaving the upload silently partial.
-    // Now 250-row batches (lighter request, paired with the route's scoped existing-query
-    // fix) and each batch retries up to 3× with backoff before it's declared failed, so a
-    // transient timeout no longer drops data. Real accounting preserved (Const I.6).
-    const CHUNK = 250;
-    const MAX_ATTEMPTS = 3;
-    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-    setCsvProgress({ current: 0, total: parsed.length });
-    for (let i = 0; i < parsed.length; i += CHUNK) {
-      const chunk = parsed.slice(i, i + CHUNK);
-      const payload = JSON.stringify({
-        domain: '',
-        source: 'csv',
-        keywords: chunk.map((row: { keyword: string; searchVolume: number; position: number | null; type: 'ranked' | 'gap'; branded: boolean; serpFeatures: string | null; url: string | null; positionType: string | null }) => ({
-          keyword:      row.keyword,
-          searchVolume: row.searchVolume,
-          position:     row.position,
-          type:         row.type,
-          serpFeatures: row.serpFeatures,
-          url:          row.url,
-          positionType: row.positionType,   // v7.451
-        })),
-      });
-      let saved = false;
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !saved; attempt++) {
-        try {
-          const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload,
-          });
-          if (res.ok) {
-            const d = await res.json();
-            added   += (d.inserted ?? 0) + (d.updated ?? 0);   // v7.92: re-uploads update in place
-            skipped += d.skipped  ?? 0;                          // duplicate keywords within the file
-            serpPrepared += d.serpFeaturesPrepared ?? 0;          // v7.289: rows in payload carrying SERP features
-            if (typeof d.serpFeaturesStored === 'number') serpStored = d.serpFeaturesStored;   // running project total
-            saved = true;
-          } else if (attempt < MAX_ATTEMPTS) {
-            await sleep(attempt * 800);                          // server error (e.g. 504 timeout) — back off and retry
-          }
-        } catch {
-          if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);   // network error — back off and retry
-        }
-      }
-      if (!saved) failed += chunk.length;                        // exhausted retries — these rows did NOT save
-      setCsvProgress({ current: Math.min(i + CHUNK, parsed.length), total: parsed.length });
-    }
-    setCsvProgress(null);
-
-    if (csvRef.current) csvRef.current.value = '';
-    await fetchDb();
-      onKeywordsChanged?.();   // v7.108: refresh dependent panels
-
-    // v7.143: always report "saved X of N rows" + a breakdown of everything that
-    // didn't save, so a partial upload (the cause of the 731→171 footprint gap)
-    // shows up immediately instead of looking like a clean success.
-    const parts: string[] = [];
-    if (skipped > 0)        parts.push(`${skipped.toLocaleString()} duplicate keyword${skipped !== 1 ? 's' : ''} in file`);
-    if (parsedDropped > 0)  parts.push(`${parsedDropped.toLocaleString()} blank/unparseable row${parsedDropped !== 1 ? 's' : ''}`);
-    if (failed > 0)         parts.push(`${failed.toLocaleString()} failed to save — re-upload to retry`);
-    // v7.289: SERP-features write diagnosis. If this file carried SERP features but none
-    // persisted, the column write is being dropped server-side (DB/migration) — surface it
-    // loudly so it isn't mistaken for "no local demand".
-    let serpNote = '';
-    if (serpPrepared > 0 && serpStored === 0) {
-      serpNote = ` ⚠ SERP features did not save (${serpPrepared.toLocaleString()} sent, 0 stored) — DB column issue, contact support.`;
-    } else if (serpPrepared > 0) {
-      serpNote = ` SERP features stored on ${serpStored.toLocaleString()} keyword${serpStored !== 1 ? 's' : ''}.`;
-    } else if (serpPrepared === 0 && fileRows > 0) {
-      serpNote = ` (No SERP-features column detected in this file.)`;
-    }
-    const detail = parts.length ? ` (${parts.join(' · ')})` : '';
-    // v7.451: the Position Type column decides whether a stored position is a real
-    // ranking or a SERP-feature box (Semrush exports a feature as Position 1). Say so
-    // at upload time — a file without it leaves every position of unknown basis.
-    const posTypeNote = csvMeta.hasPositionType
-      ? ` Position Type read on ${parsed.filter(r => r.positionType).length.toLocaleString()} row${parsed.filter(r => r.positionType).length !== 1 ? 's' : ''} — organic rankings and SERP-feature placements are kept apart.`
-      : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export with Position Type included, or run Verify positions on this project.`;
-    setCsvStatus({
-      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || !csvMeta.hasPositionType) ? 'error' : 'success',
-      msg:  `Saved ${added.toLocaleString()} of ${fileRows.toLocaleString()} CSV row${fileRows !== 1 ? 's' : ''}${detail}.${serpNote}${posTypeNote}`,
-    });
-    setTimeout(() => setCsvStatus(null), 15000);
-  }
-
-  // ── Clear All — FULL RESET (v7.233) ─────────────────────────────────────────
-  // Wayne's decision: "delete and clear them out — there should be NO hiding."
-  // The old Clear All deleted the uploaded rows but then INSERTED a 'blocked' row
-  // for every Semrush keyword to mask them — which (a) was hiding, not deleting,
-  // and (b) only covered topKeywords+gapKeywords, leaving the demand-universe and
-  // competitor-gap keywords (buildKwPool includeDemand:true) still visible, so it
-  // looked like nothing happened. The Semrush footprint isn't in project_keywords
-  // at all — it lives in analyses.semrush_snapshot — so a true wipe must delete
-  // the analysis record. The /reset endpoint does both in one shot: every keyword
-  // row + every analysis (cascades personas/opportunities/reports). The api_usage
-  // ledger, competitors and brand vocab are preserved (project config / spend).
-  async function handleClearAll() {
-    setClearLoading(true);
-    setClearStep('Deleting all keywords & analysis…');
-
-    await fetch(`/api/projects/${projectId}/keywords/reset`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-    }).catch(() => null);
-
-    setClearStep('Refreshing…');
-    await fetchDb();              // local panel rows → empty
-    onKeywordsChanged?.();        // v7.108: refresh dependent panels
-    onCleared?.();               // v7.233: parent refetches the now-empty project and keeps us on the empty Keyword panel
-    setClearLoading(false);
-    setClearStep('');
-    setShowClearConfirm(false);
-  }
-
   // ─── Render ───────────────────────────────────────────────────────────────
 
   // v7.139/v7.144 scroll fix: the panel root is the single vertical scroller.
@@ -1520,103 +1300,24 @@ export default function KeywordsPanel({
                 : <span style={{ color: 'var(--c-333350)' }}>Loading keywords…</span>
               }
             </p>
+            {/* v7.481: upload / add / start-over moved to the wizard — say where they went. */}
+            <p className="text-orbit-tertiary text-[10px] mt-1">
+              Upload, add or reset keywords in{' '}
+              <button
+                type="button"
+                onClick={() => onGoToKeywordSelection?.()}
+                style={{ fontWeight: 700, color: 'var(--c-6c63ff)', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                Keyword Selection
+              </button>.
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* Upload CSV */}
-            <label
-              className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
-              title="Upload CSV (columns: keyword, search_volume, type)"
-              style={{ color: 'var(--c-7070a0)', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-              </svg>
-              Upload CSV
-              <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCsvUpload} />
-            </label>
-
-            {/* Clear All — v7.233: full reset. Show whenever there's anything to
-                wipe — uploaded rows OR a Semrush footprint (which lives in the
-                analysis snapshot, not dbKeywords). The old `dbKeywords.length > 0`
-                gate hid the button on pure-Semrush projects, exactly when a reset
-                was needed. */}
-            {(summaryRows.length > 0 || dbKeywords.length > 0) && !showClearConfirm && !csvProgress && (
-              <button
-                onClick={() => setShowClearConfirm(true)}
-                className="text-xs border border-orbit-border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-                style={{ color: 'var(--c-7070a0)' }}
-                title="Delete everything and start over — removes all keywords (uploaded + Semrush footprint) and the saved analysis. No hiding."
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                Clear All
-              </button>
-            )}
-
-            {/* Clear All — inline confirm */}
-            {showClearConfirm && (
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--ca-239-68-68-0_3)', background: 'var(--ca-239-68-68-0_06)' }}>
-                {clearLoading ? (
-                  <>
-                    <svg className="animate-spin shrink-0" style={{ width: 12, height: 12, color: 'var(--c-f87171)' }} fill="none" viewBox="0 0 24 24">
-                      <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path style={{ opacity: 0.85 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-                    </svg>
-                    <span className="text-[11px] font-medium" style={{ color: 'var(--c-f87171)' }}>{clearStep}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-[11px]" style={{ color: 'var(--c-f87171)' }}>
-                      Delete all keywords + the saved analysis and start over? This can't be undone.
-                    </span>
-                    <button
-                      onClick={handleClearAll}
-                      className="text-[11px] font-semibold px-2 py-0.5 rounded"
-                      style={{ background: 'var(--ca-239-68-68-0_15)', color: 'var(--c-f87171)' }}
-                    >
-                      Yes, clear
-                    </button>
-                    <button
-                      onClick={() => setShowClearConfirm(false)}
-                      className="text-[11px] px-2 py-0.5 rounded"
-                      style={{ color: 'var(--c-6060a0)' }}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* v7.101: competitor CSV upload moved to the Competitors button in the top bar */}
-
-            {/* Result toast */}
-            {csvStatus && !csvProgress && (
-              <span className="text-[11px] px-2.5 py-1 rounded-md border" style={{
-                background:  csvStatus.type === 'success' ? 'var(--ca-52-211-153-0_08)' : 'var(--ca-239-68-68-0_08)',
-                color:       csvStatus.type === 'success' ? 'var(--c-34d399)' : 'var(--c-f87171)',
-                borderColor: csvStatus.type === 'success' ? 'var(--ca-52-211-153-0_25)' : 'var(--ca-239-68-68-0_25)',
-              }}>
-                {csvStatus.msg}
-              </span>
-            )}
-
-          {/* Add keyword */}
-          <button
-            onClick={() => { setShowAdd(v => !v); setAddError(''); }}
-            className="text-xs border px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5"
-            style={{
-              color: showAdd ? 'var(--c-8b85ff)' : 'var(--c-7070a0)',
-              borderColor: showAdd ? 'var(--ca-108-99-255-0_5)' : '',
-              background:  showAdd ? 'var(--ca-108-99-255-0_08)' : '',
-            }}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Add Keyword
-          </button>
+            {/* v7.481: Upload CSV, Clear All and Add Keyword MOVED to the Keyword
+                Selection wizard (Step 1) — Wayne: the keyword activities belong to the
+                panel that builds the pool, not the one that reads it. What is left here
+                are the exports, which are read actions and must stay: they export the
+                ACTIVE filter + journey scope, which only exists on this panel. */}
 
           {/* Download CSV */}
           <button
@@ -2083,96 +1784,6 @@ export default function KeywordsPanel({
         competitorFromFallback={competitorDist.fromFallback}
         topCompetitor={(analysis?.topCompetitor ?? null) as string | null}
       />
-
-      {/* ── Add keyword form ── */}
-
-      {showAdd && (
-        <div className="px-5 py-3 border-b border-orbit-border shrink-0" style={{ background: 'var(--c-0b0b16)' }}>
-          <div className="flex items-center gap-2">
-            <input
-              autoFocus
-              value={newKw}
-              onChange={e => setNewKw(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleAdd()}
-              placeholder="Keyword text…"
-              className="flex-1 bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2 text-orbit-primary text-xs focus:outline-none focus:border-orbit-accent transition-colors"
-            />
-            <input
-              type="number"
-              value={newVol}
-              onChange={e => setNewVol(e.target.value)}
-              placeholder="Monthly vol."
-              className="w-28 bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2 text-orbit-primary text-xs focus:outline-none focus:border-orbit-accent transition-colors"
-            />
-            <select
-              value={newType}
-              onChange={e => setNewType(e.target.value as 'ranked' | 'gap')}
-              className="bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2 text-orbit-secondary text-xs focus:outline-none focus:border-orbit-accent transition-colors"
-            >
-              <option value="gap">Gap</option>
-              <option value="ranked">Ranked</option>
-            </select>
-            <button
-              onClick={handleAdd}
-              disabled={addLoading}
-              className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-xs font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {addLoading ? 'Adding…' : 'Add'}
-            </button>
-            <button
-              onClick={() => { setShowAdd(false); setAddError(''); setNewKw(''); setNewVol(''); }}
-              className="text-orbit-tertiary hover:text-orbit-secondary border border-orbit-border px-3 py-2 rounded-lg text-xs transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-          {addError && (
-            <p className="text-red-400 text-[11px] mt-1.5">{addError}</p>
-          )}
-          <p className="text-orbit-tertiary text-[10px] mt-1.5">
-            Branded flag auto-detected from client + competitor domains. CSV format: <span className="font-mono text-orbit-muted">keyword, search_volume, type</span>
-          </p>
-        </div>
-      )}
-
-      {/* ── Upload progress bar ── */}
-      {clearLoading && (
-        <div className="animate-pulse" style={{ height: 3, background: 'var(--ca-239-68-68-0_45)', flexShrink: 0 }} />
-      )}
-
-      {csvProgress && (
-        <div style={{ background: 'var(--c-0d0d18)', borderBottom: '1px solid var(--c-1a1a30)', padding: '10px 20px 14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <svg style={{ width: 13, height: 13, animation: 'spin 1s linear infinite', flexShrink: 0, color: 'var(--c-6c63ff)' }} fill="none" viewBox="0 0 24 24">
-                <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-              </svg>
-              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--c-8888c8)', letterSpacing: '0.01em' }}>
-                Uploading keywords
-              </span>
-            </div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-6060a0)', fontVariantNumeric: 'tabular-nums' }}>
-              {csvProgress.current} <span style={{ opacity: 0.45, fontWeight: 400 }}>/ {csvProgress.total}</span>
-            </span>
-          </div>
-          <div style={{ height: 5, borderRadius: 3, background: 'var(--c-14142a)', overflow: 'hidden' }}>
-            <div style={{
-              height: '100%', borderRadius: 3,
-              background: 'linear-gradient(90deg, var(--c-5a52e8), var(--c-8b85ff))',
-              width: csvProgress.total > 0 ? `${Math.round((csvProgress.current / csvProgress.total) * 100)}%` : '0%',
-              transition: 'width 0.25s ease',
-              boxShadow: '0 0 10px var(--ca-108-99-255-0_7)',
-            }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5 }}>
-            <span style={{ fontSize: 10, color: 'var(--c-404060)' }} />
-            <span style={{ fontSize: 10, color: 'var(--c-4a4a70)' }}>
-              {csvProgress.total > 0 ? Math.round((csvProgress.current / csvProgress.total) * 100) : 0}%
-            </span>
-          </div>
-        </div>
-      )}
 
       {/* ── Rank-bucket filter pills (v7.80) ── */}
       {/* Segments live on the summary cards above; these pills filter by rank

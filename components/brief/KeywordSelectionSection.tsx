@@ -44,6 +44,7 @@ interface Props {
   onDeepJourneyBuilt?: () => void;     // page refetches analysis → backfill everywhere
   onScopeChanged?: () => void;         // page refetches project → new _hiddenCategories
   onKeywordsChanged?: () => void;
+  onCleared?: () => void;              // v7.481: full reset — parent refetches the now-empty project
   onGoToKeywordList?: () => void;
 }
 
@@ -55,7 +56,7 @@ const fmtVol = (v: number) => v >= 1_000_000 ? (v / 1_000_000).toFixed(2) + 'M' 
 export default function KeywordSelectionSection({
   projectId, analysis, competitors = [], brandTerms = [], domain = '',
   kwVersion = 0, defaultClientThreshold = 0, defaultCompetitorThreshold = 0,
-  onOpenCompetitors, onDeepJourneyBuilt, onScopeChanged, onKeywordsChanged, onGoToKeywordList,
+  onOpenCompetitors, onDeepJourneyBuilt, onScopeChanged, onKeywordsChanged, onCleared, onGoToKeywordList,
 }: Props) {
   const snap = analysis?.semrushSnapshot ?? {};
   const cb   = snap?._categoryBreakdown ?? {};
@@ -349,17 +350,34 @@ export default function KeywordSelectionSection({
     }
   }
 
-  // ── Step 1: CSV upload (shared parser; same batch endpoint + retry as the panel) ──
+  // ── Step 1: the client footprint — upload, manual add, full reset ───────────
+  // v7.481: all three moved here from the Keyword list panel's header (Wayne: the
+  // keyword ACTIVITIES belong to the panel that builds the pool). The upload keeps
+  // the panel's FULL accounting — row-by-row reconciliation, the SERP-features write
+  // diagnosis and the v7.451 Position-Type warning — so nothing about how an upload
+  // reports itself changed when it moved. One implementation, one parser (Const II.7).
   const csvRef = useRef<HTMLInputElement>(null);
   const [csvProgress, setCsvProgress] = useState<{ current: number; total: number } | null>(null);
-  const [csvStatus,   setCsvStatus]   = useState<null | { type: 'success' | 'error'; msg: string }>(null);
+  const [csvStatus,   setCsvStatus]   = useState<null | { type: 'loading' | 'success' | 'error'; msg: string }>(null);
   async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setCsvStatus(null);
-    const text = await file.text();
-    const rows = parseKeywordCsvMeta(text).rows;
-    const parsed = rows.map(r => ({
+    setCsvStatus({ type: 'loading', msg: 'Uploading keywords…' });
+    let text: string;
+    try { text = await file.text(); } catch {
+      setCsvStatus({ type: 'error', msg: 'Could not read file.' });
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    const dataLines = lines.slice(1).filter(l => l.trim().length > 0);
+    if (dataLines.length === 0) {
+      setCsvStatus({ type: 'error', msg: 'CSV is empty — needs a header row and at least one data row.' });
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+    const csvMeta = parseKeywordCsvMeta(text);
+    const parsed = csvMeta.rows.map(r => ({
       keyword: r.keyword, searchVolume: r.searchVolume, position: r.position,
       type: (r.typeRaw !== null ? (r.typeRaw === 'ranked' ? 'ranked' : 'gap')
         : (r.position !== null && r.position <= 100 ? 'ranked' : 'gap')) as 'ranked' | 'gap',
@@ -373,7 +391,9 @@ export default function KeywordSelectionSection({
     }
     const CHUNK = 250, MAX_ATTEMPTS = 3;
     const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
-    let added = 0, failed = 0;
+    let added = 0, skipped = 0, failed = 0, serpPrepared = 0, serpStored = 0;
+    const fileRows      = dataLines.length;
+    const parsedDropped = fileRows - parsed.length;
     setCsvProgress({ current: 0, total: parsed.length });
     for (let i = 0; i < parsed.length; i += CHUNK) {
       const chunk = parsed.slice(i, i + CHUNK);
@@ -384,8 +404,14 @@ export default function KeywordSelectionSection({
           const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload,
           });
-          if (res.ok) { const dd = await res.json(); added += (dd.inserted ?? 0) + (dd.updated ?? 0); saved = true; }
-          else if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);
+          if (res.ok) {
+            const dd = await res.json();
+            added   += (dd.inserted ?? 0) + (dd.updated ?? 0);
+            skipped += dd.skipped ?? 0;
+            serpPrepared += dd.serpFeaturesPrepared ?? 0;
+            if (typeof dd.serpFeaturesStored === 'number') serpStored = dd.serpFeaturesStored;
+            saved = true;
+          } else if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);
         } catch { if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800); }
       }
       if (!saved) failed += chunk.length;
@@ -395,9 +421,84 @@ export default function KeywordSelectionSection({
     if (csvRef.current) csvRef.current.value = '';
     await fetchDb();
     onKeywordsChanged?.();
-    setCsvStatus(failed > 0
-      ? { type: 'error', msg: `Saved ${fmtN(added)} of ${fmtN(parsed.length)} rows — ${fmtN(failed)} failed; re-upload to retry.` }
-      : { type: 'success', msg: `Saved ${fmtN(added)} of ${fmtN(parsed.length)} rows.` });
+    const parts: string[] = [];
+    if (skipped > 0)       parts.push(`${fmtN(skipped)} duplicate keyword${skipped !== 1 ? 's' : ''} in file`);
+    if (parsedDropped > 0) parts.push(`${fmtN(parsedDropped)} blank/unparseable row${parsedDropped !== 1 ? 's' : ''}`);
+    if (failed > 0)        parts.push(`${fmtN(failed)} failed to save — re-upload to retry`);
+    let serpNote = '';
+    if (serpPrepared > 0 && serpStored === 0) {
+      serpNote = ` ⚠ SERP features did not save (${fmtN(serpPrepared)} sent, 0 stored) — DB column issue, contact support.`;
+    } else if (serpPrepared > 0) {
+      serpNote = ` SERP features stored on ${fmtN(serpStored)} keyword${serpStored !== 1 ? 's' : ''}.`;
+    } else if (fileRows > 0) {
+      serpNote = ` (No SERP-features column detected in this file.)`;
+    }
+    const withType = parsed.filter(r => r.positionType).length;
+    const posTypeNote = csvMeta.hasPositionType
+      ? ` Position Type read on ${fmtN(withType)} row${withType !== 1 ? 's' : ''} — organic rankings and SERP-feature placements are kept apart.`
+      : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export with Position Type included, or run Verify positions on this project.`;
+    setCsvStatus({
+      type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || !csvMeta.hasPositionType) ? 'error' : 'success',
+      msg:  `Saved ${fmtN(added)} of ${fmtN(fileRows)} CSV row${fileRows !== 1 ? 's' : ''}${parts.length ? ` (${parts.join(' · ')})` : ''}.${serpNote}${posTypeNote}`,
+    });
+    setTimeout(() => setCsvStatus(null), 15000);
+  }
+
+  // ── Add ONE keyword by hand (v7.481, moved from the list panel header) ───────
+  // Stored as source 'custom'; the branded flag is DETECTED from this project's
+  // domains + brand terms, never asked for (Const I.1 — no user-entered facts).
+  const [showAdd,  setShowAdd]  = useState(false);
+  const [newKw,    setNewKw]    = useState('');
+  const [newVol,   setNewVol]   = useState('');
+  const [newType,  setNewType]  = useState<'ranked' | 'gap'>('gap');
+  const [addError, setAddError] = useState('');
+  const [addLoading, setAddLoading] = useState(false);
+  async function handleAdd() {
+    const kwTrimmed = newKw.trim();
+    if (!kwTrimmed) { setAddError('Keyword is required.'); return; }
+    setAddError('');
+    setAddLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          keyword:      kwTrimmed,
+          searchVolume: parseInt(newVol, 10) || 0,
+          type:         newType,
+          branded:      isBrandedKeyword(kwTrimmed, clientDomain, competitors, brandTerms),
+          source:       'custom',
+        }),
+      });
+      if (res.status === 409) { setAddError('This keyword already exists in your list.'); return; }
+      if (!res.ok)            { setAddError('Failed to add keyword. Try again.'); return; }
+      setNewKw(''); setNewVol(''); setNewType('gap'); setShowAdd(false);
+      await fetchDb();
+      onKeywordsChanged?.();
+    } finally { setAddLoading(false); }
+  }
+
+  // ── Start over — FULL RESET (v7.233 semantics, moved here v7.481) ───────────
+  // Wayne: "delete and clear them out — there should be NO hiding." /keywords/reset
+  // deletes every keyword row AND every analysis (the Semrush footprint lives in
+  // analyses.semrush_snapshot, not project_keywords, so a true wipe needs both).
+  // api_usage, competitors and brand vocab are project config and are preserved.
+  // Deliberately NOT called "Clear all" — Step 2's Clear all only DESELECTS.
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetLoading,     setResetLoading]     = useState(false);
+  const [resetStep,        setResetStep]        = useState('');
+  async function handleResetAll() {
+    setResetLoading(true);
+    setResetStep('Deleting all keywords & analysis…');
+    await fetch(`/api/projects/${projectId}/keywords/reset`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    }).catch(() => null);
+    setResetStep('Refreshing…');
+    await fetchDb();
+    onKeywordsChanged?.();
+    onCleared?.();
+    setResetLoading(false);
+    setResetStep('');
+    setShowResetConfirm(false);
   }
 
   // ── Stepper model ───────────────────────────────────────────────────────────
@@ -580,7 +681,7 @@ export default function KeywordSelectionSection({
 
         {/* ── Step 1 ── */}
         {shownStep === 1 && (
-          <div style={{ ...card, maxWidth: 620 }}>
+          <div style={{ ...card, maxWidth: 660 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--c-e8e8ff)', marginBottom: 8 }}>Step 1 · Client footprint</div>
             <div style={{ fontSize: 12, color: 'var(--c-9090c0)', marginBottom: 10 }}>
               {dbLoaded
@@ -589,10 +690,83 @@ export default function KeywordSelectionSection({
                   : 'Upload the full Semrush export — scoping happens in Step 2, so upload everything.'
                 : 'Loading keywords…'}
             </div>
-            <label style={{ ...btn('var(--c-6c63ff)'), display: 'inline-block', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}>
-              {baseDone ? 'Re-upload CSV' : 'Upload CSV'}
-              <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCsvUpload} />
-            </label>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <label style={{ ...btn('var(--c-6c63ff)'), display: 'inline-block', opacity: csvProgress ? 0.5 : 1, pointerEvents: csvProgress ? 'none' : 'auto' }}>
+                {baseDone ? 'Re-upload CSV' : 'Upload CSV'}
+                <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleCsvUpload} />
+              </label>
+
+              {/* v7.481: add ONE keyword by hand — moved from the list panel header */}
+              <button
+                style={{ ...btn(showAdd ? 'var(--c-8b85ff)' : 'var(--c-585878)') }}
+                disabled={!!csvProgress || resetLoading}
+                onClick={() => { setShowAdd(v => !v); setAddError(''); }}
+              >
+                <i className="ti ti-plus" style={{ fontSize: 11, marginRight: 5 }} aria-hidden="true" />Add keyword
+              </button>
+
+              {/* v7.481: full reset — moved from the list panel header. NOT "Clear all":
+                  Step 2's Clear all only deselects; this DELETES the project's data. */}
+              {(baseDone || gapCount > 0) && !showResetConfirm && !csvProgress && (
+                <button
+                  style={{ ...btn('var(--c-f87171)'), marginLeft: 'auto' }}
+                  onClick={() => setShowResetConfirm(true)}
+                  title="Delete everything and start over — every keyword (uploaded + Semrush footprint) and the saved analysis. Nothing is hidden; it is deleted."
+                >
+                  <i className="ti ti-trash" style={{ fontSize: 11, marginRight: 5 }} aria-hidden="true" />Start over
+                </button>
+              )}
+            </div>
+
+            {/* Start-over confirm */}
+            {showResetConfirm && (
+              <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, border: '1px solid var(--c-f87171)', background: 'var(--ca-239-68-68-0_06)' }}>
+                {resetLoading ? (
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-f87171)' }}>{resetStep}</span>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11.5, color: 'var(--c-f87171)' }}>
+                      Delete every keyword and the saved analysis, and start this project over? This can&rsquo;t be undone.
+                    </span>
+                    <button style={btn('var(--c-f87171)')} onClick={handleResetAll}>Yes, delete everything</button>
+                    <button style={btn('var(--c-585878)')} onClick={() => setShowResetConfirm(false)}>Cancel</button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Add-keyword form */}
+            {showAdd && (
+              <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 9, border: '1px solid var(--c-1e1e34)', background: 'var(--c-0b0b16)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <input
+                    autoFocus value={newKw} onChange={e => setNewKw(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+                    placeholder="Keyword text…"
+                    style={{ flex: 1, minWidth: 200, fontSize: 12, padding: '7px 10px', borderRadius: 7, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', outline: 'none' }}
+                  />
+                  <input
+                    type="number" value={newVol} onChange={e => setNewVol(e.target.value)} placeholder="Monthly vol."
+                    style={{ width: 120, fontSize: 12, padding: '7px 10px', borderRadius: 7, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', outline: 'none' }}
+                  />
+                  <select
+                    value={newType} onChange={e => setNewType(e.target.value as 'ranked' | 'gap')}
+                    style={{ fontSize: 12, padding: '7px 10px', borderRadius: 7, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-9090c0)', outline: 'none' }}
+                  >
+                    <option value="gap">Gap</option>
+                    <option value="ranked">Ranked</option>
+                  </select>
+                  <button style={btn('var(--c-34d399)')} disabled={addLoading} onClick={handleAdd}>{addLoading ? 'Adding…' : 'Add'}</button>
+                  <button style={btn('var(--c-585878)')} onClick={() => { setShowAdd(false); setAddError(''); setNewKw(''); setNewVol(''); }}>Cancel</button>
+                </div>
+                {addError && <p style={{ fontSize: 11, color: 'var(--c-f87171)', margin: '6px 0 0' }}>{addError}</p>}
+                <p style={{ fontSize: 10.5, color: 'var(--c-585878)', margin: '6px 0 0' }}>
+                  The branded flag is detected from this project&rsquo;s client and competitor domains — you don&rsquo;t set it.
+                </p>
+              </div>
+            )}
+
             {csvProgress && (
               <div style={{ marginTop: 10, fontSize: 11, color: 'var(--c-9090c0)' }}>
                 Saving {fmtN(csvProgress.current)} of {fmtN(csvProgress.total)} rows…
@@ -602,10 +776,10 @@ export default function KeywordSelectionSection({
               </div>
             )}
             {csvStatus && (
-              <div style={{ marginTop: 10, fontSize: 11.5, color: csvStatus.type === 'success' ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{csvStatus.msg}</div>
+              <div style={{ marginTop: 10, fontSize: 11.5, lineHeight: 1.5, color: csvStatus.type === 'success' ? 'var(--c-34d399)' : csvStatus.type === 'loading' ? 'var(--c-9090c0)' : 'var(--c-f87171)' }}>{csvStatus.msg}</div>
             )}
             <p style={{ fontSize: 10.5, color: 'var(--c-585878)', marginTop: 10 }}>
-              Uploading re-runs auto-categorization into the same anchored tree, so Step-3 selections keep their names.
+              Uploading re-runs auto-categorization into the same anchored tree, so the Step-2 selection keeps its names. CSV columns: <span style={{ fontFamily: 'monospace', color: 'var(--c-7070a0)' }}>keyword, search_volume, type</span>.
             </p>
           </div>
         )}
