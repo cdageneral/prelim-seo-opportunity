@@ -1866,6 +1866,10 @@ export default function ProjectBriefPage() {
               onDeepJourneyBuilt={() => { fetchProject(); setKwVersion(v => v + 1); }}
               onScopeChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}
               onKeywordsChanged={() => setKwVersion(v => v + 1)}
+              onCleared={() => {                                   // v7.481: Start over lives in the wizard now — full reset done, refetch the now-empty project (hasResults flips false → the pre-run screen shows)
+                setKwVersion(v => v + 1);
+                fetchProject();
+              }}
               onGoToKeywordList={() => setKeywordsSubView('list')}
             />
           )}
@@ -1873,10 +1877,7 @@ export default function ProjectBriefPage() {
             <KeywordsPanel
               kwVersion={kwVersion}
               onKeywordsChanged={() => setKwVersion(v => v + 1)}   // v7.108: client kw changes refresh all panels
-              onCleared={() => {                                   // v7.234: full reset done → refetch the now-empty project; hasResults flips false so the pre-run data-source/Run screen shows
-                setKwVersion(v => v + 1);
-                fetchProject();
-              }}
+              onGoToKeywordSelection={() => setKeywordsSubView('selection')}   // v7.481: keyword actions live in the wizard
               projectId={projectId}
               analysis={analysisForPanels}
               competitors={competitorDomains}
