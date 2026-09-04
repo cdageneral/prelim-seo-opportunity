@@ -8,9 +8,17 @@
  * values written per call by lib/usage/record.ts.
  *
  * Fault-tolerant: an un-migrated table yields an empty rollup, not a 500.
+ *
+ * v7.483 — accepts an optional half-open date window ?from=&to= (ISO instants,
+ * [from, to) — see lib/usage/rollupView.ts for why half-open). When a window is
+ * given, `kind = 'baseline'` rows are EXCLUDED: a baseline is a manual anchor for
+ * spend that happened before the ledger existed, so its created_at records when
+ * someone typed the number in, not when the money was spent. Counting it inside a
+ * month it did not occur in would be a fabricated attribution (Const I.1). The
+ * response says so via `baselinesExcluded` rather than dropping them silently.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable } from '@/lib/usage/record';
@@ -34,7 +42,17 @@ function foldLine(map: Map<string, Line>, provider: string, unit: string, kind: 
   map.set(key, line);
 }
 
-export async function GET() {
+/** A usable ISO instant, or null. An unparseable bound is ignored, never guessed. */
+function bound(v: string | null): string | null {
+  if (!v) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+export async function GET(req: NextRequest) {
+  const from = bound(req.nextUrl.searchParams.get('from'));
+  const to   = bound(req.nextUrl.searchParams.get('to'));
+  const dated = !!from || !!to;
   try {
     await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
 
@@ -60,6 +78,9 @@ export async function GET() {
       FROM api_usage u
       LEFT JOIN projects p ON p.id = u.project_id
       WHERE u.kind <> 'selftest'
+        ${dated ? sql`AND u.kind <> 'baseline'` : sql``}
+        ${from  ? sql`AND u.created_at >= ${from}::timestamptz` : sql``}
+        ${to    ? sql`AND u.created_at <  ${to}::timestamptz`   : sql``}
       GROUP BY u.project_id, p.client_name, u.provider, u.unit, u.kind
     `);
     const grouped: Array<{
@@ -107,6 +128,11 @@ export async function GET() {
 
     return NextResponse.json({
       asOf: new Date().toISOString(),
+      // v7.483 — the window this payload actually covers, echoed back so the panel
+      // and the report label themselves from the SERVER's answer, not from what
+      // the client believes it asked for.
+      range: { from, to },
+      baselinesExcluded: dated,
       grandTotals: Array.from(grand.values()).sort((a, b) => a.provider.localeCompare(b.provider) || a.unit.localeCompare(b.unit)),
       projects: projectsOut,
     });
@@ -114,6 +140,8 @@ export async function GET() {
     console.warn('[OrbitIQ usage] rollup failed:', (err as any)?.message ?? err);
     return NextResponse.json({
       asOf: new Date().toISOString(),
+      range: { from, to },
+      baselinesExcluded: dated,
       grandTotals: [], projects: [],
       note: 'Usage ledger is empty or not yet migrated. It populates as API calls are made on this version.',
     });
