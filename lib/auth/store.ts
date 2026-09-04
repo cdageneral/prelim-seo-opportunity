@@ -8,7 +8,7 @@
  */
 
 import { db } from '@/db';
-import { appUsers, projectAccess, authSessions, auditEvents, projects, userGroups, userGroupMembers, projectGroupAccess } from '@/db/schema';
+import { appUsers, projectAccess, authSessions, auditEvents, projects, userGroups, userGroupMembers, projectGroupAccess, passwordResets } from '@/db/schema';
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Role, UserStatus } from './config';
 
@@ -122,6 +122,26 @@ export async function ensureAuthTables(): Promise<void> {
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS notice_dismissals_notice_user_uq
     ON notice_dismissals(notice_id, user_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS notices_active_idx ON notices(active, created_at)`);
+
+  // v7.485: one-time password-reset tokens. Only the SHA-256 of the token is
+  // stored, so this table can never yield a working link if it leaks — the same
+  // one-way property the password column has. The hash index is what the consume
+  // path looks up by; the user index is what lets issuing a new token invalidate
+  // the prior unused ones.
+  await db.execute(sql`CREATE TABLE IF NOT EXISTS password_resets (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id         uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    token_hash      text NOT NULL,
+    expires_at      timestamp NOT NULL,
+    used_at         timestamp,
+    created_at      timestamp NOT NULL DEFAULT now(),
+    issued_by       uuid,
+    issued_by_email text
+  )`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS password_resets_token_hash_uq
+    ON password_resets(token_hash)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS password_resets_user_idx
+    ON password_resets(user_id, used_at)`);
 
   ensured = true;
 }
@@ -433,4 +453,69 @@ export async function projectNames(ids: string[]): Promise<Record<string, string
   const map: Record<string, string> = {};
   for (const r of rows) map[r.id] = r.name;
   return map;
+}
+
+// ─── Password resets (v7.485) ───────────────────────────────────────────────
+// Recovery issues a NEW secret; it never reveals an old one (passwords are
+// one-way scrypt hashes). Every function here works in token-HASH space — the
+// plaintext token exists only in the response that hands the link over and in
+// the URL the recipient opens.
+
+/**
+ * Store a freshly minted reset token for a user, invalidating any prior unused
+ * one in the same call. Two live links for one account is a footgun: a mis-sent
+ * link would keep working after the admin issued its replacement.
+ */
+export async function createResetToken(input: {
+  userId: string; tokenHash: string; expiresAt: Date;
+  issuedBy?: string | null; issuedByEmail?: string | null;
+}) {
+  await invalidateUserResets(input.userId);
+  const [row] = await db.insert(passwordResets).values({
+    userId:        input.userId,
+    tokenHash:     input.tokenHash,
+    expiresAt:     input.expiresAt,
+    issuedBy:      input.issuedBy ?? null,
+    issuedByEmail: input.issuedByEmail ?? null,
+  }).returning();
+  return row;
+}
+
+/** Burn every unused token a user holds (used on issue, and on a successful reset). */
+export async function invalidateUserResets(userId: string) {
+  await db.update(passwordResets)
+    .set({ usedAt: new Date() })
+    .where(and(eq(passwordResets.userId, userId), isNull(passwordResets.usedAt)));
+}
+
+/** Look a token up by its hash. Returns the row whether or not it is still valid. */
+export async function getResetByTokenHash(tokenHash: string) {
+  const rows = await db.select().from(passwordResets)
+    .where(eq(passwordResets.tokenHash, tokenHash)).limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Mark one token used. The `isNull(usedAt)` predicate is the single-use guard:
+ * two simultaneous submissions race on the UPDATE and exactly one affects a row,
+ * so a token can never be spent twice even under concurrency.
+ * Returns true when THIS call is the one that spent it.
+ */
+export async function consumeResetToken(id: string): Promise<boolean> {
+  const rows = await db.update(passwordResets)
+    .set({ usedAt: new Date() })
+    .where(and(eq(passwordResets.id, id), isNull(passwordResets.usedAt)))
+    .returning({ id: passwordResets.id });
+  return rows.length > 0;
+}
+
+/**
+ * Revoke every active session a user holds. Called after a successful reset:
+ * whoever knew the old password (or was riding a stolen session) is signed out,
+ * which is the whole point of resetting it.
+ */
+export async function revokeUserSessions(userId: string) {
+  await db.update(authSessions)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)));
 }
