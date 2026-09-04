@@ -23,9 +23,13 @@
  * loudly and the Article VIII release gate fails on it.
  *
  * Read-only. Fault-tolerant: an un-migrated table yields an empty rollup.
+ *
+ * v7.483 — accepts the same optional half-open ?from=&to= window as /api/usage.
+ * This route already reads only `kind = 'usage'`, so baselines never reached it
+ * and the window needs no extra exclusion here.
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable, getLedgerFailures } from '@/lib/usage/record';
@@ -53,7 +57,16 @@ const BASIS_NOTE =
   PLAN_QUOTA_CAVEAT +
   ' DataForSEO is different again: it reports the real cost of every request in its own response, so those dollars are MEASURED, not estimated, and no rate is applied to them.';
 
-export async function GET() {
+/** A usable ISO instant, or null. An unparseable bound is ignored, never guessed. */
+function bound(v: string | null): string | null {
+  if (!v) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+export async function GET(req: NextRequest) {
+  const from = bound(req.nextUrl.searchParams.get('from'));
+  const to   = bound(req.nextUrl.searchParams.get('to'));
   try {
     await ensureUsageTable();
 
@@ -77,6 +90,8 @@ export async function GET() {
       FROM api_usage u
       LEFT JOIN projects p ON p.id = u.project_id
       WHERE u.kind = 'usage'
+        ${from ? sql`AND u.created_at >= ${from}::timestamptz` : sql``}
+        ${to   ? sql`AND u.created_at <  ${to}::timestamptz`   : sql``}
       GROUP BY u.project_id, p.client_name, u.provider, u.endpoint, u.unit
     `);
     const grouped: Array<{
@@ -168,6 +183,7 @@ export async function GET() {
 
     return NextResponse.json({
       asOf: new Date().toISOString(),
+      range: { from, to },
       pricingAsOf: PRICING_ASOF,
       basis: BASIS_NOTE,
       planQuotaCaveat: PLAN_QUOTA_CAVEAT,
@@ -187,6 +203,7 @@ export async function GET() {
     console.warn('[OrbitIQ usage] cost rollup failed:', (err as any)?.message ?? err);
     return NextResponse.json({
       asOf: new Date().toISOString(),
+      range: { from, to },
       pricingAsOf: PRICING_ASOF,
       basis: 'Usage ledger is empty or not yet migrated. Cost populates as API calls are recorded.',
       planQuotaCaveat: PLAN_QUOTA_CAVEAT,
