@@ -26,11 +26,15 @@
  *
  * v7.483 — a scope bar: a date range (All time by default, plus this month /
  * last month / this quarter / year to date / a custom range) and a project
- * picker. The range is applied SERVER-side by the two spend routes; the project
+ * picker. The range is applied SERVER-side by all three routes; the project
  * selection is applied client-side through the shared folds in rollupView, which
- * re-sum the grand totals from the surviving per-project lines. Hours Saved and
- * Keywords are current-state figures and are deliberately NOT date-filtered —
- * the bar says so on screen, and the same sentence travels into the PDF, because
+ * re-sum the grand totals from the surviving per-project lines.
+ *
+ * v7.484 — Hours Saved is date-attributed too, but on a DIFFERENT basis from
+ * spend: a project's hours belong to the month its work began (its first
+ * analysis), so a dated view counts the projects INITIATED in that period at
+ * their current credited totals (Wayne, 2026-09-04). Keywords stays live and
+ * un-dated. The scope sentence names each basis, and travels into the PDF —
  * a report that silently covers a subset is worse than no report.
  */
 
@@ -86,14 +90,14 @@ export default function UsageRollup() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      // The date window goes to the two SPEND routes only. /api/usage/hours is
-      // deliberately un-ranged: Hours Saved is a current-state scope figure, not
-      // a time series (Const I.1/I.5) — see the note in rollupView.
+      // v7.484 — all three routes take the window. They interpret it differently
+      // (spend by call date, hours by project-initiation date) and the scope
+      // sentence says which is which; the per-project keyword count stays live.
       const q = rangeQuery(range);
       const [res, costRes, hoursRes] = await Promise.all([
         fetch(`/api/usage${q}`, { cache: 'no-store' }),
         fetch(`/api/usage/cost${q}`, { cache: 'no-store' }),
-        fetch('/api/usage/hours', { cache: 'no-store' }),
+        fetch(`/api/usage/hours${q}`, { cache: 'no-store' }),
       ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
@@ -167,7 +171,7 @@ export default function UsageRollup() {
   const viewHours  = filterHoursByProjects(hours, projectSel);
   const dated      = rangeIsBounded(range);
   const projFiltered = selectionIsFiltered(projectSel, allProjectCount);
-  const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount);
+  const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount, viewHours);
 
   // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
   useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
@@ -438,10 +442,10 @@ export default function UsageRollup() {
                 <div className="text-[11px] text-orbit-secondary mt-0.5">
                   hours · {viewHours.projectCount} {viewHours.projectCount === 1 ? 'project' : 'projects'}
                 </div>
-                {/* v7.483 — Hours Saved is a CURRENT-STATE figure. It follows the
-                    project selection, but a date range does not apply to it, and
-                    saying so on the card is cheaper than being asked later. */}
-                {dated && <div className="text-[10px] text-orbit-amber mt-1">current state · not limited to the date range</div>}
+                {/* v7.484 — hours ARE dated, but by PROJECT INITIATION, not by
+                    when each hour was earned. Naming the basis on the card is
+                    cheaper than being asked why the number moved. */}
+                {dated && <div className="text-[10px] text-orbit-amber mt-1">projects initiated in this period</div>}
               </div>
             )}
             {grand.map(l => (
@@ -549,13 +553,15 @@ export default function UsageRollup() {
                           steps up to text-orbit-secondary, because orbit-tertiary measures
                           2.50:1 on the dark card and progress has to be readable (Art. IV.4). */}
                       <span className={`block text-[10px] font-normal ${kwDone ? 'text-orbit-tertiary' : 'text-orbit-secondary'}`}>
-                        {kwDone ? 'all keywords' : `counting · ${kwPending} left`}
+                        {!kwDone ? `counting · ${kwPending} left` : dated ? 'live · not dated' : 'all keywords'}
                       </span>
                     </th>
                     {/* v7.447: hours credited on real evidence, expandable per project. */}
                     <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
                       Hours Saved
-                      <span className="block text-[10px] text-orbit-tertiary font-normal">of {fmt(hours?.scope?.total ?? 0)} in scope</span>
+                      <span className="block text-[10px] text-orbit-tertiary font-normal">
+                        {dated ? 'initiated in period' : `of ${fmt(hours?.scope?.total ?? 0)} in scope`}
+                      </span>
                     </th>
                     {grand.map(l => (
                       <th key={lineKey(l)} className="py-2 px-3 font-medium text-right whitespace-nowrap">
