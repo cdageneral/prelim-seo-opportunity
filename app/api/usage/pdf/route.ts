@@ -54,6 +54,13 @@ const Schema = z.object({
   cost:  z.object({ grandTotalUSD: z.number() }).passthrough().nullable().optional(),
   hours: z.object({ grandHours: z.number(), projects: z.array(z.any()) }).passthrough().nullable().optional(),
   keywordCounts: z.record(z.union([z.number(), z.null(), z.literal('error')])).optional(),
+  // v7.483 — the scope the dashboard was showing. Optional so a pre-v7.483
+  // caller still gets a report; when absent the template prints no statement
+  // rather than claiming an unfiltered view it cannot vouch for (Const I.5).
+  scope: z.object({
+    statement: z.string(), rangeLabel: z.string(),
+    dated: z.boolean(), projectFiltered: z.boolean(),
+  }).nullable().optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -73,6 +80,7 @@ export async function POST(req: NextRequest) {
     hours:         (parsed.data.hours ?? null) as unknown as HoursPayload | null,
     keywordCounts: (parsed.data.keywordCounts ?? {}) as Record<string, KwCount>,
     generatedAt:   new Date().toISOString(),
+    scope:         parsed.data.scope ?? null,
   });
 
   let pdf: Buffer;
