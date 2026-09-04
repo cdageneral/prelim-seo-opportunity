@@ -24,6 +24,7 @@ export default function SignInPage() {
   const [name, setName]         = useState('');
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw]     = useState(false);
   const [busy, setBusy]         = useState(false);
   const [error, setError]       = useState<string | null>(null);
 
@@ -142,12 +143,24 @@ export default function SignInPage() {
 
                 <label className="block">
                   <span className="block text-[11px] font-mono uppercase tracking-wider text-orbit-tertiary mb-1.5">Password</span>
-                  <input
-                    type="password" value={password} onChange={e => setPassword(e.target.value)} required
-                    autoComplete={isBootstrap ? 'new-password' : 'current-password'}
-                    placeholder={isBootstrap ? 'At least 8 characters' : '••••••••••'}
-                    className="w-full bg-orbit-surface border border-orbit-border rounded-lg px-3 py-2.5 text-sm outline-none focus:border-orbit-accent focus:ring-2 focus:ring-orbit-accent/20 transition"
-                  />
+                  {/* v7.485: reveal toggle. Masked by default; the eye is for the
+                      person who cannot tell whether they mistyped it. */}
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required
+                      autoComplete={isBootstrap ? 'new-password' : 'current-password'}
+                      placeholder={isBootstrap ? 'At least 8 characters' : '••••••••••'}
+                      className="w-full bg-orbit-surface border border-orbit-border rounded-lg pl-3 pr-10 py-2.5 text-sm outline-none focus:border-orbit-accent focus:ring-2 focus:ring-orbit-accent/20 transition"
+                    />
+                    <button
+                      type="button" onClick={() => setShowPw(v => !v)}
+                      aria-label={showPw ? 'Hide password' : 'Show password'}
+                      title={showPw ? 'Hide password' : 'Show password'}
+                      className="absolute inset-y-0 right-0 px-3 flex items-center text-orbit-tertiary hover:text-orbit-primary transition-colors"
+                    >
+                      <i className={showPw ? 'ti ti-eye-off text-[15px]' : 'ti ti-eye text-[15px]'} />
+                    </button>
+                  </div>
                 </label>
 
                 {error && (
@@ -166,6 +179,8 @@ export default function SignInPage() {
                 {!isBootstrap && (
                   <p className="text-[11px] text-orbit-tertiary mt-5">
                     New teammates are added by an admin — there is no open sign-up.
+                    {' '}Forgot your password? Ask an owner or admin for a reset link — passwords
+                    are stored one-way and cannot be looked up.
                   </p>
                 )}
               </form>
