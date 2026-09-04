@@ -1,3 +1,20 @@
+## v7.484 — 2026-09-04
+
+### Hours Saved is dated by the month a project's work began
+
+- **Wayne:** "i selected 3 different date times (this month, last month and all time) all three showed the same hours saved. The hours saved should be attached to the month when the project was setup and iniated." Correct — v7.483 deliberately left Hours Saved out of the date filter, on the reasoning that it is a current-state figure. That reasoning was too conservative: a project's hours *do* have a natural date, and it is the month its delivery started.
+- **A project's hours now land in the month of its FIRST analysis.** A dated view counts the projects **initiated in that period**, at their current credited totals. "Last month" answers "what did we take on last month, and what was that worth".
+- **First, not latest — and not the project row's creation date.** `MIN(triggered_at)` per project. Re-analysing a project in September must not move hours out of the June it started in, which is exactly what anchoring on the *latest* analysis would do. And a project row can be created and never worked; hours describe work, so the anchor is the first real analysis.
+- **The window is half-open `[from, to)`, the same convention as spend**, so each project belongs to exactly one initiation month and disjoint windows **partition** the all-time total — nothing double-counted, nothing lost.
+- **A project that has never been analysed has no initiation date**, so it appears in no dated view. It is **counted and named** in the scope sentence rather than silently vanishing (Const I.5).
+- **The one caveat, stated on screen rather than hidden:** the hours themselves are each project's *current* credited total, so a project that gains a new deliverable later raises the figure shown for the month it started. The alternative — re-dating hours to whenever each deliverable landed — would empty the month the work actually began, and the evidence layer reads only each project's latest analysis, so it could not be done faithfully anyway. The scope sentence says this outright.
+- **Keywords stays live and un-dated** (Wayne's call). A keyword landscape grows and shrinks continuously, so pinning today's count to a setup month would be the least meaningful of the three figures. Its column header now reads "live · not dated" whenever a range is active.
+- **Registry alarms are still detected across every project**, not just the ones in the window — narrowing a date range must never make a live "activity with no evidence gate" warning disappear.
+
+**Downstream parity (II.6a/II.6b/II.6c)** — the Hours Saved card, the table column, the scope sentence and the PDF all read the one shared basis, so they cannot disagree about what a dated figure means. The PDF's Hours tile and appendix name the initiation basis when the report is dated. Still an operator-only artifact: outside `lib/pdf/`, never written to public blob storage.
+
+**Verification** — real `next build` compiled successfully; project `tsc --noEmit` clean under the project's own tsconfig, no `target` override (V.1a). Retained suite **2252 PASS / 33 pre-existing FAIL, zero regression delta**. **32 new checks**, **16 proven to FAIL on the v7.483 base** — including the one that encodes the reported bug (the panel no longer fetches hours without the window). The partition property is asserted directly against the route's own predicate on a fixture built around a month boundary and an un-analysable project. **Four v7.483 checks and three v7.483 render assertions were UPDATED with dated notes, never deleted** (V.6): they asserted that hours take no window, which this release makes false by design. What survives in each is the invariant underneath — hours are never dated on the *spend* basis, a dated view must always say how hours are dated, and Keywords remains exempt.
+
 ## v7.483 — 2026-09-04
 
 ### Scope the API Usage dashboard: date range + project selection
