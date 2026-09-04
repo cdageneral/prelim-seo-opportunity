@@ -18,7 +18,10 @@ import { SESSION_COOKIE, authEnforced } from '@/lib/auth/config';
 import { verifySessionToken } from '@/lib/auth/jwt';
 
 // Paths reachable without a session.
-const PUBLIC_PREFIXES = ['/sign-in', '/sign-up', '/api/auth'];
+// v7.485: /reset-password is public BY DESIGN — the whole point is that the
+// person cannot sign in. The one-time token in the URL is the credential and
+// every guard on it lives in /api/auth/reset (already public under /api/auth).
+const PUBLIC_PREFIXES = ['/sign-in', '/sign-up', '/reset-password', '/api/auth'];
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some(p => pathname === p || pathname.startsWith(p + '/'));
