@@ -410,6 +410,24 @@ export const projectGroupAccess = pgTable('project_group_access', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 
+// v7.485: one-time password-reset tokens. Passwords are one-way scrypt hashes,
+// so recovery can only ISSUE A NEW SECRET, never reveal an old one. Only the
+// SHA-256 of the token is stored (token_hash) — a leak of this table yields no
+// usable link. Single-use (used_at) and short-lived (expires_at). Created at
+// runtime by ensureAuthTables() (CREATE TABLE IF NOT EXISTS), same as the other
+// auth tables.
+export const passwordResets = pgTable('password_resets', {
+  id:         uuid('id').defaultRandom().primaryKey(),
+  userId:     uuid('user_id').notNull().references(() => appUsers.id, { onDelete: 'cascade' }),
+  tokenHash:  text('token_hash').notNull(),
+  expiresAt:  timestamp('expires_at').notNull(),
+  usedAt:     timestamp('used_at'),
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
+  // who issued it — denormalized so the trail survives the issuer being removed
+  issuedBy:      uuid('issued_by'),
+  issuedByEmail: text('issued_by_email'),
+});
+
 export const authSessions = pgTable('auth_sessions', {
   id:        uuid('id').defaultRandom().primaryKey(),
   userId:    uuid('user_id').notNull().references(() => appUsers.id, { onDelete: 'cascade' }),
