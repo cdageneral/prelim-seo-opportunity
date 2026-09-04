@@ -23,7 +23,21 @@ import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import type { GateContext } from './gates';
 
-export interface ProjectEvidence { projectId: string; projectName: string; ctx: GateContext }
+export interface ProjectEvidence {
+  projectId: string;
+  projectName: string;
+  /**
+   * v7.484 — the month this project's delivery ACTUALLY BEGAN: the timestamp of
+   * its FIRST analysis, not the projects-row creation date. A row can be created
+   * and never worked; hours describe work. Null when no analysis has ever run,
+   * which is an honest "we cannot date this" rather than a zero (Const I.5).
+   *
+   * Deliberately MIN, not MAX: re-analysing a project in September must not move
+   * hours that were saved in June out of June.
+   */
+  initiatedAt: string | null;
+  ctx: GateContext;
+}
 
 const n = (v: any): number => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
 
@@ -63,6 +77,9 @@ export async function loadEvidence(): Promise<ProjectEvidence[]> {
     SELECT
       p.id   AS "projectId",
       p.client_name AS "projectName",
+
+      -- v7.484: initiation = the FIRST analysis ever run for this project.
+      (SELECT min(a2.triggered_at) FROM analyses a2 WHERE a2.project_id = p.id) AS "initiatedAt",
 
       COALESCE(CASE WHEN jsonb_typeof(l.s->'topKeywords')='array'
                THEN jsonb_array_length(l.s->'topKeywords') END, 0) AS "topKeywords",
@@ -178,6 +195,7 @@ export async function loadEvidence(): Promise<ProjectEvidence[]> {
   return rows.map(r => ({
     projectId:   String(r.projectId),
     projectName: String(r.projectName ?? 'Unknown project'),
+    initiatedAt: r.initiatedAt ? new Date(r.initiatedAt).toISOString() : null,
     ctx: {
       topKeywords:             n(r.topKeywords),
       clientUploadRows:        n(r.clientUploadRows),
