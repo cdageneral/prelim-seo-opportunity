@@ -15,108 +15,28 @@
  * cost, and how big is it?" in one place. The counts are fetched per project
  * (lib/keywordLandscape is the shared basis; see the route for why one project
  * per request) and land progressively with an outstanding-count in the header.
+ *
+ * v7.482 — the panel exports itself as a PDF. Its payload shapes, provider
+ * labels and formatters moved to lib/usage/rollupView.ts so the report reads the
+ * SAME basis rather than restating it (Const II.6a/II.7), and the "PDF" button
+ * beside Refresh posts the payloads this component already holds to
+ * /api/usage/pdf, which renders them verbatim. The report is INTERNAL: it
+ * carries Hours Saved and the full cost position, so the route streams the bytes
+ * straight back and never writes them to public blob storage (Const II.6c).
  */
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-
-interface Line { provider: string; unit: string; usage: number; baseline: number; total: number; calls: number; }
-interface ProjectRollup { projectId: string | null; projectName: string; lines: Line[]; lastActivity: string | null; }
-interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRollup[]; note?: string; }
-
-// Cost rollup (v7.363; registry rebuilt v7.396) — USD at registry rates (Const I.5a).
-interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; unregistered: boolean; }
-interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number; unpriced: UnpricedLine[]; }
-interface RateCardModel { label: string; inputPerM: number; outputPerM: number; }
-interface RateCardUnit { label: string; usdPerUnit: number; plan: string; basis: string; source: string; asOf: string; }
-interface RateCardUnpriced { label: string; reason: string; asOf: string; }
-interface RateCardMeasured { label: string; note: string; crossCheckPerUnit: number; crossCheckNote: string; source: string; asOf: string; }
-interface RateCard {
-  asOf: string; models: RateCardModel[]; units: RateCardUnit[];
-  unpriced: RateCardUnpriced[]; measured?: RateCardMeasured[]; planQuotaCaveat: string; sources: string[];
-}
-interface UnregisteredLine { provider: string; unit: string; endpoint: string; reason: string; }
-interface LedgerFailures { count: number; lastError: string | null; }
-interface CostPayload {
-  grandTotalUSD: number; grandPayPerUseUSD: number; grandPlanQuotaUSD: number; grandMeasuredUSD?: number;
-  pricingAsOf: string; basis: string; planQuotaCaveat: string; rateCard: RateCard;
-  registryOk: boolean; unregistered: UnregisteredLine[]; ledgerFailures?: LedgerFailures; projects: ProjectCost[];
-}
-
-const PROVIDER_LABEL: Record<string, string> = {
-  semrush: 'Semrush', serpapi: 'SerpAPI', profound: 'Profound',
-  anthropic: 'Anthropic (Claude)', openai: 'OpenAI', dataforseo: 'DataForSEO',
-};
-const UNIT_LABEL: Record<string, string> = {
-  units: 'API units', searches: 'searches', calls: 'calls', tokens: 'tokens', images: 'images',
-};
-const PROVIDER_ICON: Record<string, string> = {
-  semrush: 'ti-chart-bar', serpapi: 'ti-brand-google', profound: 'ti-robot',
-  anthropic: 'ti-sparkles', openai: 'ti-photo', dataforseo: 'ti-database',
-};
-
-function fmt(n: number): string { return (n ?? 0).toLocaleString(); }
-function fmtUSD(n: number): string {
-  const v = n ?? 0;
-  // Show cents; for sub-cent amounts show enough precision to not read as $0.00.
-  const frac = v > 0 && v < 0.01 ? 4 : 2;
-  return `$${v.toLocaleString(undefined, { minimumFractionDigits: frac, maximumFractionDigits: frac })}`;
-}
-/** Per-unit rates are fractions of a cent — show enough digits to be checkable. */
-function fmtRate(n: number): string {
-  const v = n ?? 0;
-  if (v === 0) return '$0';
-  const digits = v < 0.01 ? 6 : 4;
-  return `$${v.toFixed(digits).replace(/0+$/, '').replace(/\.$/, '')}`;
-}
-function fmtTime(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-function lineKey(l: Line) { return `${l.provider}|${l.unit}`; }
-
-/**
- * v7.446 — per-project Keyword Landscape size.
- *   number → the project's "All Keywords" count
- *   null   → the project has no analysis with keyword data (honest gap, Const I.5)
- *   'error'→ the count request failed; never shown as 0
- */
-type KwCount = number | null | 'error';
-
-/**
- * v7.447 — Hours Saved. Wayne's 24-activity delivery scope, credited per project
- * ONLY where the project carries the deliverable's own data (lib/hours/gates.ts).
- * Every project's full credited/withheld line list comes back with the totals, so
- * the drill-down can say which activities were withheld and why — a bare number
- * invites "how did you get that?" and the honest answer names the gaps (I.5).
- */
-interface HoursLine {
-  key: string; label: string; hours: number; group: 'base' | 'local';
-  gateKey: string; gateLabel: string; reads: string;
-  credited: boolean; unregistered: boolean; proxy: boolean;
-}
-interface HoursProject {
-  projectId: string; projectName: string;
-  hours: number; ceilingHours: number;
-  creditedCount: number; totalCount: number; proxyHours: number;
-  lines: HoursLine[];
-}
-interface HoursPayload {
-  asOf: string; grandHours: number; projectCount: number;
-  scope: { base: number; local: number; total: number };
-  activitiesUpdatedAt: string | null; usingSeed: boolean;
-  unregistered: string[]; projects: HoursProject[];
-}
-
-/** A 200 is not a contract — only a body carrying every field the render reads is. */
-function isHoursPayload(h: any): h is HoursPayload {
-  return !!h && typeof h === 'object'
-    && Array.isArray(h.projects)
-    && Array.isArray(h.unregistered)
-    && !!h.scope && typeof h.scope === 'object'
-    && typeof h.scope.total === 'number'
-    && typeof h.grandHours === 'number';
-}
+// v7.482 — one shared basis for the screen and the PDF (Const II.7). Everything
+// below used to be declared privately in this file; the report imports the same
+// module, so a new provider label or a changed rounding rule lands on both.
+import {
+  fmt, fmtUSD, fmtRate, fmtTime, lineKey, isHoursPayload,
+  sumKeywordCounts, costByProject, hoursByProject,
+  PROVIDER_LABEL, UNIT_LABEL, PROVIDER_ICON,
+  type Line, type RollupPayload, type CostPayload,
+  type HoursPayload, type HoursProject, type KwCount,
+} from '@/lib/usage/rollupView';
 
 export default function UsageRollup() {
   const [data, setData]       = useState<RollupPayload | null>(null);
@@ -134,6 +54,13 @@ export default function UsageRollup() {
   // they are measured in SQL and no snapshot ever crosses the wire.
   const [hours, setHours] = useState<HoursPayload | null>(null);
   const [hoursOpen, setHoursOpen] = useState<string | null>(null);   // projectId whose breakdown is expanded
+  // v7.482 PDF export. A single server-side Chromium render has no derivable
+  // "X of N", so per Const IV.3 the button shows a CHANGING STEP LABEL plus
+  // elapsed seconds — never a bare spinner (IV.2).
+  const [pdfStep, setPdfStep] = useState<null | 'collect' | 'render' | 'save'>(null);
+  const [pdfSecs, setPdfSecs] = useState(0);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const pdfTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -168,6 +95,58 @@ export default function UsageRollup() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
+  useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
+
+  /**
+   * v7.482 — download this dashboard as a PDF.
+   *
+   * The payloads already in state are what gets rendered: the route is a pure
+   * serializer and re-queries nothing, so the report cannot print a different
+   * number from the screen it was taken from (Const II.6a). The response is the
+   * PDF itself rather than a link — this report carries Hours Saved and the full
+   * internal cost position, so it is never written to public blob storage
+   * (Const II.6c).
+   */
+  const downloadPDF = useCallback(async () => {
+    if (!data) return;
+    setPdfError(null);
+    setPdfSecs(0);
+    setPdfStep('collect');
+    if (pdfTimer.current) clearInterval(pdfTimer.current);
+    pdfTimer.current = setInterval(() => setPdfSecs(n => n + 1), 1000);
+    let url: string | null = null;
+    try {
+      setPdfStep('render');
+      const res = await fetch('/api/usage/pdf', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ rollup: data, cost, hours, keywordCounts: kwCounts }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json())?.error ?? msg; } catch { /* body was not JSON */ }
+        throw new Error(msg);
+      }
+      setPdfStep('save');
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbitiq-api-usage-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setPdfError((e as any)?.message ?? 'PDF export failed');
+    } finally {
+      if (pdfTimer.current) { clearInterval(pdfTimer.current); pdfTimer.current = null; }
+      setPdfStep(null);
+      // Revoked on the next tick so the browser has started the download.
+      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 30_000);
+    }
+  }, [data, cost, hours, kwCounts]);
 
   // ── v7.446: fan out the per-project keyword counts ──────────────────────────
   // Bounded concurrency (4) keeps at most four keyword snapshots in flight at
@@ -209,17 +188,15 @@ export default function UsageRollup() {
   const columns = grand.map(lineKey);
   const hasAny = grand.length > 0;
   // Per-project USD, keyed to match the usage rollup's project ids.
-  const costByProject = new Map<string, number>();
-  (cost?.projects ?? []).forEach(p => costByProject.set(p.projectId ?? 'unattributed', p.costUSD));
+  const costMap = costByProject(cost);
   // v7.446: the column total is the sum of the counts we actually have. While
   // requests are outstanding it is labelled a running subtotal, never presented
   // as the final cross-project figure.
-  const kwLoaded = Object.values(kwCounts).filter((v): v is number => typeof v === 'number');
-  const kwTotal  = kwLoaded.reduce((s, n) => s + n, 0);
-  const kwDone   = kwPending === 0;
+  const kwSum   = sumKeywordCounts(kwCounts);
+  const kwTotal = kwSum.total;
+  const kwDone  = kwPending === 0;
   // v7.447 per-project hours, keyed to the usage rollup's project ids.
-  const hoursByProject = new Map<string, HoursProject>();
-  (Array.isArray(hours?.projects) ? hours!.projects : []).forEach(p => hoursByProject.set(p.projectId, p));
+  const hoursMap = hoursByProject(hours);
 
   return (
     <div>
@@ -235,15 +212,38 @@ export default function UsageRollup() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <button
-            onClick={load}
-            disabled={loading}
-            className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors disabled:opacity-50"
-          >
-            <i className={`ti ti-refresh ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            {/* v7.482 — a printable copy of this dashboard. Disabled until there is
+                something to print; the label reports the live step + elapsed
+                seconds rather than spinning silently (Const IV.2/IV.3). */}
+            <button
+              onClick={downloadPDF}
+              disabled={!data || pdfStep !== null}
+              title={data ? 'Download this dashboard as a PDF (internal — Const II.6c)' : 'Nothing to export yet'}
+              className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors disabled:opacity-50"
+            >
+              <i className={`ti ${pdfStep ? 'ti-loader-2 animate-spin' : 'ti-file-type-pdf'}`} aria-hidden="true" />
+              {pdfStep === 'collect' ? `Collecting · ${pdfSecs}s`
+                : pdfStep === 'render' ? `Rendering PDF · ${pdfSecs}s`
+                : pdfStep === 'save'   ? `Saving · ${pdfSecs}s`
+                : 'PDF'}
+            </button>
+            <button
+              onClick={load}
+              disabled={loading}
+              className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors disabled:opacity-50"
+            >
+              <i className={`ti ti-refresh ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+              Refresh
+            </button>
+          </div>
           <span className="text-[11px] text-orbit-tertiary">As of {fmtTime(data?.asOf ?? null)}</span>
+          {pdfStep && (
+            <span className="text-[11px] text-orbit-secondary">
+              Rendering every project, the rate card and the hours breakdown — usually 10&ndash;25s.
+            </span>
+          )}
+          {pdfError && <span className="text-[11px] text-orbit-red">PDF export failed: {pdfError}</span>}
         </div>
       </div>
 
@@ -429,7 +429,7 @@ export default function UsageRollup() {
                     const nameCell = proj.projectId
                       ? <Link href={`/projects/${proj.projectId}`} className="text-orbit-primary hover:text-orbit-accent font-medium transition-colors">{proj.projectName}</Link>
                       : <span className="text-orbit-tertiary italic">{proj.projectName}</span>;
-                    const hp = proj.projectId ? hoursByProject.get(proj.projectId) : undefined;
+                    const hp = proj.projectId ? hoursMap.get(proj.projectId) : undefined;
                     const open = !!proj.projectId && hoursOpen === proj.projectId;
                     return (
                       <Fragment key={proj.projectId ?? 'unattributed'}>
@@ -468,7 +468,7 @@ export default function UsageRollup() {
                           );
                         })}
                         <td className="py-2 px-3 text-right tabular-nums text-orbit-primary font-medium">
-                          {cost ? fmtUSD(costByProject.get(proj.projectId ?? 'unattributed') ?? 0) : <span className="text-orbit-tertiary">—</span>}
+                          {cost ? fmtUSD(costMap.get(proj.projectId ?? 'unattributed') ?? 0) : <span className="text-orbit-tertiary">—</span>}
                         </td>
                         <td className="py-2 pl-3 text-right text-orbit-tertiary whitespace-nowrap">{fmtTime(proj.lastActivity)}</td>
                       </tr>
@@ -512,9 +512,9 @@ export default function UsageRollup() {
                   <tr className="border-t-2 border-orbit-border font-semibold">
                     <td className="py-2 pr-4 text-orbit-primary">All projects</td>
                     <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
-                      {kwLoaded.length === 0
+                      {kwSum.loaded === 0
                         ? <span className="text-orbit-tertiary font-normal">—</span>
-                        : <span title={kwDone ? undefined : `Subtotal of ${kwLoaded.length} project(s) counted so far`}>
+                        : <span title={kwDone ? undefined : `Subtotal of ${kwSum.loaded} project(s) counted so far`}>
                             {fmt(kwTotal)}{kwDone ? '' : '…'}
                           </span>}
                     </td>
