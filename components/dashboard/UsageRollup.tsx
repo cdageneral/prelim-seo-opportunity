@@ -23,6 +23,15 @@
  * /api/usage/pdf, which renders them verbatim. The report is INTERNAL: it
  * carries Hours Saved and the full cost position, so the route streams the bytes
  * straight back and never writes them to public blob storage (Const II.6c).
+ *
+ * v7.483 — a scope bar: a date range (All time by default, plus this month /
+ * last month / this quarter / year to date / a custom range) and a project
+ * picker. The range is applied SERVER-side by the two spend routes; the project
+ * selection is applied client-side through the shared folds in rollupView, which
+ * re-sum the grand totals from the surviving per-project lines. Hours Saved and
+ * Keywords are current-state figures and are deliberately NOT date-filtered —
+ * the bar says so on screen, and the same sentence travels into the PDF, because
+ * a report that silently covers a subset is worse than no report.
  */
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -34,8 +43,12 @@ import {
   fmt, fmtUSD, fmtRate, fmtTime, lineKey, isHoursPayload,
   sumKeywordCounts, costByProject, hoursByProject,
   PROVIDER_LABEL, UNIT_LABEL, PROVIDER_ICON,
+  resolveRange, rangeIsBounded, rangeLabel, rangeQuery, scopeStatement,
+  filterRollupByProjects, filterCostByProjects, filterHoursByProjects,
+  projectKey, selectionIsFiltered, RANGE_OPTIONS, ALL_TIME,
   type Line, type RollupPayload, type CostPayload,
   type HoursPayload, type HoursProject, type KwCount,
+  type UsageRange, type RangeKey,
 } from '@/lib/usage/rollupView';
 
 export default function UsageRollup() {
@@ -61,13 +74,25 @@ export default function UsageRollup() {
   const [pdfSecs, setPdfSecs] = useState(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const pdfTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // v7.483 scope. Default is ALL TIME (Wayne, 2026-09-04) so the panel opens on
+  // exactly the figures it has always opened on.
+  const [range, setRange]           = useState<UsageRange>(ALL_TIME);
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo]     = useState('');
+  // null = every project. A Set names exactly the selected ones.
+  const [projectSel, setProjectSel] = useState<Set<string> | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
+      // The date window goes to the two SPEND routes only. /api/usage/hours is
+      // deliberately un-ranged: Hours Saved is a current-state scope figure, not
+      // a time series (Const I.1/I.5) — see the note in rollupView.
+      const q = rangeQuery(range);
       const [res, costRes, hoursRes] = await Promise.all([
-        fetch('/api/usage', { cache: 'no-store' }),
-        fetch('/api/usage/cost', { cache: 'no-store' }),
+        fetch(`/api/usage${q}`, { cache: 'no-store' }),
+        fetch(`/api/usage/cost${q}`, { cache: 'no-store' }),
         fetch('/api/usage/hours', { cache: 'no-store' }),
       ]);
       const json = await res.json();
@@ -92,61 +117,11 @@ export default function UsageRollup() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [range]);
 
+  // Re-runs whenever the range changes, so Refresh and a range change take the
+  // same path and the keyword fan-out below re-runs with them.
   useEffect(() => { load(); }, [load]);
-
-  // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
-  useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
-
-  /**
-   * v7.482 — download this dashboard as a PDF.
-   *
-   * The payloads already in state are what gets rendered: the route is a pure
-   * serializer and re-queries nothing, so the report cannot print a different
-   * number from the screen it was taken from (Const II.6a). The response is the
-   * PDF itself rather than a link — this report carries Hours Saved and the full
-   * internal cost position, so it is never written to public blob storage
-   * (Const II.6c).
-   */
-  const downloadPDF = useCallback(async () => {
-    if (!data) return;
-    setPdfError(null);
-    setPdfSecs(0);
-    setPdfStep('collect');
-    if (pdfTimer.current) clearInterval(pdfTimer.current);
-    pdfTimer.current = setInterval(() => setPdfSecs(n => n + 1), 1000);
-    let url: string | null = null;
-    try {
-      setPdfStep('render');
-      const res = await fetch('/api/usage/pdf', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ rollup: data, cost, hours, keywordCounts: kwCounts }),
-      });
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try { msg = (await res.json())?.error ?? msg; } catch { /* body was not JSON */ }
-        throw new Error(msg);
-      }
-      setPdfStep('save');
-      const blob = await res.blob();
-      url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `orbitiq-api-usage-${new Date().toISOString().slice(0, 10)}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } catch (e) {
-      setPdfError((e as any)?.message ?? 'PDF export failed');
-    } finally {
-      if (pdfTimer.current) { clearInterval(pdfTimer.current); pdfTimer.current = null; }
-      setPdfStep(null);
-      // Revoked on the next tick so the browser has started the download.
-      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 30_000);
-    }
-  }, [data, cost, hours, kwCounts]);
 
   // ── v7.446: fan out the per-project keyword counts ──────────────────────────
   // Bounded concurrency (4) keeps at most four keyword snapshots in flight at
@@ -182,13 +157,83 @@ export default function UsageRollup() {
     return () => { cancelled = true; };
   }, [data]);
 
-  const grand = data?.grandTotals ?? [];
-  const projects = data?.projects ?? [];
+  // ── v7.483: the project selection is applied HERE, once, through the shared
+  // folds — so the cards, the table, the totals and the PDF all read one scoped
+  // view and cannot disagree (Const II.7). `data` stays the unfiltered server
+  // answer so the picker can still list every project.
+  const allProjectCount = (data?.projects ?? []).length;
+  const view       = data ? filterRollupByProjects(data, projectSel) : null;
+  const viewCost   = filterCostByProjects(cost, projectSel);
+  const viewHours  = filterHoursByProjects(hours, projectSel);
+  const dated      = rangeIsBounded(range);
+  const projFiltered = selectionIsFiltered(projectSel, allProjectCount);
+  const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount);
+
+  // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
+  useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
+
+  /**
+   * v7.482 — download this dashboard as a PDF.
+   *
+   * The payloads already in state are what gets rendered: the route is a pure
+   * serializer and re-queries nothing, so the report cannot print a different
+   * number from the screen it was taken from (Const II.6a). The response is the
+   * PDF itself rather than a link — this report carries Hours Saved and the full
+   * internal cost position, so it is never written to public blob storage
+   * (Const II.6c).
+   */
+  const downloadPDF = useCallback(async () => {
+    if (!data) return;
+    setPdfError(null);
+    setPdfSecs(0);
+    setPdfStep('collect');
+    if (pdfTimer.current) clearInterval(pdfTimer.current);
+    pdfTimer.current = setInterval(() => setPdfSecs(n => n + 1), 1000);
+    let url: string | null = null;
+    try {
+      setPdfStep('render');
+      const res = await fetch('/api/usage/pdf', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // The SCOPED view is what gets rendered — the report covers exactly what
+        // the screen covers — and the scope statement travels with it so the
+        // report says out loud which rows it does and does not include (v7.483).
+        body:    JSON.stringify({
+          rollup: view, cost: viewCost, hours: viewHours, keywordCounts: kwCounts,
+          scope: { statement: scopeLine, rangeLabel: rangeLabel(range), dated, projectFiltered: projFiltered },
+        }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json())?.error ?? msg; } catch { /* body was not JSON */ }
+        throw new Error(msg);
+      }
+      setPdfStep('save');
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbitiq-api-usage-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setPdfError((e as any)?.message ?? 'PDF export failed');
+    } finally {
+      if (pdfTimer.current) { clearInterval(pdfTimer.current); pdfTimer.current = null; }
+      setPdfStep(null);
+      // Revoked on the next tick so the browser has started the download.
+      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 30_000);
+    }
+  }, [view, viewCost, viewHours, kwCounts, scopeLine, range, dated, projFiltered]);
+
+  const grand = view?.grandTotals ?? [];
+  const projects = view?.projects ?? [];
   // Stable column order for the per-project table = the grand-total lines present.
   const columns = grand.map(lineKey);
   const hasAny = grand.length > 0;
   // Per-project USD, keyed to match the usage rollup's project ids.
-  const costMap = costByProject(cost);
+  const costMap = costByProject(viewCost);
   // v7.446: the column total is the sum of the counts we actually have. While
   // requests are outstanding it is labelled a running subtotal, never presented
   // as the final cross-project figure.
@@ -196,7 +241,7 @@ export default function UsageRollup() {
   const kwTotal = kwSum.total;
   const kwDone  = kwPending === 0;
   // v7.447 per-project hours, keyed to the usage rollup's project ids.
-  const hoursMap = hoursByProject(hours);
+  const hoursMap = hoursByProject(viewHours);
 
   return (
     <div>
@@ -247,6 +292,104 @@ export default function UsageRollup() {
         </div>
       </div>
 
+      {/* ── v7.483 scope bar ───────────────────────────────────────────────────
+          Date range drives the two SPEND routes server-side; the project picker
+          is applied client-side through the shared folds. The sentence beneath
+          states exactly what the figures cover — including what the date range
+          does NOT reach — and the same sentence travels into the PDF. */}
+      <div className="orbit-card p-3 mb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold text-orbit-secondary uppercase tracking-wide mr-1">Scope</span>
+
+          {/* Date presets */}
+          <select
+            value={range.key}
+            onChange={e => {
+              const key = e.target.value as RangeKey;
+              setRange(key === 'custom'
+                ? resolveRange('custom', new Date(), customFrom, customTo)
+                : resolveRange(key, new Date()));
+            }}
+            className="text-sm px-2.5 py-1.5 rounded-lg border border-orbit-border bg-orbit-surface text-orbit-primary"
+          >
+            {RANGE_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+
+          {range.key === 'custom' && (
+            <span className="flex items-center gap-1.5">
+              <input
+                type="date" value={customFrom} max={customTo || undefined}
+                onChange={e => { setCustomFrom(e.target.value); setRange(resolveRange('custom', new Date(), e.target.value, customTo)); }}
+                className="text-sm px-2 py-1.5 rounded-lg border border-orbit-border bg-orbit-surface text-orbit-primary"
+                aria-label="Range start"
+              />
+              <span className="text-orbit-tertiary text-xs">to</span>
+              <input
+                type="date" value={customTo} min={customFrom || undefined}
+                onChange={e => { setCustomTo(e.target.value); setRange(resolveRange('custom', new Date(), customFrom, e.target.value)); }}
+                className="text-sm px-2 py-1.5 rounded-lg border border-orbit-border bg-orbit-surface text-orbit-primary"
+                aria-label="Range end"
+              />
+              {/* An incomplete or inverted pair is NOT silently coerced into some
+                  other window — it stays all-time and says so (Const I.5). */}
+              {!dated && (customFrom || customTo) && (
+                <span className="text-[11px] text-orbit-amber">pick a valid start and end — showing all time</span>
+              )}
+            </span>
+          )}
+
+          {/* Project picker */}
+          <div className="relative">
+            <button
+              onClick={() => setPickerOpen(o => !o)}
+              disabled={allProjectCount === 0}
+              className="flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors disabled:opacity-50"
+            >
+              <i className="ti ti-filter" aria-hidden="true" />
+              {!projFiltered ? `All projects (${allProjectCount})` : `${projectSel!.size} of ${allProjectCount} projects`}
+              <i className={`ti ti-chevron-${pickerOpen ? 'up' : 'down'} text-[10px]`} aria-hidden="true" />
+            </button>
+            {pickerOpen && (
+              <div className="absolute z-30 mt-1 w-72 max-h-80 overflow-y-auto orbit-card p-2 border border-orbit-border shadow-lg">
+                <div className="flex gap-2 px-1 pb-2 mb-1 border-b border-orbit-border">
+                  <button onClick={() => setProjectSel(null)} className="text-[11px] text-orbit-accent hover:underline">Select all</button>
+                  <button onClick={() => setProjectSel(new Set())} className="text-[11px] text-orbit-accent hover:underline">Clear</button>
+                </div>
+                {(data?.projects ?? []).map(pr => {
+                  const k = projectKey(pr.projectId);
+                  const on = !projectSel || projectSel.has(k);
+                  return (
+                    <label key={k} className="flex items-center gap-2 px-1 py-1 text-xs text-orbit-primary cursor-pointer hover:bg-orbit-muted/30 rounded">
+                      <input
+                        type="checkbox" checked={on}
+                        onChange={() => setProjectSel(prev => {
+                          // First click off "all" materialises the full set, so the
+                          // box the operator just unticked is the only one removed.
+                          const base = prev ? new Set(prev) : new Set((data?.projects ?? []).map(x => projectKey(x.projectId)));
+                          if (base.has(k)) base.delete(k); else base.add(k);
+                          return base;
+                        })}
+                      />
+                      <span className={pr.projectId ? '' : 'italic text-orbit-tertiary'}>{pr.projectName}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {(dated || projFiltered) && (
+            <button
+              onClick={() => { setRange(ALL_TIME); setCustomFrom(''); setCustomTo(''); setProjectSel(null); }}
+              className="text-[11px] text-orbit-accent hover:underline ml-1"
+            >
+              Reset scope
+            </button>
+          )}
+        </div>
+        <p className="text-[11px] text-orbit-tertiary mt-2 leading-relaxed">{scopeLine}</p>
+      </div>
+
       {error && (
         <div className="orbit-card p-4 mb-4 border border-orbit-red/30">
           <p className="text-orbit-red text-sm">Couldn’t load usage: {error}</p>
@@ -281,7 +424,7 @@ export default function UsageRollup() {
                 same kind of number at a glance (Wayne, 2026-08-14).
                 The tint is capped at 8%: at 10% `text-orbit-secondary` measures
                 4.50:1 on the dark card and drops below AA — see the theme gate. */}
-            {hours && (
+            {viewHours && (
               <div className="orbit-card p-4 border border-orbit-green/30 bg-orbit-green/[0.08]">
                 <div className="flex items-center gap-2 mb-1.5">
                   <i className="ti ti-clock-hour-4 text-orbit-green" aria-hidden="true" />
@@ -291,10 +434,14 @@ export default function UsageRollup() {
                       screenshotted into a client deck. */}
                   <span className="ml-auto text-[10px] text-orbit-green/80 font-medium">admin only</span>
                 </div>
-                <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(hours.grandHours)}</div>
+                <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(viewHours.grandHours)}</div>
                 <div className="text-[11px] text-orbit-secondary mt-0.5">
-                  hours · {hours.projectCount} {hours.projectCount === 1 ? 'project' : 'projects'}
+                  hours · {viewHours.projectCount} {viewHours.projectCount === 1 ? 'project' : 'projects'}
                 </div>
+                {/* v7.483 — Hours Saved is a CURRENT-STATE figure. It follows the
+                    project selection, but a date range does not apply to it, and
+                    saying so on the card is cheaper than being asked later. */}
+                {dated && <div className="text-[10px] text-orbit-amber mt-1">current state · not limited to the date range</div>}
               </div>
             )}
             {grand.map(l => (
@@ -519,12 +666,12 @@ export default function UsageRollup() {
                           </span>}
                     </td>
                     <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
-                      {hours ? fmt(hours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
+                      {viewHours ? fmt(viewHours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
                     </td>
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
                     ))}
-                    <td className="py-2 px-3 text-right tabular-nums text-orbit-accent">{cost ? fmtUSD(cost.grandTotalUSD) : '—'}</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-orbit-accent">{viewCost ? fmtUSD(viewCost.grandTotalUSD) : '—'}</td>
                     <td className="py-2 pl-3" />
                   </tr>
                 </tbody>
@@ -567,16 +714,16 @@ export default function UsageRollup() {
               {/* The two bases mean different things — never merge them into one number silently. */}
               <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
                 <strong className="text-orbit-secondary">Est. cost splits two ways:</strong>{' '}
-                <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPayPerUseUSD)}</span> pay-per-use
+                <span className="text-orbit-primary tabular-nums">{fmtUSD(viewCost?.grandPayPerUseUSD ?? 0)}</span> pay-per-use
                 (Anthropic &amp; OpenAI tokens, billed per token) +{' '}
-                <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandPlanQuotaUSD)}</span> allocated from
+                <span className="text-orbit-primary tabular-nums">{fmtUSD(viewCost?.grandPlanQuotaUSD ?? 0)}</span> allocated from
                 prepaid plans ({(cost.rateCard?.units ?? []).map(u => u.label.replace(/ (search|API unit)$/, '')).join(' & ') || 'none configured'})
-                {(cost.grandMeasuredUSD ?? 0) > 0 && (
-                  <> + <span className="text-orbit-primary tabular-nums">{fmtUSD(cost.grandMeasuredUSD ?? 0)}</span>{' '}
+                {(viewCost?.grandMeasuredUSD ?? 0) > 0 && (
+                  <> + <span className="text-orbit-primary tabular-nums">{fmtUSD(viewCost?.grandMeasuredUSD ?? 0)}</span>{' '}
                   <strong className="text-orbit-secondary">measured</strong> (DataForSEO reports the real cost of every
                   request, so those dollars are not an estimate at all)</>
                 )} ={' '}
-                <span className="text-orbit-accent tabular-nums">{fmtUSD(cost.grandTotalUSD)}</span>.
+                <span className="text-orbit-accent tabular-nums">{fmtUSD(viewCost?.grandTotalUSD ?? 0)}</span>.
               </p>
 
               <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
