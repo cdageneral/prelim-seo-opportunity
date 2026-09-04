@@ -186,7 +186,23 @@ function UsersTab({ loading, users, projects, projName, reload }:
     </div>
   );
 
+  // v7.485: a single owner is a lockout risk — that account can reset anyone,
+  // but nobody can reset it. Counted from the real user rows (Const I.1), shown
+  // only while the condition actually holds.
+  const activeOwners = users.filter(u => u.role === 'owner' && u.status === 'active').length;
+
   return (
+    <>
+      {activeOwners === 1 && (
+        <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-orbit-amber/40 bg-orbit-amber/10 px-3.5 py-3">
+          <i className="ti ti-alert-triangle text-orbit-amber text-[15px] mt-px" />
+          <p className="text-[12px] text-orbit-secondary leading-relaxed">
+            <span className="text-orbit-primary font-medium">Only one owner account.</span>{' '}
+            An owner can issue a reset link for anyone — but nobody can issue one for the last owner.
+            Promote a second person to Owner so the two of you can recover each other.
+          </p>
+        </div>
+      )}
     <div className="orbit-card overflow-hidden p-0">
       <table className="w-full text-[13px]">
         <thead>
@@ -204,6 +220,7 @@ function UsersTab({ loading, users, projects, projName, reload }:
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -252,6 +269,38 @@ function UserRow({ u, projects, projName, open, onToggle, reload }:
   );
 }
 
+/**
+ * PasswordField (v7.485) — a masked password input with a reveal toggle.
+ *
+ * Before v7.485 both admin password inputs were `type="text"`, so a temporary
+ * password sat in plain sight of anyone near the screen. They are masked now,
+ * and the eye is what lets the operator verify what they typed before saving.
+ * One component so the two call sites cannot drift apart.
+ */
+function PasswordField({ label, value, onChange, placeholder, hint }:
+  { label: string; value: string; onChange: (v: string) => void; placeholder: string; hint?: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label className="block">
+      <span className="block text-[11px] text-orbit-tertiary mb-1">{label}</span>
+      <div className="relative">
+        <input
+          type={show ? 'text' : 'password'} value={value} autoComplete="new-password"
+          onChange={e => onChange(e.target.value)} placeholder={placeholder}
+          className="w-full bg-orbit-bg border border-orbit-border rounded-lg pl-3 pr-10 py-2 text-sm outline-none focus:border-orbit-accent" />
+        <button
+          type="button" onClick={() => setShow(v => !v)}
+          aria-label={show ? 'Hide password' : 'Show password'}
+          title={show ? 'Hide password' : 'Show password'}
+          className="absolute inset-y-0 right-0 px-3 flex items-center text-orbit-tertiary hover:text-orbit-primary transition-colors">
+          <i className={show ? 'ti ti-eye-off text-[15px]' : 'ti ti-eye text-[15px]'} />
+        </button>
+      </div>
+      {hint && <span className="block text-[11px] text-orbit-tertiary mt-1">{hint}</span>}
+    </label>
+  );
+}
+
 function ManageDrawer({ u, projects, reload, onClose }:
   { u: AdminUser; projects: Proj[]; reload: () => void; onClose: () => void }) {
   const [role, setRole]     = useState<Role>(u.role);
@@ -259,6 +308,10 @@ function ManageDrawer({ u, projects, reload, onClose }:
   const [pw, setPw]         = useState('');
   const [busy, setBusy]     = useState(false);
   const [msg, setMsg]       = useState<string | null>(null);
+  // v7.485: the issued reset link. Held in state only — it is shown once and is
+  // never stored anywhere (the server keeps only its SHA-256).
+  const [link, setLink]       = useState<{ url: string; expiresAt: string } | null>(null);
+  const [copied, setCopied]   = useState(false);
   const seesAll = role === 'owner' || role === 'admin';
 
   async function patch(body: Record<string, unknown>, done?: string) {
@@ -272,6 +325,19 @@ function ManageDrawer({ u, projects, reload, onClose }:
     setMsg(done || 'Saved');
     reload();
   }
+
+  // v7.485: mint a one-time reset link for this user. Passwords are one-way
+  // scrypt hashes, so recovery ISSUES A NEW SECRET — it never reveals the old
+  // one. The admin copies this and hands it over; the app has no mail sender.
+  async function makeLink() {
+    setBusy(true); setMsg(null); setCopied(false);
+    const res  = await fetch(`/api/admin/users/${u.id}/reset-link`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setMsg(data.error || 'Could not create a reset link'); return; }
+    setLink({ url: data.url, expiresAt: data.expiresAt });
+  }
+
   const toggle = (id: string) => setGrants(g => g.includes(id) ? g.filter(x => x !== id) : [...g, id]);
   const showGrants = role === 'editor' || role === 'viewer';
 
@@ -287,9 +353,49 @@ function ManageDrawer({ u, projects, reload, onClose }:
         </select>
 
         <div className="mt-4">
-          <label className="block text-[11px] text-orbit-tertiary mb-1">Reset password (optional)</label>
-          <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="new temporary password (8+ chars)"
-            className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2 text-sm outline-none focus:border-orbit-accent" />
+          <PasswordField
+            label="Set password directly (optional)"
+            value={pw} onChange={setPw}
+            placeholder="new temporary password (8+ chars)"
+            hint="Saved with “Save changes”. Or send them a reset link below and let them choose their own." />
+        </div>
+
+        {/* v7.485 — password recovery. Nothing here reads the existing password:
+            it is a one-way scrypt hash and cannot be looked up or shown. */}
+        <div className="mt-4 border-t border-orbit-border pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <span className="block text-[11px] text-orbit-tertiary">Password recovery</span>
+              <span className="block text-[11px] text-orbit-tertiary mt-0.5">
+                One-time link, expires in 30 minutes. They set their own password.
+              </span>
+            </div>
+            <button disabled={busy} onClick={makeLink}
+              className="shrink-0 text-[12px] px-3 py-2 rounded-lg border border-orbit-accent/40 text-orbit-accent-light hover:bg-orbit-accent/10 disabled:opacity-60">
+              {busy ? 'Working…' : link ? 'New link' : 'Create reset link'}
+            </button>
+          </div>
+
+          {link && (
+            <div className="mt-3 bg-orbit-bg border border-orbit-border rounded-lg p-3">
+              <div className="flex items-start gap-2">
+                <code className="flex-1 font-mono text-[10px] text-orbit-secondary break-all leading-relaxed">{link.url}</code>
+                <button
+                  onClick={async () => {
+                    try { await navigator.clipboard.writeText(link.url); setCopied(true); }
+                    catch { setCopied(false); setMsg('Copy failed — select the link and copy it manually.'); }
+                  }}
+                  className="shrink-0 text-[11px] px-2 py-1 rounded border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40">
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <p className="text-[11px] text-orbit-tertiary mt-2">
+                Send this to {u.name} yourself — OrbitIQ does not email it. It works once, expires{' '}
+                {new Date(link.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, and
+                signs out their other sessions when used.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2 mt-4">
@@ -631,12 +737,13 @@ function AddUserTab({ projects, onDone }: { projects: Proj[]; onDone: () => void
         </div>
       </div>
 
-      <label className="block mt-5">
-        <span className="block text-[11px] font-mono uppercase tracking-wider text-orbit-tertiary mb-1.5">Temporary password</span>
-        <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="8+ characters — share it with them; they can’t log in without one"
-          className="w-full bg-orbit-bg border border-orbit-border rounded-lg px-3 py-2.5 text-sm outline-none focus:border-orbit-accent" />
-        <span className="block text-[11px] text-orbit-tertiary mt-1">Leave blank to create the account as “pending” and set a password later.</span>
-      </label>
+      <div className="mt-5">
+        <PasswordField
+          label="Temporary password"
+          value={pw} onChange={setPw}
+          placeholder="8+ characters — share it with them; they can’t log in without one"
+          hint="Leave blank to create the account as “pending”, then send them a reset link from Manage." />
+      </div>
 
       {showGrants && (
         <div className="mt-5">
