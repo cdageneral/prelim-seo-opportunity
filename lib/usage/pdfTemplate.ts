@@ -43,6 +43,14 @@ export interface UsageReportInput {
   keywordCounts: Record<string, KwCount>;
   /** When the report itself was produced. */
   generatedAt: string;
+  /**
+   * v7.483 — what these figures cover. A report of a filtered dashboard that
+   * does not say it is filtered is a false report, so this is printed on page
+   * one AND repeated in the eyebrow of every page. Absent = an unscoped export
+   * from before v7.483; the report simply omits the statement rather than
+   * inventing one (Const I.5).
+   */
+  scope?: { statement: string; rangeLabel: string; dated: boolean; projectFiltered: boolean } | null;
 }
 
 const esc = (s: unknown): string =>
@@ -70,7 +78,8 @@ function kwCell(projectId: string | null, counts: Record<string, KwCount>): stri
 }
 
 export function buildUsageHTML(input: UsageReportInput): string {
-  const { rollup, cost, hours, keywordCounts, generatedAt } = input;
+  const { rollup, cost, hours, keywordCounts, generatedAt, scope } = input;
+  const scoped = !!scope && (scope.dated || scope.projectFiltered);
 
   const grand    = rollup?.grandTotals ?? [];
   const projects = rollup?.projects ?? [];
@@ -127,6 +136,9 @@ export function buildUsageHTML(input: UsageReportInput): string {
     <div class="lede">Real metered credit consumption across every project, as of <b>${esc(asOf)}</b>.
     Every quantity below was recorded per call at the moment the call was made; every dollar is that quantity
     multiplied by a named, dated rate. Provider dashboards remain the billing source of truth.</div>
+    ${scope?.statement ? `<div class="${scoped ? 'callout scopebox' : 'callout'}">
+      <div class="t">${scoped ? 'THIS REPORT IS FILTERED' : 'SCOPE'}</div>
+      <p>${esc(scope.statement)}</p></div>` : ''}
     <div class="tiles c4">${headTiles.join('')}</div>
     <div class="figtitle" style="margin-top:18px;">Consumption by provider</div>
     <div class="figsub">Metered usage plus any manual baseline, in each provider&rsquo;s own native unit. These units are not comparable to one another.</div>
@@ -280,7 +292,10 @@ export function buildUsageHTML(input: UsageReportInput): string {
   body.push(...hoursPages);
 
   const total = body.length;
-  const eyebrowR = `AS OF ${esc(asOf).toUpperCase()}`;
+  // Every page repeats the window, because pages get printed and passed around
+  // individually and a filtered table page must not read as the whole ledger.
+  const eyebrowR = `${scope?.rangeLabel ? esc(scope.rangeLabel).toUpperCase() + ' &middot; ' : ''}AS OF ${esc(asOf).toUpperCase()}`
+    + (scope?.projectFiltered ? ' &middot; FILTERED' : '');
   const pagesHTML = body.map((inner, i) => `
     <div class="page">
       <div class="eyebrow"><span class="l">ORBITIQ &middot; API USAGE &amp; COST</span><span class="r">${eyebrowR}</span></div>
@@ -312,6 +327,8 @@ export function buildUsageHTML(input: UsageReportInput): string {
   .src b{color:var(--ink2);}
   .callout{border-left:3px solid var(--blue); background:#f5f8fd; padding:10px 14px; border-radius:0 6px 6px 0; margin-top:12px;}
   .callout .t{font-size:8.5px; font-weight:800; letter-spacing:.1em; color:var(--blue-550); margin-bottom:3px;}
+  .callout.scopebox{border-left-color:var(--amber); background:#fdf8ec; margin:0 0 14px;}
+  .callout.scopebox .t{color:var(--amber);}
   .callout p{margin-top:0;}
   .gapblock{border:1.5px dashed #ecd39a; background:#fdf8ec; padding:12px 14px; border-radius:8px; margin-top:12px;}
   .gapblock .t{font-size:8.5px; font-weight:800; letter-spacing:.1em; color:var(--amber); margin-bottom:3px;}

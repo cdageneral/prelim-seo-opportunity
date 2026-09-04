@@ -15,6 +15,11 @@
  * line, or credits an hour — it labels, formats and folds what the routes
  * measured (Const I.1).
  *
+ * v7.483 adds the SCOPE layer: the date-range presets, the project filter, and
+ * the folds that apply them. They live here for the same reason everything else
+ * does — the panel and the report must scope identically or the report is a lie
+ * about which rows it covers.
+ *
  * NOTE ON LOCATION (Const II.6c): this module — and the PDF template beside it —
  * live under lib/usage/, deliberately NOT under lib/pdf/. lib/pdf/*, lib/export/*
  * and app/api/reports/* are the enumerated CLIENT-DELIVERABLE namespaces that the
@@ -153,4 +158,217 @@ export function hoursByProject(hours: HoursPayload | null): Map<string, HoursPro
   const m = new Map<string, HoursProject>();
   (Array.isArray(hours?.projects) ? hours!.projects : []).forEach(p => m.set(p.projectId, p));
   return m;
+}
+
+
+// ── v7.483 — SCOPE: date range + project selection ────────────────────────────
+//
+// Two rules govern everything below.
+//
+// (1) A range is a HALF-OPEN INSTANT INTERVAL [from, to). `null` on either end
+//     means unbounded. Half-open is not a detail: with an inclusive end, a row
+//     written at 23:59:59.500 on the last day of a month lands in BOTH that
+//     month and the next, and the two periods would not sum to the whole.
+//
+// (2) Only SPEND is date-scoped. Hours Saved and the Keyword Landscape describe
+//     what a project holds RIGHT NOW — they are current-state figures, not
+//     time series, so there is no honest "hours saved in March". They are
+//     therefore never filtered, and every surface that shows them beside a
+//     filtered figure must SAY so (Wayne, 2026-09-04; Const I.1/I.5).
+
+export type RangeKey = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'ytd' | 'custom';
+
+export interface UsageRange {
+  key: RangeKey;
+  /** Inclusive lower bound, ISO instant. null = unbounded. */
+  from: string | null;
+  /** EXCLUSIVE upper bound, ISO instant. null = up to now. */
+  to: string | null;
+}
+
+export const RANGE_OPTIONS: Array<{ key: RangeKey; label: string }> = [
+  { key: 'all',          label: 'All time' },
+  { key: 'this_month',   label: 'This month' },
+  { key: 'last_month',   label: 'Last month' },
+  { key: 'this_quarter', label: 'This quarter' },
+  { key: 'ytd',          label: 'Year to date' },
+  { key: 'custom',       label: 'Custom range' },
+];
+
+export const ALL_TIME: UsageRange = { key: 'all', from: null, to: null };
+
+/** Local-midnight instant for a calendar day. Boundaries are the operator's own days. */
+function dayStart(y: number, m: number, d: number): string { return new Date(y, m, d, 0, 0, 0, 0).toISOString(); }
+
+/** Parse a YYYY-MM-DD field into local midnight; returns null for an unusable value. */
+function parseDayStart(v: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v ?? ''));
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+  const dt = new Date(y, mo, d, 0, 0, 0, 0);
+  // Reject a date the calendar rolled over (e.g. 2026-02-31) rather than silently shifting it.
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo || dt.getDate() !== d) return null;
+  return dt.toISOString();
+}
+
+/** The day AFTER the given date, at local midnight — the exclusive end of an inclusive day. */
+function parseDayEndExclusive(v: string | null | undefined): string | null {
+  const start = parseDayStart(v);
+  if (!start) return null;
+  const dt = new Date(start);
+  dt.setDate(dt.getDate() + 1);
+  return dt.toISOString();
+}
+
+/**
+ * Resolve a preset against a reference instant. `now` is a parameter, never
+ * read from the clock inside, so this is deterministic and testable.
+ * Open-ended presets ("this month", "this quarter", "year to date") carry a
+ * null upper bound rather than a future one — the period is still running.
+ */
+export function resolveRange(key: RangeKey, now: Date, customFrom?: string | null, customTo?: string | null): UsageRange {
+  const y = now.getFullYear(), m = now.getMonth();
+  switch (key) {
+    case 'this_month':
+      return { key, from: dayStart(y, m, 1), to: null };
+    case 'last_month':
+      return { key, from: dayStart(y, m - 1, 1), to: dayStart(y, m, 1) };
+    case 'this_quarter':
+      return { key, from: dayStart(y, Math.floor(m / 3) * 3, 1), to: null };
+    case 'ytd':
+      return { key, from: dayStart(y, 0, 1), to: null };
+    case 'custom': {
+      const fromRaw = String(customFrom ?? '').trim();
+      const toRaw   = String(customTo   ?? '').trim();
+      const from = parseDayStart(fromRaw);
+      const to   = parseDayEndExclusive(toRaw);
+      // A bound that was SUPPLIED but could not be parsed (2026-02-31, a typo,
+      // a half-typed value) invalidates the whole range. Dropping just that end
+      // and applying the other would silently produce a DIFFERENT window than the
+      // one asked for — an open-ended "everything up to March" in place of a
+      // five-day range — and it would look entirely plausible on screen.
+      // An end genuinely left EMPTY is a deliberate open bound and is honoured.
+      if ((fromRaw && !from) || (toRaw && !to)) return { ...ALL_TIME, key: 'custom' };
+      // An inverted pair is not silently swapped either (Const I.5).
+      if (from && to && from >= to) return { ...ALL_TIME, key: 'custom' };
+      return { key, from, to };
+    }
+    case 'all':
+    default:
+      return ALL_TIME;
+  }
+}
+
+/** True when the range actually constrains anything. */
+export function rangeIsBounded(r: UsageRange | null | undefined): boolean {
+  return !!r && (!!r.from || !!r.to);
+}
+
+const DAY_FMT: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
+
+/** Human label for the active range — the exclusive end is shown as its last INCLUDED day. */
+export function rangeLabel(r: UsageRange | null | undefined): string {
+  if (!rangeIsBounded(r)) return 'All time';
+  const preset = RANGE_OPTIONS.find(o => o.key === r!.key);
+  if (preset && r!.key !== 'custom') return preset.label;
+  const from = r!.from ? new Date(r!.from).toLocaleDateString(undefined, DAY_FMT) : 'the beginning';
+  if (!r!.to) return `${from} to now`;
+  const lastIncluded = new Date(new Date(r!.to).getTime() - 1);
+  return `${from} to ${lastIncluded.toLocaleDateString(undefined, DAY_FMT)}`;
+}
+
+/** Query string for the two spend routes. Empty when unbounded. */
+export function rangeQuery(r: UsageRange | null | undefined): string {
+  const p = new URLSearchParams();
+  if (r?.from) p.set('from', r.from);
+  if (r?.to)   p.set('to', r.to);
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
+
+// ── Project selection ─────────────────────────────────────────────────────────
+// `null` means EVERY project (the default). A Set means exactly those ids, where
+// the unattributed bucket is addressed by the sentinel below — it has no id but
+// it does carry real spend, so it must be selectable like anything else.
+export const UNATTRIBUTED = '__unattributed__';
+
+export function projectKey(projectId: string | null): string { return projectId ?? UNATTRIBUTED; }
+
+export function selectionIsFiltered(sel: Set<string> | null, total: number): boolean {
+  return !!sel && sel.size < total;
+}
+
+/**
+ * Narrow a rollup to the selected projects, recomputing the grand totals as an
+ * EXACT roll-up of the surviving per-project lines.
+ *
+ * This is a sum of stored per-project values, not a re-derivation of a metric
+ * (Const II.6a): each project's line was measured by the route, and the total of
+ * a subset is the sum of that subset. Deriving it any other way — a second query,
+ * a proportional estimate — is what the article forbids.
+ */
+export function filterRollupByProjects(rollup: RollupPayload, sel: Set<string> | null): RollupPayload {
+  if (!sel) return rollup;
+  const projects = (rollup.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  const grand = new Map<string, Line>();
+  for (const p of projects) {
+    for (const l of p.lines) {
+      const k = lineKey(l);
+      const g = grand.get(k) ?? { provider: l.provider, unit: l.unit, usage: 0, baseline: 0, total: 0, calls: 0 };
+      g.usage += l.usage; g.baseline += l.baseline; g.total += l.total; g.calls += l.calls;
+      grand.set(k, g);
+    }
+  }
+  return {
+    ...rollup,
+    projects,
+    grandTotals: Array.from(grand.values())
+      .sort((a, b) => a.provider.localeCompare(b.provider) || a.unit.localeCompare(b.unit)),
+  };
+}
+
+/** The same narrowing for the cost payload, with every total re-summed from the survivors. */
+export function filterCostByProjects(cost: CostPayload | null, sel: Set<string> | null): CostPayload | null {
+  if (!cost || !sel) return cost;
+  const projects = (cost.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  const sum = (f: (p: ProjectCost) => number) => projects.reduce((s, p) => s + (f(p) || 0), 0);
+  return {
+    ...cost,
+    projects,
+    grandTotalUSD:     sum(p => p.costUSD),
+    grandPayPerUseUSD: sum(p => p.payPerUseUSD),
+    grandPlanQuotaUSD: sum(p => p.planQuotaUSD),
+    grandMeasuredUSD:  sum(p => p.measuredUSD),
+  };
+}
+
+/** The same narrowing for the hours payload. Hours are NOT date-scoped, but they ARE per project. */
+export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<string> | null): HoursPayload | null {
+  if (!hours || !sel) return hours;
+  const projects = (hours.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  return {
+    ...hours,
+    projects,
+    projectCount: projects.length,
+    grandHours:   projects.reduce((s, p) => s + (p.hours || 0), 0),
+  };
+}
+
+/**
+ * One sentence naming exactly what the figures cover. Every surface that can be
+ * scoped prints this — a report that silently shows a subset is worse than no
+ * report, and the two non-dated columns are called out by name.
+ */
+export function scopeStatement(range: UsageRange | null | undefined, selected: number | null, total: number): string {
+  const parts: string[] = [];
+  parts.push(rangeIsBounded(range) ? `Spend and usage cover ${rangeLabel(range).toLowerCase()}` : 'Spend and usage cover all recorded activity');
+  parts.push(selected === null || selected >= total
+    ? `across all ${total} ${total === 1 ? 'project' : 'projects'}`
+    : `across ${selected} of ${total} projects`);
+  let s = parts.join(' ') + '.';
+  if (rangeIsBounded(range)) {
+    s += ' Hours Saved and Keywords are current-state figures — they describe what each project holds today and are NOT limited to this date range.'
+       + ' Manual baselines are excluded from a dated view, because a baseline records spend from before the ledger began.';
+  }
+  return s;
 }
