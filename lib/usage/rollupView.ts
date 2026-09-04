@@ -64,12 +64,18 @@ export interface HoursLine {
 }
 export interface HoursProject {
   projectId: string; projectName: string;
+  /** v7.484 — the project's FIRST analysis: the month its delivery began. */
+  initiatedAt?: string | null;
   hours: number; ceilingHours: number;
   creditedCount: number; totalCount: number; proxyHours: number;
   lines: HoursLine[];
 }
 export interface HoursPayload {
   asOf: string; grandHours: number; projectCount: number;
+  /** v7.484 — the window applied, and how many projects it could not date. */
+  range?: { from: string | null; to: string | null };
+  dated?: boolean;
+  undatedExcluded?: number;
   scope: { base: number; local: number; total: number };
   activitiesUpdatedAt: string | null; usingSeed: boolean;
   unregistered: string[]; projects: HoursProject[];
@@ -170,11 +176,19 @@ export function hoursByProject(hours: HoursPayload | null): Map<string, HoursPro
 //     written at 23:59:59.500 on the last day of a month lands in BOTH that
 //     month and the next, and the two periods would not sum to the whole.
 //
-// (2) Only SPEND is date-scoped. Hours Saved and the Keyword Landscape describe
-//     what a project holds RIGHT NOW — they are current-state figures, not
-//     time series, so there is no honest "hours saved in March". They are
-//     therefore never filtered, and every surface that shows them beside a
-//     filtered figure must SAY so (Wayne, 2026-09-04; Const I.1/I.5).
+// (2) Spend and Hours are dated on DIFFERENT bases, and the difference is
+//     stated wherever both appear.
+//       • SPEND is dated by when each call was made.
+//       • HOURS SAVED is dated by when each PROJECT was initiated — the month
+//         its first analysis ran (Wayne, 2026-09-04, revising the v7.483
+//         behaviour where hours ignored the range entirely). Each project has
+//         exactly one initiation month, so windows still partition the total.
+//         The hours themselves remain each project's CURRENT credited total, so
+//         a project that gains a deliverable later raises the figure reported
+//         for its original month. Said out loud, never implied.
+//       • The KEYWORD LANDSCAPE stays un-dated: it grows and shrinks
+//         continuously, so pinning today's count to a setup month would be the
+//         least meaningful of the three (Wayne's call). It keeps its label.
 
 export type RangeKey = 'all' | 'this_month' | 'last_month' | 'this_quarter' | 'ytd' | 'custom';
 
@@ -359,7 +373,12 @@ export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<strin
  * scoped prints this — a report that silently shows a subset is worse than no
  * report, and the two non-dated columns are called out by name.
  */
-export function scopeStatement(range: UsageRange | null | undefined, selected: number | null, total: number): string {
+export function scopeStatement(
+  range: UsageRange | null | undefined,
+  selected: number | null,
+  total: number,
+  hours?: { dated?: boolean; projectCount?: number; undatedExcluded?: number } | null,
+): string {
   const parts: string[] = [];
   parts.push(rangeIsBounded(range) ? `Spend and usage cover ${rangeLabel(range).toLowerCase()}` : 'Spend and usage cover all recorded activity');
   parts.push(selected === null || selected >= total
@@ -367,7 +386,17 @@ export function scopeStatement(range: UsageRange | null | undefined, selected: n
     : `across ${selected} of ${total} projects`);
   let s = parts.join(' ') + '.';
   if (rangeIsBounded(range)) {
-    s += ' Hours Saved and Keywords are current-state figures — they describe what each project holds today and are NOT limited to this date range.'
+    // v7.484 — hours ARE dated now, but on a different basis from spend, and
+    // saying which basis is the whole point of this sentence.
+    const n = hours?.projectCount;
+    s += ` Hours Saved is dated differently: it counts the ${typeof n === 'number' ? n + ' ' : ''}`
+       + `${n === 1 ? 'project' : 'projects'} whose work BEGAN in this period, at each project's current credited total`
+       + ' — so a project that gains a deliverable later raises the figure shown for the month it started.';
+    if ((hours?.undatedExcluded ?? 0) > 0) {
+      s += ` ${hours!.undatedExcluded} project${hours!.undatedExcluded === 1 ? ' has' : 's have'} never been analysed,`
+         + ' so nothing records when their work began and they are excluded from any dated view.';
+    }
+    s += ' Keywords is a live figure and is NOT limited to this date range.'
        + ' Manual baselines are excluded from a dated view, because a baseline records spend from before the ledger began.';
   }
   return s;

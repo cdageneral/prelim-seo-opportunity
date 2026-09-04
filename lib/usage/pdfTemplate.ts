@@ -101,7 +101,9 @@ export function buildUsageHTML(input: UsageReportInput): string {
   if (hours) {
     headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; internal</div>
       <div class="v">${esc(fmt(hours.grandHours))}</div>
-      <div class="d">Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope, across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}.</div></div>`);
+      <div class="d">${(hours as any)?.dated
+        ? `Across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'} <b>initiated in this period</b>, at their current credited totals.`
+        : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope, across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}.`}</div></div>`);
   }
   headTiles.push(`<div class="tile"><div class="k">Projects metered</div>
     <div class="v">${esc(fmt(projects.length))}</div>
@@ -265,6 +267,7 @@ export function buildUsageHTML(input: UsageReportInput): string {
   const hoursPages = hours && hoursProjects.length > 0
     ? chunk(hoursProjects, HOURS_PER_PAGE).map((slice, i, all) => `
       <h1 class="pg sm">Hours saved &mdash; what was credited${all.length > 1 ? ` <span class="ofn">${i + 1} of ${all.length}</span>` : ''}</h1>
+      ${i === 0 && (hours as any)?.dated ? `<div class="figsub">These are the projects whose work BEGAN in this period. A project's hours are dated by its first analysis, not by when each hour was earned.</div>` : ''}
       ${i === 0 ? `<div class="lede">The hours are a declared rate card, not a measurement &mdash; but <i>which</i> activities
         are counted is measured. Each is credited only where the project actually holds that deliverable&rsquo;s stored data,
         so a project with no backlink scan is never credited for a backlink profile. A struck line was withheld for exactly
