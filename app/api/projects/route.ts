@@ -5,6 +5,7 @@
  *
  * v7.32: accepts dataSource ('auto'|'upload') on create; auto-migrates
  *        the data_source column for databases created before v7.32.
+ * v7.486: GET selects an explicit blob-free column set (Neon 507 fix).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -156,9 +157,33 @@ const CreateProjectSchema = z.object({
   accessGroupIds:           z.array(z.string().uuid()).optional().default([]),
 });
 
+// v7.486: the dashboard list needs only the card/row fields. The previous
+// `db.select().from(projects)` pulled EVERY column — including every project's
+// JSONB stores (profound_data, product_insights, insights_panel, authority_snapshot,
+// taxonomy_anchor, content_plan_selections, …). Those blobs grew past Neon's
+// 64 MB single-response cap, the driver threw HTTP 507 "response is too large",
+// and the dashboard rendered three empty tiles with the projects intact in the DB.
+// Selecting an explicit, blob-free column set keeps the list response small no
+// matter how large the per-project stores become. ensureColumns() stays: POST's
+// `.returning()` still reads the full row, and the [id] routes rely on the columns.
+const LIST_COLUMNS = {
+  id:                       projects.id,
+  clientName:               projects.clientName,
+  websiteUrl:               projects.websiteUrl,
+  industry:                 projects.industry,
+  notes:                    projects.notes,
+  status:                   projects.status,
+  dataSource:               projects.dataSource,
+  kwVolThresholdClient:     projects.kwVolThresholdClient,
+  kwVolThresholdCompetitor: projects.kwVolThresholdCompetitor,
+  semrushDatabase:          projects.semrushDatabase,
+  createdAt:                projects.createdAt,
+  updatedAt:                projects.updatedAt,
+};
+
 export async function GET() {
   await ensureColumns();
-  const rows = await db.select().from(projects)
+  const rows = await db.select(LIST_COLUMNS).from(projects)
     .where(eq(projects.status, 'active'))
     .orderBy(desc(projects.createdAt));
 
