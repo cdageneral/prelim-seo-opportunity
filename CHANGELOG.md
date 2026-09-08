@@ -1,3 +1,16 @@
+## v7.486 — 2026-09-08
+
+### The dashboard shows every project again (Neon 507 on the projects list)
+
+- **Wayne:** "where are all of my projects?" — the dashboard rendered three empty tiles. Nothing was lost: every project row was intact in the database. `GET /api/projects` was failing with a 500, and the Vercel runtime errors named the cause — Neon rejected the list query with **HTTP 507 "response is too large (max is 67108864 bytes)"**. First seen 4 Aug 2026 (intermittent), by 8 Sep on every dashboard load.
+- **Why it tipped over.** The list route ran `db.select().from(projects)` — every column, for every project — so every project's JSONB stores rode along on the dashboard call: `profound_data`, `product_insights`, `insights_panel`, `authority_snapshot`, `taxonomy_anchor`, `content_plan_selections` (+ its backup), `scope_*`, `hidden_categories`, `priority_overrides`, `brand_terms`, `excluded_brands`, `market_benchmarks` — 15 blob columns. Their sum crossed Neon's 64 MB single-response cap. Same failure class as the v7.445 SERP-scan 507, now on the one route the whole app starts from.
+- **The fix.** The dashboard card and row read `id`, `clientName`, `websiteUrl`, `industry`, `status`, `updatedAt` — nothing more. The route now selects an explicit, blob-free column set (`LIST_COLUMNS`: those six plus `notes`, `dataSource`, the two volume thresholds, `semrushDatabase`, `createdAt`). The compiled SQL is `select "id", "client_name", "website_url", … from "projects" where status = 'active' order by "created_at" desc` — its size no longer depends on how large any project's stores grow. `ensureColumns()` stays in front of it (the v7.268 lesson): POST's `.returning()` still reads the full row and the `[id]` routes rely on those columns existing.
+- **Nothing else changes.** Same rows, same order, same visibility rules (v7.373 grants ∪ v7.418 group grants). `NewProjectModal` POSTs to this route and is untouched. The `[id]` route, which does need the stores, is untouched.
+
+**Downstream parity (II.6a/II.6b)** — no panel metric, rollup, PDF section or export changed; the route serialises the same dashboard fields it did before, minus the columns no dashboard surface ever read. Not applicable, stated rather than assumed.
+
+**Verification** — real project `tsc` clean under the project tsconfig (Const V.1a), with a negative control (a bogus column in `LIST_COLUMNS` fails typing). 9 new retained-suite checks (`v486-list`) build the **real drizzle SQL** from the route's `LIST_COLUMNS` under the pg dialect and prove **none of the 15 JSONB columns** is in it while every dashboard field is, the active filter + ordering are unchanged, and `ensureColumns` still runs first; on the v7.485 base the same check finds all 15 blob columns in the SQL — 4 of 9 fail there (a real negative control, not a vacuous pass). Full suite A/B: zero unexpected delta. Two carried-forward jsdom harnesses (`render7482`, `render7483`) now `process.exit(0)` once their result is printed (the v7.485 harness lesson) — the suite had idled on their open handles; no check was removed.
+
 ## v7.485 — 2026-09-04
 
 ### Password recovery: a one-time reset link, and an eye on every password field
