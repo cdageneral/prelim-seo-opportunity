@@ -63,6 +63,9 @@ export default function InsightsSection({ projectId, clientName }: Props) {
   const [genStatus, setGenStatus] = useState<{ label: string; step: number; steps: number } | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  // v7.487 — upper bound for this run, streamed by the route so the wait states a
+  // real ceiling instead of counting up forever (Const IV.2).
+  const [budgetSec, setBudgetSec] = useState<number | null>(null);
   const [benchOpen, setBenchOpen] = useState(false);
   const [benchDraft, setBenchDraft] = useState<BenchRow[]>([]);
   const [benchSaving, setBenchSaving] = useState(false);
@@ -90,6 +93,7 @@ export default function InsightsSection({ projectId, clientName }: Props) {
     setGenError(null);
     setGenStatus({ label: 'Starting', step: 1, steps: 5 });
     setElapsed(0);
+    setBudgetSec(null);
     const t0 = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
@@ -99,6 +103,12 @@ export default function InsightsSection({ projectId, clientName }: Props) {
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      // v7.487 — a stream that ends without a terminal frame is a FAILURE, not a
+      // no-op. When the platform kills the function the socket simply closes: the
+      // reader reports `done`, no error frame ever arrives, and the panel used to
+      // fall silently back to "Not generated yet" with nothing said (TD Bank,
+      // 2026-09-09). Track whether a terminal frame actually landed.
+      let sawTerminal = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -107,10 +117,16 @@ export default function InsightsSection({ projectId, clientName }: Props) {
         for (const line of lines) {
           if (!line.trim()) continue;
           let msg: any; try { msg = JSON.parse(line); } catch { continue; }
-          if (msg.type === 'status') setGenStatus({ label: msg.label, step: msg.step ?? 0, steps: msg.steps ?? 5 });
-          else if (msg.type === 'error') setGenError(msg.error ?? 'Generation failed.');
-          else if (msg.type === 'done') { setInsights(msg.insights ?? null); setUpdatedAt(msg.updatedAt ?? null); }
+          if (msg.type === 'status') {
+            setGenStatus({ label: msg.label, step: msg.step ?? 0, steps: msg.steps ?? 5 });
+            if (typeof msg.budgetMs === 'number') setBudgetSec(Math.round(msg.budgetMs / 1000));
+          }
+          else if (msg.type === 'error') { sawTerminal = true; setGenError(msg.error ?? 'Generation failed.'); }
+          else if (msg.type === 'done') { sawTerminal = true; setInsights(msg.insights ?? null); setUpdatedAt(msg.updatedAt ?? null); }
         }
+      }
+      if (!sawTerminal) {
+        setGenError('The generation was cut off by the server before it finished, so nothing was saved. This usually means the run hit its time limit — try again, and if it keeps happening the project may need its data narrowed.');
       }
     } catch { setGenError('Generation failed — check the connection and try again.'); }
     finally {
@@ -200,7 +216,9 @@ export default function InsightsSection({ projectId, clientName }: Props) {
                 <div style={{ height: '100%', width: `${Math.round((genStatus.step / genStatus.steps) * 100)}%`, background: 'var(--c-6c63ff)', borderRadius: '2px', transition: 'width .4s' }} />
               </div>
             </div>
-            <span style={{ fontSize: '11px', color: 'var(--c-6a6a90)', flexShrink: 0 }}>{elapsed}s elapsed</span>
+            <span style={{ fontSize: '11px', color: 'var(--c-6a6a90)', flexShrink: 0 }}>
+              {elapsed}s elapsed{budgetSec ? ` · up to ${Math.round(budgetSec / 60)}m` : ''}
+            </span>
           </div>
         )}
         {genError && (
