@@ -11,6 +11,9 @@
  *        benchmarks = user-entered market benchmark rows (external scale data,
  *                     e.g. deposits) — displayed verbatim with their source,
  *                     never computed on (Const I.1: user-supplied, source-labeled)
+ *        job        = v7.488 — the live state of the current/last generation run
+ *        GET ?job=1 → { job, insights, updatedAt } only — the cheap poll the panel
+ *                     uses when its stream is gone (no census rebuild, no blobs)
  * PUT  → { benchmarks } — store the market-benchmark rows
  * POST → generate/regenerate the narrative insights. NDJSON status stream
  *        (Const IV.2), Claude tool-use over lib/seer/core's guarded tools with
@@ -18,6 +21,16 @@
  *        JSON must appear verbatim in a tool result from THIS request, or the
  *        generation is refused — never stored (Const I.1, the v7.463 lesson:
  *        a prompt rule is a request; the machine check is the guarantee).
+ *
+ * v7.488 — the run no longer DEPENDS on its stream. v7.487 gave the server a
+ * wall-clock budget, and the server then ran to completion — but the browser's
+ * connection was cut at ~5 min by an intermediate layer, so the result landed in
+ * the database and nobody saw it. Now every status frame, heartbeat and terminal
+ * outcome is ALSO written to projects.insights_panel_job; the panel switches to
+ * polling GET ?job=1 the moment its stream drops, and a reload mid-run resumes
+ * from the stored state. A 15 s heartbeat keeps idle-timeout layers fed, a
+ * running job is never started twice (POST attaches to it instead), and every
+ * enqueue is guarded so a vanished client cannot abort the generation.
  *
  * Cached: the verified blob is stored on projects.insights_panel and re-served
  * until the user regenerates. Every Claude call is metered into the api_usage
@@ -27,6 +40,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import Anthropic from '@anthropic-ai/sdk';
+import { randomUUID } from 'node:crypto';
 import { db } from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
@@ -67,10 +81,27 @@ const RESERVE_MS = 95_000;   // held back for: final no-tools write + verify + D
 const REPAIR_MS  = 70_000;   // a repair round is only started with this much left
 const MIN_CALL_MS = 30_000;  // never hand the SDK an absurdly short timeout
 
+// ── v7.488 — job state + heartbeat ────────────────────────────────────────────
+const HEARTBEAT_MS  = 15_000;  // a ping frame (and a job write) while the model thinks
+const JOB_STALE_MS  = 90_000;  // a "running" job not touched for this long is presumed dead
+
+type JobStatus = 'running' | 'done' | 'error';
+interface Job {
+  runId: string; status: JobStatus; label: string; step: number; steps: number;
+  startedAt: string; updatedAt: string; elapsedMs: number; budgetMs: number;
+  error?: string | null; refusal?: boolean;
+}
+function jobIsLive(j: any): j is Job {
+  if (!j || j.status !== 'running' || typeof j.updatedAt !== 'string') return false;
+  const t = Date.parse(j.updatedAt);
+  return Number.isFinite(t) && (Date.now() - t) < JOB_STALE_MS;
+}
+
 async function ensureColumns() {
   try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel JSONB`); } catch { /* exists */ }
   try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel_updated_at TIMESTAMP`); } catch { /* exists */ }
   try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS market_benchmarks JSONB`); } catch { /* exists */ }
+  try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel_job JSONB`); } catch { /* exists */ }   // v7.488
 }
 
 // Market benchmarks are EXTERNAL scale data the user enters with a named source
@@ -145,6 +176,25 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const gate = await checkProjectAccess(params.id);
   if (!gate.ok) return NextResponse.json({ error: gate.reason ?? 'Access denied' }, { status: gate.status, headers: JSON_NO_STORE });
   await ensureColumns();
+
+  // v7.488 — the cheap poll. Explicit columns only (the v7.486 lesson): no census
+  // rebuild, no quadrant, none of the big JSONB stores — the panel hits this
+  // every few seconds while a run is in flight or after its stream dropped.
+  if (_req.nextUrl.searchParams.get('job') === '1') {
+    const [row] = await db.select({
+      job: projects.insightsPanelJob, insights: projects.insightsPanel, updatedAt: projects.insightsPanelUpdatedAt,
+    }).from(projects).where(eq(projects.id, params.id)).limit(1);
+    if (!row) return NextResponse.json({ error: 'Project not found' }, { status: 404, headers: JSON_NO_STORE });
+    const job: any = row.job ?? null;
+    // A "running" job nobody has touched in JOB_STALE_MS is reported as such, in
+    // words, rather than spinning forever (Const I.5 — an honest gap).
+    if (job && job.status === 'running' && !jobIsLive(job)) {
+      job.status = 'error';
+      job.error = 'The server stopped reporting progress on this run, so it is presumed to have died. Nothing was saved from it. Try again.';
+    }
+    return NextResponse.json({ job, insights: row.insights ?? null, updatedAt: row.updatedAt ?? null }, { headers: JSON_NO_STORE });
+  }
+
   const project = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404, headers: JSON_NO_STORE });
 
@@ -161,6 +211,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     updatedAt: (project as any).insightsPanelUpdatedAt ?? null,
     quadrant, coverage,
     benchmarks: (project as any).marketBenchmarks ?? null,
+    job: (project as any).insightsPanelJob ?? null,   // v7.488 — a reload mid-run resumes from this
   }, { headers: JSON_NO_STORE });
 }
 
@@ -244,33 +295,85 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     return new Response(JSON.stringify({ type: 'error', error: 'Insights generation is not configured (ANTHROPIC_API_KEY missing)' }) + '\n', { status: 503, headers: NDJSON_NO_STORE });
   }
   const projectId = params.id;
+  await ensureColumns();
+
+  // v7.488 — one run at a time. A second click, a reload-and-click, or two tabs
+  // must ATTACH to the run in flight (the client polls it), never start another
+  // — two runs raced on TD Bank on 2026-09-09 and doubled the spend for nothing.
+  const [cur] = await db.select({ job: projects.insightsPanelJob }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (cur && jobIsLive(cur.job)) {
+    return new Response(JSON.stringify({ type: 'attached', job: cur.job }) + '\n', { status: 200, headers: NDJSON_NO_STORE });
+  }
+
+  // Absolute clock for this run (v7.487, hoisted in v7.488 so the budget counts
+  // from the first byte of work, not from after the census is built).
+  // `deadlineAt` is ours and is always earlier than the platform kill;
+  // `toolCutoffAt` is when we stop gathering and start writing. Every SDK call
+  // is also given a timeout of whatever is left, so one hung upstream call
+  // cannot eat the budget.
+  const t0           = Date.now();
+  const deadlineAt   = t0 + BUDGET_MS - SAFETY_MS;
+  const toolCutoffAt = deadlineAt - RESERVE_MS;
+  const msLeft       = () => deadlineAt - Date.now();
+  const callTimeout  = () => Math.max(MIN_CALL_MS, msLeft());
+  const clock        = () => ({ elapsedMs: Date.now() - t0, budgetMs: BUDGET_MS });
+
+  // v7.488 — the job row is the record of this run; the stream is a courtesy.
+  let job: Job = {
+    runId: randomUUID(), status: 'running', label: 'Starting', step: 1, steps: 5,
+    startedAt: new Date(t0).toISOString(), updatedAt: new Date(t0).toISOString(), elapsedMs: 0, budgetMs: BUDGET_MS,
+  };
+  // Writes are serialised so a later state can never land before an earlier one,
+  // and the chain is awaited before the response closes (Fluid compute may freeze
+  // the instance once the response completes — a write still in flight then
+  // would be lost, and the panel would poll a "running" job forever).
+  let persistChain: Promise<void> = Promise.resolve();
+  const persist = (patch: Partial<Job>): Promise<void> => {
+    job = { ...job, ...patch, updatedAt: new Date().toISOString(), elapsedMs: Date.now() - t0 };
+    const snapshot = job;
+    persistChain = persistChain
+      .then(() => db.update(projects).set({ insightsPanelJob: snapshot as any } as any).where(eq(projects.id, projectId)).then(() => undefined))
+      .catch(() => undefined);
+    return persistChain;
+  };
+  await persist({});   // claim the run before any work, so a racing click attaches
 
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
-      const emit = (obj: any) => controller.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+      // v7.488 — every enqueue is guarded. If the client has gone (connection cut,
+      // tab closed), enqueue throws; that must NOT abort the generation — the job
+      // row carries on and the panel picks the result up by polling.
+      let clientGone = false;
+      const emit = (obj: any) => {
+        if (!clientGone) {
+          try { controller.enqueue(enc.encode(JSON.stringify(obj) + '\n')); }
+          catch { clientGone = true; }
+        }
+        if (obj.type === 'status')     void persist({ status: 'running', label: String(obj.label ?? job.label), step: obj.step ?? job.step, steps: obj.steps ?? job.steps });
+        else if (obj.type === 'ping')  void persist({});
+        else if (obj.type === 'error') void persist({ status: 'error', error: String(obj.error ?? 'Generation failed'), refusal: !!obj.refusal });
+        else if (obj.type === 'done')  void persist({ status: 'done', label: 'Done', step: 5, steps: 5, error: null });
+      };
+      // A heartbeat while the model thinks: idle-timeout layers see traffic, and
+      // the job row's updatedAt keeps proving the run is alive (JOB_STALE_MS).
+      const hb = setInterval(() => emit({ type: 'ping', ...clock() }), HEARTBEAT_MS);
+      let finished = false;
+      const finish = async () => {
+        if (finished) return; finished = true;
+        clearInterval(hb);
+        await persistChain;                     // the terminal state lands BEFORE the response closes
+        try { controller.close(); } catch { /* already closed */ }
+      };
       try {
-        await ensureColumns();
-        emit({ type: 'status', label: 'Loading stored project data', step: 1, steps: 5 });
+        emit({ type: 'status', label: 'Loading stored project data', step: 1, steps: 5, ...clock() });
         const ctx = await buildContext(projectId);
-        if ('error' in ctx) { emit({ type: 'error', error: ctx.error }); controller.close(); return; }
+        if ('error' in ctx) { emit({ type: 'error', error: ctx.error }); await finish(); return; }
 
         setUsageProject(projectId);
         const client = instrumentAnthropic(new Anthropic({ apiKey }), 'insights');
 
-        // Absolute clock for this request (v7.487). `deadlineAt` is ours and is
-        // always earlier than the platform kill; `toolCutoffAt` is when we stop
-        // gathering and start writing. Every SDK call is also given a timeout of
-        // whatever is left, so one hung upstream call cannot eat the budget and
-        // leave the caller with a silent stream again.
-        const t0           = Date.now();
-        const deadlineAt   = t0 + BUDGET_MS - SAFETY_MS;
-        const toolCutoffAt = deadlineAt - RESERVE_MS;
-        const msLeft       = () => deadlineAt - Date.now();
-        const callTimeout  = () => Math.max(MIN_CALL_MS, msLeft());
-        const clock        = () => ({ elapsedMs: Date.now() - t0, budgetMs: BUDGET_MS });
-
-        emit({ type: 'status', label: 'Collecting data from every panel', step: 2, steps: 5 });
+        emit({ type: 'status', label: 'Collecting data from every panel', step: 2, steps: 5, ...clock() });
         const { payload: censusPayload } = buildCensus(ctx);
         const groundedPayloads: string[] = [censusPayload];
 
@@ -319,7 +422,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           // a big project, not an error: we stop gathering and write what we have.
           if (Date.now() >= toolCutoffAt) {
             stored = await finalAnswer('Time budget reached — writing the verified insights from the data already read');
-            if (!stored) { controller.close(); return; }
+            if (!stored) { await finish(); return; }
             break;
           }
           const resp: Anthropic.Message = await client.messages.create({
@@ -356,7 +459,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
                 error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + (problem ?? '') + ' Try again — nothing unverified was saved.',
                 refusal: true,
               });
-              controller.close();
+              await finish();
               return;
             }
             if (msLeft() < REPAIR_MS) {
@@ -367,7 +470,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
                 error: 'The grounding check failed and there was not enough time left to re-query safely, so the generation was discarded — nothing unverified was saved. ' + (problem ?? '') + ' Try again.',
                 refusal: true,
               });
-              controller.close();
+              await finish();
               return;
             }
             repairs++;
@@ -399,7 +502,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             // Out of tool turns — force a final NO-TOOLS answer from what was
             // gathered (the Seer pattern, v7.462), then verify it like any draft.
             stored = await finalAnswer('Writing the verified insights');
-            if (!stored) { controller.close(); return; }
+            if (!stored) { await finish(); return; }
           }
         }
 
@@ -408,7 +511,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         // the stored panel untouched rather than silently blanking it (I.5).
         if (!stored) {
           emit({ type: 'error', error: 'Generation ended without a verified result, so nothing was saved. Try again.', refusal: true });
-          controller.close();
+          await finish();
           return;
         }
 
@@ -421,7 +524,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       } catch (e: any) {
         emit({ type: 'error', error: e?.message ?? 'Insights generation failed — try again' });
       } finally {
-        try { controller.close(); } catch { /* closed */ }
+        await finish();
       }
     },
   });
