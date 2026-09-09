@@ -137,6 +137,9 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS market_benchmarks JSONB`);
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel_job JSONB`);        // v7.488
+  } catch { /* already exists */ }
 }
 
 // v7.99: valid market codes come from the single source of truth in markets.ts
