@@ -149,6 +149,9 @@ async function ensureColumns() {
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS market_benchmarks JSONB`);
   } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel_job JSONB`);        // v7.488
+  } catch { /* already exists */ }
 }
 
 const marketCodes = MARKETS.map(m => m.code) as [string, ...string[]];   // v7.99
