@@ -131,6 +131,13 @@ export const projects = pgTable('projects', {
   insightsPanel:             jsonb('insights_panel'),
   insightsPanelUpdatedAt:    timestamp('insights_panel_updated_at'),
   marketBenchmarks:          jsonb('market_benchmarks'),
+  // v7.488: the LIVE STATE of an insights generation run — status, current step
+  // label, timestamps, and the terminal error if any. Written by the POST as it
+  // goes, read by GET, so the panel no longer depends on one long-lived stream
+  // staying open (v7.487's connection was cut at ~5 min while the server ran on
+  // to completion and nobody saw the result). Small (< 1 KB); never a client
+  // deliverable. Ensured in the projects-list + [id] + insights-panel routes.
+  insightsPanelJob:          jsonb('insights_panel_job'),
   // v7.342: the project's CANONICAL TAXONOMY ANCHOR (distinct canonical paths from the
   // last successful anchored-engine breakdown, capped). Lives on the PROJECT — like brand
   // terms — so it SURVIVES the full keyword reset Wayne's upload workflow runs (the reset
