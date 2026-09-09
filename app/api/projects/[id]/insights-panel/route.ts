@@ -41,13 +41,31 @@ import { buildQuadrant, buildCoverageSummary } from '@/lib/insightsPanel/build';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-export const maxDuration = 300;
+export const maxDuration = 800;   // v7.487 (Fluid compute, Pro) — was 300
 
 const JSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform' } as const;
 const NDJSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform', 'Content-Type': 'application/x-ndjson' } as const;
 
 const MAX_TOOL_TURNS = 16;
 const MAX_REPAIRS = 3;
+
+// ── v7.487 — the wall-clock budget ───────────────────────────────────────────
+// Why this exists: the platform kills the function at `maxDuration` WITHOUT any
+// error frame. The NDJSON stream simply stops mid-flight, the browser reads a
+// clean end-of-stream, and the panel silently reverts to "Not generated yet" —
+// no error, nothing saved, nothing said (TD Bank, 2026-09-09 19:58 UTC, killed
+// at 300s mid-tool-loop). The loop had no notion of elapsed time: 16 tool turns
+// plus up to 3 repair rounds, each a full call against a context that grows
+// every turn, will outrun any ceiling on a large enough project.
+//
+// So the route now owns a deadline SHORTER than the platform's and always lands
+// a terminal frame (done or error) inside it. Raising the ceiling alone would
+// not have fixed this — it would only have moved the silent kill later.
+const BUDGET_MS  = maxDuration * 1000;
+const SAFETY_MS  = 25_000;   // margin so our deadline always precedes the kill
+const RESERVE_MS = 95_000;   // held back for: final no-tools write + verify + DB save
+const REPAIR_MS  = 70_000;   // a repair round is only started with this much left
+const MIN_CALL_MS = 30_000;  // never hand the SDK an absurdly short timeout
 
 async function ensureColumns() {
   try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS insights_panel JSONB`); } catch { /* exists */ }
@@ -240,6 +258,18 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
         setUsageProject(projectId);
         const client = instrumentAnthropic(new Anthropic({ apiKey }), 'insights');
 
+        // Absolute clock for this request (v7.487). `deadlineAt` is ours and is
+        // always earlier than the platform kill; `toolCutoffAt` is when we stop
+        // gathering and start writing. Every SDK call is also given a timeout of
+        // whatever is left, so one hung upstream call cannot eat the budget and
+        // leave the caller with a silent stream again.
+        const t0           = Date.now();
+        const deadlineAt   = t0 + BUDGET_MS - SAFETY_MS;
+        const toolCutoffAt = deadlineAt - RESERVE_MS;
+        const msLeft       = () => deadlineAt - Date.now();
+        const callTimeout  = () => Math.max(MIN_CALL_MS, msLeft());
+        const clock        = () => ({ elapsedMs: Date.now() - t0, budgetMs: BUDGET_MS });
+
         emit({ type: 'status', label: 'Collecting data from every panel', step: 2, steps: 5 });
         const { payload: censusPayload } = buildCensus(ctx);
         const groundedPayloads: string[] = [censusPayload];
@@ -249,17 +279,56 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           content: 'Generate the Insights panel content for this project now.\n\n<data_census>\n' + censusPayload + '\n</data_census>',
         }];
 
-        emit({ type: 'status', label: 'Reading the data across panels', step: 3, steps: 5 });
+        emit({ type: 'status', label: 'Reading the data across panels', step: 3, steps: 5, ...clock() });
         let repairs = 0;
         let stored: any = null;
+
+        // v7.487 — ONE closure for "stop querying, write the answer from what we
+        // already gathered". It was previously inline and reachable only from the
+        // tool-turn cap (the v7.462 Seer pattern); the wall clock now reaches the
+        // same path. Both routes verify the draft identically and both still fail
+        // CLOSED (v7.463) — a time limit is never a reason to relax grounding.
+        const finalAnswer = async (label: string): Promise<any | null> => {
+          emit({ type: 'status', label, step: 4, steps: 5, ...clock() });
+          const fin: Anthropic.Message = await client.messages.create({
+            model: SEER_MODEL,
+            max_tokens: 4000,
+            system: insightsSystemPrompt(ctx) + '\nYou have used all tool calls. Reply NOW with the single JSON object, using only numbers that appeared in the tool results above.',
+            messages,
+          }, { timeout: callTimeout() });
+          const draft = fin.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n').trim();
+          const parsed = parseGenerated(draft);
+          const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
+          if ('blob' in parsed && bad.length === 0) {
+            return {
+              ...tidyBlob(parsed.blob),
+              generatedAt: new Date().toISOString(),
+              model: SEER_MODEL,
+              verified: extractNumberTokens(narrativeText(parsed.blob)).length,
+              analysisCompletedAt: ctx.analysis?.completedAt ?? null,
+            };
+          }
+          // Fail CLOSED — unverified output is never stored (v7.463).
+          emit({ type: 'error', error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + ('parseError' in parsed ? parsed.parseError : ('Unverified numbers: ' + bad.join(', '))) + ' Try again — nothing unverified was saved.', refusal: true });
+          return null;
+        };
+
         for (let turn = 0; turn < MAX_TOOL_TURNS && !stored; turn++) {
+          // Spend a tool turn only if there is still time to write and verify the
+          // answer afterwards (v7.487). Crossing this line is normal operation on
+          // a big project, not an error: we stop gathering and write what we have.
+          if (Date.now() >= toolCutoffAt) {
+            stored = await finalAnswer('Time budget reached — writing the verified insights from the data already read');
+            if (!stored) { controller.close(); return; }
+            break;
+          }
           const resp: Anthropic.Message = await client.messages.create({
             model: SEER_MODEL,
             max_tokens: 4000,
             system: insightsSystemPrompt(ctx),
             tools: TOOLS,
             messages,
-          });
+          }, { timeout: callTimeout() });
           const toolUses = resp.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
           const textBlocks = resp.content.filter((b): b is Anthropic.TextBlock => b.type === 'text');
 
@@ -290,8 +359,19 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
               controller.close();
               return;
             }
+            if (msLeft() < REPAIR_MS) {
+              // v7.487 — a repair round we cannot finish would be killed mid-stream
+              // and say nothing. Refuse in words instead, still storing nothing.
+              emit({
+                type: 'error',
+                error: 'The grounding check failed and there was not enough time left to re-query safely, so the generation was discarded — nothing unverified was saved. ' + (problem ?? '') + ' Try again.',
+                refusal: true,
+              });
+              controller.close();
+              return;
+            }
             repairs++;
-            emit({ type: 'status', label: `Grounding check failed — re-querying (${repairs}/${MAX_REPAIRS})`, step: 4, steps: 5 });
+            emit({ type: 'status', label: `Grounding check failed — re-querying (${repairs}/${MAX_REPAIRS})`, step: 4, steps: 5, ...clock() });
             messages.push({ role: 'assistant', content: draft });
             messages.push({
               role: 'user',
@@ -303,7 +383,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           messages.push({ role: 'assistant', content: resp.content });
           const results: Anthropic.ToolResultBlockParam[] = [];
           for (const tu of toolUses) {
-            emit({ type: 'status', label: statusLabelFor(tu.name, tu.input), step: 3, steps: 5 });
+            emit({ type: 'status', label: statusLabelFor(tu.name, tu.input), step: 3, steps: 5, ...clock() });
             let out: any;
             try { out = runTool(ctx, tu.name, tu.input); }
             catch (e: any) { out = { error: `Tool failed: ${e?.message ?? 'unknown'}` }; }
@@ -318,34 +398,21 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           if (turn === MAX_TOOL_TURNS - 1 && !stored) {
             // Out of tool turns — force a final NO-TOOLS answer from what was
             // gathered (the Seer pattern, v7.462), then verify it like any draft.
-            emit({ type: 'status', label: 'Writing the verified insights', step: 4, steps: 5 });
-            const fin: Anthropic.Message = await client.messages.create({
-              model: SEER_MODEL,
-              max_tokens: 4000,
-              system: insightsSystemPrompt(ctx) + '\nYou have used all tool calls. Reply NOW with the single JSON object, using only numbers that appeared in the tool results above.',
-              messages,
-            });
-            const draft = fin.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n').trim();
-            const parsed = parseGenerated(draft);
-            const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
-            if ('blob' in parsed && bad.length === 0) {
-              stored = {
-                ...tidyBlob(parsed.blob),
-                generatedAt: new Date().toISOString(),
-                model: SEER_MODEL,
-                verified: extractNumberTokens(narrativeText(parsed.blob)).length,
-                analysisCompletedAt: ctx.analysis?.completedAt ?? null,
-              };
-            } else {
-              // Fail CLOSED — unverified output is never stored (v7.463).
-              emit({ type: 'error', error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + ('parseError' in parsed ? parsed.parseError : ('Unverified numbers: ' + bad.join(', '))) + ' Try again — nothing unverified was saved.', refusal: true });
-              controller.close();
-              return;
-            }
+            stored = await finalAnswer('Writing the verified insights');
+            if (!stored) { controller.close(); return; }
           }
         }
 
-        emit({ type: 'status', label: 'Saving the verified insights', step: 5, steps: 5 });
+        // v7.487 — never write a null panel. Every path that reaches here should
+        // have produced a verified blob; if one ever does not, say so and leave
+        // the stored panel untouched rather than silently blanking it (I.5).
+        if (!stored) {
+          emit({ type: 'error', error: 'Generation ended without a verified result, so nothing was saved. Try again.', refusal: true });
+          controller.close();
+          return;
+        }
+
+        emit({ type: 'status', label: 'Saving the verified insights', step: 5, steps: 5, ...clock() });
         const now = new Date();
         await db.update(projects)
           .set({ insightsPanel: stored as any, insightsPanelUpdatedAt: now, updatedAt: now } as any)
