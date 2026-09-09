@@ -22,6 +22,12 @@
  *
  * Const IV.1: scroll root is `flex-1 min-h-0 overflow-y-auto`.
  * Const IV.2: generation streams live step labels (step N of 5 + elapsed).
+ * v7.488: the panel no longer depends on that stream staying open. The route
+ *   writes every step to a job row; if the stream drops (v7.487's was cut at
+ *   ~5 min by an intermediate layer while the server ran on to completion) the
+ *   panel switches to polling GET ?job=1 and picks up the result when it lands,
+ *   and a reload mid-run resumes from the stored job instead of showing the
+ *   empty state. A run already in flight is attached to, never duplicated.
  * Const IV.6: colour tokens are the shipped panel vocabulary (theme-mapped).
  */
 
@@ -42,7 +48,7 @@ interface CovLine { product: string; journeyTopicsRequired: number | null; clien
 interface Coverage { lines: CovLine[]; basis: string; }
 interface BenchRow { brand: string; metric: string; value: string; rank?: number | null; source: string; }
 
-interface Props { projectId: string; clientName?: string | null; }
+interface Props { projectId: string; clientName?: string | null; pollMs?: number; }   // pollMs: v7.488 — test seam only; the app never passes it
 
 const TAG_STYLES: Record<Pattern['tag'], { label: string; color: string; bg: string; border: string }> = {
   PATTERN:     { label: 'PATTERN',     color: 'var(--c-9b96ff)', bg: 'var(--ca-108-99-255-0_12)', border: 'var(--ca-108-99-255-0_25)' },
@@ -53,7 +59,7 @@ const TAG_STYLES: Record<Pattern['tag'], { label: string; color: string; bg: str
 
 function squash(s: string): string { return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
 
-export default function InsightsSection({ projectId, clientName }: Props) {
+export default function InsightsSection({ projectId, clientName, pollMs }: Props) {
   const [insights, setInsights] = useState<InsightsBlob | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [quadrant, setQuadrant] = useState<Quadrant | null>(null);
@@ -70,6 +76,56 @@ export default function InsightsSection({ projectId, clientName }: Props) {
   const [benchDraft, setBenchDraft] = useState<BenchRow[]>([]);
   const [benchSaving, setBenchSaving] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);   // v7.488 — the poll loop stops when the panel unmounts
+
+  // v7.488 — one elapsed ticker, anchored on the run's real start so a reload
+  // mid-run shows the true elapsed time, not the seconds since the reload.
+  const startTicker = useCallback((startedAtMs: number) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setElapsed(Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)));
+    timerRef.current = setInterval(() => setElapsed(Math.max(0, Math.round((Date.now() - startedAtMs) / 1000))), 1000);
+  }, []);
+  const stopTicker = useCallback(() => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    setGenStatus(null);
+  }, []);
+
+  // v7.488 — follow a run through its stored job row until it ends. This is the
+  // path the panel takes when its stream is gone (cut connection, closed tab,
+  // reload) or when a click found a run already in flight. GET ?job=1 is the
+  // cheap poll: explicit columns, no census rebuild. Ends on done/error, or in
+  // words if the server stops reporting (the route marks such a job as dead).
+  const followJob = useCallback(async (): Promise<void> => {
+    const POLL_MS = pollMs ?? 4000;
+    const MAX_MISSES = 8;   // ~32 s of failed polls in a row before giving up in words
+    let misses = 0;
+    for (;;) {
+      if (!mountedRef.current) return;
+      await new Promise(r => setTimeout(r, POLL_MS));
+      if (!mountedRef.current) return;
+      let j: any = null; let reached = false;
+      try {
+        const r = await fetch(`/api/projects/${projectId}/insights-panel?job=1`, { cache: 'no-store' });
+        if (r.ok) { j = await r.json(); reached = true; }
+      } catch { /* transient — counted below */ }
+      if (!reached) {
+        // A blip while polling is not a failed run — retry, but not forever.
+        if (++misses >= MAX_MISSES) { setGenError('Lost contact with the server while following the run. The run may still finish on its own — reload this panel in a minute to check.'); return; }
+        continue;
+      }
+      misses = 0;
+      const job = j?.job ?? null;
+      if (!job) { setGenError('The run could not be found on the server. Nothing was saved. Try again.'); return; }
+      if (job.status === 'running') {
+        setGenStatus({ label: job.label ?? 'Working', step: job.step ?? 0, steps: job.steps ?? 5 });
+        if (typeof job.budgetMs === 'number') setBudgetSec(Math.round(job.budgetMs / 1000));
+        continue;
+      }
+      if (job.status === 'done') { setInsights(j.insights ?? null); setUpdatedAt(j.updatedAt ?? null); return; }
+      setGenError(job.error ?? 'Generation failed.');
+      return;
+    }
+  }, [projectId, pollMs]);
 
   const load = useCallback(async () => {
     try {
@@ -82,33 +138,41 @@ export default function InsightsSection({ projectId, clientName }: Props) {
       setCoverage(j.coverage ?? null);
       const b = Array.isArray(j.benchmarks) ? j.benchmarks : [];
       setBenchmarks(b); setBenchDraft(b);
+      // v7.488 — a run in flight survives a reload: show its live step and follow it.
+      const job = j.job ?? null;
+      if (job && job.status === 'running' && typeof job.updatedAt === 'string' && Date.now() - Date.parse(job.updatedAt) < 90_000) {
+        setGenError(null);
+        setGenStatus({ label: job.label ?? 'Working', step: job.step ?? 0, steps: job.steps ?? 5 });
+        if (typeof job.budgetMs === 'number') setBudgetSec(Math.round(job.budgetMs / 1000));
+        startTicker(Date.parse(job.startedAt) || Date.now());
+        followJob().finally(stopTicker);
+      }
     } finally { setLoading(false); }
-  }, [projectId]);
+  }, [projectId, startTicker, stopTicker, followJob]);
 
   useEffect(() => { setLoading(true); load(); }, [load]);
 
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; if (timerRef.current) clearInterval(timerRef.current); }; }, []);
+
 
   const generate = useCallback(async () => {
     setGenError(null);
     setGenStatus({ label: 'Starting', step: 1, steps: 5 });
-    setElapsed(0);
     setBudgetSec(null);
-    const t0 = Date.now();
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => setElapsed(Math.round((Date.now() - t0) / 1000)), 1000);
+    startTicker(Date.now());
+    // v7.488 — the stream is the fast path; the job row is the truth. Whether the
+    // stream ends cleanly without a terminal frame (v7.487's silent kill) or
+    // throws mid-read (v7.487's "check the connection" — the connection really
+    // was cut, at ~5 min, while the server finished the run), the panel does the
+    // same thing: it follows the stored job to its end instead of guessing.
+    let sawTerminal = false;
+    let streamGone: string | null = null;
     try {
       const r = await fetch(`/api/projects/${projectId}/insights-panel`, { method: 'POST' });
       if (!r.ok || !r.body) { setGenError('Generation failed to start — try again.'); return; }
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
-      // v7.487 — a stream that ends without a terminal frame is a FAILURE, not a
-      // no-op. When the platform kills the function the socket simply closes: the
-      // reader reports `done`, no error frame ever arrives, and the panel used to
-      // fall silently back to "Not generated yet" with nothing said (TD Bank,
-      // 2026-09-09). Track whether a terminal frame actually landed.
-      let sawTerminal = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -121,19 +185,35 @@ export default function InsightsSection({ projectId, clientName }: Props) {
             setGenStatus({ label: msg.label, step: msg.step ?? 0, steps: msg.steps ?? 5 });
             if (typeof msg.budgetMs === 'number') setBudgetSec(Math.round(msg.budgetMs / 1000));
           }
+          else if (msg.type === 'ping') { /* heartbeat — the ticker already shows elapsed */ }
+          else if (msg.type === 'attached') {
+            // A run was already in flight (double click, second tab, reload+click):
+            // no second run was started — follow the existing one.
+            const job = msg.job ?? {};
+            setGenStatus({ label: job.label ?? 'Working', step: job.step ?? 0, steps: job.steps ?? 5 });
+            if (typeof job.budgetMs === 'number') setBudgetSec(Math.round(job.budgetMs / 1000));
+            if (typeof job.startedAt === 'string') startTicker(Date.parse(job.startedAt) || Date.now());
+            sawTerminal = true;   // the stream's job is done; the poll takes over
+            await followJob();
+          }
           else if (msg.type === 'error') { sawTerminal = true; setGenError(msg.error ?? 'Generation failed.'); }
           else if (msg.type === 'done') { sawTerminal = true; setInsights(msg.insights ?? null); setUpdatedAt(msg.updatedAt ?? null); }
         }
       }
-      if (!sawTerminal) {
-        setGenError('The generation was cut off by the server before it finished, so nothing was saved. This usually means the run hit its time limit — try again, and if it keeps happening the project may need its data narrowed.');
-      }
-    } catch { setGenError('Generation failed — check the connection and try again.'); }
-    finally {
-      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-      setGenStatus(null);
+    } catch (e: any) {
+      streamGone = (e && (e.name || e.message)) ? `${e.name ?? 'Error'}: ${e.message ?? ''}`.trim() : 'stream error';
     }
-  }, [projectId]);
+    try {
+      if (!sawTerminal) {
+        // The stream is gone but the run is (very likely) still going. Say so —
+        // in words the user can act on — and follow the job to its real end.
+        setGenStatus({ label: streamGone ? `Live connection dropped (${streamGone}) — following the run on the server` : 'Live connection ended — following the run on the server', step: 3, steps: 5 });
+        await followJob();
+      }
+    } finally {
+      stopTicker();
+    }
+  }, [projectId, startTicker, stopTicker, followJob]);
 
   const saveBenchmarks = useCallback(async () => {
     setBenchSaving(true);
@@ -247,7 +327,7 @@ export default function InsightsSection({ projectId, clientName }: Props) {
               <div style={{ border: '1px dashed var(--c-2a2a40)', borderRadius: '14px', padding: '26px', textAlign: 'center' }}>
                 <p style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--c-c8c8e8)' }}>No insights generated for {clientName ?? 'this project'} yet</p>
                 <p style={{ fontSize: '12px', color: 'var(--c-6a6a90)', marginTop: '6px', maxWidth: '560px', marginLeft: 'auto', marginRight: 'auto' }}>
-                  Generate to have the insight engine read every stored panel — keywords, ranks, AI visibility, prompts, content coverage, sentiment — and write the verified cross-panel story. Takes about a minute; results are cached until you regenerate.
+                  Generate to have the insight engine read every stored panel — keywords, ranks, AI visibility, prompts, content coverage, sentiment — and write the verified cross-panel story. Takes one to several minutes depending on the project's size — every number is verified, and a draft that fails verification is re-queried. Results are cached until you regenerate; you can leave this panel and come back.
                 </p>
               </div>
             )}
