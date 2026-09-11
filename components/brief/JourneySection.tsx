@@ -17,6 +17,10 @@ import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-se
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
 import { mandateInsight, preProductZeroInsight } from '@/lib/insights';   // v7.366 (G6 + pre-product zero)
+// v7.489: the mind-map's GEOMETRY moved to lib/journey/mapLayout.ts so the PDF export
+// can draw EVERY umbrella with the SAME function this panel draws the focused one with
+// (Const II.6a/II.7 — one layout, never a second implementation that drifts).
+import { buildMindLayout, truncMindLabel, MIND_COL_LABELS, type MindLayout, type MindCat, type MindNode, type MindPlanState } from '@/lib/journey/mapLayout';
 
 // ── v7.376: the classifier closure + segment attribution moved VERBATIM to lib/ ──
 // (lib/journey/classifier.ts + lib/journey/segments.ts) so the assessment-report
@@ -1995,7 +1999,8 @@ export function JourneyViewToggle({ view, onChange }: { view: 'list' | 'mindmap'
 // modeled weights — pure stored hierarchy; only the focused umbrella's branch is drawn so the
 // canvas never renders thousands of nodes flat (the durable scale constraint).
 type MindRow = { t: CanonicalJourneyTopic; lane: JourneyType; state: NodeState; action: 'optimize' | 'build' };
-function truncLabel(s: string, n = 22): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+// v7.489: one truncation rule, shared with the PDF export (lib/journey/mapLayout.ts).
+const truncLabel = truncMindLabel;
 // level palette: umbrella (amber) → category (purple) → topic (cyan), matching the Option 3 preview.
 const MIND_LEVEL = [
   { border: 'var(--c-f59e0b)', bg: 'var(--ca-245-158-11-0_06)', label: 'Umbrella' },
@@ -2013,6 +2018,14 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   // Empty by default — the tree still opens fully expanded, so nothing is hidden unless
   // the user chooses to hide it (that is the point of having no cap).
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // v7.489: PDF export of this map (Wayne 2026-09-11: "lets add a pdf export of the
+  // journey panel so we can visually see the journey"). The step + elapsed seconds are
+  // reported on the button rather than a bare spinner (Const IV.2).
+  const [pdfStep, setPdfStep]   = useState<null | 'collect' | 'render' | 'save'>(null);
+  const [pdfSecs, setPdfSecs]   = useState(0);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const pdfTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
 
   // v7.266: Content Plan selection now comes from the shared useContentPlanSelection hook — the
   // SAME persisted set the Content Map / Content Plan / Journey LIST view read & write (one
@@ -2059,6 +2072,20 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const effectiveUmbrella = (focusUmbrella && umbrellas.some(u => u.name === focusUmbrella)) ? focusUmbrella : (umbrellas[0]?.name ?? null);
   const focused = umbrellas.find(u => u.name === effectiveUmbrella) ?? null;
 
+  // v7.489: ONE way to turn an umbrella into its ordered category/topic list — used by the
+  // on-screen layout below AND by the PDF export, so the printed tree is the drawn tree
+  // (Const II.6a/II.7). Order is the panel's: categories by their exact volume roll-up,
+  // topics by volume within a category. Nothing is re-derived — every value is read.
+  const catsOfUmbrella = (u: { cats: Map<string, MindRow[]> } | null): MindCat[] =>
+    !u ? [] : Array.from(u.cats.entries())
+      .sort((a, b) => b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0))
+      .map(([cat, rs]) => ({
+        name: cat,
+        vol:  rs.reduce((s, r) => s + r.t.totalVolume, 0),
+        topics: rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume)
+                  .map(r => ({ id: r.t.id, label: r.t.product, vol: r.t.totalVolume, action: r.action })),
+      }));
+
   // keyword aggregation (real Semrush volume — Const I.1; dedup keeps the max real volume, no double count)
   const kwAgg = (rs: MindRow[]) => {
     const m = new Map<string, number>();
@@ -2075,54 +2102,20 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   // DOWN and the canvas scrolls vertically instead of running off the right edge — which
   // is what hid the volume + status column on a wide umbrella. Same stored taxonomy, same
   // nodes, same ids: only the coordinate assignment is transposed (Const II.7 / III.1b).
-  const layout = useMemo(() => {
-    const NW = [196, 214, 252], NH = 56, leafStep = 70, colGap = 86, padX = 26, topPad = 46, catGap = 26;
-    const colX = [
-      padX + NW[0] / 2,
-      padX + NW[0] + colGap + NW[1] / 2,
-      padX + NW[0] + colGap + NW[1] + colGap + NW[2] / 2,
-    ];
-    const width = padX * 2 + NW[0] + NW[1] + NW[2] + colGap * 2;
-    type Kind = 'umbrella' | 'category' | 'topic';
-    type LNode = { id: string; kind: Kind; level: number; x: number; y: number; label: string; sub: string; action?: 'optimize' | 'build'; kids?: number; shut?: boolean };
-    type LEdge = { id: string; x1: number; y1: number; x2: number; y2: number; level: number };
-    if (!focused) return { nodes: [] as LNode[], edges: [] as LEdge[], width, height: 200, NW, NH, colX };
-    const cats = Array.from(focused.cats.entries()).sort((a, b) =>
-      b[1].reduce((s, r) => s + r.t.totalVolume, 0) - a[1].reduce((s, r) => s + r.t.totalVolume, 0));
-    const nodes: LNode[] = [];
-    const edges: LEdge[] = [];
-    let y = topPad + NH / 2;
-    let maxY = y;
-    const catYs: number[] = [];
-    const umbId = 'umb:' + focused.name;
+  const layout = useMemo((): MindLayout => {
+    // v7.489: the geometry itself now lives in lib/journey/mapLayout.ts (moved verbatim)
+    // so the PDF export draws every umbrella with this exact function. What stays here is
+    // the panel's own state: which umbrella is focused, and which branches are collapsed.
+    const umbId = 'umb:' + (focused?.name ?? '');
     const umbShut = collapsed.has(umbId);
-    (umbShut ? [] : cats).forEach(([cat, rs]) => {
-      const catId = 'cat:' + cat;
-      const catShut = collapsed.has(catId);
-      const sorted = rs.slice().sort((a, b) => b.t.totalVolume - a.t.totalVolume);
-      const childYs: number[] = [];
-      if (!catShut) sorted.forEach(r => {
-        const cy = y; y += leafStep; childYs.push(cy);
-        nodes.push({ id: r.t.id, kind: 'topic', level: 2, x: colX[2], y: cy, label: r.t.product, sub: `${fmtVol(r.t.totalVolume)}/mo`, action: r.action });
-      });
-      let cy: number;
-      if (childYs.length) { cy = (childYs[0] + childYs[childYs.length - 1]) / 2; }
-      else { cy = y; y += leafStep; }
-      catYs.push(cy);
-      const catVol = rs.reduce((s, r) => s + r.t.totalVolume, 0);
-      nodes.push({ id: catId, kind: 'category', level: 1, x: colX[1], y: cy, label: cat, sub: `${fmtVol(catVol)}/mo · ${rs.length} topics`, kids: rs.length, shut: catShut });
-      for (const ty of childYs) edges.push({ id: `e1:${cat}:${ty}`, x1: colX[1] + NW[1] / 2, y1: cy, x2: colX[2] - NW[2] / 2, y2: ty, level: 2 });
-      maxY = Math.max(maxY, cy, childYs.length ? childYs[childYs.length - 1] : cy);
-      y += catGap;
+    const cats: MindCat[] = catsOfUmbrella(focused);
+    return buildMindLayout({
+      umbrella:  focused ? { name: focused.name, vol: focused.vol } : null,
+      cats,
+      umbShut,
+      isCatShut: (catName: string) => { const catId = 'cat:' + catName; return collapsed.has(catId); },
+      fmtVol,
     });
-    // The umbrella is PINNED to the top row, not centred on its categories: on a tall
-    // umbrella the centroid lands a thousand-odd px down, so the root would be off-screen
-    // on first paint. Categories still centre on their own (short) child spans.
-    const rootY = topPad + NH / 2;
-    nodes.push({ id: umbId, kind: 'umbrella', level: 0, x: colX[0], y: rootY, label: focused.name, sub: `${fmtVol(focused.vol)}/mo`, kids: cats.length, shut: umbShut });
-    for (const cy of catYs) edges.push({ id: `e0:${cy}`, x1: colX[0] + NW[0] / 2, y1: rootY, x2: colX[1] - NW[1] / 2, y2: cy, level: 1 });
-    const height = Math.max(240, maxY + NH / 2 + 24);
-    return { nodes, edges, width, height, NW, NH, colX };
   }, [focused, collapsed]);
 
   // selected node → keywords + volume (Const I.1)
@@ -2170,6 +2163,97 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   const planStateOf    = (id: string, kind: string) => planStateForIds(idsForNode(id, kind));
   const isNodeSaving   = (id: string, kind: string) => savingForIds(idsForNode(id, kind));
   const toggleNodePlan = (id: string, kind: string) => toggleIds(idsForNode(id, kind));
+
+  // ── v7.489: export this journey as a PDF ────────────────────────────────────────
+  // EVERY umbrella in the current journey scope is drawn, each with buildMindLayout —
+  // the SAME function that placed the boxes on screen — so the report cannot disagree
+  // with the panel (Const II.6a). Branches are drawn FULLY EXPANDED: collapsing is a
+  // reading convenience for a scrolling canvas, and a report that silently omitted a
+  // branch would be worse than no report, so the scope statement says so out loud.
+  // The route re-derives nothing; it renders these objects.
+  const downloadMapPDF = async () => {
+    if (!umbrellas.length) return;
+    setPdfError(null);
+    setPdfSecs(0);
+    setPdfStep('collect');
+    if (pdfTimer.current) clearInterval(pdfTimer.current);
+    pdfTimer.current = setInterval(() => setPdfSecs(n => n + 1), 1000);
+    let url: string | null = null;
+    try {
+      const payloadUmbrellas = umbrellas.map(u => {
+        const cats = catsOfUmbrella(u);
+        const rs = Array.from(u.cats.values()).flat();
+        const planStateFor = (id: string, kind: 'umbrella' | 'category' | 'topic'): MindPlanState => planStateForIds(
+          kind === 'topic' ? [id]
+          : kind === 'umbrella' ? rs.map(r => r.t.id)
+          : (u.cats.get(id.slice(4)) ?? []).map(r => r.t.id),
+        ) as MindPlanState;
+        return {
+          name: u.name,
+          volLabel: `${fmtVol(u.vol)}/mo`,
+          categories: cats.length,
+          topics: rs.length,
+          existing: rs.filter(r => r.action === 'optimize').length,
+          build: rs.filter(r => r.action === 'build').length,
+          inPlan: rs.filter(r => planIds.has(r.t.id)).length,
+          layout: buildMindLayout({
+            umbrella: { name: u.name, vol: u.vol },
+            cats,
+            fmtVol,
+            planStateOf: planStateFor,
+          }),
+          // the at-a-glance page: the SAME builder with the topics withheld, so the
+          // whole product line fits on one sheet while every category keeps its real
+          // volume and its real topic count (nothing is summarised away).
+          overview: buildMindLayout({
+            umbrella: { name: u.name, vol: u.vol },
+            cats: cats.map(c => ({ ...c, topics: [], topicCount: c.topics.length })),
+            fmtVol,
+            planStateOf: planStateFor,
+          }),
+        };
+      });
+      const scopeLabel = journeyScope === 'product' ? 'Product journey'
+                       : journeyScope === 'pre'     ? 'Pre-product journey'
+                       :                              'All journeys';
+      const scopeStatement =
+        `${scopeLabel}: ${scopedRows.length.toLocaleString()} of ${(productN + preN).toLocaleString()} topics`
+        + `${segmentLabel ? `, filtered to the ${segmentLabel} segment` : ''}.`
+        + ` Every branch is drawn fully expanded — nothing is collapsed, capped or sampled.`;
+      setPdfStep('render');
+      const res = await fetch('/api/reports/journey-map', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          clientDomain: clientDomain || '',
+          scopeLabel, scopeStatement,
+          segmentLabel: segmentLabel ?? null,
+          planCount: planIds.size,
+          umbrellas: payloadUmbrellas,
+        }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json())?.error ?? msg; } catch { /* body was not JSON */ }
+        throw new Error(msg);
+      }
+      setPdfStep('save');
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbitiq-journey-map-${(clientDomain || 'client').replace(/[^a-z0-9.-]+/gi, '-').toLowerCase()}-${new Date().toISOString().slice(0, 10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setPdfError((e as any)?.message ?? 'PDF export failed');
+    } finally {
+      if (pdfTimer.current) { clearInterval(pdfTimer.current); pdfTimer.current = null; }
+      setPdfStep(null);
+      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 30_000);
+    }
+  };
 
   return (
     <div>
@@ -2229,6 +2313,29 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
           ))}
         </select>
         <span style={{ fontSize: 10.5, color: 'var(--c-585878)' }}>Umbrella → category → topic.</span>
+        {/* v7.489: a printable copy of this journey. Disabled until there is a tree to
+            print; the label reports the live step + elapsed seconds rather than spinning
+            silently (Const IV.2). */}
+        <button
+          onClick={downloadMapPDF}
+          disabled={!umbrellas.length || pdfStep !== null}
+          title={umbrellas.length ? 'Download every umbrella in this journey scope as a PDF map' : 'Nothing to export yet'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600,
+                   color: 'var(--c-9090b8)', background: 'transparent', border: '1px solid var(--c-2a2a45)',
+                   borderRadius: 8, padding: '6px 11px', cursor: (!umbrellas.length || pdfStep !== null) ? 'default' : 'pointer',
+                   opacity: (!umbrellas.length || pdfStep !== null) ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+          <i className={`ti ${pdfStep ? 'ti-loader-2 animate-spin' : 'ti-file-type-pdf'}`} style={{ fontSize: 13 }} />
+          {pdfStep === 'collect' ? `Collecting \u00b7 ${pdfSecs}s`
+            : pdfStep === 'render' ? `Rendering PDF \u00b7 ${pdfSecs}s`
+            : pdfStep === 'save'   ? `Saving \u00b7 ${pdfSecs}s`
+            : 'PDF'}
+        </button>
+        {pdfStep && (
+          <span style={{ fontSize: 10.5, color: 'var(--c-9090b8)' }}>
+            Drawing {umbrellas.length.toLocaleString()} {umbrellas.length === 1 ? 'umbrella' : 'umbrellas'} &middot; {scopedRows.length.toLocaleString()} topics &mdash; usually 5&ndash;15s
+          </span>
+        )}
+        {pdfError && <span style={{ fontSize: 10.5, color: 'var(--c-f87171)' }}>PDF export failed: {pdfError}</span>}
       </div>
 
       {/* full-width canvas — the hierarchy map (status badge lives on each topic node) */}
