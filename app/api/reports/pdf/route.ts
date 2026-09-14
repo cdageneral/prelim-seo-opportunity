@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z }       from 'zod';
 import { put }     from '@vercel/blob';
 import { db }      from '@/db';
-import { analyses, reports, projectKeywords, competitors } from '@/db/schema';
+import { analyses, projects, reports, projectKeywords, competitors } from '@/db/schema';
 import { eq }      from 'drizzle-orm';
 // v7.374: the header PDF button now generates the client ASSESSMENT REPORT
 // (design spec GEO/orbitiq-assessment-report-mockup-v3-2026-07-16.html) instead
@@ -36,6 +36,47 @@ import { instrumentAnthropic }                 from '@/lib/usage/record';
 import Anthropic                               from '@anthropic-ai/sdk';
 import { buildQuadrant }                       from '@/lib/insightsPanel/build';   // v7.471 (Const II.6b): the Insights panel's own deterministic quadrant builder
 
+/**
+ * v7.490 — the project columns this report actually reads, named explicitly.
+ *
+ * `projects` carries sixteen JSONB stores and this report reads eight of them.
+ * A bare `select()` ships all sixteen and grows with every column a future
+ * release adds, which is how the same 64 MiB cap was hit at v7.486. Every entry
+ * below has a read site in this file or in the shared builders it calls:
+ *
+ *   clientName / websiteUrl / industry        → buildAssessmentHTML cover + header
+ *   kwVolThreshold{Client,Competitor}         → buildKwPool volume floors
+ *   brandTerms / excludedBrands /
+ *     scopeOverrides / hiddenCategories       → hydrateSnapshotForPool (Const II.7)
+ *   hiddenCategories                          → the keyword-scope block (v7.476)
+ *   profoundData                              → ProfoundMetrics + buildQuadrant
+ *   productInsights / …UpdatedAt              → the Product Insights section (v7.427)
+ *   insightsPanel                             → the Insights section (v7.471)
+ *   authoritySnapshot                         → the Authority Signals section (v7.375)
+ *
+ * Adding a section to this report means adding its column here — a section that
+ * silently reads `undefined` renders as an honest gap (Const I.5) and would hide
+ * itself rather than fail loudly, so the retained suite asserts this set covers
+ * every project field the route reads.
+ */
+const REPORT_PROJECT_COLUMNS = {
+  id:                       projects.id,
+  clientName:               projects.clientName,
+  websiteUrl:               projects.websiteUrl,
+  industry:                 projects.industry,
+  kwVolThresholdClient:     projects.kwVolThresholdClient,
+  kwVolThresholdCompetitor: projects.kwVolThresholdCompetitor,
+  brandTerms:               projects.brandTerms,
+  excludedBrands:           projects.excludedBrands,
+  scopeOverrides:           projects.scopeOverrides,
+  hiddenCategories:         projects.hiddenCategories,
+  profoundData:             projects.profoundData,
+  productInsights:          projects.productInsights,
+  productInsightsUpdatedAt: projects.productInsightsUpdatedAt,
+  insightsPanel:            projects.insightsPanel,
+  authoritySnapshot:        projects.authoritySnapshot,
+};
+
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 60;
 
@@ -48,9 +89,27 @@ export async function POST(req: NextRequest) {
   const parsed = Schema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
+  // ── v7.490 (Const I.5): one analysis + one project row, TWO responses ──────
+  // This handler used to load the analysis, its project, its opportunities and
+  // its personas in ONE relational query. Neon's HTTP driver refuses any single
+  // response over 64 MiB, and a mature project crosses that line: measured on
+  // 2026-09-14 for TD Bank, the analysis JSONB alone is 22,660,726 bytes
+  // (serpapi 19,243,727 + semrush 2,850,673 + profound 566,326, via this app's
+  // own `/api/projects/[id]?sizes=1` probe) and the project row's stores ride on
+  // top of it in the same response. The button 500'd with
+  //
+  //   NeonDbError: Server error (HTTP status 507):
+  //   {"message":"response is too large (max is 67108864 bytes)"}
+  //
+  // read from the production runtime log (deployment dpl_7LSV3zux6QSNFAWn7HCmwQGA1jDi,
+  // POST /api/reports/pdf, 2026-09-14T21:54:22Z) — the third failure of this
+  // class after v7.411 (project would not open) and v7.486 (empty dashboard).
+  // Nothing in the report is dropped: the same analysis and the same project
+  // fields are read, in their OWN queries, so each gets its own 64 MiB budget
+  // instead of sharing one. `opportunities` and `personas` are not loaded at all
+  // — this route has never read either one; they were pure payload.
   const analysis = await db.query.analyses.findFirst({
     where: eq(analyses.id, parsed.data.analysisId),
-    with: { project: true, opportunities: { orderBy: (o, { asc }) => [asc(o.rank)] }, personas: true },
   });
 
   if (!analysis) return NextResponse.json({ error: 'Analysis not found' }, { status: 404 });
@@ -65,11 +124,12 @@ export async function POST(req: NextRequest) {
   // click-capture model (lib/sov/model.ts — the exact math SovPanel renders).
   // The template falls back to the stored legacy fields, clearly labeled, ONLY
   // when this snapshot cannot build a pool (honest fallback, Const I.5).
-  const project = (analysis as any).project ?? {};
-  const [kwRows, compRows] = await Promise.all([
+  const [projectRows, kwRows, compRows] = await Promise.all([
+    db.select(REPORT_PROJECT_COLUMNS).from(projects).where(eq(projects.id, (analysis as any).projectId)),
     db.select().from(projectKeywords).where(eq(projectKeywords.projectId, (analysis as any).projectId)),
     db.select().from(competitors).where(eq(competitors.projectId, (analysis as any).projectId)),
   ]);
+  const project: any = projectRows[0] ?? {};
   const snap              = hydrateSnapshotForPool(project, (analysis as any).semrushSnapshot ?? {});
   const clientDomain      = (snap?.domain ?? '') as string;
   const competitorDomains = compRows.map(c => c.domain).filter(Boolean);
@@ -383,7 +443,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'PDF rendering failed' }, { status: 500 });
   }
 
-  const filename = `orbitiq-assessment-${(analysis as any).project?.clientName?.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.pdf`;
+  const filename = `orbitiq-assessment-${project?.clientName?.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.pdf`;
   const { url }  = await put(filename, pdfBuffer, { access: 'public', contentType: 'application/pdf' });
 
   await db.insert(reports).values({ analysisId: parsed.data.analysisId, type: 'PDF', generatedAt: new Date(), fileUrl: url });
