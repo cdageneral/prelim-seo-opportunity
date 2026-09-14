@@ -40,8 +40,15 @@
  *      still opens instead of bouncing.
  *
  * `?sizes=1` returns those measured byte sizes for the five most recent
- * analyses and nothing else — a read-only probe for exactly this class of
- * failure, so the next one is diagnosed with numbers rather than guesses.
+ * analyses — a read-only probe for exactly this class of failure, so the next
+ * one is diagnosed with numbers rather than guesses.
+ *
+ * v7.490 widened it to the PROJECT row's sixteen JSONB stores as well, plus
+ * `worstCaseCombinedBytes` (largest analysis + project row). The Assessment-PDF
+ * 507 that release fixed was a query that carried BOTH halves in one response,
+ * and only the analysis half could be measured here — the project half had to
+ * be reasoned about from the schema. Both halves are measured now. Nothing else
+ * is returned and nothing is loaded to produce it: only integers cross the wire.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -253,6 +260,48 @@ async function measureSnapshotBytes(analysisId: string) {
   };
 }
 
+/** v7.490 — REAL byte cost of the PROJECT row's JSONB stores, measured by
+ *  Postgres the same way measureSnapshotBytes measures an analysis (Const I.1,
+ *  never an estimate). Only the integers cross the wire.
+ *
+ *  v7.411 built the analysis half of this probe and the project half was left
+ *  to inference; v7.490's Assessment-PDF failure was a query that summed an
+ *  analysis AND a project row into one response, and sizing the project half
+ *  took a code read rather than a measurement. It is measured now. The column
+ *  list is every JSONB store on `projects` — if a future release adds one, add
+ *  it here or this total quietly under-reports. */
+async function measureProjectBytes(projectId: string) {
+  const res = await db.execute(sql`
+    SELECT COALESCE(octet_length(brand_terms::text),                    0) AS "brandTerms",
+           COALESCE(octet_length(excluded_brands::text),                0) AS "excludedBrands",
+           COALESCE(octet_length(content_plan_selections::text),        0) AS "contentPlanSelections",
+           COALESCE(octet_length(content_plan_selections_prev::text),   0) AS "contentPlanSelectionsPrev",
+           COALESCE(octet_length(scope_selections::text),               0) AS "scopeSelections",
+           COALESCE(octet_length(scope_workstreams::text),              0) AS "scopeWorkstreams",
+           COALESCE(octet_length(scope_overrides::text),                0) AS "scopeOverrides",
+           COALESCE(octet_length(hidden_categories::text),              0) AS "hiddenCategories",
+           COALESCE(octet_length(priority_overrides::text),             0) AS "priorityOverrides",
+           COALESCE(octet_length(profound_data::text),                  0) AS "profoundData",
+           COALESCE(octet_length(product_insights::text),               0) AS "productInsights",
+           COALESCE(octet_length(insights_panel::text),                 0) AS "insightsPanel",
+           COALESCE(octet_length(market_benchmarks::text),              0) AS "marketBenchmarks",
+           COALESCE(octet_length(insights_panel_job::text),             0) AS "insightsPanelJob",
+           COALESCE(octet_length(taxonomy_anchor::text),                0) AS "taxonomyAnchor",
+           COALESCE(octet_length(authority_snapshot::text),             0) AS "authoritySnapshot"
+      FROM projects
+     WHERE id = ${projectId}::uuid
+  `);
+  const r = rowsOf(res)[0] ?? {};
+  const stores: Record<string, number> = {};
+  let totalBytes = 0;
+  for (const k of Object.keys(r)) {
+    const n = Number((r as any)[k] ?? 0);
+    stores[k] = n;
+    totalBytes += n;
+  }
+  return { stores, totalBytes, limitBytes: NEON_HTTP_RESPONSE_LIMIT };
+}
+
 /** The opportunities + personas of one analysis, without touching its snapshots.
  *  Used only on the degraded path, where the full-row read did not survive. */
 async function loadAnalysisChildren(analysisId: string) {
@@ -326,16 +375,29 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // get?" with measured bytes and never loads a snapshot to do it.
   if (req.nextUrl.searchParams.get('sizes')) {
     const heads = await loadAnalysisHeads(params.id);
-    const sized = await Promise.all(
-      heads.map(async h => ({
-        id:          h.id,
-        status:      h.status,
-        triggeredAt: h.triggeredAt,
-        ...(await measureSnapshotBytes(h.id)),
-      })),
-    );
+    const [sized, projectBytes] = await Promise.all([
+      Promise.all(
+        heads.map(async h => ({
+          id:          h.id,
+          status:      h.status,
+          triggeredAt: h.triggeredAt,
+          ...(await measureSnapshotBytes(h.id)),
+        })),
+      ),
+      // v7.490: the project row's own stores, measured the same way. A route
+      // that reads an analysis AND its project in one response spends both
+      // budgets at once — `worstCaseCombinedBytes` is that sum for the largest
+      // analysis, which is the number that predicts a 507 before it happens.
+      measureProjectBytes(params.id).catch(() => null),
+    ]);
+    const largestAnalysis = sized.reduce((m, a) => Math.max(m, Number(a.totalBytes ?? 0)), 0);
     return NextResponse.json(
-      { analyses: sized, limitBytes: NEON_HTTP_RESPONSE_LIMIT },
+      {
+        project: projectBytes,
+        analyses: sized,
+        worstCaseCombinedBytes: largestAnalysis + Number(projectBytes?.totalBytes ?? 0),
+        limitBytes: NEON_HTTP_RESPONSE_LIMIT,
+      },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   }
