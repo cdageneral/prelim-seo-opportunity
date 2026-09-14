@@ -1,3 +1,87 @@
+# v7.490 — the Assessment PDF button works again (2026-09-14)
+
+> Wayne: *"the pdf assessment didnt work when I clicked the button."*
+
+## What happened
+
+Three clicks on TD Bank, three 500s. The Vercel runtime log names it without ambiguity:
+
+```
+NeonDbError: Server error (HTTP status 507):
+{"message":"response is too large (max is 67108864 bytes)"}
+  at async B (/var/task/.next/server/app/api/reports/pdf/route.js…)
+```
+
+`POST /api/reports/pdf`, deployment `dpl_7LSV3zux6QSNFAWn7HCmwQGA1jDi`, 21:52 and 21:54 UTC.
+
+The route opened with one relational query — the analysis, **its project row, its
+opportunities and its personas**, all in a single response. Neon's HTTP driver refuses any
+single response over 64 MiB. Measured through this app's own `?sizes=1` probe, TD Bank's
+analysis JSONB is already **22,660,726 bytes** (serpapi 19,243,727 + semrush 2,850,673 +
+profound 566,326); the project row's sixteen stores rode on top of it, and the sum crossed
+the line.
+
+This is the third time: **v7.411** (a project that would not open), **v7.486** (a dashboard
+of empty tiles), now the client-facing report. The failure is always silent and always a
+function of how much data a project has accumulated, never of the route being wrong when it
+was written.
+
+## The fix
+
+Two responses instead of one, so each gets its own 64 MiB budget:
+
+- **The analysis is loaded by id, on its own.** No `with:` clause. `opportunities` and
+  `personas` are not loaded at all — this route has never read either one, so they were pure
+  payload riding a query that could not afford them.
+- **The project row is its own query, with its columns named.** `REPORT_PROJECT_COLUMNS`
+  lists the fifteen fields the report actually reads. The eight JSONB stores it never touches
+  — content-plan selections and their previous copy, scope selections and workstreams,
+  priority overrides, market benchmarks, the insights job row, the taxonomy anchor — stay in
+  Postgres.
+
+**Nothing in the report changed.** Same analysis, same project fields, same pool, same math,
+same sections. This is how the data is fetched, not what it says.
+
+## Measuring the other half
+
+`GET /api/projects/[id]?sizes=1` — the read-only probe v7.411 built for exactly this class of
+failure — only ever measured the analysis side. Diagnosing this one meant reading the schema
+to size the project side, which is a guess wearing a code review. It now measures the project
+row's sixteen stores the same way (`octet_length`, by Postgres, never an estimate — I.1) and
+returns `worstCaseCombinedBytes`: largest analysis + project row. That is the number that
+predicts a 507 before a button does.
+
+## Files
+
+- `app/api/reports/pdf/route.ts` — `REPORT_PROJECT_COLUMNS`; the relational load split into
+  an analysis query and a project query.
+- `app/api/projects/[id]/route.ts` — `measureProjectBytes`; the `?sizes=1` branch widened.
+
+## Verification
+
+Real `next build` exit 0 · project `tsc --noEmit` clean under the project's own tsconfig, no
+`target` override (V.1a) · retained suite **2787 PASS / 31 pre-existing FAIL, zero regression
+delta** against pristine v7.489 · **21 new checks, 11 of which fail on the pristine base** —
+the real negative control: on v7.489 the compiled project SQL carries all eight unread stores
+by name, the analysis load still has its `with:` clause, and `measureProjectBytes` does not
+exist. The coverage check was proven non-vacuous by adding a `project.marketBenchmarks` read
+to the route and watching it fail, then removing it.
+
+The checks are mechanism, not prose: the project SELECT is compiled through the **real**
+drizzle dialect (`pg-proxy` + `.toSQL()`) and asserted against `getTableColumns(projects)`, so
+a store added to the schema later and left out of the probe fails the gate rather than
+quietly under-reporting.
+
+**Downstream review (Const II.6a/II.6b).** No metric, denominator or basis changed, and no
+panel or client-facing metric was added — nothing is owed a new PDF section. The Assessment
+PDF is itself the surface this release repairs; it was regenerated end to end after deploy.
+
+**V.6 exception carried forward.** The same 31 pre-existing failures as v7.487/488/489,
+identical on both legs, still unclassified rot-vs-defect. Audit still queued as its own
+release.
+
+---
+
 # v7.489 — the Journey panel prints (2026-09-11)
 
 > Wayne: *"lets add a pdf export of the journey panel so we can visually see the journey"*
