@@ -28,6 +28,9 @@ import { db } from '@/db';
 import { projects } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getMarket } from '@/lib/utils/markets';
+// v7.491 (Const II.9): the keyword sample is extracted in Postgres, and it now
+// comes from the ANALYSIS row that actually holds it — see below.
+import { newestAnalysisId, snapshotTopKeywordsByVolume } from '@/lib/keywords/snapshotSample';
 import { serpApiBatchKeywordScan, serpProvider, type KeywordSerpData } from '@/lib/apis/serp';
 import { dfsBatchKeywordScan, dataForSeoEnabled } from '@/lib/apis/dataforseo';
 import { setUsageProject } from '@/lib/usage/context';
@@ -70,20 +73,27 @@ export async function GET(req: NextRequest) {
   if (projectId) {
     try {
       setUsageProject(projectId);
-      const rows = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+      // ── v7.491 ───────────────────────────────────────────────────────────
+      // Two defects in the four lines this replaces. (1) Const II.9: the bare
+      // select shipped all sixteen of the project's JSONB stores — 44,342,983
+      // bytes on TD Bank — to read two scalars. (2) `proj.semrushSnapshot` is
+      // not a column of `projects`; it lives on `analyses`. The read resolved
+      // to `undefined` on every call, so `keywords` stayed empty and this route
+      // answered "No keywords to compare" for ANY projectId that did not also
+      // pass an explicit keywords= list. It failed silently and always — the
+      // v7.472 class of bug (a read of a field the row does not carry). The
+      // sample now comes from the project's newest analysis, ranked by real
+      // search volume, extracted in Postgres.
+      const rows = await db
+        .select({ id: projects.id, websiteUrl: projects.websiteUrl, semrushDatabase: projects.semrushDatabase })
+        .from(projects).where(eq(projects.id, projectId)).limit(1);
       const proj: any = rows[0];
       if (!proj) return NextResponse.json({ ok: false, error: 'Project not found' }, { status: 404 });
       if (!domain) domain = String(proj.websiteUrl ?? '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       if (!marketCode) market = getMarket(proj.semrushDatabase);
       if (!keywords.length) {
-        const snap: any = proj.semrushSnapshot ?? {};
-        const top: any[] = Array.isArray(snap?.topKeywords) ? snap.topKeywords : [];
-        keywords = top
-          .slice()
-          .sort((a, b) => (Number(b?.searchVolume) || 0) - (Number(a?.searchVolume) || 0))
-          .slice(0, limit)
-          .map(k => String(k?.keyword ?? ''))
-          .filter(Boolean);
+        const analysisId = await newestAnalysisId(projectId);
+        keywords = analysisId ? await snapshotTopKeywordsByVolume(analysisId, limit) : [];
       }
     } catch (err) {
       return NextResponse.json({ ok: false, error: `Could not read project: ${(err as any)?.message ?? err}` }, { status: 500 });
