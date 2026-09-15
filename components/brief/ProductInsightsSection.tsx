@@ -101,7 +101,6 @@ export default function ProductInsightsSection({
   const [drill, setDrill]         = useState<TopicVerdict | null>(null);
   const [planBusy, setPlanBusy]   = useState(false);
   const [planNote, setPlanNote]   = useState<string | null>(null);
-  const [showAllPrompts, setShowAllPrompts] = useState(false);
   const [scanning, setScanning]       = useState(false);
   const [scanErrors, setScanErrors]   = useState<string[]>([]);
   // v7.432: sub-category drill — expanded node keys + the node currently being scanned
@@ -433,7 +432,7 @@ export default function ProductInsightsSection({
         seg(inv.name + ' ', true), seg('holds page-1 rank #' + inv.clientRank + ' in its brand field but is '),
         seg(aiTxt, true), seg(' — the ranking authority exists; the AI answer is what’s missing.'),
       ],
-      evidence: `Basis: v7.419 page-1 volume ladder + ${inv.aiRate !== null ? 'LLM probe (analysis-time)' : 'DataForSEO recorded answers'} · thresholds on panel`,
+      evidence: `Basis: measured page-1 volume ladder + ${inv.aiRate !== null ? 'LLM probe (analysis-time)' : 'DataForSEO recorded answers'} · thresholds on panel`,
     };
   }, [products]);
 
@@ -674,6 +673,17 @@ export default function ProductInsightsSection({
           Every product category with search and AI visibility measured together — and per topic, whether your ranking authority is
           reflected in the AI answers around it. This panel reads the same canonical pool and stored taxonomy as every other panel.
         </p>
+        {/* v7.474 honest partial-coverage note, re-homed here in v7.493 when the category-level
+            prompt drawer went away: a deadline-stopped probe is a project-level fact (I.5). */}
+        {(() => {
+          const cov = (probeFromAnalysis(analysis) as any)?.coverage;
+          if (!cov || !(cov.completed < cov.planned)) return null;
+          return (
+            <div style={{ margin: '0 0 10px', padding: '7px 10px', borderRadius: '7px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', fontSize: '10.5px', color: 'var(--c-f59e0b)' }}>
+              The LLM probe hit its time budget: {cov.completed.toLocaleString()} of {cov.planned.toLocaleString()} planned prompt calls completed. Prompts not asked are unmeasured, not zero — the next analysis re-probes in priority order.
+            </div>
+          );
+        })()}
 
         {/* provider not configured (honest gap, I.5) */}
         {!providerOk && (
@@ -837,8 +847,8 @@ export default function ProductInsightsSection({
           return (
             <div key={p.name}>
               <div
-                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); setOpenTopicsNode(null); }}
-                style={{ display: 'grid', gridTemplateColumns: '22px minmax(130px,1fr) minmax(280px,1.1fr) minmax(400px,1.5fr) 212px', gap: '10px', alignItems: 'start',
+                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setCfCell(null); setOpenTopicsNode(null); }}
+                style={{ display: 'grid', gridTemplateColumns: '22px minmax(130px,0.9fr) minmax(250px,1fr) minmax(350px,1.3fr) minmax(180px,0.7fr) 236px', gap: '10px', alignItems: 'start',
                   background: 'var(--c-111120)', border: `1px solid ${isOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
                   borderRadius: isOpen ? '10px 10px 0 0' : '10px', padding: '10px 14px', marginBottom: isOpen ? 0 : '7px', cursor: 'pointer' }}
               >
@@ -847,7 +857,7 @@ export default function ProductInsightsSection({
                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{p.name}</div>
                   {/* v7.492: the counts are the way in — click for the line's topics and keywords */}
                   <button
-                    onClick={e => { e.stopPropagation(); if (!isOpen) { setOpenProduct(p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); } setOpenTopicsNode(prev => prev === p.name ? null : p.name); }}
+                    onClick={e => { e.stopPropagation(); if (!isOpen) { setOpenProduct(p.name); setShowAllTopics(false); setCfCell(null); } setOpenTopicsNode(prev => prev === p.name ? null : p.name); }}
                     title="View this product line's topics and keywords"
                     style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' }}>
                     {p.kwCount.toLocaleString()} kws · {p.topics.length} topics ›
@@ -934,6 +944,36 @@ export default function ProductInsightsSection({
                 </div>
                   </div>
                 </div>
+                {/* ── v7.493 (Wayne): "AIO citation rate, PAA citation rate and Video citations
+                    should be mentioned in the category level summary." Read from the shared
+                    computeSerpFeatureRollup over THIS line's keywords — the same math the SERP
+                    Features panel and the Executive Summary strip show, scoped to the line. ── */}
+                <div>
+                  <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.08em', color: 'var(--c-8a8aa8)',
+                    borderBottom: '1px solid var(--c-1e1e34)', paddingBottom: '3px', marginBottom: '6px' }}>GOOGLE SERP FEATURES · YOU CITED</div>
+                  {!p.serpFeatures && (
+                    <div style={{ fontSize: '9.5px', color: 'var(--c-55557a)', lineHeight: 1.35 }}>No SERP-feature data on this line yet — run a SERP scan (SERP Features panel).</div>
+                  )}
+                  {p.serpFeatures && ([
+                    ['AI Overviews', p.serpFeatures.aioAcq,   p.serpFeatures.aioAvail,   p.serpFeatures.aioRate],
+                    ['People also ask', p.serpFeatures.paaAcq, p.serpFeatures.paaAvail, p.serpFeatures.paaRate],
+                    ['Video',        p.serpFeatures.videoAcq, p.serpFeatures.videoAvail, p.serpFeatures.videoRate],
+                  ] as const).map(([lab, acq, avail, rate]) => (
+                    <div key={lab} style={{ display: 'grid', gridTemplateColumns: '1fr 38px', gap: '6px', alignItems: 'baseline', marginBottom: '2px' }}
+                      title={`${lab}: you are cited in ${acq} of the ${avail} ${p.name} SERPs carrying this feature (available = live scan detections + Semrush-flagged unscanned keywords; cited = live scan only)`}>
+                      <span style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {lab} <span style={{ color: 'var(--c-6a6a90)' }}>· {acq} of {avail}</span>
+                      </span>
+                      <span style={{ fontSize: '11px', fontWeight: 800, textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                        color: avail === 0 ? 'var(--c-55557a)' : rate >= 50 ? 'var(--c-34d399)' : rate >= 25 ? 'var(--c-f59e0b)' : 'var(--c-f87171)' }}>
+                        {avail === 0 ? '—' : `${rate}%`}
+                      </span>
+                    </div>
+                  ))}
+                  {p.serpFeatures && (
+                    <div style={{ fontSize: '8.5px', color: 'var(--c-6a6a90)', marginTop: '3px' }}>{p.serpScanned.toLocaleString()} of {p.kwCount.toLocaleString()} kw SERP-scanned</div>
+                  )}
+                </div>
                 {/* ── v7.459 (Wayne): Pages — journey vs actual, in ONE unit. Journey =
                     this line's canonical Theme-Cluster topics (one topic = one intended
                     page, II.7); actual = topics COVERED — the client ranks on >=1 of the
@@ -984,110 +1024,74 @@ export default function ProductInsightsSection({
                     'Every canonical Theme-Cluster topic on this product line, across all of its sub-categories (one topic = one intended page). Click a topic for its keywords — position, volume and ranking page come from the same keyword pool the Keyword list panel renders.')}
 
                   {/* brand ladder + cited-domain ladder side by side.
-                      v7.492 (Wayne): both ladders show the top 6 as before, then a
-                      placements block — where YOU and every TRACKED competitor sit in
-                      the full list (rank #N of M, or an explicit "none"). The page-1
-                      ladder now also admits SERP occupants: any domain the stored SERP
-                      scan saw at positions 1–6 on this line's keywords (shared basis,
-                      lib/productInsights.ts buildRivalRankMap — the PDF reads the same). */}
+                      v7.492 (Wayne): both ladders admit SERP top-6 occupants and place you +
+                      every tracked competitor. v7.493 (Wayne): ONE list, not two — the top 6,
+                      then you/tracked at their real rank in the same row format, and the
+                      unranked ones at the bottom with an explicit "none". No captions, no
+                      version numbers. Shared basis: lib/productInsights.ts (the PDF reads it). */}
                   {(() => {
                     const lad = placeInLadder(p.ladder, clientNorm, p.tracked, e => e.kind === 'client');
                     const cit = placeInLadder(p.citedTop, clientNorm, p.tracked, c => c.isClient);
                     const kindLabel = (k: string) => k === 'client' ? 'you' : k === 'tracked' ? 'tracked competitor' : k === 'serp' ? 'SERP top-6 occupant' : 'Semrush organic rival';
                     const kindColor = (k: string) => k === 'client' ? 'var(--c-6c63ff)' : k === 'tracked' ? 'var(--c-46cce0)' : k === 'serp' ? 'var(--c-34d399)' : 'var(--c-f59e0b)';
                     const serpN = p.ladder.filter(e => e.kind === 'serp').length;
-                    const placeRow = (pl: { domain: string; kind: 'client' | 'tracked'; rank: number | null; inTop: boolean }, val: string | null, key: string) => (
-                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px', fontSize: '11px' }}>
-                        <span style={{ width: '12px', fontSize: '10px', fontWeight: 700, color: pl.rank !== null ? 'var(--c-8a8aa8)' : 'var(--c-55557a)' }}>{pl.rank !== null ? `#${pl.rank}` : '—'}</span>
-                        <span style={{ flex: '0 0 150px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          color: pl.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
-                          {pl.kind === 'client' ? `${pl.domain} (you)` : pl.domain}
+                    // one row shape for every line of both ladders
+                    const row = (key: string, rank: number | null, domain: string, isYou: boolean, color: string, frac: number | null, val: string | null, title?: string) => (
+                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px', fontSize: '11.5px' }}>
+                        <span style={{ width: '26px', color: rank !== null ? 'var(--c-55557a)' : 'var(--c-55557a)', fontSize: '10px', fontVariantNumeric: 'tabular-nums' }}>{rank !== null ? rank : '—'}</span>
+                        <span style={{ flex: '0 0 170px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: isYou ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }} title={title}>
+                          {isYou ? `${domain} (you)` : domain}
                         </span>
-                        <span style={{ flex: 1, fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>
-                          {pl.kind === 'tracked' ? 'tracked competitor' : ''}{pl.inTop ? (pl.kind === 'tracked' ? ' · in the top 6 above' : 'in the top 6 above') : ''}
+                        <span style={{ flex: 1, height: '7px', borderRadius: '4px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
+                          {frac !== null && <span style={{ display: 'block', height: '100%', width: `${Math.max(0, Math.min(1, frac)) * 100}%`, background: color }} />}
                         </span>
-                        <span style={{ width: '112px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
-                          color: pl.rank !== null ? (pl.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)') : 'var(--c-f87171)', fontSize: '10.5px' }}>
-                          {val ?? 'none'}
-                        </span>
+                        <span style={{ width: '64px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: val === null ? 'var(--c-f87171)' : isYou ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>{val ?? 'none'}</span>
                       </div>
                     );
+                    const maxVol = p.ladder[0]?.p1Vol || 1;
+                    const pct = (v: number) => `${(p.demand > 0 ? (v / p.demand) * 100 : 0).toFixed(1)}%`;
+                    // the list: top 6 → you/tracked outside the top 6 at their real rank → unranked at the bottom
+                    const ladRows = [
+                      ...lad.top.map((e, i) => row(`t:${e.domain}`, i + 1, e.domain, e.kind === 'client', kindColor(e.kind), e.p1Vol / maxVol, pct(e.p1Vol), kindLabel(e.kind))),
+                      ...lad.placements.filter(pl => !pl.inTop && pl.rank !== null && pl.entry).sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).map(pl => row(`p:${pl.domain}`, pl.rank, pl.domain, pl.kind === 'client', kindColor(pl.kind), pl.entry!.p1Vol / maxVol, pct(pl.entry!.p1Vol), kindLabel(pl.kind))),
+                      ...lad.placements.filter(pl => pl.rank === null).map(pl => row(`n:${pl.domain}`, null, pl.domain, pl.kind === 'client', kindColor(pl.kind), null, null, kindLabel(pl.kind))),
+                    ];
+                    const maxCit = p.citedTop[0]?.count || 1;
+                    const citColor = (c: { isClient: boolean; domain: string }) => c.isClient ? 'var(--c-6c63ff)' : p.tracked.includes(c.domain) ? 'var(--c-46cce0)' : 'var(--c-f59e0b)';
+                    const citRows = [
+                      ...cit.top.map((c, i) => row(`t:${c.domain}`, i + 1, c.domain, c.isClient, citColor(c), c.count / maxCit, `${c.count}×`)),
+                      ...cit.placements.filter(pl => !pl.inTop && pl.rank !== null && pl.entry).sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).map(pl => row(`p:${pl.domain}`, pl.rank, pl.domain, pl.kind === 'client', citColor(pl.entry!), pl.entry!.count / maxCit, `${pl.entry!.count}×`)),
+                      ...cit.placements.filter(pl => pl.rank === null).map(pl => row(`n:${pl.domain}`, null, pl.domain, pl.kind === 'client', kindColor(pl.kind), null, null)),
+                    ];
                     return (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
                       <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '2px' }}>
-                        PAGE-1 VOLUME SHARE — MEASURED (v7.419 ladder basis) · {lad.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${lad.total}` : `${lad.total} MEASURED`}
+                        PAGE-1 VOLUME SHARE — MEASURED · {lad.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${lad.total}` : `${lad.total} MEASURED`}{lad.placements.length > 0 ? ' · YOU + TRACKED COMPETITORS' : ''}
                       </div>
                       <div style={{ fontSize: '9px', color: 'var(--c-8a8aa8)', marginBottom: '8px' }}>
                         tracked competitors + Semrush organic rivals + any domain the stored SERP scan placed at positions 1–{SERP_ENTRY_MAX_POS} on this line&rsquo;s keywords
                         {built.serpScannedKw > 0 ? ` (${built.serpScannedKw.toLocaleString()} SERPs on file · ${serpN} SERP occupant${serpN === 1 ? '' : 's'} qualified here)` : ' (no SERP scan on file — SERP occupants cannot be measured yet)'}
-                        {' '}· bars are measured page-1 volume, no click model
+                        {' '}· measured page-1 volume, no click model · you and your tracked competitors are listed at their rank; none = no page-1 hold
                       </div>
-                      {p.ladder.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No brand holds page-1 volume on this category's keywords.</div>}
-                      {lad.top.map((e, i) => {
-                        const pctOfCat = p.demand > 0 ? (e.p1Vol / p.demand) * 100 : 0;
-                        const maxVol = p.ladder[0]?.p1Vol || 1;
-                        return (
-                          <div key={e.domain} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px', fontSize: '11.5px' }}>
-                            <span style={{ width: '12px', color: 'var(--c-55557a)', fontSize: '10px' }}>{i + 1}</span>
-                            <span style={{ flex: '0 0 150px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              color: e.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }} title={kindLabel(e.kind)}>
-                              {e.kind === 'client' ? `${e.domain} (you)` : e.domain}
-                            </span>
-                            <span style={{ flex: 1, height: '7px', borderRadius: '4px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
-                              <span style={{ display: 'block', height: '100%', width: `${(e.p1Vol / maxVol) * 100}%`, background: kindColor(e.kind) }} />
-                            </span>
-                            <span style={{ width: '46px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: e.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>{pctOfCat.toFixed(1)}%</span>
-                            <span style={{ width: '86px', textAlign: 'right', fontSize: '9px', color: 'var(--c-55557a)' }}>
-                              {e.kind === 'serp' ? `top-${SERP_ENTRY_MAX_POS} on ${e.top6Kw ?? 0} · ` : ''}rank data: {e.measuredKw}/{p.kwCount} kw
-                            </span>
-                          </div>
-                        );
-                      })}
-                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: '8.5px', color: 'var(--c-8a8aa8)', margin: '4px 0 8px' }}>
+                      {p.ladder.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)', marginBottom: '6px' }}>No brand holds page-1 volume on this category's keywords.</div>}
+                      {ladRows}
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: '8.5px', color: 'var(--c-8a8aa8)', marginTop: '4px' }}>
                         {(['client', 'tracked', 'rival', 'serp'] as const).map(k => (
                           <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                             <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: kindColor(k), display: 'inline-block' }} />{kindLabel(k)}
                           </span>
                         ))}
                       </div>
-                      <div style={{ borderTop: '1px solid var(--c-1e1e34)', paddingTop: '7px' }}>
-                        <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
-                          WHERE YOU AND YOUR TRACKED COMPETITORS SIT — RANK OF {lad.total} MEASURED
-                        </div>
-                        {lad.placements.map(pl => placeRow(pl, pl.entry ? `${((pl.entry.p1Vol / Math.max(p.demand, 1)) * 100).toFixed(1)}% · ${pl.entry.p1Kw} kw` : null, `lad:${pl.domain}`))}
-                        {lad.placements.length === 1 && <div style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>No tracked competitors on this project yet — add them in Competitors.</div>}
-                      </div>
+                      {lad.placements.length === 1 && <div style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)', marginTop: '4px' }}>No tracked competitors on this project yet — add them in Competitors.</div>}
                     </div>
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
                       <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '8px' }}>
-                        WHO GETS CITED IN RECORDED AI ANSWERS {p.scan ? `— ${p.scan.rows.length} answers · ${cit.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${cit.total}` : `${cit.total}`} DOMAINS` : ''}
+                        WHO GETS CITED IN RECORDED AI ANSWERS {p.scan ? `— ${p.scan.rows.length} answers · ${cit.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${cit.total}` : `${cit.total}`} DOMAINS · YOU + TRACKED COMPETITORS` : ''}
                       </div>
                       {!p.scan && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>Not scanned yet — run "Scan recorded AI answers" above.</div>}
                       {p.scan && p.citedTop.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>The recorded answers for this category carry no cited sources.</div>}
-                      {cit.top.map((c, i) => {
-                        const max = p.citedTop[0]?.count || 1;
-                        return (
-                          <div key={c.domain} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px', fontSize: '11.5px' }}>
-                            <span style={{ width: '12px', color: 'var(--c-55557a)', fontSize: '10px' }}>{i + 1}</span>
-                            <span style={{ flex: '0 0 150px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: c.isClient ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
-                              {c.isClient ? `${c.domain} (you)` : c.domain}
-                            </span>
-                            <span style={{ flex: 1, height: '7px', borderRadius: '4px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
-                              <span style={{ display: 'block', height: '100%', width: `${(c.count / max) * 100}%`, background: c.isClient ? 'var(--c-6c63ff)' : p.tracked.includes(c.domain) ? 'var(--c-46cce0)' : 'var(--c-f59e0b)' }} />
-                            </span>
-                            <span style={{ width: '56px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{c.count}×</span>
-                          </div>
-                        );
-                      })}
-                      {p.scan && p.citedTop.length > 0 && (
-                        <div style={{ borderTop: '1px solid var(--c-1e1e34)', paddingTop: '7px', marginTop: '8px' }}>
-                          <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
-                            WHERE YOU AND YOUR TRACKED COMPETITORS SIT — RANK OF {cit.total} CITED DOMAINS
-                          </div>
-                          {cit.placements.map(pl => placeRow(pl, pl.entry ? `${pl.entry.count}× cited` : null, `cit:${pl.domain}`))}
-                        </div>
-                      )}
+                      {p.scan && p.citedTop.length > 0 && citRows}
                       {p.scan && !p.citedTop.some(c => c.isClient) && p.citedTop.length > 0 && (
                         <div style={{ marginTop: '7px', fontSize: '10.5px', color: 'var(--c-f87171)' }}>
                           Your domain is cited 0 times across these recorded answers.
@@ -1662,103 +1666,9 @@ export default function ProductInsightsSection({
                     return <>{rowsOut}</>;
                   })()}
 
-                  {/* prompt drawer: probe prompts + recorded questions */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '10px' }}>
-                    <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '7px' }}>
-                        LLM PROBE PROMPTS — THIS CATEGORY (analysis-time, unbranded)
-                      </div>
-                      {(() => {
-                        // v7.474: honest partial-coverage note — a deadline-stopped probe
-                        // keeps its completed prompts; the rest were never asked (I.5).
-                        const cov = (probeFromAnalysis(analysis) as any)?.coverage;
-                        if (!cov || !(cov.completed < cov.planned)) return null;
-                        return (
-                          <div style={{ fontSize: '10px', color: 'var(--c-f59e0b)', marginBottom: '6px' }}>
-                            The probe hit its time budget: {cov.completed.toLocaleString()} of {cov.planned.toLocaleString()} planned prompt calls completed. Prompts not shown were never asked — unmeasured, not zero. The next analysis re-probes in priority order.
-                          </div>
-                        );
-                      })()}
-                      {(() => {
-                        // v7.430: prompts roll up to the umbrella through the STORED taxonomy (II.8)
-                        const res: any[] = probeResultsForUmbrella(probeFromAnalysis(analysis), p.name, catToUmb);   // v7.472
-                        if (res.length === 0) return <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No probe prompts for this category (the probe covers the top 30 product lines by demand).</div>;
-                        // v7.474: grouped by NODE — the line's own prompts first, then each
-                        // direct sub-category's prompts under its name (Wayne: "every sub
-                        // category will have prompts mapped to it as well").
-                        const pLow = p.name.toLowerCase().trim();
-                        const groups: Array<{ name: string; isLine: boolean; rows: any[] }> = [];
-                        const gIdx = new Map<string, number>();
-                        for (const r of res) {
-                          const nm = String(r?.category ?? '');
-                          const low = nm.toLowerCase().trim();
-                          let gi = gIdx.get(low);
-                          if (gi === undefined) { gi = groups.length; gIdx.set(low, gi); groups.push({ name: nm, isLine: low === pLow, rows: [] }); }
-                          groups[gi].rows.push(r);
-                        }
-                        groups.sort((a, b) => (a.isLine ? 0 : 1) - (b.isLine ? 0 : 1));
-                        return groups.map(g => {
-                          const named = g.rows.filter((r: any) => r.mentioned).length;
-                          return (
-                            <div key={g.name} style={{ marginBottom: '7px' }}>
-                              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.05em', color: g.isLine ? 'var(--c-9b96ff)' : 'var(--c-6a6a90)', margin: '4px 0 2px' }}>
-                                {g.isLine ? `${g.name.toUpperCase()} — PRODUCT LINE` : g.name.toUpperCase()} · named in {named} of {g.rows.length}
-                              </div>
-                              {g.rows.map((r: any) => (
-                                <div key={r.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline', padding: '4px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
-                                  <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.prompt}</span>
-                                  <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--c-55557a)' }}>{r.platform === 'claude' ? 'Claude' : 'GPT'}</span>
-                                  <span style={{ fontSize: '10px', fontWeight: 800, color: r.mentioned ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{r.mentioned ? '✓ mentioned' : '✕ absent'}</span>
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        });
-                      })()}
-                    </div>
-                    <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '7px' }}>
-                        RECORDED AI QUESTIONS — DataForSEO LLM Mentions
-                        {p.scan && p.scan.totalCount > p.scan.fetched && (
-                          <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--c-f59e0b)' }}> · showing {p.scan.fetched} of {p.scan.totalCount.toLocaleString()} matches</span>
-                        )}
-                      </div>
-                      {!p.scan && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>Not scanned yet.</div>}
-                      {p.scan && (() => {
-                        const rows = showAllPrompts ? p.scan.rows : p.scan.rows.slice(0, 10);
-                        return (
-                          <>
-                            {rows.map((r, i) => {
-                              const named = rowNamesClient(r, clientNorm, brandToks);
-                              const cited = r.sources.slice(0, 3).map(s => s.domain).join(', ');
-                              return (
-                                <div key={i} style={{ padding: '5px 0', borderBottom: '1px solid var(--c-14142a)', fontSize: '11.5px' }}>
-                                  <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                                    <span style={{ flex: 1, color: 'var(--c-c8c8e8)' }}>{r.question}</span>
-                                    <span style={{ fontSize: '9.5px', fontWeight: 700, color: 'var(--c-55557a)', whiteSpace: 'nowrap' }}>{r.platform === 'google' ? 'AI Overview' : 'ChatGPT'}</span>
-                                    <span style={{ fontSize: '10px', fontWeight: 800, whiteSpace: 'nowrap', color: named ? 'var(--c-34d399)' : 'var(--c-f87171)' }}>{named ? '✓ you' : '✕ absent'}</span>
-                                  </div>
-                                  <div style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', marginTop: '1px' }}>
-                                    {cited ? <>cites: {cited}</> : 'no cited sources recorded'}
-                                    {r.aiSearchVolume !== null && (
-                                      <span title="DataForSEO's ai_search_volume — an ESTIMATED metric from their PAA-based algorithm, not measured demand (labeled per Const I.5a)">
-                                        {' '}· AI vol {fmtVol(r.aiSearchVolume)} <span style={{ fontWeight: 800, color: 'var(--c-f59e0b)' }}>EST</span>
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                            {p.scan.rows.length > 10 && (
-                              <button onClick={() => setShowAllPrompts(s => !s)} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 0 0' }}>
-                                {showAllPrompts ? 'Show fewer' : `Show all ${p.scan.rows.length} fetched questions`}
-                              </button>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </div>
+                  {/* v7.493 (Wayne): the category-level prompt drawers (probe prompts + recorded
+                      questions) are gone from the product line — individual prompts and AI
+                      Overviews map to a PAGE, so they live on the sub-category nodes below. */}
                 </div>
               )}
             </div>
@@ -1769,7 +1679,7 @@ export default function ProductInsightsSection({
         {!loading && products.length > 0 && (
           <div style={{ marginTop: '16px', padding: '11px 14px', borderRadius: '9px', background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', fontSize: '10.5px', color: 'var(--c-8a8aa8)', lineHeight: 1.6 }}>
             <b style={{ color: 'var(--c-c8c8e8)' }}>Where these numbers come from.</b>{' '}
-            Search side: the canonical keyword pool + stored taxonomy (same basis as the Keyword/Cluster panels; membership read, never re-derived) — page-1 share is measured volume at positions 1–10; the brand ladder is the v7.419 measured page-1 volume method (uploaded competitor rows + Semrush SERP rivals, no CTR model).
+            Search side: the canonical keyword pool + stored taxonomy (same basis as the Keyword/Cluster panels; membership read, never re-derived) — page-1 share is measured volume at positions 1–10; the brand ladder is measured page-1 volume (uploaded competitor rows + Semrush organic rivals + SERP top-6 occupants from the stored SERP scan, no click model); AIO / PAA / Video citation rates read the same roll-up as the SERP Features panel.
             AI side, two labeled bases never blended: the analysis-time LLM probe (5 unbranded Claude + 5 unbranded GPT prompts per category, top-30 categories by demand) and recorded AI answers from DataForSEO LLM Mentions (real ChatGPT + Google-AI-Overview answers; US/English index).
             Verdicts are fixed threshold rules over those numbers (weak &lt; {AI_WEAK_BELOW * 100}%, strong ≥ {AI_STRONG_FROM * 100}%) — deterministic, no model in the loop.
             "AI vol" on recorded questions is DataForSEO's <b style={{ color: 'var(--c-f59e0b)' }}>estimated</b> ai_search_volume metric (labeled EST), never measured demand. Scan cost is the measured per-task cost DataForSEO reports, recorded on the API Usage ledger.
