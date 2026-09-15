@@ -1,3 +1,82 @@
+# v7.492 — the product line as a whole: SERP occupants, placements, and the way into the topics (2026-09-15)
+
+Wayne, looking at Mortgages on the Product Insights panel: *"Let's keep this as a view into the
+performance of the whole product line. So the share of volume should include their tracked
+competitors but also pull any SERP competitors that are in the top 6 positions in addition to the
+tracked competitors. Same with the most cited sources in that category. Show the top 6 like you
+have it but also show where the tracked competitors and the client are in that grouping. There
+should also be a way to click or view the topics and keywords of the parent category or the
+sub-category."*
+
+## What was true before
+
+The page-1 ladder read two sources — uploaded competitor rows and Semrush's auto-discovered
+organic rivals — and showed the top six. A project with three uploaded competitors and no Semrush
+rival positions showed exactly those three, so a line where the client held nothing showed no
+client row at all, and a tracked competitor outside the top six vanished. The stored SERP scan
+(`analysis.serpApiSnapshot`, every organic result on every scanned keyword) was never consulted.
+Sub-category keyword lists existed (v7.433), but there was no topic list at any level and no way in
+from the line header.
+
+## What changed
+
+- **One rival rank map, three sources** (`buildRivalRankMap`, lib/productInsights.ts): uploaded
+  rows → `tracked`, Semrush rivals → `rival`, and now the SERP scan's organic results → `serp`.
+  A domain's positions come from the first source that carries it (1 > 2 > 3), so **every number a
+  pre-v7.492 ladder showed is byte-identical** — the scan only adds domains the first two never
+  carried. Asserted in the suite: the ladder with the scan, minus its `serp` rows, equals the
+  ladder without it.
+- **The top-6 entry rule.** A SERP occupant enters a ladder only where it sat at positions 1–6 on
+  at least one of that category's scanned keywords (`SERP_ENTRY_MAX_POS = 6` — Wayne's threshold,
+  the one requested Art. I.6 limit this release). Its bar is then the same measured page-1 volume
+  every other row shows; the row discloses `top-6 on N kw · rank data: N/M kw`. A domain that only
+  ever sits at #7–#10 does not enter.
+- **Placements on both ladders.** Under the top six, "Where you and your tracked competitors sit —
+  rank of N measured": the client and every tracked brand (uploaded-row domains ∪ the project's
+  competitor list) with rank, share and keyword count — or an explicit **none** when the brand
+  holds nothing there. The cited-domain ladder gets the same block against the full cited list.
+  One helper (`placeInLadder`) serves both, and the Assessment PDF's product-breakdown page reads
+  it too (Art. II.6a).
+- **Sub-category ladders share the map.** `buildCategoryTree` no longer builds its own rank map;
+  it calls the same `buildRivalRankMap` + `accumulateLadder`, so a sub-category's ladder and its
+  line's ladder cannot disagree on who is measured (Art. II.7). The root node's ladder is asserted
+  equal to the product-line ladder.
+- **Topics & keywords, at every level.** The line header's "N kws · M topics" is now the way in:
+  it opens every canonical Theme-Cluster topic on the line (topic, theme, stage, best rank + page,
+  demand, keyword count), each expanding to its keywords with position, volume and ranking page.
+  Every sub-category row carries "N topics at this level (· M incl. sub-levels)" opening the same
+  view for that node. Topics file down the tree with the SAME one-child filing math the journey
+  chip counts (`fileTopicsDeep` over `fileTopics`), so every topic lands in exactly one node and
+  the per-node lists partition the line — asserted.
+- **Honest gaps.** No SERP scan on file → the basis line says SERP occupants cannot be measured
+  yet; no tracked competitors → said in the placements block; a node whose topics all live deeper
+  → said, not blank.
+
+## Downstream (II.6a/II.6b)
+
+- **Assessment PDF** — reads the same `buildProductRows` / `buildCategoryTree` (now passed the SERP
+  scan + competitor list by the route), so its ladders carry SERP occupants; the product-breakdown
+  page adds the placement line for both ladders through the panel's helper. The payload type
+  carries the `serp` kind and the tracked list.
+- **Seer** — both call sites pass the same two inputs, so its read of the ladder matches the panel.
+- **II.9** — no query changed; the PDF route and Seer already load the full analysis row that
+  carries `serpapi_snapshot`.
+
+## Verification
+
+Real `next build` exit 0; project `tsc` clean under the project tsconfig. Retained suite: base
+v7.491 pristine **2826 PASS / 31 FAIL** → change **2921 / 31**, FAIL set byte-identical (the
+same 31 pre-existing failures carried since v7.487). **95 new checks**: precedence, the top-6
+ticket (a #8-only domain excluded), byte-identity without the scan, placements incl. a tracked
+brand with no hold, root-vs-line ladder equality, deep filing as a partition, consumer wiring,
+a real-scale (3,500-keyword) render of the actual panel in BOTH themes exercising the ladder, the
+placements block, the line-level and node-level topics views, and a dual-theme contrast gate
+on every pairing the release introduces (new captions on `c-8a8aa8`, ≥ 5.5:1 both themes).
+
+**Changed:** `lib/productInsights.ts`, `components/brief/ProductInsightsSection.tsx`,
+`lib/pdf/assessmentTemplate.ts`, `app/api/reports/pdf/route.ts`, `lib/seer/core.ts`,
+`package.json`.
+
 # v7.491 — the first sweep under Art. II.9 (2026-09-14)
 
 v7.490 made the response budget constitutional. The sweep that article requires was run the
