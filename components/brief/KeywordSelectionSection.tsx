@@ -203,6 +203,63 @@ export default function KeywordSelectionSection({
     setDraftDirty(true);
   };
 
+
+  // ── v7.495 · volume floor (Wayne 2026-09-15) ───────────────────────────────
+  // "a lot of topics with a single keyword and volume at like 140 — I want an
+  // option to deselect all of these." The floor reads each branch's ROLLUP —
+  // the same kw / vol the row prints — and deselects the branch whole, top-most
+  // cover, exactly like a manual uncheck, so nothing is counted twice (I.3).
+  // Off unless a number is typed AND Apply is clicked (I.6: no default caps).
+  const [floorVolStr, setFloorVolStr] = useState('');
+  const [floorKwStr,  setFloorKwStr]  = useState('');
+  const [floorUndo,   setFloorUndo]   = useState<{ prev: string[]; vol: number; kw: number; branches: number } | null>(null);
+  const floorVol = Math.max(0, Math.floor(Number(floorVolStr) || 0));
+  const floorKw  = Math.max(0, Math.floor(Number(floorKwStr)  || 0));
+
+  const floorHits = useMemo(() => {
+    if (floorVol <= 0 && floorKw <= 0) return null;
+    const hiddenIn = (key: string): boolean => {
+      const parts = key.split(' › ');
+      let acc = '';
+      for (let i = 0; i < parts.length; i++) { acc = acc ? acc + ' › ' + parts[i] : parts[i]; if (hiddenDraft.has(acc.toLowerCase())) return true; }
+      return false;
+    };
+    const countNodes = (n: SelectionNode): number => { let t = 1; for (const c of n.children) t += countNodes(c); return t; };
+    const keys: string[] = [];
+    let kw = 0, vol = 0, nodes = 0;
+    const walk = (n: SelectionNode) => {
+      if (hiddenIn(n.key)) return;                       // already out of scope — leave it alone
+      const under = (floorVol > 0 && n.monthlyVol < floorVol) || (floorKw > 0 && n.kwCount < floorKw);
+      if (under) { keys.push(n.key.toLowerCase()); kw += n.kwCount; vol += n.monthlyVol; nodes += countNodes(n); return; }
+      n.children.forEach(walk);
+    };
+    tree.nodes.forEach(walk);
+    return { keys, kw, vol, nodes, branches: keys.length };
+  }, [tree, hiddenDraft, floorVol, floorKw]);
+
+  const applyFloor = () => {
+    if (!floorHits || floorHits.keys.length === 0) return;
+    const prev = Array.from(hiddenDraft);
+    const next = new Set(hiddenDraft);
+    for (const k of floorHits.keys) {
+      const del: string[] = [];
+      next.forEach(id => { if (id === k || id.indexOf(k + ' › ') === 0) del.push(id); });
+      for (let i = 0; i < del.length; i++) next.delete(del[i]);
+      next.add(k);
+    }
+    setFloorUndo({ prev, vol: floorVol, kw: floorKw, branches: floorHits.branches });
+    setHiddenDraft(next);
+    setDraftDirty(true);
+    setScopeError(null);
+  };
+
+  const undoFloor = () => {
+    if (!floorUndo) return;
+    setHiddenDraft(new Set(floorUndo.prev));
+    setFloorUndo(null);
+    setDraftDirty(true);
+  };
+
   // Exact in/out accounting over the draft (own rows counted once — Const I.3).
   const draftStats = useMemo(() => {
     let inKw = 0, inVol = 0, outKw = 0, outVol = 0, inRoots = 0;
@@ -831,6 +888,63 @@ export default function KeywordSelectionSection({
                     <button style={btn('var(--c-6c63ff)')} onClick={() => setAll(true)}>Select all</button>
                     <button style={btn('var(--c-585878)')} onClick={() => setAll(false)}>Clear all</button>
                   </span>
+                </div>
+                {/* v7.495 · volume floor — bulk-deselect every branch under a number you set.
+                    Off by default (I.6); reads the same rollup the row prints (I.1). */}
+                <div style={{ padding: '9px 14px', borderBottom: '1px solid var(--c-1e1e34)', background: 'var(--c-0b0b16)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--c-9090c0)' }}>Deselect anything under</span>
+                    <input
+                      type="number" min={0} step={50} value={floorVolStr} placeholder="none"
+                      onChange={e => setFloorVolStr(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') applyFloor(); }}
+                      style={{ width: 84, fontSize: 11.5, padding: '5px 9px', borderRadius: 7, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: 11, color: 'var(--c-8080a8)' }}>/mo</span>
+                    {[100, 250, 500, 1000].map(v => (
+                      <button key={v} onClick={() => setFloorVolStr(String(v))}
+                        style={{ fontSize: 10.5, fontWeight: 700, color: floorVol === v ? 'var(--c-e8e8ff)' : 'var(--c-8080a8)', background: floorVol === v ? 'var(--c-14142a)' : 'transparent', border: '1px solid var(--c-1e1e34)', borderRadius: 999, padding: '3px 9px', cursor: 'pointer' }}>
+                        {fmtVol(v)}
+                      </button>
+                    ))}
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--c-8080a8)', marginLeft: 4 }}>
+                      or with fewer than
+                      <input
+                        type="number" min={0} step={1} value={floorKwStr} placeholder="none"
+                        onChange={e => setFloorKwStr(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') applyFloor(); }}
+                        style={{ width: 62, fontSize: 11.5, padding: '5px 9px', borderRadius: 7, background: 'var(--c-14142a)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', outline: 'none' }}
+                      />
+                      keywords
+                    </label>
+                    <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                      <button onClick={applyFloor} disabled={!floorHits || floorHits.branches === 0}
+                        style={{ ...btn('var(--c-6c63ff)'), opacity: (!floorHits || floorHits.branches === 0) ? 0.45 : 1, cursor: (!floorHits || floorHits.branches === 0) ? 'default' : 'pointer' }}>
+                        Apply floor
+                      </button>
+                      {floorUndo && <button style={btn('var(--c-585878)')} onClick={undoFloor}>Undo floor</button>}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10.5, lineHeight: 1.5, color: 'var(--c-8080a8)', marginTop: 6 }}>
+                    {floorHits && floorHits.branches > 0 ? (
+                      <span style={{ color: 'var(--c-f59e0b)' }}>
+                        Would deselect <b>{fmtN(floorHits.branches)}</b> branch{floorHits.branches === 1 ? '' : 'es'}
+                        {floorHits.nodes > floorHits.branches ? ` (${fmtN(floorHits.nodes)} categories with their sub-categories)` : ''} ·{' '}
+                        <b>{fmtN(floorHits.kw)}</b> kw · <b>{fmtVol(floorHits.vol)}</b>/mo
+                        {draftStats.inVol > 0 ? ` — ${floorHits.vol / draftStats.inVol < 0.001 ? '<0.1' : (100 * floorHits.vol / draftStats.inVol).toFixed(1)}% of the volume now in scope.` : '.'}
+                      </span>
+                    ) : floorHits ? (
+                      <span>Nothing left in the current selection falls under this floor.</span>
+                    ) : floorUndo ? (
+                      <span>
+                        Floor applied — <b style={{ color: 'var(--c-9090c0)' }}>{fmtN(floorUndo.branches)}</b> branch{floorUndo.branches === 1 ? '' : 'es'} deselected
+                        {floorUndo.vol > 0 ? ` under ${fmtN(floorUndo.vol)}/mo` : ''}{floorUndo.kw > 0 ? `${floorUndo.vol > 0 ? ' or' : ' under'} ${fmtN(floorUndo.kw)} keywords` : ''}.
+                        Re-check any box to bring one back, or Undo floor to restore the previous selection. Nothing is saved until you confirm.
+                      </span>
+                    ) : (
+                      <span>Reads each branch&rsquo;s rollup — the same kw · /mo the row prints. A branch under the floor is deselected whole; anything at or above it is untouched. Applies on top of the current selection.</span>
+                    )}
+                  </div>
                 </div>
                 <div style={{ maxHeight: 520, overflowY: 'auto', padding: '8px 10px 12px' }}>
                   {tree.nodes.map(n => renderNode(n, false))}
