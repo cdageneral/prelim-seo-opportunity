@@ -203,6 +203,9 @@ export async function POST(req: NextRequest) {
         clientDomain,
         brandTerms:       (((project as any).brandTerms ?? []) as string[]),
         breakdown:        (snap as any)?._categoryBreakdown,
+        // v7.492: the SAME two inputs the panel passes — SERP top-6 occupants + tracked list
+        serpScan:         ((analysis as any)?.serpApiSnapshot ?? null) as any,
+        trackedCompetitors: competitorDomains,
       });
       if (built.products.length > 0) {
         const ts = (project as any).productInsightsUpdatedAt;
@@ -236,6 +239,8 @@ export async function POST(req: NextRequest) {
             storedScans:      scans,
             clientDomain,
             brandTerms:       (((project as any).brandTerms ?? []) as string[]),
+            serpScan:         ((analysis as any)?.serpApiSnapshot ?? null) as any,   // v7.492
+            trackedCompetitors: competitorDomains,
           });
           // v7.449: Content Footprint by Brand — SAME shared builder the panel calls
           // (Const II.6b). Works without a stored taxonomy (flat line-level node).
