@@ -1,3 +1,61 @@
+# v7.493 — one ladder list, no captions, SERP-feature citation rates on the line (2026-09-15)
+
+Wayne, an hour after v7.492 went live: *"Let's push the client and the tracked competitors up
+into the same panel but just list where they are ranked. If they are not ranked at all they would
+go at the bottom of the list. Keep the same formatting as the structure above. Also we do not
+need the words top-6 on 201 rank data, or whatever that is after the percentage. Also do not
+include the version number (v7.419) as that is not relevant to the user. Also if this is for the
+sum of the total category then we would not have individual prompts and AIOs as those are mapped
+to a page level. The AIO citation rate and PAA citation rate and Video citations should be
+mentioned in the category level summary."*
+
+## What changed
+
+- **One list per ladder.** The separate "Where you and your tracked competitors sit" block is
+  gone. Both ladders are now a single list: the top 6, then you and every tracked competitor at
+  their real rank (#7, #19, #41 … in the same row shape — rank, name, bar, figure), and the ones
+  with nothing there at the bottom marked "—" with an explicit **none**. The header states the
+  scope: "TOP 6 OF N · YOU + TRACKED COMPETITORS".
+- **Captions and version numbers removed.** No more "top-6 on N · rank data: N/M kw" after the
+  percentage, and no "v7.419" anywhere in user copy (the ladder label, the insight banner basis,
+  the methodology footnote). A version number is a release-log fact, not a reader's.
+- **Category-level prompt drawers removed.** "LLM probe prompts — this category" and "Recorded AI
+  questions" no longer render on the product line. Individual prompts and AI Overviews map to a
+  page, so they live where the page is: the sub-category nodes keep their v7.434 prompt tabs and
+  v7.474 probe drawers unchanged. The fetched-of-total disclosure ("named in 5% of 100 of 1,234
+  answers") stays in the line header; the v7.474 partial-probe-coverage note moved to the top
+  of the panel — it is a project-level fact and is still stated (I.5).
+- **AIO / PAA / Video citation rates in the line header.** A fourth header group, "Google SERP
+  features · you cited": AI Overviews, People also ask and Video, each as *cited N of M* and a
+  rate, plus "N of M kw SERP-scanned". Computed by `computeSerpFeatureRollup` — the SAME roll-up
+  the SERP Features panel, the Executive Summary strip and the nav score read — scoped to the
+  line's keyword set (available = live scan detections + Semrush-flagged unscanned keywords;
+  cited = live scan only). Null, and said so, when the line has no feature data at all — never a
+  manufactured 0%. Carried on `ProductRow.serpFeatures` / `serpScanned`.
+
+## Downstream (II.6a/II.6b)
+
+- **Assessment PDF** — the product-breakdown block prints the same three rates from the same row
+  ("Google SERP features — you cited: AI Overviews 20% (60 of 300) · …"). Its compact placement
+  line (v7.492) and the "prompts asked" rows are unchanged — the prompt removal is a panel layout
+  decision, not a metric change; say the word and the PDF drops them too.
+- **Seer** — reads the same rows; no change needed.
+
+## Verification
+
+Real `next build` exit 0; project `tsc` clean. Retained suite: base v7.491 pristine **2826 / 31**
+→ change **2960 / 31**, FAIL set byte-identical. **39 new checks** (v493-basis: line-scoped roll-up
+== a direct call on the same inputs, no cross-line leak, honest null; v493-source: no version
+strings or captions in user copy, drawers removed at the line and kept at the node, PDF parity,
+the one-list structure; v493-render ×2 themes: header rates, list order occupants → tracked at #7
+→ you at #8 → unranked "none" at the bottom, cited list order). **Six retained checks updated
+with dated notes** (never deleted): v426 partial-fetch disclosure now read from the header, v426
+EST label (no render site left — the rule now reads "wherever rendered"), v426 probe drawer,
+v474 line drawer, v474 coverage note (re-homed), v492 placements block / caption / cited block.
+
+**Changed:** `lib/productInsights.ts`, `components/brief/ProductInsightsSection.tsx`,
+`lib/pdf/assessmentTemplate.ts`, `package.json`.
+
 # v7.492 — the product line as a whole: SERP occupants, placements, and the way into the topics (2026-09-15)
 
 Wayne, looking at Mortgages on the Product Insights panel: *"Let's keep this as a view into the
