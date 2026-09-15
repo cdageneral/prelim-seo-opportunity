@@ -224,6 +224,9 @@ export interface AssessmentData {
       ladder: Array<{ domain: string; kind: 'client' | 'tracked' | 'rival' | 'serp'; p1Vol: number; measuredKw: number; top6Kw?: number }>;
       clientRank: number | null;
       tracked?: string[];   // v7.492: placement rows (you + every tracked brand) read this
+      // v7.493: per-line AIO / PAA / Video citation rates (shared computeSerpFeatureRollup, scoped to the line)
+      serpFeatures?: { aioAcq: number; aioAvail: number; aioRate: number; paaAcq: number; paaAvail: number; paaRate: number; videoAcq: number; videoAvail: number; videoRate: number } | null;
+      serpScanned?: number;
       probe: { mentions: number; total: number; claude: string; gpt: string } | null;
       scan: { fetched: number; totalCount: number; scannedAt: string } | null;
       aiRate: number | null; dfsShare: number | null;
@@ -985,6 +988,12 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       const ladPlHtml = plLine(ladPl.placements, ladPl.total, dm => { const e = (p.ladder ?? []).find(l => normSovDomain(l.domain) === dm); return e ? `${p1((e.p1Vol / Math.max(p.demand, 1)) * 100)}` : null; }, 'measured brands');
       const citPlHtml = p.scan ? plLine(citPl.placements, citPl.total, dm => { const e = (p.citedTop ?? []).find(c => normSovDomain(c.domain) === dm); return e ? `${n0(e.count)}× cited` : null; }, 'cited domains') : '';
       const serpN = (p.ladder ?? []).filter(l => l.kind === 'serp').length;
+      // v7.493: the line's SERP-feature citation rates (same roll-up as the SERP Features panel)
+      const sf = p.serpFeatures ?? null;
+      const sfCell = (lab: string, acq: number, avail: number, rate: number) => `${esc(lab)} <b style="color:${avail === 0 ? 'var(--muted)' : rate >= 50 ? 'var(--green)' : rate >= 25 ? '#b45309' : 'var(--critical)'};">${avail === 0 ? '—' : rate + '%'}</b> <span style="color:var(--muted);">(${n0(acq)} of ${n0(avail)})</span>`;
+      const sfLine = sf
+        ? `<div style="font-size:8.6px; color:var(--ink2); margin-bottom:7px;"><b style="color:var(--ink);">Google SERP features — you cited:</b> ${sfCell('AI Overviews', sf.aioAcq, sf.aioAvail, sf.aioRate)} &nbsp;·&nbsp; ${sfCell('People also ask', sf.paaAcq, sf.paaAvail, sf.paaRate)} &nbsp;·&nbsp; ${sfCell('Video', sf.videoAcq, sf.videoAvail, sf.videoRate)} <span style="color:var(--muted);">· ${n0(p.serpScanned ?? 0)} of ${n0(p.kwCount)} keywords SERP-scanned</span></div>`
+        : '';
       const leader = p.ladder[0] ?? null;
       const winTxt = leader
         ? (leader.kind === 'client'
@@ -1003,6 +1012,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
           <span style="font-size:8.8px; color:var(--muted);">${vol(p.demand)}/mo across ${n0(p.kwCount)} keywords · page-1 share ${p0(p.p1Share * 100)}</span>
         </div>
         <div style="font-size:9.3px; color:var(--ink2); margin-bottom:8px;"><b style="color:var(--ink);">Who wins:</b> ${winTxt}${p.scan ? ` · AI answers name or cite you in ${p0((p.dfsShare ?? 0) * 100)} of ${n0(p.scan.fetched)} recorded answers` : ''}${p.probe ? ` · probe: named in ${n0(p.probe.mentions)} of ${n0(p.probe.total)} unbranded prompts` : ''}</div>
+        ${sfLine}
         <div class="two" style="gap:14px; margin-bottom:${promptRows ? '8px' : '0'};">
           <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO RANKS — PAGE-1 VOLUME HELD${serpN > 0 ? ` <span style="font-weight:600; letter-spacing:0;">(incl. ${n0(serpN)} SERP top-${SERP_ENTRY_MAX_POS} occupant${serpN === 1 ? '' : 's'})</span>` : ''}</div>${ladBars || '<div style="font-size:8.8px; color:var(--muted);">No page-1 holds measured on this line.</div>'}${ladPlHtml}</div>
           <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO AI ANSWERS CITE HERE</div>${citBars || '<div style="font-size:8.8px; color:var(--muted);">No recorded citations on this line yet.</div>'}${citPlHtml}</div>
