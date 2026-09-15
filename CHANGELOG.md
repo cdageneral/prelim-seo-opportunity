@@ -1,3 +1,106 @@
+# v7.491 — the first sweep under Art. II.9 (2026-09-14)
+
+v7.490 made the response budget constitutional. The sweep that article requires was run the
+same night and found three more routes carrying the same shape, plus one read that had never
+worked at all.
+
+## What the numbers said
+
+Measured on TD Bank through `?sizes=1`, which v7.490 widened for exactly this:
+
+```
+project row, all 16 stores      44,342,983
+  └ product_insights            44,217,307   (99.7% of the row)
+newest analysis                 22,660,726
+worstCaseCombinedBytes          67,003,709
+Neon limit                      67,108,864
+headroom                           105,155   (0.16%)
+```
+
+## The three
+
+- **`brand-terms/suggest`** and **`excluded-brands/suggest`** each did
+  `findFirst({ with: { analyses: { limit: 1 } } })` — the project row *and* the newest analysis
+  in one response, 67,003,709 bytes, to end up using three project scalars and 120–220 keyword
+  strings. The identical shape that 500'd the Assessment PDF. They had not errored only because
+  nobody had pressed those buttons on this project recently.
+- **`keywords/clear-scope`** selected every column of every analysis — 41,920,028 bytes across
+  two rows, ~35 MB of it `serpapi_snapshot` that the loop never touches. One more scan would
+  have put it over.
+
+Also named columns on **`authority-scan`** and **`serp-compare`**, which each shipped 44.2 MB of
+`product_insights` to read two or three scalars.
+
+## The sample no longer means the snapshot
+
+`lib/keywords/snapshotSample.ts` extracts the keyword strings in Postgres —
+`jsonb_array_elements … WITH ORDINALITY`, LIMITed server-side — so 120 keywords cost 120
+keywords instead of a 2.85 MB snapshot. One shared module rather than three copies (II.7,
+and v7.459's lesson that two readers of one format will drift).
+
+The array guard in it is load-bearing. Every caller previously tested `Array.isArray` and fell
+back to `[]`; `jsonb_array_elements` **throws** on a non-array, so without the
+`jsonb_typeof(...) = 'array'` CASE a snapshot missing the field would 500 where it used to
+return an honest empty (I.5). A retained check asserts the guard count equals the call count.
+
+## A read that never worked
+
+`serp-compare` read `proj.semrushSnapshot`. That is not a column of `projects` — it lives on
+`analyses`. The read resolved to `undefined` on every call, so `keywords` stayed empty and the
+route answered *"No keywords to compare"* for any `projectId` that did not also pass an explicit
+`keywords=` list. Silently, always, since v7.397. This is the v7.472 class of bug, and it was
+only visible because II.9 forced someone to write down which columns the route reads: you cannot
+name a column that does not exist. The sample now comes from the project's newest analysis,
+ranked by real search volume. A retained check proves the schema fact both ways —
+`semrush_snapshot` IS on `analyses` and is NOT on `projects` — so the old read cannot come back.
+
+## One thing the suite caught mid-build
+
+Naming `authority-scan`'s columns dropped `authority_snapshot`, which two sites further down
+read to compare against the prior scan. It would have shipped as a silent `undefined`. The
+coverage check added for it — every `project.<field>` a route reads must be a key of that
+route's own select — now runs on all four routes.
+
+## Files
+
+- `lib/keywords/snapshotSample.ts` (NEW) — `newestAnalysisId`, `snapshotKeywordSample`,
+  `snapshotTopKeywordsByVolume`.
+- `app/api/projects/[id]/brand-terms/suggest/route.ts`,
+  `app/api/projects/[id]/excluded-brands/suggest/route.ts` — split, named, sampled in Postgres.
+- `app/api/projects/[id]/keywords/clear-scope/route.ts` — id + the one snapshot it rewrites.
+- `app/api/projects/[id]/authority-scan/route.ts`, `app/api/serp-compare/route.ts` — named columns.
+
+## Verification
+
+Real `next build` exit 0 · project `tsc --noEmit` clean, no `target` override (V.1a) · retained
+suite **2826 PASS / 31 pre-existing FAIL** against pristine v7.490's 2795/31 — the only
+non-v491 line that moved is the token guard's own file count (207 → 208), which is this
+release's new file, so **zero regression delta** · **39 new checks, 21 failing on the pristine
+base**. The negative control was run with the new module physically removed, not merely
+`git stash`ed — an untracked file survives a stash and would have made the extractor checks pass
+vacuously on the base leg.
+
+Live: both suggest buttons exercised end to end on TD Bank and returned real grounded terms
+(`td bank login`, `td bank hours` from the footprint; `pnc`, `regions`, `santander` from the
+tracked competitors); no runtime errors in the window. **`clear-scope` and `serp-compare` were
+NOT exercised live** — the first deletes keywords and rewrites snapshots, the second spends real
+money at both SERP providers. Both are verified by the real build, the compiled-SQL checks and
+the source gates only, and that is stated here rather than implied.
+
+**Downstream review (II.6a/II.6b).** No metric, denominator or basis changed; no panel or
+client-facing metric added. The two suggest routes return the same shape from the same source
+rows, ordered and deduped identically. Nothing is owed a PDF section.
+
+**Known and deliberately not touched:** `GET /api/projects/[id]` still reads the project row
+relationally without naming columns. It carries one blob-bearing row (competitors hold no JSONB),
+so it passes II.9(b), and II.9(a) binds the queries a release touches — this one was not touched.
+It is the project page's primary read and deserves its own pass, not a rider on this fix.
+
+**V.6 exception carried forward.** The same 31 pre-existing failures as v7.487–v7.490, identical
+on both legs. Audit still queued as its own release.
+
+---
+
 # v7.490 — the Assessment PDF button works again (2026-09-14)
 
 > Wayne: *"the pdf assessment didnt work when I clicked the button."*
