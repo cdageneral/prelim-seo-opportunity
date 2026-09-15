@@ -862,6 +862,22 @@ export default function ProductInsightsSection({
                     style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' }}>
                     {p.kwCount.toLocaleString()} kws · {p.topics.length} topics ›
                   </button>
+                  {/* v7.444 (Wayne): scan AI at THIS parent level — and the whole subtree
+                      below it. v7.494 (Wayne): moved here, under the category name, so the
+                      LLM column no longer overlaps. The row's own onClick expands the
+                      product, so stop the bubble or the button would toggle the drill. */}
+                  {!scanning && (
+                    <div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); planScan(p.name, treeFor(p.name), `p:${p.name}`); }}
+                        disabled={!providerOk}
+                        title={`Scan recorded AI answers for ${p.name} and every sub-category beneath it`}
+                        style={{ marginTop: '6px', padding: '3px 8px', fontSize: '9.5px', fontWeight: 700, borderRadius: '6px',
+                          cursor: providerOk ? 'pointer' : 'not-allowed', background: 'var(--ca-108-99-255-0_12)',
+                          color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)', opacity: providerOk ? 1 : 0.5 }}
+                      >↻ Scan AI + below</button>
+                    </div>
+                  )}
                 </div>
                 {/* ── v7.458 (Wayne): the header's metrics grouped under named lenses —
                     Google first, then LLM/AI, then the journey-vs-actual pages chip ── */}
@@ -893,10 +909,10 @@ export default function ProductInsightsSection({
                 <div>
                   <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.08em', color: 'var(--c-8a8aa8)',
                     borderBottom: '1px solid var(--c-1e1e34)', paddingBottom: '3px', marginBottom: '6px' }}>LLM &amp; AI VISIBILITY</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(150px,1fr) minmax(140px,1fr) 58px', gap: '10px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px,0.9fr) minmax(150px,1.1fr) 62px', gap: '10px' }}>
                 <div>
                   {p.probe ? (
-                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}>
                       {chip('transparent', (p.aiRate ?? 0) >= AI_STRONG_FROM ? 'var(--c-34d399)' : (p.aiRate ?? 0) < AI_WEAK_BELOW ? 'var(--c-f87171)' : 'var(--c-f59e0b)', 'var(--c-2a2a40)', `Claude ${p.probe.claude}`, 'Unbranded probe prompts the client was mentioned in (analysis-time)')}
                       {chip('transparent', (p.aiRate ?? 0) >= AI_STRONG_FROM ? 'var(--c-34d399)' : (p.aiRate ?? 0) < AI_WEAK_BELOW ? 'var(--c-f87171)' : 'var(--c-f59e0b)', 'var(--c-2a2a40)', `GPT ${p.probe.gpt}`)}
                     </div>
@@ -908,19 +924,6 @@ export default function ProductInsightsSection({
                       ? `AI answers · named in ${Math.round((p.dfsShare ?? 0) * 100)}% of ${p.scan.rows.length}${p.scan.totalCount > p.scan.fetched ? ` of ${p.scan.totalCount.toLocaleString()}` : ''} answers`
                       : 'AI answers · not scanned yet'}
                   </div>
-                  {/* v7.444 (Wayne): scan AI at THIS parent level — and the whole subtree
-                      below it. The row's own onClick expands the product, so stop the
-                      bubble or the button would toggle the drill instead. */}
-                  {!scanning && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); planScan(p.name, treeFor(p.name), `p:${p.name}`); }}
-                      disabled={!providerOk}
-                      title={`Scan recorded AI answers for ${p.name} and every sub-category beneath it`}
-                      style={{ marginTop: '4px', padding: '3px 8px', fontSize: '9.5px', fontWeight: 700, borderRadius: '6px',
-                        cursor: providerOk ? 'pointer' : 'not-allowed', background: 'var(--ca-108-99-255-0_12)',
-                        color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)', opacity: providerOk ? 1 : 0.5 }}
-                    >↻ Scan AI + below</button>
-                  )}
                 </div>
                 <div>
                   {[['Search', sPct, 'var(--c-46cce0)'] as const, ['AI', aPct, 'var(--c-8b85ff)'] as const].map(([lab, v, col]) => (
