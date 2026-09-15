@@ -1,3 +1,38 @@
+# v7.495 — Keyword Selection: volume floor (2026-09-15)
+
+Wayne, on Step 2: *"I would like a way to select a volume threshold and anything that is under
+that threshold would be deselected. There are a lot of topics with a single keyword and volume at
+like 140. I want an option to deselect all of these."*
+
+## What changed
+
+- **"Deselect anything under N /mo"** sits in the Step-2 tree card, with 100 / 250 / 500 / 1K
+  presets and an optional second floor, **"or with fewer than N keywords"**. Both are empty by
+  default — no cap exists until a number is typed and **Apply floor** is clicked (Const I.6).
+- **It reads each branch's rollup — the same `kw` and `/mo` the row prints** (Const I.1), and walks
+  top-down: a branch under the floor is deselected **whole** and never recursed into, so a subtree
+  is counted once (I.3). A low-volume child under a high-volume parent is deselected without
+  touching the parent or its healthy siblings.
+- **A preview before anything happens:** "Would deselect 412 branches · 486 kw · 38K/mo — 0.6% of
+  the volume now in scope." Typing a number changes nothing; only Apply edits the draft.
+- **Reversible two ways:** **Undo floor** restores the exact prior selection, and any individual
+  box can still be re-checked. Nothing is saved until **Confirm selection**, as before.
+- **One store.** The floor writes the same `hiddenDraft` / hidden-categories selection the
+  checkboxes write (v7.476) — no second scope state, no second filter. Every panel, scan and the
+  Assessment PDF therefore pick it up unchanged, and the PDF's "deliberately excluded by selection"
+  statement already reads it (II.6a — no downstream change needed).
+
+## Verification
+
+Real `next build` exit 0; project `tsc` clean. Retained suite: base **2964 / 31** → change
+**3003 / 31**, FAIL set byte-identical. **39 new checks** — 12 source-level (off by default, the
+skip on already-hidden branches, whole-branch cover, rollup basis, one store, no save on Apply,
+theme-mapped tokens only), 15 render-level against a fixture with known rollups (a 500/mo floor
+drops exactly 4 branches · 4 kw · 720/mo = 1.0% of in-scope volume, including a 200/mo node two
+levels down and a 140/mo root, while its 60K/mo parent and 900/mo sibling stay; preview-only until
+Apply; re-running the floor is a no-op; Undo restores exactly), and 12 contrast checks computing
+every new text/background pair from both theme scopes (lowest 4.53:1, AA in both — Const IV.6).
+
 # v7.494 — line header overlap fix (2026-09-15)
 
 Wayne, on the v7.493 header: *"looks like some overlap happening. lets move the scan button far
