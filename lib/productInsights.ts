@@ -21,6 +21,9 @@ import type { Topic } from '@/lib/clusters/canonical';
 import { normSovDomain } from '@/lib/sov/model';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import { qualifySeed } from '@/lib/category/seedQualify';   // v7.444
+// v7.493: AIO / PAA / Video citation rates per product line — the SAME roll-up the
+// SERP Features panel, the Executive Summary strip and the nav score read (II.7).
+import { computeSerpFeatureRollup, type SerpFeatureRollup, type UploadKwRow, type ScannedKwLike } from '@/lib/serp/featurePool';
 
 export interface StoredMentionSource { domain: string; url: string; title: string }
 export interface StoredMentionRow {
@@ -117,7 +120,9 @@ export const SERP_ENTRY_MAX_POS = 6;
 export const LADDER_TOP_N = 6;   // the "top 6" both ladders show before the placements block
 
 export interface SerpScanLike {
-  keywords?: Array<{ keyword: string; organicResults?: Array<{ position: number; domain: string }> | null }> | null;
+  // organicResults feed the ladder (v7.492); the ScannedKwLike fields feed the
+  // per-line AIO/PAA/Video citation rates (v7.493) — same stored row, two readers.
+  keywords?: Array<ScannedKwLike & { organicResults?: Array<{ position: number; domain: string }> | null }> | null;
 }
 
 export interface RivalRankMap {
@@ -285,6 +290,12 @@ export interface ProductRow {
   arbTopics:   number;
   verdicts:    { arb: number; dual: number; aiOnly: number; none: number };
   tracked:     string[];             // v7.492: every tracked brand (uploaded rows ∪ project competitors) — placement rows read this
+  // v7.493 (Wayne): "AIO citation rate, PAA citation rate and Video citations should be
+  // mentioned in the category level summary." computeSerpFeatureRollup over THIS line's
+  // keywords: available = live scanned detections + Semrush-flagged unscanned upload rows,
+  // acquired = live scanned citations only. null when the line has no feature data at all.
+  serpFeatures: SerpFeatureRollup | null;
+  serpScanned:  number;              // this line's keywords with a stored SERP scan row
 }
 
 export interface ProductKpi { arb: number; dual: number; aiOnly: number; none: number; citesClient: number; citesTotal: number }
@@ -609,6 +620,12 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
     // v7.492: the same accumulation every sub-category node runs (II.7)
     const { ladder, clientRank: clientRankV } = accumulateLadder(dedup, rm, clientNorm);
     const clientIdx = clientRankV !== null ? clientRankV - 1 : -1;
+    // v7.493: SERP-feature citation rates over this line's keyword set — the shared
+    // roll-up (lib/serp/featurePool) scoped to the line, never a second derivation.
+    const lineScanned = (serpScan?.keywords ?? []).filter(k => seen.has(String(k?.keyword ?? '').toLowerCase().trim()));
+    const lineUploads = (uploadedKeywords ?? []).filter((r: any) => seen.has(String(r?.keyword ?? '').toLowerCase().trim())) as UploadKwRow[];
+    const sfr = computeSerpFeatureRollup(lineUploads, lineScanned, clientDomain);
+    const serpFeatures = (lineScanned.length > 0 || sfr.totalAvail > 0) ? sfr : null;
 
     const pe = probeByUmb.get(normName(name)) ?? null;
     const probe = pe && (pe.ct + pe.gt) > 0
@@ -646,6 +663,7 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
       probe, scan, aiRate, dfsShare, citedTop,
       arbTopics: verdicts.arb, verdicts,
       tracked: trackedList,
+      serpFeatures, serpScanned: lineScanned.length,
     });
   });
   products.sort((a, b) => b.demand - a.demand);
