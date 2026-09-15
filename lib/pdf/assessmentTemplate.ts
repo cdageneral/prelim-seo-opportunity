@@ -28,6 +28,10 @@
  */
 
 import type { SovComputed } from '@/lib/sov/model';
+import { normSovDomain } from '@/lib/sov/model';
+// v7.492: top-6 + placements on both product ladders — the SAME helper the panel
+// renders (Const II.6a): rank of you + every tracked brand in the full list.
+import { placeInLadder, SERP_ENTRY_MAX_POS } from '@/lib/productInsights';
 // v7.459: the gap statement moved to plain language (coverage basis) — the v7.449
 // CONTENT_GAP_MIN import went with it; the constant still lives in the shared lib.
 import {
@@ -217,8 +221,9 @@ export interface AssessmentData {
   productInsights?: {
     products: Array<{
       name: string; kwCount: number; demand: number; p1Share: number;
-      ladder: Array<{ domain: string; kind: 'client' | 'tracked' | 'rival'; p1Vol: number; measuredKw: number }>;
+      ladder: Array<{ domain: string; kind: 'client' | 'tracked' | 'rival' | 'serp'; p1Vol: number; measuredKw: number; top6Kw?: number }>;
       clientRank: number | null;
+      tracked?: string[];   // v7.492: placement rows (you + every tracked brand) read this
       probe: { mentions: number; total: number; claude: string; gpt: string } | null;
       scan: { fetched: number; totalCount: number; scannedAt: string } | null;
       aiRate: number | null; dfsShare: number | null;
@@ -966,6 +971,20 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       const maxCit = Math.max(1, ...cited.map(c => c.count));
       const citBars = cited.map(c => barRow(c.isClient ? `${c.domain} (you)` : c.domain,
         (c.count / maxCit) * 100, n0(c.count), c.isClient ? 'var(--blue)' : '#c9c8c1', '1.45in', '.45in')).join('');
+      // v7.492: where you and every tracked brand sit in the FULL list (rank of N), read
+      // through the panel's own helper — a tracked brand with no hold is stated, not hidden.
+      const cNorm = normSovDomain(d.websiteUrl || '');
+      const trackedList = (p.tracked ?? []) as string[];
+      const ladPl = placeInLadder(p.ladder ?? [], cNorm, trackedList, l => l.kind === 'client', 5);
+      const citPl = placeInLadder(p.citedTop ?? [], cNorm, trackedList, c => c.isClient, 5);
+      const plLine = (items: Array<{ domain: string; kind: 'client' | 'tracked'; rank: number | null }>, total: number, valOf: (dm: string) => string | null, unit: string) =>
+        items.length === 0 ? '' : `<div style="font-size:8.2px; color:var(--ink2); margin-top:4px; line-height:1.4;"><b style="color:var(--ink);">Where you and tracked competitors sit</b> (rank of ${n0(total)} ${esc(unit)}): ${items.map(it => {
+          const v = valOf(it.domain);
+          return `<span style="white-space:nowrap;">${it.kind === 'client' ? `<b>${esc(it.domain)} (you)</b>` : esc(it.domain)} ${it.rank !== null ? `#${it.rank}${v ? ` · ${esc(v)}` : ''}` : '<span style="color:var(--critical);">none</span>'}</span>`;
+        }).join(' &nbsp;·&nbsp; ')}</div>`;
+      const ladPlHtml = plLine(ladPl.placements, ladPl.total, dm => { const e = (p.ladder ?? []).find(l => normSovDomain(l.domain) === dm); return e ? `${p1((e.p1Vol / Math.max(p.demand, 1)) * 100)}` : null; }, 'measured brands');
+      const citPlHtml = p.scan ? plLine(citPl.placements, citPl.total, dm => { const e = (p.citedTop ?? []).find(c => normSovDomain(c.domain) === dm); return e ? `${n0(e.count)}× cited` : null; }, 'cited domains') : '';
+      const serpN = (p.ladder ?? []).filter(l => l.kind === 'serp').length;
       const leader = p.ladder[0] ?? null;
       const winTxt = leader
         ? (leader.kind === 'client'
@@ -985,8 +1004,8 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         </div>
         <div style="font-size:9.3px; color:var(--ink2); margin-bottom:8px;"><b style="color:var(--ink);">Who wins:</b> ${winTxt}${p.scan ? ` · AI answers name or cite you in ${p0((p.dfsShare ?? 0) * 100)} of ${n0(p.scan.fetched)} recorded answers` : ''}${p.probe ? ` · probe: named in ${n0(p.probe.mentions)} of ${n0(p.probe.total)} unbranded prompts` : ''}</div>
         <div class="two" style="gap:14px; margin-bottom:${promptRows ? '8px' : '0'};">
-          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO RANKS — PAGE-1 VOLUME HELD</div>${ladBars || '<div style="font-size:8.8px; color:var(--muted);">No page-1 holds measured on this line.</div>'}</div>
-          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO AI ANSWERS CITE HERE</div>${citBars || '<div style="font-size:8.8px; color:var(--muted);">No recorded citations on this line yet.</div>'}</div>
+          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO RANKS — PAGE-1 VOLUME HELD${serpN > 0 ? ` <span style="font-weight:600; letter-spacing:0;">(incl. ${n0(serpN)} SERP top-${SERP_ENTRY_MAX_POS} occupant${serpN === 1 ? '' : 's'})</span>` : ''}</div>${ladBars || '<div style="font-size:8.8px; color:var(--muted);">No page-1 holds measured on this line.</div>'}${ladPlHtml}</div>
+          <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">WHO AI ANSWERS CITE HERE</div>${citBars || '<div style="font-size:8.8px; color:var(--muted);">No recorded citations on this line yet.</div>'}${citPlHtml}</div>
         </div>
         ${promptRows ? `<div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--muted); margin-bottom:4px;">THE PROMPTS ASKED${allPrompts.length > 5 ? ` — 5 OF ${n0(allPrompts.length)}` : ''}</div>${promptRows}` : ''}
       </div>`;
