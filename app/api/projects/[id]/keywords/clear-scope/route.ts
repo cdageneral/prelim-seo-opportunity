@@ -108,7 +108,15 @@ export async function POST(
 
   // 3. snapshot — clear the scope's fields on EVERY analysis row for the project so a
   //    stale analysis can't resurface the deleted data.
-  const rows = await db.select().from(analyses).where(eq(analyses.projectId, params.id));
+  // v7.491 (Const II.9): this selected EVERY column of EVERY analysis — on TD
+  // Bank, 41,920,028 bytes across two rows, of which ~35 MB was serpapi_snapshot
+  // that this loop never touches. One more scan (~22 MB) would have put it over
+  // Neon's 67,108,864-byte response limit. It rewrites semrush_snapshot and
+  // nothing else, so it now asks for the id and that column only.
+  const rows = await db
+    .select({ id: analyses.id, semrushSnapshot: analyses.semrushSnapshot })
+    .from(analyses)
+    .where(eq(analyses.projectId, params.id));
   let updatedAnalyses = 0;
   for (const a of rows) {
     const snap = (a as any).semrushSnapshot;
