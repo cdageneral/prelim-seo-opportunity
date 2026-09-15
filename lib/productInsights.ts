@@ -93,7 +93,180 @@ export function buildPlatformMix(scan: StoredCatScan | null, clientDomain: strin
   }).sort((a, b) => b.rows - a.rows);
 }
 
-export interface LadderEntry { domain: string; kind: 'client' | 'tracked' | 'rival'; p1Vol: number; p1Kw: number; measuredKw: number }
+// v7.492: a fourth kind — 'serp' = a domain observed in the stored SERP scan's
+// organic results that is neither an uploaded (tracked) competitor nor a Semrush
+// organic rival. `top6Kw` (serp only) = keywords in this category where it sat at
+// positions 1–SERP_ENTRY_MAX_POS on the scanned SERP — its ticket into the ladder.
+export type LadderKind = 'client' | 'tracked' | 'rival' | 'serp';
+export interface LadderEntry { domain: string; kind: LadderKind; p1Vol: number; p1Kw: number; measuredKw: number; top6Kw?: number }
+
+// ─── v7.492 (Wayne 2026-09-15): ONE rival rank map for every ladder ───────────
+// "The share of volume should include their tracked competitors but also pull any
+//  serp competitors that are in the top 6 positions." Three sources, one map:
+//   1. uploaded competitor rows (project_keywords, source!=='blocked') → 'tracked'
+//   2. Semrush serpCompetitorPositions (auto-discovered organic rivals)  → 'rival'
+//   3. the stored SERP scan's organic results (analysis.serpApiSnapshot) → 'serp'
+// A domain's positions come from the FIRST source that carries it (1 > 2 > 3), so
+// every number a pre-v7.492 ladder showed is byte-identical — the SERP scan only
+// ADDS domains the first two sources never carried. A 'serp' domain enters a
+// ladder only where it holds a top-SERP_ENTRY_MAX_POS position on ≥1 of that
+// category's scanned keywords (Wayne's threshold — the one requested I.6 limit);
+// its bar is then the same measured page-1 volume every other entry shows.
+// Nothing is modeled: each position is a stored SERP row (Const I.1).
+export const SERP_ENTRY_MAX_POS = 6;
+export const LADDER_TOP_N = 6;   // the "top 6" both ladders show before the placements block
+
+export interface SerpScanLike {
+  keywords?: Array<{ keyword: string; organicResults?: Array<{ position: number; domain: string }> | null }> | null;
+}
+
+export interface RivalRankMap {
+  perKw:      Map<string, Map<string, number>>;   // keyword → domain → best position
+  kindOf:     Map<string, Exclude<LadderKind, 'client'>>;
+  trackedAll: Set<string>;                        // uploaded-row domains ∪ project competitor list
+  serpEntry:  Map<string, Set<string>>;           // 'serp' domain → keywords where it sat in the top SERP_ENTRY_MAX_POS
+  scannedKw:  number;                             // SERP-scan rows read (0 = no scan on file — honest gap)
+}
+
+export interface BuildRivalRankMapOpts {
+  uploadedKeywords:    any[];
+  serpPositions:       Record<string, Array<{ keyword: string; position: number }>>;
+  serpScan?:           SerpScanLike | null;
+  clientDomain:        string;
+  trackedCompetitors?: string[];   // project.competitors — a tracked brand with no rows still gets a placement row
+}
+
+export function buildRivalRankMap(opts: BuildRivalRankMapOpts): RivalRankMap {
+  const { uploadedKeywords, serpPositions, serpScan, clientDomain, trackedCompetitors = [] } = opts;
+  const clientNorm = normSovDomain(clientDomain);
+  const perKw   = new Map<string, Map<string, number>>();
+  const kindOf  = new Map<string, Exclude<LadderKind, 'client'>>();
+  const tracked = new Set<string>();   // the v7.419 set: uploaded rows with a real position
+  const put = (k: string, dom: string, p: number) => {
+    let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
+    const prev = m.get(dom);
+    if (prev === undefined || p < prev) m.set(dom, p);
+  };
+  for (const r of (uploadedKeywords ?? [])) {
+    if (r?.source === 'blocked') continue;
+    const dom = normSovDomain(r?.domain ?? '');
+    if (!dom || dom === clientNorm) continue;
+    const p = r?.position;
+    if (p == null || p < 1) continue;
+    tracked.add(dom); kindOf.set(dom, 'tracked');
+    const k = String(r?.keyword ?? '').toLowerCase().trim();
+    if (!k) continue;
+    put(k, dom, p);
+  }
+  const rivalDoms = new Set<string>();
+  for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
+    const dom = normSovDomain(rawDom);
+    if (!dom || dom === clientNorm || tracked.has(dom)) continue;
+    rivalDoms.add(dom);
+    for (const pos of (positions ?? [])) {
+      const p = pos?.position;
+      if (p == null || p < 1) continue;
+      const k = String(pos?.keyword ?? '').toLowerCase().trim();
+      if (!k) continue;
+      put(k, dom, p);
+    }
+  }
+  rivalDoms.forEach(d => { if (!kindOf.has(d)) kindOf.set(d, 'rival'); });
+  // 3. the stored SERP scan — organic rows only, page-1 window, domains the first two
+  //    sources never carried (so nothing already measured changes basis)
+  const serpEntry = new Map<string, Set<string>>();
+  let scannedKw = 0;
+  for (const row of (serpScan?.keywords ?? [])) {
+    const k = String(row?.keyword ?? '').toLowerCase().trim();
+    if (!k) continue;
+    scannedKw++;
+    for (const r of (row?.organicResults ?? [])) {
+      const p = r?.position;
+      if (p == null || p < 1 || p > 10) continue;
+      const dom = normSovDomain(r?.domain ?? '');
+      if (!dom || dom === clientNorm || tracked.has(dom) || rivalDoms.has(dom)) continue;
+      put(k, dom, p);
+      if (!kindOf.has(dom)) kindOf.set(dom, 'serp');
+      if (p <= SERP_ENTRY_MAX_POS) {
+        let s = serpEntry.get(dom); if (!s) { s = new Set(); serpEntry.set(dom, s); }
+        s.add(k);
+      }
+    }
+  }
+  const trackedAll = new Set<string>(tracked);
+  for (const c of trackedCompetitors) { const d = normSovDomain(String(c ?? '')); if (d && d !== clientNorm) trackedAll.add(d); }
+  // a project competitor that only reached us through Semrush/SERP rows is still a tracked brand
+  trackedAll.forEach(d => { if (kindOf.has(d)) kindOf.set(d, 'tracked'); });
+  return { perKw, kindOf, trackedAll, serpEntry, scannedKw };
+}
+
+/** v7.492: the one ladder accumulation (Const II.7) — the product line and every
+ *  sub-category node build their page-1 volume ladder through this. `kws` is the
+ *  node's deduped keyword set; the client's hold is read from the pool position. */
+export function accumulateLadder(
+  kws: Array<{ keyword: string; searchVolume: number; position: number | null }>,
+  rm: RivalRankMap,
+  clientNorm: string,
+): { ladder: LadderEntry[]; clientRank: number | null; clientP1Vol: number; clientP1Kw: number } {
+  const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number; top6Kw: number }>();
+  let clientP1Vol = 0, clientP1Kw = 0;
+  for (const k of kws) {
+    const v = k.searchVolume || 0;
+    const p = k.position;
+    if (p !== null && p >= 1 && p <= 10) { clientP1Vol += v; clientP1Kw++; }
+    const m = rm.perKw.get(k.keyword);
+    if (m) m.forEach((bp, dom) => {
+      let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0, top6Kw: 0 }; byDom.set(dom, e); }
+      e.measuredKw++;
+      if (bp >= 1 && bp <= 10) { e.p1Vol += v; e.p1Kw++; }
+      if (rm.serpEntry.get(dom)?.has(k.keyword)) e.top6Kw++;
+    });
+  }
+  const ladder: LadderEntry[] = [];
+  if (clientP1Vol > 0) ladder.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: kws.length });
+  byDom.forEach((e, dom) => {
+    if (e.p1Vol <= 0) return;   // no page-1 hold → no entry (honest gap, I.5)
+    const kind = rm.kindOf.get(dom) ?? 'rival';
+    if (kind === 'serp') {
+      if (e.top6Kw <= 0) return;   // a SERP occupant enters only on a top-SERP_ENTRY_MAX_POS hit in THIS category
+      ladder.push({ domain: dom, kind, p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw, top6Kw: e.top6Kw });
+      return;
+    }
+    ladder.push({ domain: dom, kind, p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
+  });
+  ladder.sort((a, b) => b.p1Vol - a.p1Vol);
+  const clientIdx = ladder.findIndex(e => e.kind === 'client');
+  return { ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null, clientP1Vol, clientP1Kw };
+}
+
+/** v7.492: "show the top 6 like you have it but also show where the tracked
+ *  competitors and the client are in that grouping." Generic over any ranked
+ *  list (the page-1 ladder, the cited-domain ladder): the top N as shown, then
+ *  one placement per client + tracked brand with its rank in the FULL list —
+ *  or rank null when it holds nothing there (stated, never hidden). */
+export interface LadderPlacement<T> { domain: string; kind: 'client' | 'tracked'; rank: number | null; entry: T | null; inTop: boolean }
+export function placeInLadder<T extends { domain: string }>(
+  entries: T[],
+  clientNorm: string,
+  tracked: string[],
+  isClient: (e: T) => boolean,
+  topN = LADDER_TOP_N,
+): { top: T[]; placements: Array<LadderPlacement<T>>; total: number } {
+  const top = entries.slice(0, topN);
+  const placements: Array<LadderPlacement<T>> = [];
+  const ci = entries.findIndex(isClient);
+  placements.push({ domain: clientNorm || 'client', kind: 'client', rank: ci >= 0 ? ci + 1 : null, entry: ci >= 0 ? entries[ci] : null, inTop: ci >= 0 && ci < topN });
+  const seen = new Set<string>();
+  for (const t of tracked) {
+    const d = normSovDomain(t); if (!d || d === clientNorm || seen.has(d)) continue;
+    seen.add(d);
+    const i = entries.findIndex(e => !isClient(e) && normSovDomain(e.domain) === d);
+    placements.push({ domain: d, kind: 'tracked', rank: i >= 0 ? i + 1 : null, entry: i >= 0 ? entries[i] : null, inTop: i >= 0 && i < topN });
+  }
+  // client first, then tracked by rank (unplaced last, A→Z)
+  const tr = placements.slice(1).sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9) || a.domain.localeCompare(b.domain));
+  return { top, placements: [placements[0], ...tr], total: entries.length };
+}
 
 export interface ProductRow {
   name:        string;
@@ -111,6 +284,7 @@ export interface ProductRow {
   citedTop:    Array<{ domain: string; count: number; isClient: boolean }>;
   arbTopics:   number;
   verdicts:    { arb: number; dual: number; aiOnly: number; none: number };
+  tracked:     string[];             // v7.492: every tracked brand (uploaded rows ∪ project competitors) — placement rows read this
 }
 
 export interface ProductKpi { arb: number; dual: number; aiOnly: number; none: number; citesClient: number; citesTotal: number }
@@ -372,44 +546,21 @@ export interface BuildProductRowsOpts {
   clientDomain:    string;
   brandTerms?:     string[];
   breakdown?:      any;                    // semrushSnapshot._categoryBreakdown (for umbrella map + brand types)
+  serpScan?:       SerpScanLike | null;    // v7.492: analysis.serpApiSnapshot — SERP top-6 occupants enter the ladder
+  trackedCompetitors?: string[];           // v7.492: project.competitors — placement rows for every tracked brand
 }
 
-export function buildProductRows(opts: BuildProductRowsOpts): { products: ProductRow[]; kpi: ProductKpi } {
-  const { topics, uploadedKeywords, serpPositions, llmProbe, storedScans, clientDomain, brandTerms = [], breakdown } = opts;
+export function buildProductRows(opts: BuildProductRowsOpts): { products: ProductRow[]; kpi: ProductKpi; tracked: string[]; serpScannedKw: number } {
+  const { topics, uploadedKeywords, serpPositions, llmProbe, storedScans, clientDomain, brandTerms = [], breakdown, serpScan = null, trackedCompetitors = [] } = opts;
   const clientNorm = normSovDomain(clientDomain);
   const brandToks  = buildBrandTokens(clientDomain, brandTerms);
   const catToUmb   = buildCategoryToUmbrella(breakdown);
   const brandCats  = brandOnlyUmbrellaNames(breakdown);   // v7.431: brand-ONLY lanes; a product umbrella sharing the brand lane's name stays
 
-  // ── per-keyword brand rank maps — v7.419 ladder method verbatim ──
-  const perKw   = new Map<string, Map<string, number>>();
-  const tracked = new Set<string>();
-  for (const r of (uploadedKeywords ?? [])) {
-    if (r?.source === 'blocked') continue;
-    const dom = normSovDomain(r?.domain ?? '');
-    if (!dom || dom === clientNorm) continue;
-    const p = r?.position;
-    if (p == null || p < 1) continue;
-    tracked.add(dom);
-    const k = String(r?.keyword ?? '').toLowerCase().trim();
-    if (!k) continue;
-    let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-    const prev = m.get(dom);
-    if (prev === undefined || p < prev) m.set(dom, p);
-  }
-  for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
-    const dom = normSovDomain(rawDom);
-    if (!dom || dom === clientNorm || tracked.has(dom)) continue;
-    for (const pos of (positions ?? [])) {
-      const p = pos?.position;
-      if (p == null || p < 1) continue;
-      const k = String(pos?.keyword ?? '').toLowerCase().trim();
-      if (!k) continue;
-      let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-      const prev = m.get(dom);
-      if (prev === undefined || p < prev) m.set(dom, p);
-    }
-  }
+  // ── per-keyword brand rank map — v7.419 ladder method + v7.492 SERP-scan occupants,
+  //    built ONCE through the shared builder every node ladder also reads (II.7) ──
+  const rm = buildRivalRankMap({ uploadedKeywords, serpPositions, serpScan, clientDomain, trackedCompetitors });
+  const trackedList = Array.from(rm.trackedAll).sort();
 
   // ── probe stats aggregated to the umbrella (v7.427 fix 1) ──
   const probeByUmb = new Map<string, { cm: number; ct: number; gm: number; gt: number }>();
@@ -440,8 +591,7 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
     const bands: [number, number, number, number] = [0, 0, 0, 0];
     let demand = 0, kwCount = 0;
     const seen = new Set<string>();
-    const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number }>();
-    let clientP1Vol = 0, clientP1Kw = 0;
+    const dedup: Array<{ keyword: string; searchVolume: number; position: number | null }> = [];
     for (const t of uts) for (const k of t.keywords) {
       const kwLow = k.keyword.toLowerCase().trim();
       if (seen.has(kwLow)) continue;
@@ -454,22 +604,11 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
       else if (p !== null && p >= 4 && p <= 10)  bands[1] += v;
       else if (p !== null && p >= 11 && p <= 20) bands[2] += v;
       else bands[3] += v;
-      if (p !== null && p >= 1 && p <= 10) { clientP1Vol += v; clientP1Kw++; }
-      const m = perKw.get(kwLow);
-      if (m) m.forEach((bp, dom) => {
-        let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0 }; byDom.set(dom, e); }
-        e.measuredKw++;
-        if (bp >= 1 && bp <= 10) { e.p1Vol += v; e.p1Kw++; }
-      });
+      dedup.push({ keyword: kwLow, searchVolume: v, position: p });
     }
-    const ladder: LadderEntry[] = [];
-    if (clientP1Vol > 0) ladder.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: kwCount });
-    byDom.forEach((e, dom) => {
-      if (e.p1Vol <= 0) return;   // no page-1 hold → no entry (honest gap, I.5)
-      ladder.push({ domain: dom, kind: tracked.has(dom) ? 'tracked' : 'rival', p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
-    });
-    ladder.sort((a, b) => b.p1Vol - a.p1Vol);
-    const clientIdx = ladder.findIndex(e => e.kind === 'client');
+    // v7.492: the same accumulation every sub-category node runs (II.7)
+    const { ladder, clientRank: clientRankV } = accumulateLadder(dedup, rm, clientNorm);
+    const clientIdx = clientRankV !== null ? clientRankV - 1 : -1;
 
     const pe = probeByUmb.get(normName(name)) ?? null;
     const probe = pe && (pe.ct + pe.gt) > 0
@@ -506,6 +645,7 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
       ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null,
       probe, scan, aiRate, dfsShare, citedTop,
       arbTopics: verdicts.arb, verdicts,
+      tracked: trackedList,
     });
   });
   products.sort((a, b) => b.demand - a.demand);
@@ -516,7 +656,7 @@ export function buildProductRows(opts: BuildProductRowsOpts): { products: Produc
     kpi.aiOnly += p.verdicts.aiOnly; kpi.none += p.verdicts.none;
     for (const c of p.citedTop) { kpi.citesTotal += c.count; if (c.isClient) kpi.citesClient += c.count; }
   }
-  return { products, kpi };
+  return { products, kpi, tracked: trackedList, serpScannedKw: rm.scannedKw };
 }
 
 // ─── The one topic-row builder (v7.429) ──────────────────────────────────────
@@ -606,6 +746,8 @@ export interface BuildCategoryTreeOpts {
   storedScans:      StoredCatScan[];  // keyed by node key (' › ' path) OR legacy top-level name
   clientDomain:     string;
   brandTerms?:      string[];
+  serpScan?:        SerpScanLike | null;   // v7.492: same SERP-scan source the product ladder reads
+  trackedCompetitors?: string[];           // v7.492
 }
 
 /**
@@ -615,7 +757,7 @@ export interface BuildCategoryTreeOpts {
  * list it already has, never a fabricated tree).
  */
 export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts): CatNode | null {
-  const { breakdown, poolKeywords, uploadedKeywords, serpPositions, storedScans, clientDomain, brandTerms = [] } = opts;
+  const { breakdown, poolKeywords, uploadedKeywords, serpPositions, storedScans, clientDomain, brandTerms = [], serpScan = null, trackedCompetitors = [] } = opts;
   const rawPaths: Record<string, any> = breakdown?.keywordPaths ?? {};
   if (!rawPaths || Object.keys(rawPaths).length === 0) return null;
 
@@ -635,35 +777,10 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
                      origin: (k as any).origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any).isGap });
   }
 
-  // competitor rank map (same two sources as the ladder — v7.419 basis)
-  const perKw   = new Map<string, Map<string, number>>();
-  const tracked = new Set<string>();
-  for (const r of (uploadedKeywords ?? [])) {
-    if (r?.source === 'blocked') continue;
-    const dom = normSovDomain(r?.domain ?? '');
-    if (!dom || dom === clientNorm) continue;
-    const p = r?.position;
-    if (p == null || p < 1) continue;
-    tracked.add(dom);
-    const k = String(r?.keyword ?? '').toLowerCase().trim();
-    if (!k) continue;
-    let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-    const prev = m.get(dom);
-    if (prev === undefined || p < prev) m.set(dom, p);
-  }
-  for (const [rawDom, positions] of Object.entries(serpPositions ?? {})) {
-    const dom = normSovDomain(rawDom);
-    if (!dom || dom === clientNorm || tracked.has(dom)) continue;
-    for (const pos of (positions ?? [])) {
-      const p = pos?.position;
-      if (p == null || p < 1) continue;
-      const k = String(pos?.keyword ?? '').toLowerCase().trim();
-      if (!k) continue;
-      let m = perKw.get(k); if (!m) { m = new Map(); perKw.set(k, m); }
-      const prev = m.get(dom);
-      if (prev === undefined || p < prev) m.set(dom, p);
-    }
-  }
+  // competitor rank map — v7.492: the SAME shared builder the product ladder reads
+  // (uploaded rows + Semrush rivals + SERP-scan occupants), so a sub-category's
+  // ladder and its product line's ladder can never disagree on who is measured.
+  const rm = buildRivalRankMap({ uploadedKeywords, serpPositions, serpScan, clientDomain, trackedCompetitors });
 
   const scanByKey = new Map<string, StoredCatScan>();
   for (const s of (storedScans ?? [])) if (s?.category) scanByKey.set(normName(s.category), s);
@@ -697,9 +814,8 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
     collect(raw);
 
     const bands: [number, number, number, number] = [0, 0, 0, 0];
-    let demand = 0, clientP1Vol = 0, clientP1Kw = 0;
+    let demand = 0;
     let bestPos: number | null = null; let bestUrl: string | undefined;
-    const byDom = new Map<string, { p1Vol: number; p1Kw: number; measuredKw: number }>();
     for (const k of all) {
       const v = k.searchVolume || 0;
       demand += v;
@@ -708,21 +824,10 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
       else if (p !== null && p >= 4 && p <= 10)  bands[1] += v;
       else if (p !== null && p >= 11 && p <= 20) bands[2] += v;
       else bands[3] += v;
-      if (p !== null && p >= 1 && p <= 10) { clientP1Vol += v; clientP1Kw++; }
       if (p !== null && p >= 1 && (bestPos === null || p < bestPos)) { bestPos = p; bestUrl = k.url; }
-      const m = perKw.get(k.keyword);
-      if (m) m.forEach((bp, dom) => {
-        let e = byDom.get(dom); if (!e) { e = { p1Vol: 0, p1Kw: 0, measuredKw: 0 }; byDom.set(dom, e); }
-        e.measuredKw++;
-        if (bp >= 1 && bp <= 10) { e.p1Vol += v; e.p1Kw++; }
-      });
     }
-    const ladder: LadderEntry[] = [];
-    if (clientP1Vol > 0) ladder.push({ domain: clientNorm || 'client', kind: 'client', p1Vol: clientP1Vol, p1Kw: clientP1Kw, measuredKw: all.length });
-    byDom.forEach((e, dom) => {
-      if (e.p1Vol <= 0) return;               // no page-1 hold → no entry (I.5)
-      ladder.push({ domain: dom, kind: tracked.has(dom) ? 'tracked' : 'rival', p1Vol: e.p1Vol, p1Kw: e.p1Kw, measuredKw: e.measuredKw });
-    });
+    // v7.492: one accumulation shared with the product-line ladder (II.7)
+    const { ladder, clientP1Vol } = accumulateLadder(all, rm, clientNorm);
     ladder.sort((a, b) => b.p1Vol - a.p1Vol);
     const clientIdx = ladder.findIndex(e => e.kind === 'client');
 
@@ -993,6 +1098,32 @@ export function fileTopics(
     for (let i = 1; i < votes.length; i++) if (votes[i] > votes[best]) best = i;   // tie → first child (deterministic)
     return best;
   });
+}
+
+/** v7.492 (Wayne: "a way to click or view the topics and keywords of the parent
+ *  category or the sub-category"). Files the line's canonical topics down the
+ *  whole stored tree with the SAME one-child filing math as the journey chip
+ *  (fileTopics), level by level: a topic filed into a child is then filed among
+ *  that child's children, and so on. Result: node key → the topics that live AT
+ *  that node (the ones no deeper level claims). Every topic lands in exactly one
+ *  node, so the per-node lists partition the line's topic list. */
+export function fileTopicsDeep<T extends JourneyTopicLike>(
+  topics: T[],
+  root: Pick<CatNode, 'key' | 'children' | 'allKws'>,
+): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  const walk = (node: Pick<CatNode, 'key' | 'children' | 'allKws'>, ts: T[]) => {
+    const kids = (node.children ?? []) as Array<Pick<CatNode, 'key' | 'children' | 'allKws'>>;
+    if (kids.length === 0) { out.set(node.key, ts); return; }
+    const filed = fileTopics(ts, kids);
+    const here: T[] = [];
+    const perKid: T[][] = kids.map(() => []);
+    ts.forEach((t, i) => { const ci = filed[i]; if (ci < 0) here.push(t); else perKid[ci].push(t); });
+    out.set(node.key, here);
+    kids.forEach((k, i) => walk(k, perKid[i]));
+  };
+  walk(root, topics);
+  return out;
 }
 
 export function buildJourneyRequirement(
