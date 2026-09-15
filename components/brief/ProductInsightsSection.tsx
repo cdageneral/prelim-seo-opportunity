@@ -55,6 +55,8 @@ import {
   // (rank evidence), so columns sum exactly and the 7≠5 confusion is gone.
   // clientPagesForTopics (v7.458) still lives in the lib for the page-level lens.
   clientTopicsCovered, coveredTopicList,
+  // v7.492: top-6 + placements on both ladders; SERP occupants; topics filed per node
+  placeInLadder, fileTopicsDeep, LADDER_TOP_N, SERP_ENTRY_MAX_POS,
 } from '@/lib/productInsights';
 // Re-exported so the v7.426/v7.429 consumers of this file (retained suite, any import
 // of the shared row builder) keep working unchanged (V.6).
@@ -127,6 +129,11 @@ export default function ProductInsightsSection({
     return () => clearInterval(t);
   }, [scanning]);
   const [openKwAll, setOpenKwAll]     = useState<Set<string>>(new Set());   // v7.433: per-node keyword list expanded
+  // v7.492 (Wayne): "a way to click or view the topics and keywords of the parent
+  // category or the sub-category" — which node's topic list is open (the product
+  // line's own key opens the whole line), and which topics are expanded to keywords
+  const [openTopicsNode, setOpenTopicsNode] = useState<string | null>(null);
+  const [openTopicKw, setOpenTopicKw]       = useState<Set<string>>(new Set());
   const [promptView, setPromptView]   = useState<Record<string, 'cited' | 'named' | 'absent' | 'urls' | null>>({});   // v7.434
   // v7.449: which content-footprint cell's URL list is open ({ childIdx: -1 } = the line total)
   const [cfCell, setCfCell] = useState<{ childIdx: number; domain: string } | null>(null);
@@ -189,7 +196,11 @@ export default function ProductInsightsSection({
     clientDomain: domain,
     brandTerms,
     breakdown: (analysis?.semrushSnapshot as any)?._categoryBreakdown,
-  }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms]);
+    // v7.492: the stored SERP scan's organic rows put top-6 SERP occupants into the
+    // ladder; the project's competitor list gives every tracked brand a placement row
+    serpScan: (analysis?.serpApiSnapshot ?? null) as any,
+    trackedCompetitors: competitors,
+  }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms, competitors]);
   const products = built.products;
 
   // v7.444: the same tree build, callable for ANY product — the cascade must know a
@@ -217,9 +228,11 @@ export default function ProductInsightsSection({
         storedScans: (stored?.categories ?? []) as StoredCatScan[],
         clientDomain: domain,
         brandTerms,
+        serpScan: (analysis?.serpApiSnapshot ?? null) as any,   // v7.492
+        trackedCompetitors: competitors,
       });
     } catch { return null; }
-  }, [built, analysis, uploadedKeywords, stored, domain, brandTerms]);
+  }, [built, analysis, uploadedKeywords, stored, domain, brandTerms, competitors]);
 
   // v7.432: the stored-path tree for the OPEN product line (built on demand — the
   // whole taxonomy for every product at once is wasted work when one is expanded).
@@ -247,9 +260,11 @@ export default function ProductInsightsSection({
         storedScans: (stored?.categories ?? []) as StoredCatScan[],
         clientDomain: domain,
         brandTerms,
+        serpScan: (analysis?.serpApiSnapshot ?? null) as any,   // v7.492
+        trackedCompetitors: competitors,
       });
     } catch { return null; }
-  }, [openProduct, built, analysis, uploadedKeywords, stored, domain, brandTerms]);
+  }, [openProduct, built, analysis, uploadedKeywords, stored, domain, brandTerms, competitors]);
 
   // ── v7.449: Content Footprint by Brand for the OPEN line (shared basis, II.7) ──
   // Falls back to a flat line-level node when no stored taxonomy exists (honest
@@ -283,6 +298,108 @@ export default function ProductInsightsSection({
       });
     } catch { return null; }
   }, [openCfNode, uploadedKeywords, analysis, domain, built, openProduct]);
+
+  // ── v7.492: the open line's canonical topics filed down its stored tree — the
+  // SAME one-child filing math the journey chip counts (fileTopics), so the topics
+  // a sub-category lists are exactly the ones its journey requirement counted (II.7).
+  const topicsByNode = useMemo<Map<string, Topic[]> | null>(() => {
+    if (!openProduct) return null;
+    const p = built.products.find(x => x.name === openProduct);
+    if (!p) return null;
+    if (!openTree) { const m = new Map<string, Topic[]>(); m.set(p.name, p.topics); return m; }   // flat line — everything at the line level
+    try { return fileTopicsDeep(p.topics, openTree); } catch { return null; }
+  }, [openProduct, openTree, built]);
+  const topicsAt = useCallback((key: string): Topic[] => topicsByNode?.get(key) ?? [], [topicsByNode]);
+  // count of topics at a node INCLUDING every level beneath it (the header's "N topics")
+  const topicsUnder = useCallback((node: CatNode): number => {
+    let n = topicsAt(node.key).length;
+    for (const c of node.children) n += topicsUnder(c);
+    return n;
+  }, [topicsAt]);
+
+  /** v7.492: the one topics-and-keywords renderer, used at the product line AND at
+   *  every sub-category node. Topic rows read the canonical Theme-Cluster topics
+   *  (product, theme, stage, demand, best client rank + page); expanding a topic
+   *  lists its keywords with position, volume and ranking page — the same pool
+   *  rows the Keyword list panel renders, nothing re-derived. No cap (I.6). */
+  const topicsBlock = (key: string, title: string, list: Topic[], indentPx: number, subtitle?: string) => {
+    const rows = list.map(t => {
+      let best: { pos: number | null; url?: string } = { pos: null };
+      for (const k of t.keywords) if (k.position !== null && k.position >= 1 && (best.pos === null || k.position < best.pos)) best = { pos: k.position, url: k.url };
+      const ranked = t.keywords.filter(k => k.position !== null && k.position >= 1 && k.position <= 10).length;
+      return { t, best, ranked };
+    }).sort((a, b) => b.t.totalVolume - a.t.totalVolume);
+    const grid = 'minmax(210px,1.8fr) minmax(120px,1fr) 78px 70px 92px 92px';
+    return (
+      <div key={`topics:${key}`} style={{ marginLeft: `${indentPx}px`, marginBottom: '8px', padding: '10px 12px', background: 'var(--c-0a0a14)', border: '1px solid var(--ca-108-99-255-0_25)', borderRadius: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', marginBottom: '3px' }}>
+          <div style={{ fontSize: '9.5px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-9b96ff)' }}>{title}</div>
+          <button onClick={e => { e.stopPropagation(); setOpenTopicsNode(null); }}
+            style={{ fontSize: '9.5px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>Close</button>
+        </div>
+        <div style={{ fontSize: '9px', color: 'var(--c-8a8aa8)', marginBottom: '7px' }}>
+          {subtitle ?? 'Topics are the canonical Theme-Cluster topics for this line (one topic = one intended page); each files at exactly one level. Click a topic for its keywords — position, volume and ranking page come from the same keyword pool the Keyword list panel renders.'}
+        </div>
+        {rows.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-8a8aa8)' }}>No topics file at this level — every topic here lives in a level beneath it.</div>}
+        {rows.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: grid, gap: '8px', padding: '0 6px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
+            <span>TOPIC · YOUR PAGE</span><span>THEME</span><span>STAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>KEYWORDS</span>
+          </div>
+        )}
+        {rows.map(({ t, best, ranked }) => {
+          const kwOpen = openTopicKw.has(`${key}::${t.id}`);
+          const kws = t.keywords.slice().sort((a, b) => (b.searchVolume || 0) - (a.searchVolume || 0));
+          return (
+            <div key={t.id}>
+              <div onClick={e => { e.stopPropagation(); setOpenTopicKw(prev => { const n = new Set(prev); const id = `${key}::${t.id}`; if (n.has(id)) n.delete(id); else n.add(id); return n; }); }}
+                style={{ display: 'grid', gridTemplateColumns: grid, gap: '8px', alignItems: 'center', padding: '5px 6px', marginBottom: '3px', cursor: 'pointer',
+                  background: 'var(--c-111120)', border: `1px solid ${kwOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`, borderRadius: '7px' }}>
+                <div style={{ minWidth: 0, display: 'flex', gap: '6px', alignItems: 'baseline' }}>
+                  <span style={{ color: kwOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontSize: '9px', flexShrink: 0 }}>{kwOpen ? '▼' : '▶'}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-e8e8ff)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.product || t.parentName}</div>
+                    <div style={{ fontSize: '9px', color: best.url ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {best.url
+                        ? <a href={hrefFor(best.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{best.url.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
+                        : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.parentName}</div>
+                <div style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>{t.stage}</div>
+                <div style={{ fontSize: '11px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: best.pos !== null ? (best.pos <= 10 ? 'var(--c-34d399)' : 'var(--c-f59e0b)') : 'var(--c-f87171)' }}>
+                  {best.pos !== null ? `#${best.pos}` : 'unranked'}
+                </div>
+                <div style={{ fontSize: '11px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</div>
+                <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{t.keywords.length} kw · {ranked} p1</div>
+              </div>
+              {kwOpen && (
+                <div style={{ margin: '0 0 6px 18px', padding: '6px 8px', border: '1px solid var(--c-14142a)', borderRadius: '7px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', padding: '0 2px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
+                    <span>KEYWORD</span><span>POSITION</span><span>VOLUME/MO</span><span>YOUR RANKING PAGE</span>
+                  </div>
+                  {kws.map(k => (
+                    <div key={k.keyword} style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', alignItems: 'center', padding: '3px 2px', borderBottom: '1px solid var(--c-111120)', fontSize: '11px' }}>
+                      <span style={{ color: 'var(--c-c8c8e8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.keyword}</span>
+                      <span style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: k.position !== null && k.position >= 1 ? (k.position <= 10 ? 'var(--c-34d399)' : 'var(--c-f59e0b)') : 'var(--c-55557a)' }}>
+                        {k.position !== null && k.position >= 1 ? `#${k.position}` : '—'}
+                      </span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{(k.searchVolume || 0).toLocaleString()}</span>
+                      <span style={{ fontSize: '10px', color: k.url ? 'var(--c-8a8aa8)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {k.url
+                          ? <a href={hrefFor(k.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{k.url.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
+                          : (k.position !== null && k.position >= 1 ? 'URL not in source rows' : (k.isGap ? `gap — ${k.competitor ?? 'competitor'} ranks` : 'not ranking'))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   // ── v7.458/v7.459: journey-vs-actual per line, for the collapsed header chip.
   // v7.459 (Wayne): actual = topics COVERED — the same unit as the requirement
@@ -720,7 +837,7 @@ export default function ProductInsightsSection({
           return (
             <div key={p.name}>
               <div
-                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); }}
+                onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); setOpenTopicsNode(null); }}
                 style={{ display: 'grid', gridTemplateColumns: '22px minmax(130px,1fr) minmax(280px,1.1fr) minmax(400px,1.5fr) 212px', gap: '10px', alignItems: 'start',
                   background: 'var(--c-111120)', border: `1px solid ${isOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
                   borderRadius: isOpen ? '10px 10px 0 0' : '10px', padding: '10px 14px', marginBottom: isOpen ? 0 : '7px', cursor: 'pointer' }}
@@ -728,7 +845,13 @@ export default function ProductInsightsSection({
                 <span style={{ color: isOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontSize: '11px' }}>{isOpen ? '▼' : '▶'}</span>
                 <div>
                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{p.name}</div>
-                  <div style={{ fontSize: '10px', color: 'var(--c-6a6a90)' }}>{p.kwCount.toLocaleString()} kws · {p.topics.length} topics</div>
+                  {/* v7.492: the counts are the way in — click for the line's topics and keywords */}
+                  <button
+                    onClick={e => { e.stopPropagation(); if (!isOpen) { setOpenProduct(p.name); setShowAllTopics(false); setShowAllPrompts(false); setCfCell(null); } setOpenTopicsNode(prev => prev === p.name ? null : p.name); }}
+                    title="View this product line's topics and keywords"
+                    style={{ fontSize: '10px', fontWeight: 700, color: 'var(--c-9b96ff)', background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' }}>
+                    {p.kwCount.toLocaleString()} kws · {p.topics.length} topics ›
+                  </button>
                 </div>
                 {/* ── v7.458 (Wayne): the header's metrics grouped under named lenses —
                     Google first, then LLM/AI, then the journey-vs-actual pages chip ── */}
@@ -856,40 +979,93 @@ export default function ProductInsightsSection({
               {isOpen && (
                 <div style={{ border: '1px solid var(--ca-108-99-255-0_45)', borderTop: 'none', borderRadius: '0 0 10px 10px', background: 'var(--c-0a0a14)', padding: '14px 16px', marginBottom: '7px' }}>
 
-                  {/* brand ladder + cited-domain ladder side by side */}
+                  {/* v7.492: the whole line's topics + keywords, opened from the header counts */}
+                  {openTopicsNode === p.name && topicsBlock(p.name, `TOPICS & KEYWORDS — ${p.name.toUpperCase()} · ${p.topics.length} TOPICS · ${p.kwCount.toLocaleString()} KEYWORDS`, p.topics, 0,
+                    'Every canonical Theme-Cluster topic on this product line, across all of its sub-categories (one topic = one intended page). Click a topic for its keywords — position, volume and ranking page come from the same keyword pool the Keyword list panel renders.')}
+
+                  {/* brand ladder + cited-domain ladder side by side.
+                      v7.492 (Wayne): both ladders show the top 6 as before, then a
+                      placements block — where YOU and every TRACKED competitor sit in
+                      the full list (rank #N of M, or an explicit "none"). The page-1
+                      ladder now also admits SERP occupants: any domain the stored SERP
+                      scan saw at positions 1–6 on this line's keywords (shared basis,
+                      lib/productInsights.ts buildRivalRankMap — the PDF reads the same). */}
+                  {(() => {
+                    const lad = placeInLadder(p.ladder, clientNorm, p.tracked, e => e.kind === 'client');
+                    const cit = placeInLadder(p.citedTop, clientNorm, p.tracked, c => c.isClient);
+                    const kindLabel = (k: string) => k === 'client' ? 'you' : k === 'tracked' ? 'tracked competitor' : k === 'serp' ? 'SERP top-6 occupant' : 'Semrush organic rival';
+                    const kindColor = (k: string) => k === 'client' ? 'var(--c-6c63ff)' : k === 'tracked' ? 'var(--c-46cce0)' : k === 'serp' ? 'var(--c-34d399)' : 'var(--c-f59e0b)';
+                    const serpN = p.ladder.filter(e => e.kind === 'serp').length;
+                    const placeRow = (pl: { domain: string; kind: 'client' | 'tracked'; rank: number | null; inTop: boolean }, val: string | null, key: string) => (
+                      <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px', fontSize: '11px' }}>
+                        <span style={{ width: '12px', fontSize: '10px', fontWeight: 700, color: pl.rank !== null ? 'var(--c-8a8aa8)' : 'var(--c-55557a)' }}>{pl.rank !== null ? `#${pl.rank}` : '—'}</span>
+                        <span style={{ flex: '0 0 150px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          color: pl.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
+                          {pl.kind === 'client' ? `${pl.domain} (you)` : pl.domain}
+                        </span>
+                        <span style={{ flex: 1, fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>
+                          {pl.kind === 'tracked' ? 'tracked competitor' : ''}{pl.inTop ? (pl.kind === 'tracked' ? ' · in the top 6 above' : 'in the top 6 above') : ''}
+                        </span>
+                        <span style={{ width: '112px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums',
+                          color: pl.rank !== null ? (pl.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)') : 'var(--c-f87171)', fontSize: '10.5px' }}>
+                          {val ?? 'none'}
+                        </span>
+                      </div>
+                    );
+                    return (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
-                      <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '8px' }}>
-                        PAGE-1 VOLUME SHARE — MEASURED (v7.419 ladder basis)
+                      <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '2px' }}>
+                        PAGE-1 VOLUME SHARE — MEASURED (v7.419 ladder basis) · {lad.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${lad.total}` : `${lad.total} MEASURED`}
+                      </div>
+                      <div style={{ fontSize: '9px', color: 'var(--c-8a8aa8)', marginBottom: '8px' }}>
+                        tracked competitors + Semrush organic rivals + any domain the stored SERP scan placed at positions 1–{SERP_ENTRY_MAX_POS} on this line&rsquo;s keywords
+                        {built.serpScannedKw > 0 ? ` (${built.serpScannedKw.toLocaleString()} SERPs on file · ${serpN} SERP occupant${serpN === 1 ? '' : 's'} qualified here)` : ' (no SERP scan on file — SERP occupants cannot be measured yet)'}
+                        {' '}· bars are measured page-1 volume, no click model
                       </div>
                       {p.ladder.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>No brand holds page-1 volume on this category's keywords.</div>}
-                      {p.ladder.slice(0, 6).map((e, i) => {
+                      {lad.top.map((e, i) => {
                         const pctOfCat = p.demand > 0 ? (e.p1Vol / p.demand) * 100 : 0;
                         const maxVol = p.ladder[0]?.p1Vol || 1;
                         return (
                           <div key={e.domain} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px', fontSize: '11.5px' }}>
                             <span style={{ width: '12px', color: 'var(--c-55557a)', fontSize: '10px' }}>{i + 1}</span>
                             <span style={{ flex: '0 0 150px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                              color: e.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>
+                              color: e.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }} title={kindLabel(e.kind)}>
                               {e.kind === 'client' ? `${e.domain} (you)` : e.domain}
                             </span>
                             <span style={{ flex: 1, height: '7px', borderRadius: '4px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
-                              <span style={{ display: 'block', height: '100%', width: `${(e.p1Vol / maxVol) * 100}%`,
-                                background: e.kind === 'client' ? 'var(--c-6c63ff)' : e.kind === 'tracked' ? 'var(--c-46cce0)' : 'var(--c-f59e0b)' }} />
+                              <span style={{ display: 'block', height: '100%', width: `${(e.p1Vol / maxVol) * 100}%`, background: kindColor(e.kind) }} />
                             </span>
                             <span style={{ width: '46px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: e.kind === 'client' ? 'var(--c-9b96ff)' : 'var(--c-c8c8e8)' }}>{pctOfCat.toFixed(1)}%</span>
-                            <span style={{ width: '86px', textAlign: 'right', fontSize: '9px', color: 'var(--c-55557a)' }}>rank data: {e.measuredKw}/{p.kwCount} kw</span>
+                            <span style={{ width: '86px', textAlign: 'right', fontSize: '9px', color: 'var(--c-55557a)' }}>
+                              {e.kind === 'serp' ? `top-${SERP_ENTRY_MAX_POS} on ${e.top6Kw ?? 0} · ` : ''}rank data: {e.measuredKw}/{p.kwCount} kw
+                            </span>
                           </div>
                         );
                       })}
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', fontSize: '8.5px', color: 'var(--c-8a8aa8)', margin: '4px 0 8px' }}>
+                        {(['client', 'tracked', 'rival', 'serp'] as const).map(k => (
+                          <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: kindColor(k), display: 'inline-block' }} />{kindLabel(k)}
+                          </span>
+                        ))}
+                      </div>
+                      <div style={{ borderTop: '1px solid var(--c-1e1e34)', paddingTop: '7px' }}>
+                        <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
+                          WHERE YOU AND YOUR TRACKED COMPETITORS SIT — RANK OF {lad.total} MEASURED
+                        </div>
+                        {lad.placements.map(pl => placeRow(pl, pl.entry ? `${((pl.entry.p1Vol / Math.max(p.demand, 1)) * 100).toFixed(1)}% · ${pl.entry.p1Kw} kw` : null, `lad:${pl.domain}`))}
+                        {lad.placements.length === 1 && <div style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>No tracked competitors on this project yet — add them in Competitors.</div>}
+                      </div>
                     </div>
                     <div style={{ background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '9px', padding: '11px 13px' }}>
                       <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.07em', color: 'var(--c-6a6a90)', marginBottom: '8px' }}>
-                        WHO GETS CITED IN RECORDED AI ANSWERS {p.scan ? `— ${p.scan.rows.length} answers` : ''}
+                        WHO GETS CITED IN RECORDED AI ANSWERS {p.scan ? `— ${p.scan.rows.length} answers · ${cit.total > LADDER_TOP_N ? `TOP ${LADDER_TOP_N} OF ${cit.total}` : `${cit.total}`} DOMAINS` : ''}
                       </div>
                       {!p.scan && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>Not scanned yet — run "Scan recorded AI answers" above.</div>}
                       {p.scan && p.citedTop.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-55557a)' }}>The recorded answers for this category carry no cited sources.</div>}
-                      {p.citedTop.slice(0, 6).map((c, i) => {
+                      {cit.top.map((c, i) => {
                         const max = p.citedTop[0]?.count || 1;
                         return (
                           <div key={c.domain} style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px', fontSize: '11.5px' }}>
@@ -898,12 +1074,20 @@ export default function ProductInsightsSection({
                               {c.isClient ? `${c.domain} (you)` : c.domain}
                             </span>
                             <span style={{ flex: 1, height: '7px', borderRadius: '4px', background: 'var(--c-1e1e34)', overflow: 'hidden' }}>
-                              <span style={{ display: 'block', height: '100%', width: `${(c.count / max) * 100}%`, background: c.isClient ? 'var(--c-6c63ff)' : 'var(--c-f59e0b)' }} />
+                              <span style={{ display: 'block', height: '100%', width: `${(c.count / max) * 100}%`, background: c.isClient ? 'var(--c-6c63ff)' : p.tracked.includes(c.domain) ? 'var(--c-46cce0)' : 'var(--c-f59e0b)' }} />
                             </span>
                             <span style={{ width: '56px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{c.count}×</span>
                           </div>
                         );
                       })}
+                      {p.scan && p.citedTop.length > 0 && (
+                        <div style={{ borderTop: '1px solid var(--c-1e1e34)', paddingTop: '7px', marginTop: '8px' }}>
+                          <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '5px' }}>
+                            WHERE YOU AND YOUR TRACKED COMPETITORS SIT — RANK OF {cit.total} CITED DOMAINS
+                          </div>
+                          {cit.placements.map(pl => placeRow(pl, pl.entry ? `${pl.entry.count}× cited` : null, `cit:${pl.domain}`))}
+                        </div>
+                      )}
                       {p.scan && !p.citedTop.some(c => c.isClient) && p.citedTop.length > 0 && (
                         <div style={{ marginTop: '7px', fontSize: '10.5px', color: 'var(--c-f87171)' }}>
                           Your domain is cited 0 times across these recorded answers.
@@ -911,6 +1095,8 @@ export default function ProductInsightsSection({
                       )}
                     </div>
                   </div>
+                    );
+                  })()}
 
                   {/* ── v7.449: Content Footprint by Brand — pages ranking, per child category ── */}
                   {openCf && (
@@ -1281,9 +1467,21 @@ export default function ProductInsightsSection({
                             const ranked = own.filter(k => k.position !== null && k.position <= 10).length;
                             return (
                               <div style={{ marginLeft: `${node.depth * 18}px`, marginBottom: '5px', padding: '9px 11px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-14142a)', borderRadius: '8px' }}>
-                                <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)', marginBottom: '6px' }}>
-                                  KEYWORDS AT THIS LEVEL — {own.length.toLocaleString()}{node.kws.length === 0 ? ' (rolled up from sub-levels)' : ''} · {ranked.toLocaleString()} ON PAGE 1
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', marginBottom: '6px' }}>
+                                  <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-6a6a90)' }}>
+                                    KEYWORDS AT THIS LEVEL — {own.length.toLocaleString()}{node.kws.length === 0 ? ' (rolled up from sub-levels)' : ''} · {ranked.toLocaleString()} ON PAGE 1
+                                  </div>
+                                  {/* v7.492: the topics filed at this level (and beneath), same filing math as the journey chip */}
+                                  <button onClick={e => { e.stopPropagation(); setOpenTopicsNode(prev => prev === node.key ? null : node.key); }}
+                                    style={{ fontSize: '9.5px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', cursor: 'pointer', whiteSpace: 'nowrap',
+                                      background: openTopicsNode === node.key ? 'var(--ca-108-99-255-0_1)' : 'transparent', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}>
+                                    {openTopicsNode === node.key ? '▼' : '▶'} {topicsAt(node.key).length} topic{topicsAt(node.key).length === 1 ? '' : 's'} at this level{node.children.length > 0 ? ` · ${topicsUnder(node)} incl. sub-levels` : ''}
+                                  </button>
                                 </div>
+                                {openTopicsNode === node.key && topicsBlock(node.key, `TOPICS FILED AT ${node.name.toUpperCase()} — ${topicsAt(node.key).length}`, topicsAt(node.key), 0,
+                                  node.children.length > 0
+                                    ? 'Topics whose keywords sit at this level rather than in a deeper sub-category (each topic files at exactly one level — the sub-levels list their own). Click a topic for its keywords.'
+                                    : undefined)}
                                 <div style={{ fontSize: '9px', color: 'var(--c-55557a)', marginBottom: '5px' }}>
                                   Keyword, position, volume and ranking page come from the same keyword pool the Keyword list panel renders — nothing is re-derived here.
                                 </div>
