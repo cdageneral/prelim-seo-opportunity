@@ -168,7 +168,20 @@ export async function POST(
   const categoriesLimit = Math.min(Math.max(parseInt(body?.categoriesLimit, 10) || DEFAULT_CATEGORIES_LIMIT, 1), MAX_CATEGORIES_LIMIT);
 
   await ensureColumns();
-  const projRows = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  // v7.491 (Const II.9): named columns. The bare select shipped all sixteen of
+  // the project's JSONB stores — 44,342,983 bytes on TD Bank, 99.7% of it
+  // product_insights — to read three scalars.
+  const projRows = await db
+    .select({
+      id:              projects.id,
+      clientName:      projects.clientName,
+      websiteUrl:      projects.websiteUrl,
+      semrushDatabase: projects.semrushDatabase,
+      // the scan compares against the PRIOR snapshot before writing a new one
+      // (two read sites further down), so this one store has to travel.
+      authoritySnapshot: projects.authoritySnapshot,
+    })
+    .from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!projRows.length) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
   const project = projRows[0] as any;
   const comps = await db.select().from(competitorsTable).where(eq(competitorsTable.projectId, projectId));
