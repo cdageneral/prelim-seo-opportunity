@@ -337,6 +337,8 @@ export function ensureProductRows(ctx: SeerContext): ProductRow[] {
       clientDomain,
       brandTerms:       (((project as any).brandTerms ?? []) as string[]),
       breakdown:        (snap as any)?._categoryBreakdown,
+      serpScan:         ((analysis as any)?.serpApiSnapshot ?? null) as any,   // v7.492: same ladder basis as the panel
+      trackedCompetitors: competitorDomains,
     });
     ctx._products = built.products;
   } catch { ctx._products = null; }
@@ -365,6 +367,8 @@ export function footprintForLine(ctx: SeerContext, prod: ProductRow) {
     storedScans:      scans,
     clientDomain,
     brandTerms:       (((project as any).brandTerms ?? []) as string[]),
+    serpScan:         ((ctx.analysis as any)?.serpApiSnapshot ?? null) as any,   // v7.492
+    trackedCompetitors: ctx.competitorDomains,
   });
   const cfNode = tree ?? { name: prod.name, allKws: poolKeywords as NodeKw[], children: [] as any[] };
   const cf = buildContentFootprint({
