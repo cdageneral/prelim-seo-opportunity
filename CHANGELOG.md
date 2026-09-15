@@ -1,3 +1,27 @@
+# v7.494 — line header overlap fix (2026-09-15)
+
+Wayne, on the v7.493 header: *"looks like some overlap happening. lets move the scan button far
+left under the category name and then stack claude gpt on top of each other."*
+
+## What changed
+
+- **"↻ Scan AI + below" moved to the name column**, under "N kws · M topics ›". Same button,
+  same cascade behaviour (v7.444), same click-bubble guard — only its home moved.
+- **Claude / GPT probe chips stack vertically** in the LLM & AI column instead of wrapping side
+  by side, and the column's inner grid gives the Search/AI bars and the "Google yes, AI no" count
+  their own room (`minmax(120px,0.9fr) minmax(150px,1.1fr) 62px`).
+
+No metric, basis or data path changed; nothing downstream (PDF, Seer) reads a layout.
+
+## Verification
+
+Real `next build` exit 0; project `tsc` clean. Retained suite: base **2826 / 31** → change
+**2964 / 31**, FAIL set byte-identical. 4 new source-level checks (button lives in the name
+column, exactly one, chips stacked, none left in the LLM column). Header rendered in both themes
+on the 3,500-keyword fixture with a probed line.
+
+**Changed:** `components/brief/ProductInsightsSection.tsx`, `package.json`.
+
 # v7.493 — one ladder list, no captions, SERP-feature citation rates on the line (2026-09-15)
 
 Wayne, an hour after v7.492 went live: *"Let's push the client and the tracked competitors up
