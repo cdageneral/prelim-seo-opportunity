@@ -206,11 +206,36 @@ export interface AssessmentData {
   // never re-derives or recomputes either (Const II.6a). null = not generated /
   // no Profound data — section omitted honestly (I.5).
   insightsPanel?: {
-    thesis: { headline: string; body: string; openPosition: string | null };
-    patterns: Array<{ tag: string; title: string; body: string }>;
+    // v7.471 shape (blobs stored before v7.496 — still rendered, never rewritten)
+    thesis?: { headline: string; body: string; openPosition: string | null };
+    patterns?: Array<{ tag: string; title: string; body: string }>;
+    strike?: Array<{ title: string; body: string; impact: string }>;
+    // v7.496 shape — the decision panel
+    schema?: string;
+    situation?: { headline: string; body: string };
+    holdingBack?: Array<{ title: string; body: string; lines: string[]; evidence: string }>;
+    opportunities?: Array<{ title: string; body: string; sizing: string; impact: string }>;
+    invest?: { order: Array<{ move: string; why: string; modeledGain: string }>; caveat: string | null };
+    leaderPath?: { whatLeaderLooksLike: string; gap: string; incrementalGain: string; constraints: string[] };
+    localMarkets?: { summary: string; markets: Array<{ city: string; finding: string }> } | null;
+    shifts?: Array<{ title: string; body: string }>;
     playbook: Array<{ brand: string; doingWell: string; vulnerable: string; keyStat: string }>;
-    strike: Array<{ title: string; body: string; impact: string }>;
     sources: string[]; generatedAt: string; verified: number;
+  } | null;
+  // v7.496 (Const II.6b): the panel's deterministic decision inputs, read verbatim
+  // from lib/insightsPanel/decision — standing (search + AI, per line), modeled
+  // scenarios (labeled), local markets. null = not computable (stated on-page).
+  insightsDecision?: {
+    clientDomain: string;
+    standing: {
+      search: Array<{ key: string; metric: string; unit: string; basis: string; client: number | null; fieldAvg: number | null; best: { domain: string; value: number } | null; clientRank: number | null; of: number; standing: string; note: string }>;
+      ai: Array<{ key: string; metric: string; unit: string; basis: string; client: number | null; fieldAvg: number | null; best: { domain: string; value: number } | null; clientRank: number | null; of: number; standing: string; note: string }>;
+      lines: Array<{ product: string; demandMonthly: number; kwCount: number; client: { p1Vol: number; p1Share: number; rank: number | null }; standing: string; fieldAvgP1Vol: number | null; best: { domain: string; p1Vol: number; isClient: boolean } | null; brandsOnLadder: number; ai: { answerShare: number | null; probeMentionRate: number | null; citedLeader: { domain: string; count: number; isClient: boolean } | null }; serp: { aioAvail: number; aioAcq: number; aioRate: number } | null }>;
+      basis: string;
+    };
+    scenarios: { currentClicksMonthly: number; leaderClicksMonthly: number | null; leaderDomain: string | null; moves: Array<{ key: string; label: string; basis: string; keywords: number; volumeMonthly: number; clicksMonthlyFloor: number | null; clicksMonthlyCeiling: number | null; floorTarget: string; ceilingTarget: string; note: string }>; ctrSource: string; basis: string };
+    local: { markets: Array<{ city: string; demandMonthly: number; kwCount: number; client: { p1Kw: number; p1Vol: number; bestPos: number | null }; topRival: { domain: string; p1Vol: number } | null; pack: { withPack: number; clientBestRank: number | null; clientInPack: number; leaders: string[]; leaderReviews: number | null } | null }>; geoTotal: { kwCount: number; demandMonthly: number; cities: number }; nearMe: { kwCount: number; demandMonthly: number; clientP1Kw: number }; basis: string } | null;
+    shifts: { serp: { scanned: number; withAIO: number; aioClientCited: number; withPAA: number; paaClientCited: number; aioUncitedVolumeMonthly: number } | null; aiAnswers: { probeMentions: number; probeTotal: number; linesScanned: number; linesWithClientShare: number } | null; historyNote: string };
   } | null;
   insightsQuadrant?: {
     points: Array<{ brand: string; isClient: boolean; visibilityPct: number; citations: number; domain: string; quadrant: string }>;
@@ -602,7 +627,172 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // ever truncated or altered.
   const ip = d.insightsPanel ?? null;
   const iq = d.insightsQuadrant ?? null;
-  if (ip) {
+  const idec = d.insightsDecision ?? null;
+  // v7.496 helpers — standing cells + chips (the panel's STANDING_STYLE vocabulary, print palette)
+  const fmtStand = (unit: string, v: number | null): string => v == null ? '—' : unit === 'pct' ? `${v}%` : unit === 'pos' ? v.toFixed(1) : unit === 'volume' ? `${vol(v)}/mo` : n0(v);
+  const standWord: Record<string, { label: string; color: string }> = {
+    leads: { label: 'LEADS', color: 'var(--good)' }, above: { label: 'ABOVE FIELD', color: 'var(--blue-550)' },
+    below: { label: 'BELOW FIELD', color: '#8a5a00' }, last: { label: 'LAST', color: 'var(--critical)' }, unmeasured: { label: 'UNMEASURED', color: 'var(--muted)' },
+  };
+  type StandRowLike = { key: string; metric: string; unit: string; basis: string; client: number | null; fieldAvg: number | null; best: { domain: string; value: number } | null; clientRank: number | null; of: number; standing: string };
+  const standTable = (rows: StandRowLike[], title: string, you: string) => `
+    <div class="figtitle" style="margin-top:6px;">${esc(title)}</div>
+    <table class="dt" style="margin-bottom:8px;">
+      <tr><th>Measure</th><th style="width:.8in;">${esc(you)}</th><th style="width:.75in;">Field avg</th><th style="width:1.15in;">Best-in-class</th><th style="width:1in;">Standing</th></tr>
+      ${rows.map(r => {
+        const sw = standWord[r.standing] ?? standWord.unmeasured;
+        const isYou = !!r.best && r.best.domain === idec?.clientDomain;
+        return `<tr><td><b>${esc(r.metric)}</b><div style="font-size:7.5px; color:${r.basis === 'modeled' ? '#8a5a00' : 'var(--muted)'};">${r.basis === 'modeled' ? 'modeled estimate' : 'measured'}</div></td>
+          <td class="n"><b>${esc(fmtStand(r.unit, r.client))}</b></td>
+          <td class="n">${esc(fmtStand(r.unit, r.fieldAvg))}</td>
+          <td>${r.best ? `<b>${esc(fmtStand(r.unit, r.best.value))}</b> <span style="color:var(--muted); font-size:8px;">${isYou ? 'you' : esc(r.best.domain)}</span>` : '—'}</td>
+          <td><span class="chip" style="color:${sw.color}; border:1px solid ${sw.color}; background:transparent;">${r.clientRank != null && r.of > 1 ? `${r.clientRank} of ${r.of} · ` : ''}${sw.label}</span></td></tr>`;
+      }).join('')}
+    </table>`;
+
+  if (ip && ip.situation) {
+    // ── v7.496 — the decision panel, designed pages (Const II.6b, same release) ──
+    const srcLine = `Source: the Insights panel's stored, machine-verified narrative (${n0(ip.verified)} numbers verified verbatim against stored panel data; every standing claim checked against the computed standing; generated from: ${ip.sources.map(x => esc(x)).join(' · ') || 'stored panels'}). Standing, scenarios and local markets are the panel's own deterministic inputs, read verbatim; nothing is recomputed for the report.`;
+    const you = esc(d.clientName);
+
+    // Page 1 — the situation + standing
+    const linesRows = idec ? idec.standing.lines.slice(0, 10).map(l => {
+      const pct = l.demandMonthly > 0 ? Math.round((l.client.p1Vol / l.demandMonthly) * 100) : 0;
+      const sw = standWord[l.standing] ?? standWord.unmeasured;   // one word, computed once (lib/insightsPanel/decision)
+      return `<tr><td><b>${esc(l.product)}</b></td><td class="n">${vol(l.demandMonthly)}</td><td class="n">${vol(l.client.p1Vol)} <span style="color:var(--muted);">(${pct}%)</span></td>
+        <td><span class="chip" style="color:${sw.color}; border:1px solid ${sw.color}; background:transparent;">${l.client.rank != null ? `${l.client.rank} of ${l.brandsOnLadder} · ` : l.standing === 'last' ? 'no page-1 hold · ' : ''}${sw.label}</span></td>
+        <td class="n">${l.fieldAvgP1Vol != null ? vol(l.fieldAvgP1Vol) : '—'}</td>
+        <td>${l.best ? `${l.best.isClient ? '<b>you</b>' : esc(l.best.domain)} · ${vol(l.best.p1Vol)}` : '—'}</td>
+        <td class="n">${l.ai.answerShare != null ? p0(l.ai.answerShare * 100) : l.ai.probeMentionRate != null ? p0(l.ai.probeMentionRate * 100) : '<span style="color:var(--muted);">unmeasured</span>'}</td>
+        <td class="n">${l.serp && l.serp.aioAvail > 0 ? `${l.serp.aioAcq} of ${l.serp.aioAvail}` : '<span style="color:var(--muted);">—</span>'}</td></tr>`;
+    }).join('') : '';
+    pages.push(pageWrap('INSIGHTS — THE SITUATION', 'THE HEADLINES', `
+      <h1 class="pg">${esc(ip.situation.headline)}</h1>
+      <div class="lede">${esc(ip.situation.body)}</div>
+      ${idec ? `<div class="two" style="gap:14px; margin-bottom:6px;">
+        <div>${standTable(idec.standing.search, 'Standing — traditional search', d.clientName)}</div>
+        <div>${standTable(idec.standing.ai, 'Standing — AI visibility', d.clientName)}</div>
+      </div>
+      ${linesRows ? `<div class="figtitle">Per product line</div>
+      <div class="figsub">Page-1 volume held vs field average and best-in-class on the line's own keywords · AI answers naming ${you} · AI Overviews citing ${you}${idec.standing.lines.length > 10 ? ` · top 10 of ${n0(idec.standing.lines.length)} lines` : ''}</div>
+      <table class="dt" style="margin-bottom:6px;"><tr><th>Line</th><th style="width:.75in;">Demand /mo</th><th style="width:1.05in;">${you} pg-1</th><th style="width:1.1in;">Rank</th><th style="width:.7in;">Field avg</th><th style="width:1.3in;">Best-in-class</th><th style="width:.7in;">AI naming</th><th style="width:.7in;">AIO cites</th></tr>${linesRows}</table>` : ''}
+      <div class="src">${esc(idec.standing.basis)}</div>` : '<div class="src">Standing could not be computed for this analysis (no keyword snapshot) — stated, not estimated.</div>'}
+      <div class="src">${srcLine}</div>`));
+
+    // Page 2 — holding back + where to invest + scenarios
+    const hbCards = (ip.holdingBack ?? []).slice(0, 5).map(h => `<div class="panelbox" style="border-top:3px solid #b8860b; padding:10px 12px;">
+        <div style="font-size:10.5px; font-weight:800; color:var(--ink); line-height:1.3; margin-bottom:3px;">${esc(h.title)}</div>
+        ${h.lines.length ? `<div style="font-size:7.5px; color:var(--muted); margin-bottom:4px;">${h.lines.map(esc).join(' · ')}</div>` : ''}
+        <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(h.body)}</div>
+        <div style="font-size:8px; color:var(--muted); line-height:1.4; margin-top:5px; border-top:1px solid var(--grid); padding-top:4px;"><b>EVIDENCE</b> · ${esc(h.evidence)}</div>
+      </div>`).join('');
+    const investHtml = ip.invest ? ip.invest.order.slice(0, 6).map((m, i) => `
+      <div style="display:grid; grid-template-columns:.3in 1fr; gap:7px; margin-bottom:7px; align-items:start;">
+        <div style="font-size:15px; font-weight:800; color:var(--blue); line-height:1.1;">${i + 1}</div>
+        <div><div style="font-size:10px; font-weight:800; color:var(--ink);">${esc(m.move)}</div>
+        <div style="font-size:9px; color:var(--ink2); line-height:1.5; margin-top:2px;">${esc(m.why)}</div>
+        <div style="font-size:9px; font-weight:800; color:var(--blue-550); margin-top:2px;">${esc(m.modeledGain)}</div></div>
+      </div>`).join('') : '';
+    const scenRows = idec ? idec.scenarios.moves.map(m => `<tr><td>${esc(m.label)}<div style="font-size:7.5px; color:var(--muted);">${m.basis === 'modeled' ? `to ${esc(m.floorTarget)} → ${esc(m.ceilingTarget)}` : 'measured volume only — no click model'}</div></td>
+        <td class="n">${n0(m.keywords)}</td><td class="n">${vol(m.volumeMonthly)}</td>
+        <td class="n">${m.clicksMonthlyFloor != null ? `<b>${vol(m.clicksMonthlyFloor)}</b>` : '—'}</td><td class="n">${m.clicksMonthlyCeiling != null ? vol(m.clicksMonthlyCeiling) : '—'}</td></tr>`).join('') : '';
+    const scen = idec ? idec.scenarios : null;
+    pages.push(pageWrap('INSIGHTS — WHAT IS HOLDING THE BRAND BACK', 'THE HEADLINES', `
+      <h1 class="pg sm">The constraints, and what each move is worth.</h1>
+      ${hbCards ? `<div class="figtitle">What is holding the brand back</div><div class="figsub">The binding constraints, with the mechanism behind each${(ip.holdingBack ?? []).length > 5 ? ` · top 5 of ${n0((ip.holdingBack ?? []).length)}` : ''}</div>
+      <div class="two" style="gap:10px; margin-bottom:12px;">${hbCards}</div>` : ''}
+      <div class="two" style="gap:16px;">
+        <div>${investHtml ? `<div class="figtitle">Where to invest</div><div class="figsub">The engine's order, written against the modeled scenarios</div>${investHtml}${ip.invest?.caveat ? `<div class="src">Caveat: ${esc(ip.invest.caveat)}</div>` : ''}` : ''}</div>
+        <div>${scen && scenRows ? `<div class="figtitle">Scenarios · modeled estimate</div><div class="figsub">Incremental clicks/mo on the ${esc(scen.ctrSource)} curve · today ${vol(scen.currentClicksMonthly)} modeled clicks/mo${scen.leaderClicksMonthly != null && scen.leaderDomain !== idec?.clientDomain ? ` · leader ${esc(scen.leaderDomain ?? '')} ${vol(scen.leaderClicksMonthly)}` : ''}</div>
+          <table class="dt"><tr><th>Move</th><th style="width:.5in;">Kws</th><th style="width:.6in;">Vol /mo</th><th style="width:.6in;">Floor</th><th style="width:.6in;">Ceiling</th></tr>${scenRows}</table>
+          <div class="src">${esc(scen.basis)}</div>` : ''}</div>
+      </div>
+      <div class="src">${srcLine}</div>`));
+
+    // Page 3 — path to market leader + key opportunities
+    const oppCards = (ip.opportunities ?? []).slice(0, 5).map(o => `<div class="panelbox" style="border-top:3px solid ${o.impact === 'HIGH' ? 'var(--good)' : 'var(--blue-550)'}; padding:10px 12px;">
+        <div style="display:flex; justify-content:space-between; gap:6px; align-items:flex-start;"><div style="font-size:10.5px; font-weight:800; color:var(--ink); line-height:1.3;">${esc(o.title)}</div><span class="chip" style="background:${o.impact === 'HIGH' ? '#eefaee' : '#eef4fc'}; color:${o.impact === 'HIGH' ? '#1a7655' : 'var(--blue-550)'}; border:1px solid ${o.impact === 'HIGH' ? '#bfe6c8' : '#c9dcf3'};">${o.impact === 'HIGH' ? 'HIGH' : 'MEDIUM'}</span></div>
+        <div style="font-size:9px; color:var(--ink2); line-height:1.5; margin-top:4px;">${esc(o.body)}</div>
+        <div style="font-size:8.5px; font-weight:800; color:var(--ink); margin-top:5px; border-top:1px solid var(--grid); padding-top:4px;">${esc(o.sizing)}</div>
+      </div>`).join('');
+    const lp2 = ip.leaderPath ?? null;
+    if (lp2 || oppCards) {
+      pages.push(pageWrap('INSIGHTS — PATH TO MARKET LEADER', 'THE HEADLINES', `
+        <h1 class="pg sm">What leading this category would take — and what it would return.</h1>
+        ${lp2 ? `<div class="tiles c3" style="margin-bottom:14px;">
+          ${[['What the leader holds', lp2.whatLeaderLooksLike, 'var(--grid)'], ['The gap', lp2.gap, 'var(--grid)'], ['Gain at leader parity · modeled', lp2.incrementalGain, 'var(--blue-550)']].map(([k, v, c]) => `<div class="panelbox" style="border-top:3px solid ${c}; padding:10px 12px;"><div style="font-size:8px; font-weight:800; letter-spacing:.09em; color:var(--muted); text-transform:uppercase; margin-bottom:5px;">${esc(k)}</div><div style="font-size:9.5px; color:var(--ink); line-height:1.5;">${esc(v)}</div></div>`).join('')}
+        </div>
+        ${lp2.constraints.length ? `<div class="panelbox" style="margin-bottom:14px;"><div class="figtitle">What has to change</div><ol style="margin:0; padding-left:14px; font-size:9.5px; color:var(--ink2); line-height:1.6;">${lp2.constraints.map(c => `<li>${esc(c)}</li>`).join('')}</ol></div>` : ''}` : ''}
+        ${oppCards ? `<div class="figtitle">Key opportunities</div><div class="figsub">Where demand is high, the leader is beatable or absent, and the brand is already close</div><div class="two" style="gap:10px;">${oppCards}</div>` : ''}
+        <div class="src">${srcLine}</div>`));
+    }
+
+    // Page 4 — playbook (kept, the v7.479 design)
+    if (ip.playbook.length > 0) {
+      const pbCards = ip.playbook.slice(0, 5).map(r => `
+        <div class="panelbox" style="margin-bottom:10px; padding:11px 14px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid var(--grid); padding-bottom:5px; margin-bottom:7px;">
+            <span style="font-size:11.5px; font-weight:800; color:var(--ink);">${esc(r.brand)}</span>
+            <span style="font-size:9px; font-weight:800; color:var(--blue-550); text-align:right; max-width:2.6in;">${esc(r.keyStat)}</span>
+          </div>
+          <div class="two" style="gap:14px;">
+            <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--good); margin-bottom:3px;">DOING WELL</div>
+              <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(r.doingWell)}</div></div>
+            <div><div style="font-size:7.5px; font-weight:800; letter-spacing:.09em; color:var(--critical); margin-bottom:3px;">VULNERABLE</div>
+              <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(r.vulnerable)}</div></div>
+          </div>
+        </div>`).join('');
+      pages.push(pageWrap('INSIGHTS — THE COMPETITIVE PLAYBOOK', 'THE HEADLINES', `
+        <h1 class="pg sm">Every tracked brand, read the same way.</h1>
+        <div class="lede" style="margin-bottom:14px;">What each brand is doing well, where it is vulnerable, and the one stat that matters — verified against the same stored data as every other page of this report.${ip.playbook.length > 5 ? ` Showing the top 5 of ${n0(ip.playbook.length)} brands — the full set is on the Insights panel.` : ''}</div>
+        ${pbCards}
+        <div class="src">${srcLine}</div>`));
+    }
+
+    // Page 5 — local markets + market shifts
+    const lm = idec?.local ?? null;
+    const mkRows = lm ? lm.markets.slice(0, 14).map(m => `<tr><td style="text-transform:capitalize;"><b>${esc(m.city)}</b></td><td class="n">${vol(m.demandMonthly)}</td><td class="n">${m.kwCount ? `${n0(m.client.p1Kw)} of ${n0(m.kwCount)}${m.client.bestPos != null ? ` · best ${m.client.bestPos}` : ' · not ranked'}` : '—'}</td>
+        <td>${m.pack ? (m.pack.withPack === 0 ? '<span style="color:var(--muted);">no pack shown</span>' : m.pack.clientBestRank != null ? `<b style="color:${m.pack.clientBestRank === 1 ? 'var(--good)' : 'var(--blue-550)'};">in pack · best #${m.pack.clientBestRank}</b> (${m.pack.clientInPack} of ${m.pack.withPack})` : `<b style="color:var(--critical);">absent</b> · leader ${esc(m.pack.leaders[0] ?? '—')}${m.pack.leaderReviews != null ? ` (${n0(m.pack.leaderReviews)} reviews)` : ''}`) : '<span style="color:var(--muted);">not scanned</span>'}</td>
+        <td>${m.topRival ? `${esc(m.topRival.domain)} · ${vol(m.topRival.p1Vol)}` : '—'}</td></tr>`).join('') : '';
+    const shiftCards = (ip.shifts ?? []).slice(0, 3).map(sh => `<div class="panelbox" style="border-top:3px solid var(--violet); padding:10px 12px;"><div style="font-size:10.5px; font-weight:800; color:var(--ink); line-height:1.3; margin-bottom:3px;">${esc(sh.title)}</div><div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(sh.body)}</div></div>`).join('');
+    const sh = idec?.shifts ?? null;
+    if (lm || ip.localMarkets || shiftCards || sh?.serp) {
+      pages.push(pageWrap('INSIGHTS — LOCAL MARKETS & MARKET SHIFTS', 'THE HEADLINES', `
+        <h1 class="pg sm">Where the demand is — and how the results page is changing.</h1>
+        ${ip.localMarkets ? `<div class="lede">${esc(ip.localMarkets.summary)}</div>
+        ${ip.localMarkets.markets.length ? `<div class="two" style="gap:6px 14px; margin-bottom:12px;">${ip.localMarkets.markets.slice(0, 8).map(m => `<div style="font-size:9px; color:var(--ink2); line-height:1.5;"><b style="color:var(--ink);">${esc(m.city)}</b> — ${esc(m.finding)}</div>`).join('')}</div>` : ''}` : ''}
+        ${lm && mkRows ? `<div class="figtitle">Demand by city</div><div class="figsub">${n0(lm.geoTotal.kwCount)} city-modified keywords · ${vol(lm.geoTotal.demandMonthly)}/mo across ${n0(lm.geoTotal.cities)} cities · near-me demand ${vol(lm.nearMe.demandMonthly)}/mo (${you} on page 1 for ${n0(lm.nearMe.clientP1Kw)} of ${n0(lm.nearMe.kwCount)})${lm.markets.length > 14 ? ` · top 14 of ${n0(lm.markets.length)}` : ''}</div>
+        <table class="dt" style="margin-bottom:6px;"><tr><th>City</th><th style="width:.7in;">Demand /mo</th><th style="width:1.2in;">${you} page 1</th><th style="width:2in;">Map pack</th><th style="width:1.5in;">Strongest rival</th></tr>${mkRows}</table>
+        <div class="src">${esc(lm.basis)}</div>` : ''}
+        ${sh && (sh.serp || sh.aiAnswers || shiftCards) ? `<div class="figtitle" style="margin-top:8px;">Market shifts — as measured today</div><div class="figsub">${esc(sh.historyNote)}</div>
+        <div class="tiles c3" style="margin-bottom:10px;">
+          ${sh.serp ? tile('AI Overviews on scanned SERPs', `${n0(sh.serp.withAIO)} of ${n0(sh.serp.scanned)}`, `${you} cited in ${n0(sh.serp.aioClientCited)} · ${vol(sh.serp.aioUncitedVolumeMonthly)}/mo of AIO demand without you · PAA on ${n0(sh.serp.withPAA)}, cited in ${n0(sh.serp.paaClientCited)}`) : ''}
+          ${sh.aiAnswers ? tile(`AI answers naming ${you}`, `${n0(sh.aiAnswers.probeMentions)} of ${n0(sh.aiAnswers.probeTotal)}`, `${n0(sh.aiAnswers.linesScanned)} product lines scanned · any answer share in ${n0(sh.aiAnswers.linesWithClientShare)}`) : ''}
+        </div>
+        ${shiftCards ? `<div class="two" style="gap:10px;">${shiftCards}</div>` : ''}` : ''}
+        <div class="src">${srcLine}</div>`));
+    }
+
+    if (iq && iq.points.length) {
+      const quadLabel: Record<string, string> = {
+        answer_and_source: 'The answer + the source', named_not_cited: 'Named, not cited',
+        cited_not_named: 'Cited, never named', invisible: 'Below field median on both',
+      };
+      const quadRows = iq.points.slice(0, 12).map(pt => `
+        <tr${pt.isClient ? ' style="font-weight:700;"' : ''}><td>${esc(pt.brand)}${pt.isClient ? ' (you)' : ''}</td><td class="n">${p1(pt.visibilityPct)}</td><td class="n">${n0(pt.citations)}</td><td>${esc(quadLabel[pt.quadrant] ?? pt.quadrant)}</td></tr>`).join('');
+      pages.push(pageWrap('INSIGHTS — NAMED VS CITED', 'THE HEADLINES', `
+        <h1 class="pg sm">Being the answer is not the same as being the source.</h1>
+        <div class="lede">Two measured axes for every tracked brand: how often AI answers <b>name</b> it, and how often its domain is <b>cited</b> as a source. The field medians (${p1(iq.medians.visibilityPct)} named · ${n0(iq.medians.citations)} citations) split the field into four positions.</div>
+        <table class="dt" style="margin-bottom:6px;">
+          <tr><th>Brand</th><th style="width:1.1in;">Named in prompts</th><th style="width:1.1in;">Citations of domain</th><th>Position</th></tr>
+          ${quadRows}
+        </table>
+        ${iq.unmatched.length ? `<div style="font-size:8.5px; color:var(--muted);">Not classified (no matchable cited domain in the stored export — citations unmeasured, not zero): ${iq.unmatched.map(u => esc(u.brand)).join(', ')}.</div>` : ''}
+        <div class="src">Quadrant: ${esc(iq.basis)}. ${srcLine}</div>`));
+    }
+  } else if (ip && ip.thesis) {
+    // ── v7.471 legacy blob (stored before v7.496) — rendered as it was, labeled ──
+
     const tagMeta: Record<string, { label: string; color: string; bg: string }> = {
       PATTERN:     { label: 'PATTERN',     color: 'var(--violet)',   bg: '#f3f1fb' },
       GOOD_NEWS:   { label: 'GOOD NEWS',   color: 'var(--good)',     bg: '#eefaee' },
@@ -610,7 +800,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       OPPORTUNITY: { label: 'OPPORTUNITY', color: 'var(--blue-550)', bg: '#eef4fc' },
     };
     const srcLine = `Source: the Insights panel's stored, machine-verified narrative (every number verified verbatim against stored panel data before saving — ${n0(ip.verified)} numbers checked; generated from: ${ip.sources.map(x => esc(x)).join(' · ') || 'stored panels'}). This section reads the panel's stored output and shared builders; nothing is recomputed for the report.`;
-    const patternCards = ip.patterns.slice(0, 6).map(pt => {
+    const patternCards = (ip.patterns ?? []).slice(0, 6).map(pt => {
       const tm = tagMeta[pt.tag] ?? { label: pt.tag, color: 'var(--blue-550)', bg: '#eef4fc' };
       return `<div class="panelbox" style="border-top:3px solid ${tm.color}; padding:11px 13px;">
         <div style="display:inline-block; font-size:7.5px; font-weight:800; letter-spacing:.09em; color:${tm.color}; background:${tm.bg}; border-radius:3px; padding:2px 7px; margin-bottom:6px;">${esc(tm.label)}</div>
@@ -618,17 +808,17 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         <div style="font-size:9px; color:var(--ink2); line-height:1.5;">${esc(pt.body)}</div>
       </div>`;
     }).join('');
-    const strikeHtml = ip.strike.slice(0, 6).map((sk, i) => `
+    const strikeHtml = (ip.strike ?? []).slice(0, 6).map((sk, i) => `
       <div style="display:grid; grid-template-columns:.3in 1fr; gap:7px; margin-bottom:7px; align-items:start;">
         <div style="font-size:15px; font-weight:800; color:var(--blue); line-height:1.1;">${i + 1}</div>
         <div><div style="font-size:10px; font-weight:800; color:var(--ink);">${esc(sk.title)} <span class="chip" style="background:${sk.impact === 'HIGH' ? '#fdf0ef' : '#fdf8ec'}; color:${sk.impact === 'HIGH' ? '#9c2b2b' : '#8a5a00'}; border:1px solid ${sk.impact === 'HIGH' ? '#f0c9c5' : '#ecd39a'}; margin-left:4px;">${sk.impact === 'HIGH' ? 'HIGH IMPACT' : 'MEDIUM'}</span></div>
         <div style="font-size:9px; color:var(--ink2); line-height:1.5; margin-top:2px;">${esc(sk.body)}</div></div>
       </div>`).join('');
-    pages.push(pageWrap('INSIGHTS — THE CROSS-PANEL STORY', 'THE HEADLINES', `
-      <h1 class="pg">${esc(ip.thesis.headline)}</h1>
-      <div class="lede">${esc(ip.thesis.body)}${ip.thesis.openPosition ? ` <b>${esc(ip.thesis.openPosition)}</b>` : ''}</div>
+    pages.push(pageWrap('INSIGHTS — THE CROSS-PANEL STORY', 'PREVIOUS ENGINE', `
+      <h1 class="pg">${esc(ip.thesis!.headline)}</h1>
+      <div class="lede">${esc(ip.thesis!.body)}${ip.thesis!.openPosition ? ` <b>${esc(ip.thesis!.openPosition)}</b>` : ''}</div>
       ${patternCards ? `<div class="figtitle">The patterns in the data</div>
-      <div class="figsub">Each pattern is machine-verified against the stored panel data it cites${ip.patterns.length > 6 ? ` · top 6 of ${n0(ip.patterns.length)} — the full set is on the Insights panel` : ''}</div>
+      <div class="figsub">Each pattern is machine-verified against the stored panel data it cites${(ip.patterns ?? []).length > 6 ? ` · top 6 of ${n0((ip.patterns ?? []).length)} — the full set is on the Insights panel` : ''}</div>
       <div class="two" style="gap:12px; margin-bottom:14px;">${patternCards}</div>` : ''}
       ${strikeHtml ? `<div class="figtitle" style="margin-top:2px;">Where to strike first</div>
       <div class="figsub">Ranked openings, each backed by the stored data behind this report</div>${strikeHtml}` : ''}
@@ -672,7 +862,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         ${iq.unmatched.length ? `<div style="font-size:8.5px; color:var(--muted);">Not classified (no matchable cited domain in the stored export — citations unmeasured, not zero): ${iq.unmatched.map(u => esc(u.brand)).join(', ')}.</div>` : ''}
         <div class="src">Quadrant: ${esc(iq.basis)}. ${srcLine}</div>`));
     }
-  }
+    }
 
   // Governance
   pages.push(pageWrap('GOVERNANCE &amp; INTELLIGENCE', 'HOW THIS WAS BUILT', `
