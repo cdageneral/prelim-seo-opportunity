@@ -57,9 +57,22 @@ export async function buildContext(projectId: string): Promise<SeerContext | { e
     db.query.projectKeywords.findMany({ where: eq(projectKeywords.projectId, projectId) }),
     loadLatestAnalysisWithSnapshot(projectId),
   ]);
+  return assembleContext({ project, competitorDomains: comps.map(c => normDomain(c.domain)), dbKeywords, analysis });
+}
 
+/**
+ * v7.496 — the context assembly, split from the queries so a route that has
+ * ALREADY loaded the project, its rows and the analysis (the Assessment PDF
+ * route, which must not load the multi-MB analysis twice — Const II.9) can build
+ * the SAME Seer basis for lib/insightsPanel/decision. Byte-identical to the
+ * v7.471 buildContext body; Seer's behaviour is unchanged.
+ */
+export function assembleContext(
+  { project, competitorDomains: compsIn, dbKeywords, analysis }:
+  { project: any; competitorDomains: string[]; dbKeywords: any[]; analysis: any | null },
+): SeerContext {
   const clientDomain = normDomain((project as any).websiteUrl ?? '');
-  const competitorDomains = comps.map(c => normDomain(c.domain));
+  const competitorDomains = compsIn.map(c => normDomain(c));
   const rawSnap = analysis?.semrushSnapshot ?? null;
   const snap = rawSnap ? hydrateSnapshotForPool(project, rawSnap) : null;
 
