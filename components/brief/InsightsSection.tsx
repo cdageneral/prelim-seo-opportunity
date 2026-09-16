@@ -31,6 +31,11 @@
  * Const IV.1: scroll root is `flex-1 min-h-0 overflow-y-auto`.
  * Const IV.2: generation streams live step labels (step N of 5 + elapsed).
  * Const IV.6: colour tokens are the shipped panel vocabulary (theme-mapped).
+ *
+ *   v7.497 — the decision block is READ from the stored blob (`insights.computed`,
+ *   saved with the narrative it was verified against) instead of rebuilt on
+ *   every open; a provenance line under the standing tables says when it was
+ *   computed and flags a newer scan. The plays list is bounded (playsBasis).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -69,7 +74,7 @@ interface BenchRow { brand: string; metric: string; value: string; rank?: number
 
 // ── v7.496 decision inputs (lib/insightsPanel/decision — the panel READS them) ──
 type StandingWord = 'leads' | 'above' | 'below' | 'last' | 'unmeasured';
-interface StandingRow { key: string; metric: string; unit: 'pct' | 'pos' | 'count' | 'volume'; basis: 'measured' | 'modeled'; client: number | null; fieldAvg: number | null; best: { domain: string; value: number } | null; clientRank: number | null; of: number; standing: StandingWord; brands: Array<{ domain: string; value: number; isClient: boolean }>; note: string; }
+interface StandingRow { key: string; metric: string; unit: 'pct' | 'pos' | 'count' | 'volume'; basis: 'measured' | 'modeled'; client: number | null; fieldAvg: number | null; best: { domain: string; value: number } | null; clientRank: number | null; of: number; standing: StandingWord; brands: Array<{ domain: string; value: number; isClient: boolean }>; brandsShown?: number; note: string; }
 interface LineStanding { product: string; demandMonthly: number; kwCount: number; client: { p1Vol: number; p1Share: number; rank: number | null; bands: [number, number, number, number] }; standing: StandingWord; fieldAvgP1Vol: number | null; best: { domain: string; p1Vol: number; isClient: boolean } | null; brandsOnLadder: number; ladderTop: Array<{ domain: string; p1Vol: number; p1Kw: number; kind: string }>; ai: { probeMentionRate: number | null; probeMentions: number | null; probeTotal: number | null; answerShare: number | null; citedLeader: { domain: string; count: number; isClient: boolean } | null; clientCited: number | null }; serp: { aioAvail: number; aioAcq: number; aioRate: number; paaAvail: number; paaAcq: number; paaRate: number } | null; }
 interface Scenario { key: string; label: string; basis: 'modeled' | 'measured'; keywords: number; volumeMonthly: number; clicksMonthlyFloor: number | null; clicksMonthlyCeiling: number | null; floorTarget: string; ceilingTarget: string; perLine: Array<{ product: string; keywords: number; volumeMonthly: number; clicksMonthlyFloor: number | null; clicksMonthlyCeiling: number | null }>; note: string; }
 interface CompetitorPlay { domain: string; kind: string; landscape: { p1Vol: number; p1Kw: number; top3Vol: number; top3Kw: number; measuredKw: number; rank: number | null }; linesWon: Array<{ product: string; rank: number; p1Vol: number; p1Kw: number }>; linesAbsent: string[]; queryMix: Array<{ type: string; kw: number; volume: number }>; pageTypes: Array<{ type: string; urls: number }> | null; outrankedByClient: { kw: number; volume: number }; outranksClient: { kw: number; volume: number }; local: { packAppearances: number; packShare: number; avgRating: number | null; maxReviews: number } | null; ai: { namedPct: number | null; citations: number | null } | null; }
@@ -79,8 +84,22 @@ interface Decision {
   standing: { search: StandingRow[]; ai: StandingRow[]; lines: LineStanding[]; basis: string };
   scenarios: { currentClicksMonthly: number; leaderClicksMonthly: number | null; leaderDomain: string | null; moves: Scenario[]; ctrSource: string; basis: string };
   plays: CompetitorPlay[];
+  playsBasis?: { measured: number; withPage1: number; tracked: number; shown: number; rule: string };   // v7.497 — the plays list is bounded; this says what it is a cut of
   local: { markets: LocalMarket[]; nearMe: { kwCount: number; demandMonthly: number; clientP1Kw: number; clientP1Vol: number }; geoTotal: { kwCount: number; demandMonthly: number; cities: number }; scan: { locations: number; scannedCells: number; withPack: number; clientInPack: number; clientRank1: number; builtAt: string | null } | null; packLeaders: Array<{ name: string; appearances: number; sharePct: number; avgRating: number | null; maxReviews: number; isClient: boolean }>; basis: string } | null;
   shifts: { serp: { scanned: number; withAIO: number; aioClientCited: number; withPAA: number; paaClientCited: number; aioVolumeMonthly: number; aioUncitedVolumeMonthly: number } | null; aiAnswers: { probeMentions: number; probeTotal: number; linesScanned: number; linesWithClientShare: number } | null; history: null; historyNote: string };
+}
+// v7.497 — where the decision block came from. `stored` = saved with the narrative at generation
+// (the block the claim gate checked); `live` = rebuilt on this open because the blob carries none.
+interface DecisionBasis { source: 'stored' | 'live'; builtAt: string | null; analysisId: string | null; analysisTriggeredAt: string | null; latestAnalysisId: string | null; stale: boolean; }
+/** v7.497 — the block a stored blob carries, read the same way GET reads it (lib/insightsPanel/computed). */
+function computedOf(blob: any): { decision: Decision; coverage: Coverage | null; basis: DecisionBasis } | null {
+  const c = blob?.computed;
+  const d = c?.decision;
+  if (!c || !d || !d.standing || !d.scenarios || !Array.isArray(d.plays)) return null;
+  return {
+    decision: d as Decision, coverage: (c.coverage ?? null) as Coverage | null,
+    basis: { source: 'stored', builtAt: typeof c.builtAt === 'string' ? c.builtAt : null, analysisId: c.analysisId ?? null, analysisTriggeredAt: c.analysisTriggeredAt ?? null, latestAnalysisId: c.analysisId ?? null, stale: false },
+  };
 }
 
 interface Props { projectId: string; clientName?: string | null; pollMs?: number; }   // pollMs: v7.488 — test seam only; the app never passes it
@@ -123,6 +142,7 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
   const [quadrant, setQuadrant] = useState<Quadrant | null>(null);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);   // v7.496
+  const [decisionBasis, setDecisionBasis] = useState<DecisionBasis | null>(null);   // v7.497
   const [supportOpen, setSupportOpen] = useState(false);              // v7.496 — supporting data, collapsed by default
   const [allMarkets, setAllMarkets] = useState(false);
   const [benchmarks, setBenchmarks] = useState<BenchRow[]>([]);
@@ -156,6 +176,14 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
   // reload) or when a click found a run already in flight. GET ?job=1 is the
   // cheap poll: explicit columns, no census rebuild. Ends on done/error, or in
   // words if the server stops reporting (the route marks such a job as dead).
+  // v7.497 — a freshly generated blob carries the decision block it was verified against;
+  // the panel switches to it the moment the run ends (no reload, no live rebuild).
+  const adoptComputed = useCallback((blob: any) => {
+    const c = computedOf(blob);
+    if (!c) return;
+    setDecision(c.decision); setCoverage(c.coverage); setDecisionBasis(c.basis);
+  }, []);
+
   const followJob = useCallback(async (): Promise<void> => {
     const POLL_MS = pollMs ?? 4000;
     const MAX_MISSES = 8;   // ~32 s of failed polls in a row before giving up in words
@@ -182,7 +210,7 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
         if (typeof job.budgetMs === 'number') setBudgetSec(Math.round(job.budgetMs / 1000));
         continue;
       }
-      if (job.status === 'done') { setInsights(j.insights ?? null); setUpdatedAt(j.updatedAt ?? null); return; }
+      if (job.status === 'done') { setInsights(j.insights ?? null); setUpdatedAt(j.updatedAt ?? null); adoptComputed(j.insights); return; }
       setGenError(job.error ?? 'Generation failed.');
       return;
     }
@@ -198,6 +226,7 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
       setQuadrant(j.quadrant ?? null);
       setCoverage(j.coverage ?? null);
       setDecision(j.decision ?? null);   // v7.496 — deterministic decision inputs
+      setDecisionBasis(j.decisionBasis ?? null);   // v7.497 — stored with the narrative, or rebuilt live
       const b = Array.isArray(j.benchmarks) ? j.benchmarks : [];
       setBenchmarks(b); setBenchDraft(b);
       // v7.488 — a run in flight survives a reload: show its live step and follow it.
@@ -259,7 +288,7 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
             await followJob();
           }
           else if (msg.type === 'error') { sawTerminal = true; setGenError(msg.error ?? 'Generation failed.'); }
-          else if (msg.type === 'done') { sawTerminal = true; setInsights(msg.insights ?? null); setUpdatedAt(msg.updatedAt ?? null); }
+          else if (msg.type === 'done') { sawTerminal = true; setInsights(msg.insights ?? null); setUpdatedAt(msg.updatedAt ?? null); adoptComputed(msg.insights); }
         }
       }
     } catch (e: any) {
@@ -501,6 +530,13 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
                   </div>
                 )}
                 {basisLine(decision.standing.basis)}
+                {decisionBasis && (
+                  <p style={{ fontSize: '11px', color: decisionBasis.stale ? 'var(--c-f59e0b)' : 'var(--c-6a6a90)', marginTop: '6px', lineHeight: 1.5 }} data-testid="decision-basis">
+                    {decisionBasis.source === 'stored'
+                      ? <>Standing, scenarios, plays and local markets were computed {decisionBasis.builtAt ? new Date(decisionBasis.builtAt).toLocaleString() : 'at generation'} from the scan of {decisionBasis.analysisTriggeredAt ? new Date(decisionBasis.analysisTriggeredAt).toLocaleDateString() : 'that time'} and stored with these insights.{decisionBasis.stale ? <b> A newer scan exists — regenerate insights to recompute on it.</b> : null}</>
+                      : <>Standing, scenarios, plays and local markets were computed now from the current scan{decisionBasis.analysisTriggeredAt ? ` (${new Date(decisionBasis.analysisTriggeredAt).toLocaleDateString()})` : ''}; generating insights stores them with the narrative.</>}
+                  </p>
+                )}
               </>
             ) : (
               <p style={{ fontSize: '12px', color: 'var(--c-6a6a90)' }}>Standing cannot be computed until an analysis with a keyword snapshot is stored for this project.</p>
@@ -660,6 +696,7 @@ export default function InsightsSection({ projectId, clientName, pollMs }: Props
                     })}
                   </div>
                 </div>
+                {decision?.playsBasis && basisLine(decision.playsBasis.rule)}
               </>
             )}
 
