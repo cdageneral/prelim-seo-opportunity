@@ -36,6 +36,7 @@ import { instrumentAnthropic }                 from '@/lib/usage/record';
 import Anthropic                               from '@anthropic-ai/sdk';
 import { buildQuadrant }                       from '@/lib/insightsPanel/build';   // v7.471 (Const II.6b): the Insights panel's own deterministic quadrant builder
 import { buildDecisionInputs }                 from '@/lib/insightsPanel/decision'; // v7.496 (Const II.6b): the panel's standing / scenarios / local basis
+import { readComputed }                        from '@/lib/insightsPanel/computed'; // v7.497 (Const II.6a): the block stored with the narrative is read, not rebuilt
 import { assembleContext }                     from '@/lib/seer/core';
 
 /**
@@ -441,10 +442,15 @@ export async function POST(req: NextRequest) {
     insightsPanel: (((project as any).insightsPanel) ?? null),
     insightsQuadrant: buildQuadrant(((project as any).profoundData) ?? null),
     // v7.496 (Const II.6b): the decision inputs the panel renders — standing vs
-    // field/best-in-class, modeled scenarios, local markets — built on the SAME
-    // Seer basis from the rows this route already loaded (no second analysis
-    // load, Const II.9). null → the section states the gap (I.5).
+    // field/best-in-class, modeled scenarios, local markets. v7.497 (Const
+    // II.6a): READ the block stored with the narrative when there is one — it is
+    // the block the narrative was verified against and the block the panel
+    // shows — and build it live on the SAME Seer basis from the rows this route
+    // already loaded (no second analysis load, Const II.9) only when the stored
+    // blob carries none. null → the section states the gap (I.5).
     insightsDecision: (() => {
+      const stored = readComputed(((project as any).insightsPanel) ?? null);
+      if (stored) return stored.decision;
       try {
         return buildDecisionInputs(assembleContext({ project, competitorDomains, dbKeywords: kwRows, analysis }));
       } catch { return null; }
