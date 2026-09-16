@@ -1,5 +1,8 @@
 /**
  * lib/insightsPanel/decision.ts — v7.496 · the Insights panel's DECISION INPUTS.
+ *   v7.497: the serialised lists are BOUNDED (BRANDS_SHOWN / PLAYS_SHOWN, `playsBasis`)
+ *   after every field figure is computed over the full measured set — measured on
+ *   Sono Bello, the unbounded block was 847 KB and overran the generation prompt.
  *
  * Wayne (2026-09-15): "I need real insights on what is happening to the brand,
  * what are their high level problem areas and key opportunities. What the
@@ -37,7 +40,7 @@
  * stored rows, or a labeled CTR-curve estimate. The generator receives this
  * object inside the data census, so every figure it quotes is verifiable by the
  * v7.463 number gate by construction. `history` is null and says why: the app
- * stores one snapshot per analysis — trends are a v7.497 ledger, not an inference.
+ * stores one snapshot per analysis — trends are a later metric ledger, not an inference.
  */
 
 import { type SeerContext, ensureProductRows, normDomain } from '@/lib/seer/core';
@@ -62,9 +65,18 @@ export interface StandingRow {
   clientRank: number | null;
   of: number;                         // brands measured on this metric (incl. client when measured)
   standing: StandingWord;
-  brands: Array<{ domain: string; value: number; isClient: boolean }>;   // full ranked list
+  /** v7.497 — the top BRANDS_SHOWN of the ranked list (+ the client wherever it sits). `of`, `fieldAvg`,
+   *  `best` and `clientRank` are computed over ALL `of` brands BEFORE this cut; the list is bounded only
+   *  so the block stays a prompt-sized payload (Sono Bello measured 620 brands per row = 87 KB per table). */
+  brands: Array<{ domain: string; value: number; isClient: boolean }>;
+  brandsShown: number;                // v7.497 — brands.length (≤ BRANDS_SHOWN + 1)
   note: string;
 }
+
+/** v7.497 — serialisation bounds. Field maths never depend on these: every average, rank and count is
+ *  computed over the full measured set first; only the lists that ride in the response / the prompt are cut. */
+export const BRANDS_SHOWN = 10;   // ranked brands listed per standing row (the client is always included)
+export const PLAYS_SHOWN  = 12;   // rival plays listed beyond the tracked competitors (by page-1 volume held)
 
 export interface LineStanding {
   product: string;
@@ -149,11 +161,22 @@ export interface Shifts {
   historyNote: string;
 }
 
+/** v7.497 — what the bounded `plays` list is a cut of. `measured` counts every non-client brand on the
+ *  landscape ladder; `withPage1` those holding any page-1 volume; `shown` = plays.length. */
+export interface PlaysBasis {
+  measured: number;
+  withPage1: number;
+  tracked: number;
+  shown: number;
+  rule: string;
+}
+
 export interface DecisionInputs {
   clientDomain: string;
   standing: { search: StandingRow[]; ai: StandingRow[]; lines: LineStanding[]; basis: string };
   scenarios: Scenarios;
   plays: CompetitorPlay[];
+  playsBasis: PlaysBasis;   // v7.497
   local: LocalMarkets | null;
   shifts: Shifts;
 }
@@ -185,11 +208,14 @@ function standingRow(
   const best = sorted[0] ? { domain: sorted[0].domain, value: sorted[0].value } : null;
   const of = sorted.length;
   const clientRank = ci >= 0 ? ci + 1 : null;
+  // v7.497 — the list is bounded AFTER every field figure above is computed over all `of` brands.
+  const shown = sorted.slice(0, BRANDS_SHOWN);
+  if (ci >= BRANDS_SHOWN) shown.push(sorted[ci]);
   return {
     key, metric, unit, basis, client, fieldAvg: fieldAvg == null ? null : (unit === 'pct' ? r1(fieldAvg) : r0(fieldAvg)),
     best, clientRank, of,
     standing: clientMeasured ? rankWord(clientRank, of, client, fieldAvg, higherIsBetter) : 'unmeasured',
-    brands: sorted, note,
+    brands: shown, brandsShown: shown.length, note,
   };
 }
 
@@ -314,7 +340,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
   search.push({
     key: 'wpos', metric: 'Weighted average position (client)', unit: 'pos', basis: 'measured',
     client: wtdAvgPos, fieldAvg: null, best: null, clientRank: null, of: wtdAvgPos == null ? 0 : 1,
-    standing: 'unmeasured', brands: wtdAvgPos == null ? [] : [{ domain: clientNorm, value: wtdAvgPos, isClient: true }],
+    standing: 'unmeasured', brands: wtdAvgPos == null ? [] : [{ domain: clientNorm, value: wtdAvgPos, isClient: true }], brandsShown: wtdAvgPos == null ? 0 : 1,
     note: `Measured — volume-weighted mean of the client's stored positions over ${clientRankedKw} ranked landscape keywords. Client only: rival rank coverage differs per brand, so a field average would not be like-for-like. Bands (monthly volume): pos 1–3 ${clientBands[0]}, 4–10 ${clientBands[1]}, 11–20 ${clientBands[2]}, 21+ ${clientBands[3]}.`,
   });
 
@@ -331,7 +357,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
     ai.push(standingRow('aiCited', 'AI-answer citations of the brand domain', 'count', 'measured', cited, cited.some(b => b.isClient),
       `Measured — stored Profound export citation counts for each brand's matched domain.${quadrant.unmatched.length ? ` Not matchable (unmeasured, not zero): ${quadrant.unmatched.map(u => u.brand).join(', ')}.` : ''}`));
   } else {
-    ai.push({ key: 'aiNamed', metric: 'Named in AI answers (share of tracked prompts)', unit: 'pct', basis: 'measured', client: null, fieldAvg: null, best: null, clientRank: null, of: 0, standing: 'unmeasured', brands: [], note: 'UNMEASURED for every brand — no Profound export is stored for this project. Upload it in AI Answer Engines to measure the field.' });
+    ai.push({ key: 'aiNamed', metric: 'Named in AI answers (share of tracked prompts)', unit: 'pct', basis: 'measured', client: null, fieldAvg: null, best: null, clientRank: null, of: 0, standing: 'unmeasured', brands: [], brandsShown: 0, note: 'UNMEASURED for every brand — no Profound export is stored for this project. Upload it in AI Answer Engines to measure the field.' });
   }
   // LLM probe (client only) + DataForSEO answer share + cited-domain leaders per line — aggregated across lines in TS
   let probeM = 0, probeT = 0, linesScanned = 0, linesWithShare = 0;
@@ -344,7 +370,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
   ai.push({
     key: 'probe', metric: 'AI answers naming the brand (LLM probe, client)', unit: 'pct', basis: 'measured',
     client: probeT > 0 ? r1((probeM / probeT) * 100) : null, fieldAvg: null, best: null, clientRank: null, of: probeT > 0 ? 1 : 0,
-    standing: 'unmeasured', brands: probeT > 0 ? [{ domain: clientNorm, value: r1((probeM / probeT) * 100), isClient: true }] : [],
+    standing: 'unmeasured', brands: probeT > 0 ? [{ domain: clientNorm, value: r1((probeM / probeT) * 100), isClient: true }] : [], brandsShown: probeT > 0 ? 1 : 0,
     note: probeT > 0 ? `Measured — ${probeM} unbranded mentions across ${probeT} completed Claude + ChatGPT probes (client only; competitors are not probed).` : 'UNMEASURED — no LLM probe results stored.',
   });
   const citedBrands = Array.from(citedAgg.entries()).map(([domain, e]) => ({ domain, value: e.count, isClient: e.isClient }));
@@ -511,6 +537,19 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
     });
   }
   plays.sort((a, b) => b.landscape.p1Vol - a.landscape.p1Vol);
+  // v7.497 — bound the list. Sono Bello's ladder carries 897 SERP occupants; serialised in full the block
+  // was 722 KB and pushed the generation prompt past the model's context. Every tracked competitor stays;
+  // beyond them, the PLAYS_SHOWN rivals holding the most page-1 volume. Nothing measured is lost from the
+  // standing figures — `playsBasis` states the cut so no surface mistakes the list for the field.
+  const measuredPlays = plays.length;
+  const withPage1 = plays.filter(p => p.landscape.p1Vol > 0).length;
+  const trackedPlays = plays.filter(p => p.kind === 'tracked');
+  const rivalPlays = plays.filter(p => p.kind !== 'tracked' && p.landscape.p1Vol > 0).slice(0, PLAYS_SHOWN);
+  const shownPlays = [...trackedPlays, ...rivalPlays].sort((a, b) => b.landscape.p1Vol - a.landscape.p1Vol);
+  const playsBasis: PlaysBasis = {
+    measured: measuredPlays, withPage1, tracked: trackedPlays.length, shown: shownPlays.length,
+    rule: `Every tracked competitor (${trackedPlays.length}) plus the ${PLAYS_SHOWN} other brands holding the most page-1 volume, out of ${measuredPlays} brands measured on the landscape ladder (${withPage1} with any page-1 hold). Field averages and ranks in standing are computed over all measured brands, not this list.`,
+  };
 
   // ── LOCAL MARKETS ────────────────────────────────────────────────────────────
   let local: LocalMarkets | null = null;
@@ -593,6 +632,6 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
       search, ai, lines,
       basis: 'Field average = mean of the other measured brands on the same metric and the same keywords; best-in-class = the top brand (may be the client). Rank = client\'s position among measured brands. A brand with no stored rank data on a metric is absent from that metric, never scored zero (Const I.5).',
     },
-    scenarios, plays, local, shifts,
+    scenarios, plays: shownPlays, playsBasis, local, shifts,
   };
 }
