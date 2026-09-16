@@ -35,6 +35,8 @@ import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
 import Anthropic                               from '@anthropic-ai/sdk';
 import { buildQuadrant }                       from '@/lib/insightsPanel/build';   // v7.471 (Const II.6b): the Insights panel's own deterministic quadrant builder
+import { buildDecisionInputs }                 from '@/lib/insightsPanel/decision'; // v7.496 (Const II.6b): the panel's standing / scenarios / local basis
+import { assembleContext }                     from '@/lib/seer/core';
 
 /**
  * v7.490 — the project columns this report actually reads, named explicitly.
@@ -438,6 +440,15 @@ export async function POST(req: NextRequest) {
     // builder over the stored Profound export. Both read verbatim (II.6a).
     insightsPanel: (((project as any).insightsPanel) ?? null),
     insightsQuadrant: buildQuadrant(((project as any).profoundData) ?? null),
+    // v7.496 (Const II.6b): the decision inputs the panel renders — standing vs
+    // field/best-in-class, modeled scenarios, local markets — built on the SAME
+    // Seer basis from the rows this route already loaded (no second analysis
+    // load, Const II.9). null → the section states the gap (I.5).
+    insightsDecision: (() => {
+      try {
+        return buildDecisionInputs(assembleContext({ project, competitorDomains, dbKeywords: kwRows, analysis }));
+      } catch { return null; }
+    })(),
   });
   let pdfBuffer: Buffer;
 
