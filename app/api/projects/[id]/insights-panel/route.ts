@@ -32,6 +32,19 @@
  * running job is never started twice (POST attaches to it instead), and every
  * enqueue is guarded so a vanished client cannot abort the generation.
  *
+ * v7.496 — the DECISION LAYER (Wayne, 2026-09-15: "real insights on what is
+ * happening to the brand … where the brand should invest, what impact would it
+ * have … what is holding them back from becoming a market leader"). The census
+ * now carries lib/insightsPanel/decision's precomputed inputs — standing vs
+ * field average and best-in-class (search + AI, overall + per line), CTR-curve
+ * scenarios (modeled, labeled), competitor plays, local markets by city, SERP/AI
+ * shifts — so the engine reasons instead of digging. The blob is restructured
+ * around the CEO questions (situation, holding back, invest, leader path,
+ * playbook, local, shifts), and a second machine gate (checkStandingClaims)
+ * rejects any strength/weakness claim about the client that contradicts its
+ * computed standing on that dimension — the v7.471 "owns search rank at
+ * position 32" inflation, now enforced rather than requested (v7.463 lesson).
+ *
  * Cached: the verified blob is stored on projects.insights_panel and re-served
  * until the user regenerates. Every Claude call is metered into the api_usage
  * ledger under this project (Const I.5b; model claude-sonnet-4-6 is registered).
@@ -52,6 +65,8 @@ import {
   TOOLS, runTool, statusLabelFor, SEER_MODEL, normDomain, type SeerContext,
 } from '@/lib/seer/core';
 import { buildQuadrant, buildCoverageSummary } from '@/lib/insightsPanel/build';
+import { buildDecisionInputs, type DecisionInputs } from '@/lib/insightsPanel/decision';
+import { checkStandingClaims } from '@/lib/insightsPanel/claimGate';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -117,56 +132,93 @@ const BenchmarkRow = z.object({
 const PutSchema = z.object({ benchmarks: z.array(BenchmarkRow).max(40) }).strict();
 
 // ─── the generated-blob shape (validated before storing) ─────────────────────
+// v7.496: restructured around the questions a CEO/CMO asks. The v7.471 shape
+// (thesis / patterns / strike) is still READ by the panel and the PDF for blobs
+// stored before this release (a stored blob is never rewritten), but nothing
+// new is generated in it.
 
-const PatternSchema = z.object({
-  tag: z.enum(['PATTERN', 'GOOD_NEWS', 'RISK', 'OPPORTUNITY']),
-  title: z.string().min(1).max(200),
-  body: z.string().min(1).max(1200),
+const PlaybookRow = z.object({
+  brand: z.string().min(1).max(120),
+  doingWell: z.string().min(1).max(900),
+  vulnerable: z.string().min(1).max(900),
+  keyStat: z.string().min(1).max(160),
 }).strict();
 const GeneratedSchema = z.object({
-  thesis: z.object({
-    headline: z.string().min(1).max(300),
-    body: z.string().min(1).max(1500),
-    openPosition: z.string().max(400).nullable(),
+  situation: z.object({
+    headline: z.string().min(1).max(320),
+    body: z.string().min(1).max(2000),
   }).strict(),
-  patterns: z.array(PatternSchema).min(1).max(8),
-  playbook: z.array(z.object({
-    brand: z.string().min(1).max(120),
-    doingWell: z.string().min(1).max(900),
-    vulnerable: z.string().min(1).max(900),
-    keyStat: z.string().min(1).max(120),
-  }).strict()).max(15),
-  strike: z.array(z.object({
+  // what is holding the brand back — the binding constraints, with the mechanism
+  holdingBack: z.array(z.object({
     title: z.string().min(1).max(200),
     body: z.string().min(1).max(1200),
+    lines: z.array(z.string().max(120)).max(8),
+    evidence: z.string().min(1).max(400),
+  }).strict()).min(1).max(6),
+  opportunities: z.array(z.object({
+    title: z.string().min(1).max(200),
+    body: z.string().min(1).max(1200),
+    sizing: z.string().min(1).max(300),
     impact: z.enum(['HIGH', 'MEDIUM']),
-  }).strict()).max(8),
+  }).strict()).min(1).max(6),
+  invest: z.object({
+    order: z.array(z.object({
+      move: z.string().min(1).max(200),
+      why: z.string().min(1).max(900),
+      modeledGain: z.string().min(1).max(300),
+    }).strict()).min(1).max(6),
+    caveat: z.string().max(500).nullable(),
+  }).strict(),
+  leaderPath: z.object({
+    whatLeaderLooksLike: z.string().min(1).max(900),
+    gap: z.string().min(1).max(900),
+    incrementalGain: z.string().min(1).max(600),
+    constraints: z.array(z.string().max(300)).max(6),
+  }).strict(),
+  playbook: z.array(PlaybookRow).max(15),
+  localMarkets: z.object({
+    summary: z.string().min(1).max(1200),
+    markets: z.array(z.object({ city: z.string().min(1).max(80), finding: z.string().min(1).max(400) }).strict()).max(12),
+  }).strict().nullable(),
+  shifts: z.array(z.object({ title: z.string().min(1).max(200), body: z.string().min(1).max(900) }).strict()).max(4),
   sources: z.array(z.string().max(160)).max(20),
 }).strict();
+export type GeneratedBlob = z.infer<typeof GeneratedSchema>;
 
 function insightsSystemPrompt(ctx: SeerContext): string {
   const p: any = ctx.project;
+  const client = `${p.clientName} (${normDomain(p.websiteUrl ?? '')}${p.industry ? `, ${p.industry}` : ''})`;
   return [
-    `You are OrbitIQ's insight engine. Produce the Insights panel content for ONE project: ${p.clientName} (${normDomain(p.websiteUrl ?? '')}${p.industry ? `, ${p.industry}` : ''}).`,
+    `You are OrbitIQ's strategy engine. You write the Insights panel for ONE brand — ${client} — for its CEO and CMO. They do not want statistics recited; they want to understand what is happening to the brand, what is holding it back, where to invest, what each move is worth, what competitors are doing that works, which local markets matter, and what it would take to lead the category.`,
     '',
-    'Your job: find the strongest OVERARCHING, cross-panel insights this project\'s stored data proves — how search rank, AI visibility, prompts, content, sentiment, and the competitive field relate. Find real correlations and patterns (e.g. a brand winning feature prompts but losing rate prompts; content mix out of line with the traffic it returns; search coverage that does not convert to AI visibility; a rival whose visibility rests on almost no citations). State what each competitor does well and where it is vulnerable. Then say where the openings are.',
+    'YOUR INPUTS. The <data_census> holds every panel\'s headline data. Its `decision` block is precomputed for you and is the backbone of your reasoning:',
+    '  decision.standing.search / .ai — the brand vs the FIELD AVERAGE vs BEST-IN-CLASS on each measure, with the brand\'s rank of N and a standing word (leads / above / below / last / unmeasured). decision.standing.lines — the same per product line (demand, page-1 hold, rank on the ladder, AI answer share, AI Overview rate).',
+    '  decision.scenarios — MODELED incremental monthly clicks for each move (match the leader, 4–10 → top 3, page 2 → page 1, take open demand) with a floor and a ceiling, per line, plus the brand\'s current modeled clicks and the current leader\'s. The AI Overview move carries measured volume only.',
+    '  decision.plays — per competitor: page-1 volume held, rank, which lines they win and where they hold nothing, their page-1 query mix (cost/pricing, local, reviews/results, comparison, informational, core), page types behind their rankings (from real URLs, when uploaded), keywords where the brand outranks them and vice versa, local map-pack standing, AI presence.',
+    '  decision.local — demand by city (real volume), the brand\'s hold and best position there, the strongest rival per city, map-pack standing (client best rank, leaders, reviews). decision.shifts — AI Overviews / PAA on scanned SERPs and AI-answer presence. decision.shifts.history is null: no time series exists.',
+    'Use the tools to drill only where the census leaves a real question open (a specific line, a competitor\'s keywords, a URL list). Do not re-derive what decision already computed.',
     '',
     'NON-NEGOTIABLE RULES (machine-enforced):',
-    '1. GROUNDED ONLY. Every number you write must appear VERBATIM in a tool result from this conversation. Copy numbers character-for-character — NEVER round (7.34 must not become 7.3), never abbreviate (1200 never 1.2K), never compute your own sums, ratios, or percentages. If you want a rounded or aggregate figure the tools did not return, quote the exact returned value instead. A server-side check rejects output containing any number the tools did not return, so one rounded digit discards the whole generation.',
-    '2. NO ESTIMATES. Nothing modeled, projected, or assumed. If the data cannot support a claim, do not make the claim.',
-    '3. ABSENCE IS NEVER ZERO. A section with no stored data is unmeasured — a pattern may note the gap, never treat it as 0.',
-    '4. QUALITATIVE CLAIMS are benchmarked claims. Name the metric behind every "wins/loses/leads/trails" — and never describe the client as "strong", "ranking well", "citing well" or "leading" on a measure unless the tools show it AT OR ABOVE the field average or leader on that SAME measure. Below the field average = say so plainly ("trails the field", "below the category average"). A lead on one narrow metric (e.g. one product line\'s content coverage) never justifies a broad "ranks well" claim; scope the praise to exactly the metric that earned it. The thesis must agree directionally with the evidence cited beneath it.',
-    '5. BRAND SAFETY: competitor brands appear only as competitors; the category tree you receive is already guarded.',
-    '6. Fewer, stronger insights. 3-6 patterns that a CMO would act on beat 8 shallow ones. Plain, direct language; short sentences; no hedging.',
+    '1. GROUNDED ONLY. Every number you write must appear VERBATIM in a tool result or the census. Copy numbers character-for-character — never round, never abbreviate (1200 never 1.2K), never compute your own sums, ratios or percentages. A server-side check rejects output containing any number the data did not return.',
+    '2. STANDING IS THE BENCHMARK. Every qualitative word about the brand must match decision.standing on that measure: standing "leads" → you may say leads / best-in-class; "above" → above the field average; "below" → below the field average / trails; "last" → last of N. Never say the brand "owns", "dominates", "is strong in", "ranks well", "wins" or "commands" a search or AI measure unless its standing there is "leads" — and never say it is "invisible", "absent" or "last" unless its standing is "last" or the measured value is 0. A lead on one narrow measure (e.g. one line\'s content coverage) never becomes a broad claim; scope the sentence to exactly that measure. A second server-side check rejects any strength or weakness claim about the brand that contradicts its standing.',
+    '3. MODELED IS LABELED. Any click or traffic figure from decision.scenarios is a modeled estimate on the named CTR curve — say "modeled" the first time you quote one in each section and quote the floor (you may add the ceiling as "up to"). Never present a modeled click figure as measured traffic. AI-visibility gains are share gaps, never clicks.',
+    '4. NO TRENDS. Nothing is stored over time. Never write "growing", "declining", "increasingly", "shifting" about this brand\'s own numbers. AI Overview presence on the scanned SERPs may be described as it is today.',
+    '5. ABSENCE IS NEVER ZERO. A measure marked unmeasured is unmeasured — say what is missing, never treat it as 0. A brand with no rows on a measure is absent from it, not at zero.',
+    '6. REASON, DON\'T RECITE. Each finding names a MECHANISM (why), not just a number. Content coverage that leads while rank trails means the pages exist but do not rank — the constraint is not content presence. A rival whose page-1 hold concentrates in cost/pricing queries has a pricing play. A rival with page-1 hold and no map-pack presence is exposed locally. A line where AI Overviews appear and no one is cited is open. Say these things plainly.',
+    '7. BRAND SAFETY: competitor brands appear only as competitors. Fewer, stronger findings — a CMO acts on 3–5, not 8. Short sentences. No hedging, no filler, no praise.',
     '',
     'OUTPUT: after your tool calls, reply with EXACTLY ONE JSON object (no markdown fences, no prose outside it):',
-    '{"thesis":{"headline":"...","body":"...","openPosition":"... or null"},',
-    ' "patterns":[{"tag":"PATTERN|GOOD_NEWS|RISK|OPPORTUNITY","title":"...","body":"..."}],',
-    ' "playbook":[{"brand":"...","doingWell":"...","vulnerable":"...","keyStat":"..."}],',
-    ' "strike":[{"title":"...","body":"...","impact":"HIGH|MEDIUM"}],',
+    '{"situation":{"headline":"one sentence: what is happening to the brand","body":"the situation in one paragraph — position vs field on search and AI, what the pattern across panels says, framed for a CEO"},',
+    ' "holdingBack":[{"title":"the constraint","body":"the mechanism, with evidence","lines":["product lines it hits hardest"],"evidence":"the measures behind it, with numbers"}],',
+    ' "opportunities":[{"title":"...","body":"why it is winnable and what to do","sizing":"volume at stake / modeled gain with the label","impact":"HIGH|MEDIUM"}],',
+    ' "invest":{"order":[{"move":"the move","why":"why this order — proximity, size, competitor exposure","modeledGain":"floor (up to ceiling) modeled clicks/mo, labeled"}],"caveat":"what the model does not capture, or null"},',
+    ' "leaderPath":{"whatLeaderLooksLike":"what best-in-class holds on this landscape today (who, how much)","gap":"the brand\'s gap to it in keywords, volume and position","incrementalGain":"modeled clicks at leader parity, labeled, with the current modeled clicks for scale","constraints":["what must change to get there"]},',
+    ' "playbook":[{"brand":"...","doingWell":"the play that works and the evidence","vulnerable":"where they are exposed","keyStat":"one stat"}],',
+    ' "localMarkets":{"summary":"where demand concentrates, where the brand is present/absent, where the pack is beatable","markets":[{"city":"...","finding":"..."}]} or null when decision.local is null,',
+    ' "shifts":[{"title":"...","body":"..."}],',
     ' "sources":["panel · what was read", ...]}',
-    'thesis = the one overarching category story the data proves. patterns = the cross-panel findings with their evidence numbers inline. playbook = per competitor (only competitors with stored data). strike = ranked openings. sources = the panels/sections you drew from.',
-    'WORKFLOW: the DATA CENSUS gives every panel\'s headline numbers. Drill with tools into keywords, categories, content coverage, and every stored section that bears on the story (ai_visibility, page_map, serp_snapshot, product_insights, sentiment). Consider ALL panels before writing.',
+    'playbook: one row per competitor in decision.plays that holds page-1 volume (skip brands with nothing measured). localMarkets.markets: the cities that matter most by demand and by gap. shifts: AI Overviews / AI answers / PAA as measured today.',
+    'WORKFLOW: read the census (especially decision) first. Drill with tools only for the specific evidence a finding needs. Then write the single JSON object.',
   ].join('\n');
 }
 
@@ -199,17 +251,22 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404, headers: JSON_NO_STORE });
 
   // Live computed views over stored data (Const II.6): quadrant + coverage.
-  let quadrant = null; let coverage = null;
+  let quadrant = null; let coverage = null; let decision: DecisionInputs | null = null;
   try { quadrant = buildQuadrant((project as any).profoundData ?? null); } catch { quadrant = null; }
   try {
     const ctx = await buildContext(params.id);
-    if (!('error' in ctx)) coverage = buildCoverageSummary(ctx);
+    if (!('error' in ctx)) {
+      coverage = buildCoverageSummary(ctx);
+      // v7.496 — the decision inputs the panel renders deterministically (standing
+      // table, scenario bars, local markets) whether or not a narrative exists.
+      try { decision = buildDecisionInputs(ctx); } catch { decision = null; }
+    }
   } catch { coverage = null; }
 
   return NextResponse.json({
     insights: (project as any).insightsPanel ?? null,
     updatedAt: (project as any).insightsPanelUpdatedAt ?? null,
-    quadrant, coverage,
+    quadrant, coverage, decision,
     benchmarks: (project as any).marketBenchmarks ?? null,
     job: (project as any).insightsPanelJob ?? null,   // v7.488 — a reload mid-run resumes from this
   }, { headers: JSON_NO_STORE });
@@ -265,24 +322,45 @@ function tidyNumbers(text: string): string {
     return Number.isFinite(n) ? (Math.round(n * 10) / 10).toString() : m;
   });
 }
-function tidyBlob<T extends z.infer<typeof GeneratedSchema>>(blob: T): T {
+function tidyBlob<T extends GeneratedBlob>(blob: T): T {
+  const t = tidyNumbers;
   return {
     ...blob,
-    thesis: { headline: tidyNumbers(blob.thesis.headline), body: tidyNumbers(blob.thesis.body),
-      openPosition: blob.thesis.openPosition ? tidyNumbers(blob.thesis.openPosition) : blob.thesis.openPosition },
-    patterns: blob.patterns.map(pt => ({ ...pt, title: tidyNumbers(pt.title), body: tidyNumbers(pt.body) })),
-    playbook: blob.playbook.map(r => ({ ...r, doingWell: tidyNumbers(r.doingWell), vulnerable: tidyNumbers(r.vulnerable), keyStat: tidyNumbers(r.keyStat) })),
-    strike: blob.strike.map(sk => ({ ...sk, title: tidyNumbers(sk.title), body: tidyNumbers(sk.body) })),
+    situation: { headline: t(blob.situation.headline), body: t(blob.situation.body) },
+    holdingBack: blob.holdingBack.map(h => ({ ...h, title: t(h.title), body: t(h.body), evidence: t(h.evidence) })),
+    opportunities: blob.opportunities.map(o => ({ ...o, title: t(o.title), body: t(o.body), sizing: t(o.sizing) })),
+    invest: { order: blob.invest.order.map(m => ({ move: t(m.move), why: t(m.why), modeledGain: t(m.modeledGain) })), caveat: blob.invest.caveat ? t(blob.invest.caveat) : blob.invest.caveat },
+    leaderPath: { whatLeaderLooksLike: t(blob.leaderPath.whatLeaderLooksLike), gap: t(blob.leaderPath.gap), incrementalGain: t(blob.leaderPath.incrementalGain), constraints: blob.leaderPath.constraints.map(t) },
+    playbook: blob.playbook.map(r => ({ ...r, doingWell: t(r.doingWell), vulnerable: t(r.vulnerable), keyStat: t(r.keyStat) })),
+    localMarkets: blob.localMarkets ? { summary: t(blob.localMarkets.summary), markets: blob.localMarkets.markets.map(m => ({ city: m.city, finding: t(m.finding) })) } : blob.localMarkets,
+    shifts: blob.shifts.map(sh => ({ title: t(sh.title), body: t(sh.body) })),
   };
 }
 
-/** every narrative string of the blob, joined — the text the number gate checks. */
-function narrativeText(blob: z.infer<typeof GeneratedSchema>): string {
-  const parts: string[] = [blob.thesis.headline, blob.thesis.body, blob.thesis.openPosition ?? ''];
-  for (const p of blob.patterns) parts.push(p.title, p.body);
+/** every narrative string of the blob, joined — the text BOTH gates check. */
+function narrativeText(blob: GeneratedBlob): string {
+  const parts: string[] = [blob.situation.headline, blob.situation.body];
+  for (const h of blob.holdingBack) parts.push(h.title, h.body, h.evidence, ...h.lines);
+  for (const o of blob.opportunities) parts.push(o.title, o.body, o.sizing);
+  for (const m of blob.invest.order) parts.push(m.move, m.why, m.modeledGain);
+  if (blob.invest.caveat) parts.push(blob.invest.caveat);
+  parts.push(blob.leaderPath.whatLeaderLooksLike, blob.leaderPath.gap, blob.leaderPath.incrementalGain, ...blob.leaderPath.constraints);
   for (const p of blob.playbook) parts.push(p.brand, p.doingWell, p.vulnerable, p.keyStat);
-  for (const s of blob.strike) parts.push(s.title, s.body);
+  if (blob.localMarkets) { parts.push(blob.localMarkets.summary); for (const m of blob.localMarkets.markets) parts.push(m.city, m.finding); }
+  for (const sh of blob.shifts) parts.push(sh.title, sh.body);
   return parts.join('\n');
+}
+
+/** v7.496 — the two gates in one place: numbers (v7.463) and standing claims. */
+function verifyDraft(blob: GeneratedBlob, groundedPayloads: string[], decision: DecisionInputs | null, clientName: string): string | null {
+  const text = narrativeText(blob);
+  const bad = findUngroundedAllowRounding(text, groundedPayloads.join('\n'));
+  if (bad.length) return 'These numbers do not appear in any tool result: ' + bad.join(', ');
+  if (decision) {
+    const claims = checkStandingClaims(text, decision, clientName);
+    if (claims.length) return 'These sentences claim a standing the data contradicts — ' + claims.map(c => `"${c.sentence}" (${c.reason})`).join(' · ');
+  }
+  return null;
 }
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -375,11 +453,21 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
         emit({ type: 'status', label: 'Collecting data from every panel', step: 2, steps: 5, ...clock() });
         const { payload: censusPayload } = buildCensus(ctx);
-        const groundedPayloads: string[] = [censusPayload];
+        // v7.496 — the decision inputs ride beside the census as their own grounded
+        // payload (the census is capped at SLICE_CAP; this block must never be
+        // truncated away, and every number in it must be verifiable — it is).
+        emit({ type: 'status', label: 'Computing standing, scenarios, competitor plays and local markets', step: 2, steps: 5, ...clock() });
+        let decision: DecisionInputs | null = null;
+        try { decision = buildDecisionInputs(ctx); } catch (e: any) { decision = null; }
+        const decisionPayload = decision
+          ? JSON.stringify(decision)
+          : JSON.stringify({ _note: 'decision inputs could not be built for this project — standing, scenarios, plays and local markets are UNMEASURED; write only what the census supports and say what is missing.' });
+        const groundedPayloads: string[] = [censusPayload, decisionPayload];
+        const clientName = String((ctx.project as any)?.clientName ?? '');
 
         const messages: Anthropic.MessageParam[] = [{
           role: 'user',
-          content: 'Generate the Insights panel content for this project now.\n\n<data_census>\n' + censusPayload + '\n</data_census>',
+          content: 'Generate the Insights panel content for this project now.\n\n<data_census>\n' + censusPayload + '\n<decision>\n' + decisionPayload + '\n</decision>\n</data_census>',
         }];
 
         emit({ type: 'status', label: 'Reading the data across panels', step: 3, steps: 5, ...clock() });
@@ -395,16 +483,17 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           emit({ type: 'status', label, step: 4, steps: 5, ...clock() });
           const fin: Anthropic.Message = await client.messages.create({
             model: SEER_MODEL,
-            max_tokens: 4000,
+            max_tokens: 8000,
             system: insightsSystemPrompt(ctx) + '\nYou have used all tool calls. Reply NOW with the single JSON object, using only numbers that appeared in the tool results above.',
             messages,
           }, { timeout: callTimeout() });
           const draft = fin.content.filter((b): b is Anthropic.TextBlock => b.type === 'text').map(b => b.text).join('\n').trim();
           const parsed = parseGenerated(draft);
-          const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
-          if ('blob' in parsed && bad.length === 0) {
+          const problem = 'parseError' in parsed ? parsed.parseError : verifyDraft(parsed.blob, groundedPayloads, decision, clientName);
+          if ('blob' in parsed && !problem) {
             return {
               ...tidyBlob(parsed.blob),
+              schema: 'v7.496',
               generatedAt: new Date().toISOString(),
               model: SEER_MODEL,
               verified: extractNumberTokens(narrativeText(parsed.blob)).length,
@@ -412,7 +501,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             };
           }
           // Fail CLOSED — unverified output is never stored (v7.463).
-          emit({ type: 'error', error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + ('parseError' in parsed ? parsed.parseError : ('Unverified numbers: ' + bad.join(', '))) + ' Try again — nothing unverified was saved.', refusal: true });
+          emit({ type: 'error', error: 'Generation could not be verified against the stored data and was discarded (grounding is enforced, not assumed). ' + (problem ?? '') + ' Try again — nothing unverified was saved.', refusal: true });
           return null;
         };
 
@@ -427,7 +516,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           }
           const resp: Anthropic.Message = await client.messages.create({
             model: SEER_MODEL,
-            max_tokens: 4000,
+            max_tokens: 8000,
             system: insightsSystemPrompt(ctx),
             tools: TOOLS,
             messages,
@@ -437,14 +526,13 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
           if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) {
             const draft = textBlocks.map(b => b.text).join('\n').trim();
-            emit({ type: 'status', label: 'Verifying every number against stored data', step: 4, steps: 5 });
+            emit({ type: 'status', label: 'Verifying every number and every standing claim against stored data', step: 4, steps: 5 });
             const parsed = parseGenerated(draft);
-            const bad = 'blob' in parsed ? findUngroundedAllowRounding(narrativeText(parsed.blob), groundedPayloads.join('\n')) : [];
-            const problem = 'parseError' in parsed ? parsed.parseError
-              : bad.length > 0 ? ('These numbers do not appear in any tool result: ' + bad.join(', ')) : null;
+            const problem = 'parseError' in parsed ? parsed.parseError : verifyDraft(parsed.blob, groundedPayloads, decision, clientName);
             if (!problem && 'blob' in parsed) {
               stored = {
                 ...tidyBlob(parsed.blob),
+                schema: 'v7.496',
                 generatedAt: new Date().toISOString(),
                 model: SEER_MODEL,
                 verified: extractNumberTokens(narrativeText(parsed.blob)).length,
@@ -478,7 +566,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             messages.push({ role: 'assistant', content: draft });
             messages.push({
               role: 'user',
-              content: 'CHECK FAILED: ' + (problem ?? '') + '\nRe-query the tools for real stored values, or rewrite without the unsupported numbers. Reply with the corrected single JSON object only.',
+              content: 'CHECK FAILED: ' + (problem ?? '') + '\nFor numbers: re-query the tools for real stored values, or rewrite without the unsupported numbers. For standing claims: rewrite the sentence to match decision.standing (leads / above the field average / below the field average / last / unmeasured) on that exact measure. Reply with the corrected single JSON object only.',
             });
             continue;
           }
