@@ -2,7 +2,7 @@
  * /api/projects/[id]/insights-panel — v7.471 · the Insights panel (under
  * Executive Summary).
  *
- * GET  → { insights, updatedAt, quadrant, coverage, benchmarks }
+ * GET  → { insights, updatedAt, quadrant, coverage, decision, decisionBasis, benchmarks, job }
  *        insights   = the STORED generated narrative blob (null until generated)
  *        quadrant   = source-vs-answer quadrant, computed live by the shared
  *                     deterministic builder over stored Profound data
@@ -45,6 +45,19 @@
  * computed standing on that dimension — the v7.471 "owns search rank at
  * position 32" inflation, now enforced rather than requested (v7.463 lesson).
  *
+ * v7.497 — the decision inputs are STORED WITH THE BLOB (`insights.computed`),
+ * not rebuilt on every open. Measured on Sono Bello: GET rebuilt the Seer
+ * context (a bare project row loaded twice + the 17 MB analysis) and the
+ * decision block on every panel open — 7.7–19 s per load, and the block itself
+ * serialised to 847 KB (897 competitor plays, 620-brand lists per standing row),
+ * which the POST also pushed into the generation prompt. Now: the block the
+ * narrative was verified against is saved beside it at generation time and GET
+ * reads it back with named columns (Const II.9) in one cheap query; the live
+ * rebuild remains only for a project with no stored block (legacy blob or none).
+ * A stored block carries the analysis it was computed from; GET compares that
+ * to the newest analysis and reports `decisionBasis.stale` so the panel can say
+ * a newer scan exists. The PDF route reads the same stored block (II.6a).
+ *
  * Cached: the verified blob is stored on projects.insights_panel and re-served
  * until the user regenerates. Every Claude call is metered into the api_usage
  * ledger under this project (Const I.5b; model claude-sonnet-4-6 is registered).
@@ -57,6 +70,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
+import { latestAnalysisIdWithSnapshot } from '@/lib/latestAnalysis';
 import { checkProjectAccess } from '@/lib/auth/access';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { setUsageProject } from '@/lib/usage/context';
@@ -66,6 +80,7 @@ import {
 } from '@/lib/seer/core';
 import { buildQuadrant, buildCoverageSummary } from '@/lib/insightsPanel/build';
 import { buildDecisionInputs, type DecisionInputs } from '@/lib/insightsPanel/decision';
+import { readComputed, makeComputed, isoOrNull, type DecisionBasis } from '@/lib/insightsPanel/computed';   // v7.497
 import { checkStandingClaims } from '@/lib/insightsPanel/claimGate';
 
 export const dynamic = 'force-dynamic';
@@ -194,7 +209,7 @@ function insightsSystemPrompt(ctx: SeerContext): string {
     'YOUR INPUTS. The <data_census> holds every panel\'s headline data. Its `decision` block is precomputed for you and is the backbone of your reasoning:',
     '  decision.standing.search / .ai — the brand vs the FIELD AVERAGE vs BEST-IN-CLASS on each measure, with the brand\'s rank of N and a standing word (leads / above / below / last / unmeasured). decision.standing.lines — the same per product line (demand, page-1 hold, rank on the ladder, AI answer share, AI Overview rate).',
     '  decision.scenarios — MODELED incremental monthly clicks for each move (match the leader, 4–10 → top 3, page 2 → page 1, take open demand) with a floor and a ceiling, per line, plus the brand\'s current modeled clicks and the current leader\'s. The AI Overview move carries measured volume only.',
-    '  decision.plays — per competitor: page-1 volume held, rank, which lines they win and where they hold nothing, their page-1 query mix (cost/pricing, local, reviews/results, comparison, informational, core), page types behind their rankings (from real URLs, when uploaded), keywords where the brand outranks them and vice versa, local map-pack standing, AI presence.',
+    '  decision.plays — per competitor: page-1 volume held, rank, which lines they win and where they hold nothing, their page-1 query mix (cost/pricing, local, reviews/results, comparison, informational, core), page types behind their rankings (from real URLs, when uploaded), keywords where the brand outranks them and vice versa, local map-pack standing, AI presence. The list is every tracked competitor plus the top rivals by page-1 volume — decision.playsBasis says how many brands were measured; standing figures and ranks are over ALL measured brands. Each standing row lists its top brands only (brandsShown of `of`).',
     '  decision.local — demand by city (real volume), the brand\'s hold and best position there, the strongest rival per city, map-pack standing (client best rank, leaders, reviews). decision.shifts — AI Overviews / PAA on scanned SERPs and AI-answer presence. decision.shifts.history is null: no time series exists.',
     'Use the tools to drill only where the census leaves a real question open (a specific line, a competitor\'s keywords, a URL list). Do not re-derive what decision already computed.',
     '',
@@ -244,31 +259,60 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       job.status = 'error';
       job.error = 'The server stopped reporting progress on this run, so it is presumed to have died. Nothing was saved from it. Try again.';
     }
-    return NextResponse.json({ job, insights: row.insights ?? null, updatedAt: row.updatedAt ?? null }, { headers: JSON_NO_STORE });
+    // v7.497 — the blob now carries the computed block; while a run is in flight the
+    // panel reads only `job`, so the blob is withheld from the 4-second poll.
+    const running = !!job && job.status === 'running';
+    return NextResponse.json({ job, insights: running ? null : (row.insights ?? null), updatedAt: row.updatedAt ?? null }, { headers: JSON_NO_STORE });
   }
 
-  const project = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
-  if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404, headers: JSON_NO_STORE });
+  // v7.497 — named columns (Const II.9): the blob, its stamps, the benchmarks, the job
+  // row and the Profound store the quadrant reads. Never the bare project row.
+  const [row] = await db.select({
+    insights: projects.insightsPanel, updatedAt: projects.insightsPanelUpdatedAt,
+    benchmarks: projects.marketBenchmarks, job: projects.insightsPanelJob, profoundData: projects.profoundData,
+  }).from(projects).where(eq(projects.id, params.id)).limit(1);
+  if (!row) return NextResponse.json({ error: 'Project not found' }, { status: 404, headers: JSON_NO_STORE });
 
   // Live computed views over stored data (Const II.6): quadrant + coverage.
   let quadrant = null; let coverage = null; let decision: DecisionInputs | null = null;
-  try { quadrant = buildQuadrant((project as any).profoundData ?? null); } catch { quadrant = null; }
-  try {
-    const ctx = await buildContext(params.id);
-    if (!('error' in ctx)) {
-      coverage = buildCoverageSummary(ctx);
-      // v7.496 — the decision inputs the panel renders deterministically (standing
-      // table, scenario bars, local markets) whether or not a narrative exists.
-      try { decision = buildDecisionInputs(ctx); } catch { decision = null; }
-    }
-  } catch { coverage = null; }
+  let decisionBasis: DecisionBasis | null = null;
+  try { quadrant = buildQuadrant((row as any).profoundData ?? null); } catch { quadrant = null; }
+
+  const computed = readComputed((row as any).insights);
+  if (computed) {
+    // Fast path: the block the stored narrative was verified against. Its analysis is
+    // compared to the newest one so the panel can say when a newer scan exists.
+    coverage = computed.coverage ?? null;
+    decision = computed.decision;
+    let latestId: string | null = null;
+    try { latestId = await latestAnalysisIdWithSnapshot(params.id); } catch { latestId = null; }
+    decisionBasis = {
+      source: 'stored', builtAt: computed.builtAt, analysisId: computed.analysisId, analysisTriggeredAt: computed.analysisTriggeredAt,
+      latestAnalysisId: latestId, stale: !!latestId && !!computed.analysisId && latestId !== computed.analysisId,
+    };
+  } else {
+    // Live path: no stored block (never generated, or generated before v7.497). The
+    // full Seer context is rebuilt — the slow load — until the user regenerates.
+    try {
+      const ctx = await buildContext(params.id);
+      if (!('error' in ctx)) {
+        coverage = buildCoverageSummary(ctx);
+        try { decision = buildDecisionInputs(ctx); } catch { decision = null; }
+        decisionBasis = {
+          source: 'live', builtAt: new Date().toISOString(),
+          analysisId: (ctx.analysis as any)?.id ?? null, analysisTriggeredAt: isoOrNull((ctx.analysis as any)?.triggeredAt),
+          latestAnalysisId: (ctx.analysis as any)?.id ?? null, stale: false,
+        };
+      }
+    } catch { coverage = null; }
+  }
 
   return NextResponse.json({
-    insights: (project as any).insightsPanel ?? null,
-    updatedAt: (project as any).insightsPanelUpdatedAt ?? null,
-    quadrant, coverage, decision,
-    benchmarks: (project as any).marketBenchmarks ?? null,
-    job: (project as any).insightsPanelJob ?? null,   // v7.488 — a reload mid-run resumes from this
+    insights: (row as any).insights ?? null,
+    updatedAt: (row as any).updatedAt ?? null,
+    quadrant, coverage, decision, decisionBasis,
+    benchmarks: (row as any).benchmarks ?? null,
+    job: (row as any).job ?? null,   // v7.488 — a reload mid-run resumes from this
   }, { headers: JSON_NO_STORE });
 }
 
@@ -493,7 +537,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
           if ('blob' in parsed && !problem) {
             return {
               ...tidyBlob(parsed.blob),
-              schema: 'v7.496',
+              schema: 'v7.497',
+              computed: decision ? makeComputed(ctx, decision) : null,   // v7.497 — the block this narrative was verified against
               generatedAt: new Date().toISOString(),
               model: SEER_MODEL,
               verified: extractNumberTokens(narrativeText(parsed.blob)).length,
@@ -532,7 +577,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
             if (!problem && 'blob' in parsed) {
               stored = {
                 ...tidyBlob(parsed.blob),
-                schema: 'v7.496',
+                schema: 'v7.497',
+                computed: decision ? makeComputed(ctx, decision) : null,   // v7.497 — the block this narrative was verified against
                 generatedAt: new Date().toISOString(),
                 model: SEER_MODEL,
                 verified: extractNumberTokens(narrativeText(parsed.blob)).length,
