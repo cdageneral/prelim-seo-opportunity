@@ -25,6 +25,7 @@ import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: 
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298: competitor-brand guard (Const III.1a)
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';   // v7.502
+import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand';   // v7.504
 import { InsightPanel } from './InsightBanner';   // v7.366: insight-sentence layer · v7.415: one card, no accent slabs
 import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
 import {
@@ -43,7 +44,7 @@ interface Props {
   kwVersion?:  number;
 }
 
-type Tab = 'loc' | 'pack' | 'rev' | 'kw' | 'comp' | 'opp';
+type Tab = 'loc' | 'pack' | 'rev' | 'kw' | 'comp' | 'opp' | 'dem';   // v7.504: dem = demand by location
 
 // ─── cache (snapshot-first → localStorage) ──────────────────────────────────────
 // v7.407 — the browser cache is kept (it is what makes a just-finished scan appear
@@ -155,6 +156,13 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [addPick, setAddPick]       = useState<string>('');   // current selection in the +Add picker
   const [locationsUrl, setLocationsUrl] = useState<string>(() => readLocationsUrl(projectId));   // v7.302 manual locations URL
   const [locQuery, setLocQuery] = useState('');   // v7.306: Locations tab search filter
+  // v7.504 — demand by location (Google Ads volume per market): estimate → confirm → stream.
+  const [demand, setDemand]         = useState<LocalDemand | null>(() => ((analysis?.semrushSnapshot as any)?._localDemand ?? null));
+  const [demPlan, setDemPlan]       = useState<any | null>(null);
+  const [demRunning, setDemRunning] = useState(false);
+  const [demProgress, setDemProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
+  const [demError, setDemError]     = useState<string | null>(null);
+  const [demQuery, setDemQuery]     = useState('');
   // v7.307 — per-office "Fetch reviews" flow (Reviews tab): estimate → confirm → stream.
   const [revFetching, setRevFetching] = useState(false);
   const [revProgress, setRevProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
@@ -554,6 +562,109 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     finally { setRevFetching(false); setRevProgress(null); }
   }, [projectId, analysis]);
 
+  // ── v7.504 demand flow: dryRun → confirm → stream, with auto-continue ──────
+  // One Google Ads task per MARKET (not per keyword), paced for the provider's
+  // 12-requests-per-minute live cap, checkpointed every few markets, so a killed
+  // function never discards paid-for work (the v7.410 pattern).
+  const requestDemandPlan = useCallback(async () => {
+    setDemError(null);
+    try {
+      const r = await fetch(`/api/projects/${projectId}/local-demand`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dryRun: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setDemError(d?.error ?? `Could not estimate (${r.status})`); return; }
+      setDemPlan(d.plan ?? null);
+    } catch (e) { setDemError(String((e as any)?.message ?? e)); }
+  }, [projectId]);
+
+  const runDemand = useCallback(async () => {
+    setDemPlan(null); setDemError(null); setDemRunning(true);
+    setDemProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    const MAX_PASSES = 20;
+    let passes = 0, carriedDone = 0, sessionTotal = 0;
+    try {
+      for (;;) {
+        passes++;
+        const r = await fetch(`/api/projects/${projectId}/local-demand`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        if (!r.ok || !r.body) {
+          let msg = `Demand read failed (${r.status})`;
+          try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+          setDemError(msg); break;
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = ''; let doneEv: any = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+            if (ev.type === 'start') {
+              if (sessionTotal === 0) sessionTotal = ev.total ?? 0;
+              setDemProgress(p => ({ done: carriedDone, total: sessionTotal, seed: ev.phase ?? '', startedAt: p?.startedAt ?? Date.now() }));
+            } else if (ev.type === 'progress') {
+              setDemProgress(p => ({ done: carriedDone + (ev.done ?? 0), total: sessionTotal || (ev.total ?? 0), seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+            } else if (ev.type === 'error') {
+              setDemError(ev.error ?? 'Demand read failed');
+            } else if (ev.type === 'done') {
+              if (ev.localDemand) setDemand(ev.localDemand);
+              doneEv = ev;
+            }
+          }
+        }
+        if (!doneEv) {
+          setDemError('The read was interrupted before this batch reported back. Every market measured up to the last checkpoint is saved — click Read demand again to continue.');
+          break;
+        }
+        carriedDone += Number(doneEv.completed ?? 0);
+        const remaining = Number(doneEv.remaining ?? 0);
+        if (remaining <= 0) break;
+        if (passes >= MAX_PASSES) { setDemError(`Stopped after ${passes} batches with ${remaining} markets still pending — click Read demand again to continue.`); break; }
+      }
+    } catch (e) { setDemError(String((e as any)?.message ?? e)); }
+    finally { setDemRunning(false); setDemProgress(null); }
+  }, [projectId]);
+
+  const demandRows = useMemo(() => {
+    const rows = (demand?.rows ?? []).slice();
+    const q = demQuery.trim().toLowerCase();
+    const filtered = q ? rows.filter(r => [r.title, r.city, r.state, r.locationName].some(v => String(v ?? '').toLowerCase().indexOf(q) >= 0)) : rows;
+    return filtered.sort((a, b) => b.totalVolume - a.totalVolume);
+  }, [demand, demQuery]);
+  const demandTotals = useMemo(() => demandPortfolioTotals(demand?.rows ?? []), [demand]);
+
+  const exportDemand = useCallback(async () => {
+    if (!demand) return;
+    const XLSX = await import('xlsx');
+    const rows = (demand.rows ?? []).slice().sort((a, b) => b.totalVolume - a.totalVolume).map(r => ({
+      Location: r.title,
+      City: r.city,
+      State: r.state,
+      'Google market': r.locationName,
+      'Shares this market with': (r.sharesMarket ?? []).join('; '),
+      'City-named keywords': r.cityNamedKw,
+      'City-named volume (national basis)': r.cityNamedVolume,
+      'Portable keywords priced': r.portableKw,
+      'In-market volume (Google Ads)': r.portableVolume,
+      'Keywords below reporting threshold': r.belowThreshold,
+      'Total monthly demand': r.totalVolume,
+      Measured: r.measuredAt ? new Date(r.measuredAt).toLocaleDateString() : 'not measured',
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Demand by location');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((demand.unresolved ?? []).map(u => ({ Location: u.title, 'Not measured because': u.reason }))), 'Not measured');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((demand.portableKeywords ?? []).map(k => ({ Keyword: k }))), 'Keywords priced');
+    XLSX.writeFile(wb, `${(projectName || 'client').replace(/\s+/g, '-')}-demand-by-location.xlsx`);
+  }, [demand, projectName]);
+
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   const eta = progress && progress.total > 0 && progress.done > 0 && progress.done < progress.total
@@ -754,6 +865,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
               <TabBtn id="pack" cur={tab} set={setTab} icon="🗺️" label="Map Pack" cnt={scan ? scan.scannedCount : undefined} />
               <TabBtn id="rev"  cur={tab} set={setTab} icon="⭐" label="Reviews" cnt={scan ? clientLocations.length : undefined} />
               <TabBtn id="comp" cur={tab} set={setTab} icon="🏆" label="Competition" cnt={roll ? roll.sov.length : undefined} />
+              <TabBtn id="dem"  cur={tab} set={setTab} icon="📈" label="Demand" cnt={demand ? demand.rows.length : undefined} />
               <TabBtn id="opp"  cur={tab} set={setTab} icon="🎯" label="Opportunities" cnt={roll ? roll.opps.opportunities.length : undefined} />
             </div>
 
@@ -881,6 +993,113 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                       ? <div style={{ fontSize: 12, color: 'var(--c-f6c061)', marginTop: 10 }}>No locations match {`"${locQuery.trim()}"`}.</div>
                       : <div style={{ fontSize: 11, color: 'var(--c-8888aa)', marginTop: 10 }}>{locQuery.trim() ? `Showing ${fmt(filteredLocations.length)} of ${fmt(clientLocations.length)} locations matching "${locQuery.trim()}".` : `Showing all ${fmt(clientLocations.length)} locations.`}</div>}
                   </>}
+              </div>
+            )}
+
+            {/* ===== DEMAND BY LOCATION (v7.504) ===== */}
+            {tab === 'dem' && scan && (
+              <div className="orbit-card p-5" data-v504-demand>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>Local demand by location</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginTop: 3, maxWidth: 780, lineHeight: 1.5 }}>
+                      Two measured bases, never mixed. <b>City-named</b> keywords (&ldquo;liposuction wichita falls&rdquo;) already carry their market, so their volume is the figure on file.
+                      <b> Portable</b> keywords (&ldquo;near me&rdquo;, plain service terms) are read from Google Ads <i>as seen from that market</i> — one request per market, up to {fmt(demand?.keywordCap ?? 1000)} keywords each.
+                      Offices in one Google market share its searchers, so the portfolio total counts each market once.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {demand && <button className="orbit-btn" onClick={exportDemand} style={{ fontSize: 11.5 }}>Excel</button>}
+                    <button className="orbit-btn orbit-btn-primary" disabled={demRunning} onClick={() => (demPlan ? runDemand() : requestDemandPlan())} style={{ fontSize: 11.5 }}>
+                      {demRunning ? 'Reading…' : demPlan ? 'Run it' : demand ? 'Re-read demand' : 'Read demand'}
+                    </button>
+                  </div>
+                </div>
+
+                {demError && <div style={{ marginTop: 10, fontSize: 12, color: 'var(--c-f08a8a)' }}>{demError}</div>}
+
+                {demPlan && !demRunning && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--c-e2e2f6)', background: 'var(--ca-139-133-255-0_12)', border: '1px solid var(--c-2a2a3d)', borderRadius: 8, padding: '10px 12px', lineHeight: 1.55 }}>
+                    <b>{fmt(demPlan.marketsPending ?? 0)} markets</b> to read for <b>{fmt(demPlan.portableKeywords ?? 0)}</b> portable keywords ({fmt(demPlan.cityNamedKeywords ?? 0)} city-named keywords are already attributed, at no cost).
+                    {' '}One request per market: <b>${(demPlan.estCostUSD ?? 0).toFixed(2)}</b> at list price, about <b>{fmt(demPlan.etaMinutes ?? 0)} min</b> at the provider&rsquo;s 12-requests-per-minute cap.
+                    {(demPlan.unresolved ?? 0) > 0 && <> {fmt(demPlan.unresolved)} office{demPlan.unresolved !== 1 ? 's' : ''} cannot be matched to a Google market and will be listed, not measured.</>}
+                    <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-8888aa)' }}>{demPlan.costBasis}</div>
+                  </div>
+                )}
+
+                {demProgress && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 5 }}>
+                      {demProgress.seed ? `Reading ${demProgress.seed} — ` : ''}{fmt(demProgress.done)} of {fmt(demProgress.total)} markets
+                      {demProgress.done > 0 && demProgress.done < demProgress.total
+                        ? ` · ${fmtEta((demProgress.total - demProgress.done) * (((Date.now() - demProgress.startedAt) / 1000) / demProgress.done))} left`
+                        : ''} · still working
+                    </div>
+                    <div style={{ height: 6, borderRadius: 4, background: 'var(--c-1e1e2e)' }}>
+                      <div style={{ height: 6, borderRadius: 4, background: 'var(--c-8b85ff)', width: `${demProgress.total > 0 ? Math.round((demProgress.done / demProgress.total) * 100) : 0}%`, transition: 'width .3s' }} />
+                    </div>
+                  </div>
+                )}
+
+                {!demand && !demRunning && (
+                  <div style={{ marginTop: 12, fontSize: 12.5, color: 'var(--c-8888aa)' }}>
+                    No per-market demand measured yet. Click <b>Read demand</b> for the cost and market count first — nothing is spent until you confirm.
+                  </div>
+                )}
+
+                {demand && (
+                  <>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 14 }}>
+                      <MiniCard k="MARKETS MEASURED" v={fmt(demandTotals.markets)} d={`${fmt(demandTotals.offices)} offices`} />
+                      <MiniCard k="IN-MARKET DEMAND" v={fmt(demandTotals.portableVolume)} d="portable keywords, per month" color="var(--c-5ee68f)" />
+                      <MiniCard k="CITY-NAMED DEMAND" v={fmt(demandTotals.cityNamedVolume)} d="keywords that name a market" />
+                      <MiniCard k="TOTAL MONTHLY" v={fmt(demandTotals.totalVolume)} d="each market counted once" color="var(--c-8b85ff)" />
+                    </div>
+                    <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)', marginTop: 8 }}>
+                      Basis: {demand.source} · {fmt((demand.portableKeywords ?? []).length)} portable keywords priced per market · {fmt(demandTotals.belowThreshold)} keyword-market pairs below Google&rsquo;s reporting threshold (shown as a gap, never as zero) · measured {demand.builtAt ? new Date(demand.builtAt).toLocaleString() : '—'} · {fmt(demand.callsUsed)} requests, US$ {demand.costUSD.toFixed(2)} measured spend.
+                    </div>
+
+                    <input type="text" value={demQuery} onChange={e => setDemQuery(e.target.value)}
+                      placeholder={`Search ${fmt((demand.rows ?? []).length)} locations by city, state or market…`}
+                      style={{ width: '100%', boxSizing: 'border-box', background: 'var(--c-13131d)', border: '1px solid var(--c-2a2a3d)', borderRadius: 7, padding: '7px 10px', color: 'var(--c-e2e2f6)', fontSize: 12, margin: '12px 0' }} />
+
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="orbit-table" style={{ fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th>Location</th><th>Google market</th>
+                            <th style={{ textAlign: 'right' }}>In-market / mo</th>
+                            <th style={{ textAlign: 'right' }}>City-named / mo</th>
+                            <th style={{ textAlign: 'right' }}>Total / mo</th>
+                            <th>Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {demandRows.map((r, i) => (
+                            <tr key={r.key || i}>
+                              <td><b>{r.title}</b>{r.city ? <span style={{ color: 'var(--c-8888aa)' }}> · {r.city}{r.state ? `, ${r.state}` : ''}</span> : null}</td>
+                              <td style={{ color: 'var(--c-8888aa)' }}>{r.locationName || <span style={{ color: 'var(--c-f6c061)' }}>not matched</span>}</td>
+                              <td style={{ textAlign: 'right' }}>{r.measuredAt ? fmt(r.portableVolume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
+                              <td style={{ textAlign: 'right' }}>{fmt(r.cityNamedVolume)}</td>
+                              <td style={{ textAlign: 'right' }}><b>{r.measuredAt || r.cityNamedVolume > 0 ? fmt(r.totalVolume) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</b></td>
+                              <td style={{ fontSize: 10.5, color: 'var(--c-8888aa)' }}>
+                                {(r.sharesMarket ?? []).length > 0 ? `shares this market with ${r.sharesMarket.length} other office${r.sharesMarket.length !== 1 ? 's' : ''}` : ''}
+                                {r.belowThreshold > 0 ? `${(r.sharesMarket ?? []).length > 0 ? ' · ' : ''}${fmt(r.belowThreshold)} keywords below reporting threshold` : ''}
+                                {!r.measuredAt ? `${(r.sharesMarket ?? []).length > 0 || r.belowThreshold > 0 ? ' · ' : ''}not measured yet` : ''}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {(demand.unresolved ?? []).length > 0 && (
+                      <div style={{ marginTop: 12, fontSize: 11.5, color: 'var(--c-f6c061)' }}>
+                        {fmt(demand.unresolved.length)} office{demand.unresolved.length !== 1 ? 's' : ''} could not be matched to a Google market, so {demand.unresolved.length !== 1 ? 'they carry' : 'it carries'} no in-market figure: {demand.unresolved.slice(0, 6).map(u => `${u.title} (${u.reason})`).join(' · ')}{demand.unresolved.length > 6 ? ' …' : ''}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
 
