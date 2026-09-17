@@ -84,8 +84,21 @@ export function normCity(c: string): string {
  * v7.506: the second shape is what schema.org markup yields, and reading it as the first
  * put the STATE in the city field ("California"), which no Google market is named after.
  */
+/**
+ * v7.510 — an office page's markup may name the country as its own last part
+ * ("…, Amherst, New York, 14226, US"), and it is dropped before the city and state are
+ * read. Without this the country lands in the state field and EVERY market with a
+ * same-named city elsewhere reads as unresolved — measured on the live Sono Bello scan
+ * of 2026-09-17, where 85 of 137 offices failed this way. Only a country token is
+ * dropped, never a part that could be a state.
+ */
+// "CA" is California and "IN"/"LA"/"MS" are states, so no two-letter country code is
+// listed here except ones that are not US state abbreviations.
+const COUNTRY_LAST = /^(?:us|usa|u\.s\.|u\.s\.a\.|united states|united states of america|canada|uk|gb|united kingdom)$/i;
+
 export function cityStateFromAddress(address: string): { city: string; state: string } {
   const parts = String(address ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  while (parts.length > 2 && COUNTRY_LAST.test(parts[parts.length - 1])) parts.pop();
   if (parts.length < 2) return { city: '', state: '' };
   const last = parts[parts.length - 1];
   if (/^\d{5}(?:-\d{4})?$/.test(last)) {
