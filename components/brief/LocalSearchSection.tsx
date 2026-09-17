@@ -164,6 +164,10 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [demProgress, setDemProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [demError, setDemError]     = useState<string | null>(null);
   const [demQuery, setDemQuery]     = useState('');
+  // v7.506 — the standalone office-detail pass (free page reads), auto-continued.
+  const [enrichRunning, setEnrichRunning] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
+  const [enrichError, setEnrichError] = useState<string | null>(null);
   // v7.307 — per-office "Fetch reviews" flow (Reviews tab): estimate → confirm → stream.
   const [revFetching, setRevFetching] = useState(false);
   const [revProgress, setRevProgress] = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
@@ -562,6 +566,63 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     } catch (e) { setRevError(String((e as any)?.message ?? e)); }
     finally { setRevFetching(false); setRevProgress(null); }
   }, [projectId, analysis]);
+
+  // ── v7.506: fill each office's own address / phone / GPS from its page ──────
+  // A slow client site cannot finish 141 page reads inside one scan, so this runs as its
+  // own time-budgeted pass and continues until nothing is pending. Free: page reads only.
+  const runEnrich = useCallback(async () => {
+    setEnrichError(null); setEnrichRunning(true);
+    setEnrichProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    const MAX_PASSES = 20;
+    let passes = 0, carriedDone = 0, sessionTotal = 0;
+    try {
+      for (;;) {
+        passes++;
+        const r = await fetch(`/api/projects/${projectId}/local-scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enrichMode: true }),
+        });
+        if (!r.ok || !r.body) {
+          let msg = `Could not read the office pages (${r.status})`;
+          try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+          setEnrichError(msg); break;
+        }
+        const reader = r.body.getReader(); const decoder = new TextDecoder();
+        let buf = ''; let doneEv: any = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+            if (ev.type === 'start') {
+              if (sessionTotal === 0) sessionTotal = ev.pending ?? ev.total ?? 0;
+              setEnrichProgress(p => ({ done: carriedDone, total: sessionTotal, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+            } else if (ev.type === 'progress') {
+              setEnrichProgress(p => ({ done: carriedDone + (ev.done ?? 0), total: sessionTotal || (ev.total ?? 0), seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }));
+            } else if (ev.type === 'error') {
+              setEnrichError(ev.error ?? 'Could not read the office pages');
+            } else if (ev.type === 'done') {
+              if (ev.localScan) { setScan(ev.localScan); setScanOrigin('snapshot'); try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {} }
+              doneEv = ev;
+            }
+          }
+        }
+        if (!doneEv) { setEnrichError('The read was interrupted. Every office filled up to the last checkpoint is saved — click again to continue.'); break; }
+        carriedDone += Number(doneEv.completed ?? 0);
+        if (Number(doneEv.remaining ?? 0) <= 0) break;
+        if (passes >= MAX_PASSES) { setEnrichError(`Stopped after ${passes} batches with ${doneEv.remaining} offices still pending — click again to continue.`); break; }
+      }
+    } catch (e) { setEnrichError(String((e as any)?.message ?? e)); }
+    finally { setEnrichRunning(false); setEnrichProgress(null); }
+  }, [projectId, analysis]);
+
+  const officesMissingDetail = useMemo(
+    () => clientLocations.filter(l => (l as any).pageUrl && (!l.address || l.lat == null)).length,
+    [clientLocations],
+  );
 
   // ── v7.504 demand flow: dryRun → confirm → stream, with auto-continue ──────
   // One Google Ads task per MARKET (not per keyword), paced for the provider's
@@ -968,6 +1029,26 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
                 </div>
+                {officesMissingDetail > 0 && (
+                  <div data-v506-enrich style={{ fontSize: 12, color: 'var(--c-e2e2f6)', background: 'var(--ca-6-182-212-0_13)', border: '1px solid var(--ca-6-182-212-0_25)', borderRadius: 8, padding: '9px 12px', marginBottom: 12, lineHeight: 1.5, display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <div>
+                      <b>{fmt(officesMissingDetail)} office{officesMissingDetail !== 1 ? 's' : ''} still have no address or map coordinates on file.</b>{' '}
+                      Their own pages have not been read yet — a slow site does not finish inside one scan. This reads only those pages, and costs nothing.
+                      {enrichError && <div style={{ color: 'var(--c-f08a8a)', marginTop: 4 }}>{enrichError}</div>}
+                      {enrichProgress && (
+                        <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--c-8888aa)' }}>
+                          {enrichProgress.seed ? `Reading ${enrichProgress.seed} — ` : ''}{fmt(enrichProgress.done)} of {fmt(enrichProgress.total)}
+                          {enrichProgress.done > 0 && enrichProgress.done < enrichProgress.total
+                            ? ` · ${fmtEta((enrichProgress.total - enrichProgress.done) * (((Date.now() - enrichProgress.startedAt) / 1000) / enrichProgress.done))} left`
+                            : ''} · still working
+                        </div>
+                      )}
+                    </div>
+                    <button className="orbit-btn orbit-btn-primary" disabled={enrichRunning} onClick={runEnrich} style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                      {enrichRunning ? 'Reading…' : 'Fill office details'}
+                    </button>
+                  </div>
+                )}
                 {(integrity.templateAddressRows > 0 || integrity.sharedProfileRows > 0) && (
                   <div data-v502-integrity style={{ fontSize: 12, color: 'var(--c-e2e2f6)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_3)', borderRadius: 8, padding: '9px 12px', marginBottom: 12, lineHeight: 1.5 }}>
                     <b style={{ color: 'var(--c-f6c061)' }}>Some stored office details are not that office's own.</b>{' '}
