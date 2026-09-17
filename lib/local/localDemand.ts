@@ -150,11 +150,18 @@ export function resolveOfficeLocations(
     const parts = String(L.locationName ?? '').split(',').map(s => s.trim()).filter(Boolean);
     if (parts.length < 2) continue;
     const city = normCity(parts[0]);
-    const state = normCity(parts[1]);
     if (!city) continue;
     const entry = { locationCode: L.locationCode, locationName: L.locationName };
-    const k = city + '|' + state;
-    if (!byCityState[k]) byCityState[k] = entry;
+    // v7.508 — a Google geo target names the city, then EVERY level above it:
+    // "Amherst,Erie County,New York,United States". Keying only on the part right after
+    // the city matched the county, so an office with its state on file still read as
+    // ambiguous ("Amherst matches 6 markets"). Every level above the city is keyed.
+    for (let j = 1; j < parts.length; j++) {
+      const level = normCity(parts[j]);
+      if (!level) continue;
+      const k = city + '|' + level;
+      if (!byCityState[k]) byCityState[k] = entry;
+    }
     (byCity[city] = byCity[city] || []).push(entry);
   }
   const resolved: Record<string, { locationCode: number; locationName: string }> = {};
