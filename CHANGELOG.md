@@ -1,3 +1,44 @@
+# v7.503 — The local scan reads the project it is scanning, however large it is (2026-09-17)
+
+Wayne, re-running the Sono Bello local scan: **"Failed to execute 'json' on 'Response':
+Unexpected end of JSON input."**
+
+## What was measured
+
+- `POST /api/projects/87dee221…/local-scan` with `dryRun` returned **HTTP 500 with a
+  zero-byte body** in 1.3 s (measured in the browser on the live build). An empty body is
+  why the panel's `r.json()` threw rather than showing an error.
+- The route opened with `db.query.analyses.findMany({ limit: 5 })` — every column of five
+  rows, snapshots included. Sono Bello's displayed analysis alone measures **63.28 MB**
+  (v7.501), so the response exceeded Neon's **67,108,864-byte** cap and the driver refused
+  the query. Nothing was wrong with the scan; it never got as far as scanning.
+- Same class as v7.411, v7.486, v7.490 and v7.501 — the fourth surface to meet the same
+  cap, which is what Const II.9 exists to stop.
+
+## What changed
+
+- **NEW `lib/analysis/loadDisplayAnalysis.ts`** — one way for a route to load the analysis
+  a project is displaying: the pick is made on **scalar heads** (no snapshot column is
+  selected at all, only `IS NOT NULL` flags and each snapshot's measured
+  `octet_length`), then only the snapshot columns the caller names are read, one query
+  each, through the v7.501 pieced reader when a column is bigger than one response can
+  carry. The pick rule itself is unchanged: newest completed, else newest row.
+- **`app/api/projects/[id]/local-scan/route.ts`** — reads through that loader and takes
+  only `semrush_snapshot`, which is the one column it reads and writes.
+
+## Not fixed here
+
+`app/api/synthesize` and `app/api/analyze` still hold multi-row analysis reads. They are
+not on this path and are left for their own release rather than being changed untested.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: base 3242 PASS / 31 FAIL → 3279 PASS / 31 FAIL, identical FAIL set;
+  10 new v503 checks (loader shape + a source check that neither local route selects whole
+  analysis rows).
+- Live: the same dryRun request that returned an empty 500 returns its plan.
+
 # v7.502 — Office locations show each office's own address, phone and Google rating (2026-09-17)
 
 Wayne, looking at Sono Bello's Locations tab: every card read "5250 Carillon Point, Kirkland, WA",
