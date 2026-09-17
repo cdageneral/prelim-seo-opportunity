@@ -1,3 +1,58 @@
+# v7.501 — A project too large for one database response loads again, losslessly (2026-09-17)
+
+Wayne: *"what happened to the panels and data in the sonobello project? It was all there yesterday
+and now nothing is showing up."* Nothing was lost. The data was in the database the whole time.
+
+## What was measured
+
+- Project **Sono Bello - SEO & GEO** (`87dee221`). Its newest analysis `0eb03afc` (triggered
+  2026-09-15 07:13) measured **63,284,928 bytes** by `?sizes=1`: serpapi_snapshot 45,507,417 +
+  semrush_snapshot 16,828,043 + profound_snapshot 949,468. On 2026-09-14 the project's worst case
+  was 19,161,037 bytes, so the SERP scan run on 09-15 roughly tripled it.
+- Neon refuses any single response over **67,108,864 bytes**. v7.411 gave each analysis row its own
+  query, but this one row no longer fits on its own. The route degraded to a snapshot-free row
+  (`snapshotUnavailable`) and every panel rendered empty with no message on screen.
+- The rest of the pipeline is not the limit: First Citizens Bank — Small Business returns a
+  **53.14 MB** response from the same route today (measured in Chrome, 200, 5.7 s).
+
+## What changed
+
+- **NEW `lib/analysis/snapshotPieces.ts`** — reads one snapshot column in as many queries as its
+  measured size needs: whole if ≤ 16 MB; otherwise one top-level key per query; a key still over
+  16 MB that is an array is read in index ranges packed from each element's measured
+  `octet_length`. Every piece is selected as `::text` and parsed in TypeScript, so types never
+  depend on the driver. Anything that cannot be split throws. Nothing is sampled, trimmed or
+  projected (I.6) — the reassembled value is the stored value.
+- **`app/api/projects/[id]/route.ts`** — `hydrateAnalysis` measures first. ≤ 40 MB: the v7.411
+  single query, unchanged. Above that, or if that query fails: scalar columns by name
+  (`getTableColumns` minus the three snapshots, II.9a), opportunities + personas, then each
+  snapshot through the pieced reader, one at a time. Only if that also fails does the row degrade.
+- **`app/projects/[id]/page.tsx`** — when a row does degrade, a notice says the data could not be
+  read, gives its measured size, and says empty panels are not measured zeros (I.5). Same
+  theme-mapped tokens as the v7.443 error banner.
+
+## Deliberately not done
+
+- No change to what is stored. Why serpapi_snapshot grows (it keeps every keyword ever scanned —
+  see the 2026-09-14 FCB investigation) is a separate decision.
+- Other routes that read a whole analysis row (Assessment PDF, Seer, Insights) still read it in one
+  query and would hit the same cap on this analysis. Not touched in this release.
+
+## Gate
+
+- tsc (project tsconfig, no target override) clean on v7.500 + v7.501.
+- Retained suite: base (v7.500 code) 3219 PASS / 31 FAIL → v7.501 3242 PASS / 31 FAIL, FAIL set
+  identical to base. 23 new v501 checks. The route checks run the REAL route and module against
+  real Postgres (PGlite) with a simulated response cap: snapshots come back deep-equal to what was
+  stored at four piece budgets, including quoted/unicode/emoji text, numeric-looking strings,
+  nulls and booleans. Negative control: the same harness against the pristine v7.499/v7.500 route
+  fails the three route checks (snapshotUnavailable), reproducing the Sono Bello symptom.
+- II.9: the new scalar read names its columns; each piece carries one column of one row. Repo grep:
+  zero bare `select().from(analyses|projects)` in code (two matches are comments); the existing
+  `findFirst` sites are untouched. Measured on this project: worstCaseCombinedBytes 66,338,175.
+- II.6a/b: no metric changed; panels, PDF and rollups read the same stored values. IV.6: notice uses
+  --c-f87171 / --c-ef4444 / --ca-239-68-68 tokens only (suite check). I.5b: no new provider.
+
 # v7.500 — Insights: the claim gate reads which measure a phrase is about (2026-09-17)
 
 Aflac Generate insights was refused after three repair rounds: *"These sentences claim a standing
