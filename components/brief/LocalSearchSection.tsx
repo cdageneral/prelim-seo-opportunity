@@ -620,7 +620,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   }, [projectId, analysis]);
 
   const officesMissingDetail = useMemo(
-    () => clientLocations.filter(l => (l as any).pageUrl && (!l.address || l.lat == null)).length,
+    () => clientLocations.filter(l => (l as any).pageUrl && !(l as any).detailFetchedAt && (!l.address || l.lat == null)).length,
     [clientLocations],
   );
 
