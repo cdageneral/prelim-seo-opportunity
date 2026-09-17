@@ -45,9 +45,13 @@ const AI_DIM = /\b(ai|ai answers?|ai visibility|ai overviews?|answer engines?|ci
 const NEGATION = /\b(not|never|no|neither|nor|without|isn't|doesn't|does not|is not|hasn't|has not|fails? to|cannot|can't|far from|rather than)\b/i;
 
 function splitSentences(text: string): string[] {
+  // v7.500 — split on line breaks FIRST. narrativeText joins every blob field
+  // with '\n'; the v7.496 splitter collapsed whitespace before splitting, so
+  // unpunctuated list items (plays, moves, constraints) fused into one
+  // "sentence" and a client mention in one item paired with a phrase in another.
   return text
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[.!?])\s+(?=[A-Z0-9"“(])|\n+/)
+    .split(/\n+/)
+    .flatMap(line => line.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+(?=[A-Z0-9"“(])/))
     .map(s => s.trim())
     .filter(s => s.length > 0);
 }
@@ -96,6 +100,52 @@ function objectExempt(s: string, endIdx: number): boolean {
 }
 
 /**
+ * v7.500 — which dimension a phrase is ABOUT. The v7.496 gate tagged the whole
+ * sentence: any search word anywhere made every strength phrase a search claim,
+ * so "Aflac is best-in-class in AI-answer visibility — … below the field average
+ * on every organic search metric" was rejected as a SEARCH claim although the
+ * client leads both AI measures (2026-09-17, Aflac — three repair rounds, then
+ * refused). The phrase is now scoped to its own clause (bounded by , ; : — – ( )
+ * and but/while/whereas/yet/although); the dimensions named inside that clause
+ * are the ones checked — BOTH when both are named (strict). A clause naming
+ * neither falls back to the nearest dimension word in the sentence.
+ */
+const CLAUSE_BREAK = /[,;:()\u2014\u2013]|\s-\s|\b(?:but|while|whereas|yet|although|though|however)\b/gi;
+function clauseAround(s: string, start: number, end: number): [number, number] {
+  let lo = 0, hi = s.length;
+  const g = new RegExp(CLAUSE_BREAK.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = g.exec(s)) !== null) {
+    const a = m.index, b = m.index + m[0].length;
+    if (b <= start) lo = Math.max(lo, b);
+    else if (a >= end) { hi = Math.min(hi, a); break; }
+  }
+  return [lo, hi];
+}
+function allMatches(s: string, re: RegExp): Array<[number, number]> {
+  const g = new RegExp(re.source, 'gi');
+  const out: Array<[number, number]> = [];
+  let m: RegExpExecArray | null;
+  while ((m = g.exec(s)) !== null) { out.push([m.index, m.index + m[0].length]); if (m[0].length === 0) g.lastIndex++; }
+  return out;
+}
+export function claimDimensions(s: string, start: number, end: number): Array<'search' | 'ai'> {
+  const [lo, hi] = clauseAround(s, start, end);
+  const inClause = (spans: Array<[number, number]>) => spans.some(([a, b]) => a < hi && b > lo);
+  const searchSpans = allMatches(s, SEARCH_DIM);
+  const aiSpans = allMatches(s, AI_DIM);
+  const dims: Array<'search' | 'ai'> = [];
+  if (inClause(searchSpans)) dims.push('search');
+  if (inClause(aiSpans)) dims.push('ai');
+  if (dims.length) return dims;
+  const dist = (spans: Array<[number, number]>) => spans.reduce((best, [a, b]) => Math.min(best, b <= start ? start - b : a >= end ? a - end : 0), Infinity);
+  const ds = dist(searchSpans), da = dist(aiSpans);
+  if (ds === Infinity && da === Infinity) return [];
+  if (ds === da) return ['search', 'ai'];
+  return ds < da ? ['search'] : ['ai'];
+}
+
+/**
  * Returns every sentence whose strength/weakness claim about the client
  * contradicts its computed standing on that dimension. Empty = pass.
  */
@@ -132,21 +182,22 @@ export function checkStandingClaims(text: string, decision: DecisionInputs, clie
         if (negatedBefore(s, idx)) continue;
         if (objectExempt(s, idx + m[0].length)) continue;
         if (kind === 'strength' && aspirationalBefore(s, idx)) continue;
+        const dims = claimDimensions(s, idx, idx + m[0].length);
         if (kind === 'strength') {
-          if (isSearch && !searchHasStrength && searchWords.length) {
+          if (dims.includes('search') && !searchHasStrength && searchWords.length) {
             out.push({ sentence: s, reason: `claims search strength ("${m[0]}") but the client's search standing is ${Array.from(new Set(searchWords)).join('/')} on every measured search metric` });
             return;
           }
-          if (isAi && !isSearch && !aiHasStrength && aiWords.length) {
+          if (dims.includes('ai') && !aiHasStrength && aiWords.length) {
             out.push({ sentence: s, reason: `claims AI strength ("${m[0]}") but the client's AI standing is ${Array.from(new Set(aiWords)).join('/')} on every measured AI metric` });
             return;
           }
         } else {
-          if (isSearch && searchAllLeads) {
+          if (dims.includes('search') && searchAllLeads) {
             out.push({ sentence: s, reason: `claims search weakness ("${m[0]}") but the client leads every measured search metric` });
             return;
           }
-          if (isAi && !isSearch && aiAllLeads && !aiClientZero) {
+          if (dims.includes('ai') && aiAllLeads && !aiClientZero) {
             out.push({ sentence: s, reason: `claims AI weakness ("${m[0]}") but the client leads every measured AI metric` });
             return;
           }
