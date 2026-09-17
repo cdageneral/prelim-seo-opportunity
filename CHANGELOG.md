@@ -1,3 +1,32 @@
+# v7.510 — The country at the end of an address is not a state (2026-09-17)
+
+With v7.509 live the dry run resolved 52 of 137 markets and left 85 unresolved, every reason
+reading the same way: `"Gulfport, US" is not one of the 2 Google markets named "Gulfport"`.
+
+## What was measured
+
+- The office pages now hand back the country as its own last part. Verbatim from the Locations
+  tab, 2026-09-17: `15110 Crossroads Parkway, Gulfport, Mississippi, 39503, US`,
+  `500 Corporate Parkway, Suite 140, Amherst, New York, 14226, US`.
+- `cityStateFromAddress` reads "…, City, State, ZIP" by position, so with a country appended it
+  took the ZIP as the state and `US` as the country — the state field came back as `US` for
+  **85 of 137 offices**, and every city with a namesake in another state went unresolved.
+- The v7.509 reason text is what made this readable in one look: it printed what it actually read
+  rather than asking for a fresh scan.
+
+## What changed
+
+- **`lib/local/localDemand.ts`** — a trailing country part is dropped before the city and state
+  are read. Only a country token is dropped (`US`, `USA`, `United States`, `Canada`, `UK`, `GB`),
+  never a two-letter token that is also a US state — `CA` stays California — and a two-part
+  address is never emptied by the rule.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: 3400 PASS / 31 FAIL, FAIL set identical to base (3242 PASS / 31 FAIL). Eight new
+  checks on the four live address strings above plus the CA-is-California guard.
+
 # v7.509 — A market Google does not file under "City" (2026-09-17)
 
 v7.508 cut the unresolved markets from six to four on the live Sono Bello scan, and Buffalo was
