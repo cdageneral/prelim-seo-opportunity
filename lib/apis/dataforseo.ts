@@ -72,15 +72,17 @@ export function llToLocationCoordinate(ll?: string): string | null {
   return `${round7(lat)},${round7(lng)},${zoom}`;
 }
 
-interface DfsCall<T> { result: T | null; costUSD: number; }
+// v7.503: `results` carries the WHOLE result array — Search Volume returns one row per
+// keyword there, so reading only the first (`result`) would drop 999 of 1,000 rows.
+interface DfsCall<T> { result: T | null; costUSD: number; results: T[] }
 
 /**
  * POST one live task. Returns the first result object plus the REAL cost the
  * API reported, and records that measured cost in the usage ledger.
  */
-async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string, ledgerUnit: 'searches' | 'llm_mentions' = 'searches'): Promise<DfsCall<T>> {
+async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string, ledgerUnit: 'searches' | 'llm_mentions' | 'search_volume' = 'searches'): Promise<DfsCall<T>> {
   const auth = authHeader();
-  if (!auth) return { result: null, costUSD: 0 };
+  if (!auth) return { result: null, costUSD: 0, results: [] };
   try {
     const res = await fetch(`${DFS_BASE}${endpoint}`, {
       method: 'POST',
@@ -90,13 +92,13 @@ async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>,
     });
     if (!res.ok) {
       console.error(`DataForSEO ${ledgerEndpoint} HTTP ${res.status}`);
-      return { result: null, costUSD: 0 };
+      return { result: null, costUSD: 0, results: [] };
     }
     const body: any = await res.json();
     // status_code 20000 = OK. Anything else is a real failure, surfaced as empty.
     if (Number(body?.status_code) !== 20000) {
       console.error(`DataForSEO ${ledgerEndpoint} status ${body?.status_code}: ${body?.status_message}`);
-      return { result: null, costUSD: 0 };
+      return { result: null, costUSD: 0, results: [] };
     }
     const t0 = Array.isArray(body?.tasks) ? body.tasks[0] : null;
     // Per-task cost when present, else the envelope total. Never invented.
@@ -105,13 +107,13 @@ async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>,
     await recordDataForSeo(ledgerEndpoint, costUSD, 1, process.env.DATAFORSEO_LOGIN, ledgerUnit);
     if (Number(t0?.status_code) !== 20000) {
       console.error(`DataForSEO ${ledgerEndpoint} task status ${t0?.status_code}: ${t0?.status_message}`);
-      return { result: null, costUSD };
+      return { result: null, costUSD, results: [] };
     }
-    const result = Array.isArray(t0?.result) ? t0.result[0] : null;
-    return { result: (result ?? null) as T | null, costUSD };
+    const results: T[] = Array.isArray(t0?.result) ? (t0.result as T[]) : [];
+    return { result: (results.length ? results[0] : null) as T | null, costUSD, results };
   } catch (err) {
     console.error(`DataForSEO ${ledgerEndpoint} fetch failed:`, err);
-    return { result: null, costUSD: 0 };
+    return { result: null, costUSD: 0, results: [] };
   }
 }
 
@@ -381,6 +383,10 @@ export async function dfsGetLocalPack(
 // Docs: https://docs.dataforseo.com/v3/ai_optimization/llm_mentions/search_mentions/live/
 
 const LLM_MENTIONS_ENDPOINT = '/ai_optimization/llm_mentions/search_mentions/live';
+// v7.503 — Keywords Data · Google Ads. `locations` is a free GET; `search_volume/live`
+// is one billed task per LOCATION (up to 1,000 keywords in the same task).
+const GADS_LOCATIONS_ENDPOINT = '/keywords_data/google_ads/locations';
+const GADS_SEARCH_VOLUME_ENDPOINT = '/keywords_data/google_ads/search_volume/live';
 
 export interface LlmMentionSource {
   domain: string;
@@ -462,4 +468,96 @@ export async function dfsSearchLlmMentions(
 
   const totalCount = Number(result?.total_count);
   return { rows, totalCount: Number.isFinite(totalCount) ? totalCount : rows.length, costUSD };
+}
+
+
+// ─── v7.503: Google Ads search volume for ONE location (per-office local demand) ──
+// Google Ads does not return volume for coordinates — "if you specify coordinates the
+// data will be provided for the country these coordinates belong to"
+// (dataforseo.com/help-center/sv-for-city-or-coordinates, read 2026-09-17). So each
+// office must be resolved to a Google geo-target location_code first, via the free
+// locations list below. Nothing here is modeled: a keyword Google does not report in
+// that location comes back null and is shown as "below reporting threshold".
+
+export interface DfsLocation {
+  locationCode:   number;
+  locationName:   string;   // e.g. "Wichita,Kansas,United States"
+  parentCode:     number | null;
+  countryIso:     string;
+  locationType:   string;   // "City" | "State" | "County" | …
+}
+
+/** The free Google Ads geo-target list for one country (no ledger entry — no cost). */
+export async function dfsGoogleAdsLocations(countryIso = 'US'): Promise<DfsLocation[]> {
+  const auth = authHeader();
+  if (!auth) return [];
+  try {
+    const res = await fetch(`${DFS_BASE}${GADS_LOCATIONS_ENDPOINT}/${encodeURIComponent(countryIso)}`, {
+      method: 'GET',
+      headers: { 'Authorization': auth },
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) { console.error(`DataForSEO google_ads locations HTTP ${res.status}`); return []; }
+    const body: any = await res.json();
+    if (Number(body?.status_code) !== 20000) {
+      console.error(`DataForSEO google_ads locations status ${body?.status_code}: ${body?.status_message}`);
+      return [];
+    }
+    const t0 = Array.isArray(body?.tasks) ? body.tasks[0] : null;
+    const rows: any[] = Array.isArray(t0?.result) ? t0.result : [];
+    return rows.map(r => ({
+      locationCode: Number(r?.location_code),
+      locationName: String(r?.location_name ?? ''),
+      parentCode:   r?.location_code_parent == null ? null : Number(r.location_code_parent),
+      countryIso:   String(r?.country_iso_code ?? ''),
+      locationType: String(r?.location_type ?? ''),
+    })).filter(r => Number.isFinite(r.locationCode) && r.locationName);
+  } catch (err) {
+    console.error('DataForSEO google_ads locations fetch failed:', err);
+    return [];
+  }
+}
+
+export interface DfsKeywordVolume {
+  keyword:      string;
+  searchVolume: number | null;   // null = Google reported no figure for this location
+  competition:  string | null;
+  cpc:          number | null;
+}
+
+/**
+ * Google Ads average monthly search volume for up to 1,000 keywords AS SEEN FROM one
+ * location_code. One billed task; the measured `cost` is recorded in the ledger under
+ * the `search_volume` unit.
+ */
+export async function dfsGoogleAdsSearchVolume(
+  keywords: string[],
+  locationCode: number,
+  market?: Market,
+): Promise<{ rows: DfsKeywordVolume[]; costUSD: number; ok: boolean }> {
+  if (!dataForSeoEnabled()) return { rows: [], costUSD: 0, ok: false };
+  const m = market ?? getMarket('us');
+  const kws = keywords.map(k => String(k ?? '').toLowerCase().trim()).filter(Boolean).slice(0, 1000);
+  if (kws.length === 0 || !Number.isFinite(locationCode)) return { rows: [], costUSD: 0, ok: false };
+  const task: Record<string, unknown> = {
+    keywords: kws,
+    location_code: locationCode,
+    language_code: m.dfsLanguageCode,
+    search_partners: false,
+  };
+  const { results, costUSD } = await dfsPost<any>(GADS_SEARCH_VOLUME_ENDPOINT, task, 'google_ads_search_volume', 'search_volume');
+  const rows: DfsKeywordVolume[] = [];
+  const arr: any[] = results;
+  for (let i = 0; i < arr.length; i++) {
+    const r = arr[i];
+    if (!r || typeof r !== 'object') continue;
+    const v = r.search_volume;
+    rows.push({
+      keyword:      String(r.keyword ?? ''),
+      searchVolume: typeof v === 'number' ? v : null,
+      competition:  r.competition == null ? null : String(r.competition),
+      cpc:          typeof r.cpc === 'number' ? r.cpc : null,
+    });
+  }
+  return { rows, costUSD, ok: arr.length > 0 };
 }
