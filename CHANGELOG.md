@@ -1,3 +1,34 @@
+# v7.508 — A city named with its county resolves to its own market (2026-09-17)
+
+The v7.504 demand estimate still reported six offices as ambiguous after v7.507 filled their
+addresses — Buffalo among them, whose row on file reads
+`Buffalo | Amherst | 500 Corporate Parkway, Suite 140, Amherst, New York, 14226`. The state was
+right there and the market still would not resolve.
+
+## What was measured
+
+- A Google Ads geo target names the city and then **every level above it**, county included:
+  `Amherst,Erie County,New York,United States` (DataForSEO `keywords_data/google_ads/locations/US`,
+  read 2026-09-17). The state is not always the second part.
+- `resolveOfficeLocations` keyed each market on the part immediately after the city, so for
+  Amherst it keyed `amherst|erie county`. The office's `amherst|new york` never matched, the
+  lookup fell through to the city-only list, and six markets read as ambiguous
+  ("Amherst matches 6 markets — needs the state from a fresh scan").
+
+## What changed
+
+- **`lib/local/localDemand.ts`** — every level above the city is keyed, not only the first, so
+  `amherst|new york` and `amherst|erie county` both point at the same Amherst, New York geo
+  target. Matching stays literal and first-wins: a same-named city in another state is still a different market, and an
+  office with no state on file is still reported unresolved rather than attached to a guess.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: 3383 PASS / 31 FAIL, FAIL set identical to base (3242 PASS / 31 FAIL). Two new
+  checks on the real county-named geo targets (Amherst NY vs Amherst MA), plus a source check
+  that every level above the city is keyed.
+
 # v7.507 — Offices whose page carries no markup at all (2026-09-17)
 
 The v7.506 pass filled 137 of 141 Sono Bello offices and then kept finding the same four

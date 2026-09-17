@@ -1,6 +1,6 @@
 {
   "name": "orbitiq",
-  "version": "7.507.0",
+  "version": "7.508.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
