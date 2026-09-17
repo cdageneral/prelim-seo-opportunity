@@ -73,7 +73,12 @@ const REVIEW_TIME_BUDGET_MS   = 200_000;  // stop + persist well before the 300s
 const REVIEW_CHECKPOINT_EVERY = 25;       // persist partial progress this often
 const KW_CONCURRENCY    = 10;     // v7.299: keyword map-pack scan = 1 search each (no AI 2nd call) → safe at higher concurrency
 const MAX_SCAN_KEYWORDS = 300;    // v7.299: runtime ceiling so one streamed request stays under the 300s Vercel cap (NOT a data cap)
-const ENRICH_BUDGET_MS  = 120_000; // v7.303: wall-clock cap for fetching office detail pages (keeps the request under 300s)
+const ENRICH_BUDGET_MS  = 120_000; // v7.303: wall-clock cap for fetching office detail pages inside a scan (keeps the request under 300s)
+// v7.506 — the standalone "fill office details" pass: its own request, so a slow client
+// site cannot run the first scan out of time and leave most offices without their own
+// address/GPS. Sono Bello: 141 pages, only 45 fitted inside the in-scan budget.
+const ENRICH_PASS_BUDGET_MS = 200_000;   // stop + persist well before the 300s cap
+const ENRICH_CONCURRENCY    = 12;
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -370,6 +375,10 @@ export async function POST(
   // _localScan (no re-discovery), does ONE google_maps search per office, and merges the real
   // rating/reviews back in. dryRun returns the office count + estimated credits.
   const reviewsMode = body?.reviewsMode === true;
+  // v7.506 — ENRICH MODE: read each office's own page for its real address, phone and GPS,
+  // in time-budgeted slices with a checkpoint, continuing until none are pending. Free
+  // (page fetches only, no provider call).
+  const enrichMode = body?.enrichMode === true;
 
   if (!process.env.SERP_API_KEY) {
     return NextResponse.json(
@@ -464,6 +473,80 @@ export async function POST(
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       let callsUsed = 0;
       try {
+        // ── v7.506 ENRICH MODE: fill each office's own address / phone / GPS ─────────
+        if (enrichMode) {
+          const prior = (analysis.semrushSnapshot as any)?._localScan as LocalScan | undefined;
+          const priorLocs: LocalListing[] = prior?.locations ?? [];
+          const pendingIdx: number[] = [];
+          priorLocs.forEach((l, i) => {
+            if (l.isClient && l.pageUrl && (!l.address || l.lat == null || !l.phone)) pendingIdx.push(i);
+          });
+          if (!prior || priorLocs.length === 0) {
+            if (dryRun) { send({ type: 'done', dryRun: true, plan: { model: 'enrich', offices: 0, pending: 0, estCalls: 0 } }); }
+            else { send({ type: 'error', error: 'No offices on file. Run the local scan first.' }); }
+            controller.close();
+            return;
+          }
+          if (dryRun) {
+            send({ type: 'done', dryRun: true, plan: { model: 'enrich', offices: priorLocs.length, pending: pendingIdx.length, estCalls: 0 } });
+            controller.close();
+            return;
+          }
+          const deadline = Date.now() + ENRICH_PASS_BUDGET_MS;
+          const work: LocalListing[] = pendingIdx.map(i => ({ ...priorLocs[i] }));
+          let eNext = 0, eDone = 0, filled = 0;
+          send({ type: 'start', total: work.length, pending: work.length, phase: `Reading ${work.length} office pages…` });
+
+          const persistEnrich = async (): Promise<LocalScan> => {
+            const merged: LocalListing[] = priorLocs.slice();
+            for (let k = 0; k < pendingIdx.length; k++) {
+              const w = work[k];
+              if (w && (w.address || w.lat != null || w.phone)) merged[pendingIdx[k]] = w;
+            }
+            const ls: LocalScan = { ...(prior as LocalScan), locations: merged, builtAt: new Date().toISOString() };
+            await db.update(analyses)
+              .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: ls } as any })
+              .where(eq(analyses.id, analysis.id));
+            return ls;
+          };
+
+          const enrichWorker = async (): Promise<void> => {
+            while (eNext < work.length) {
+              if (Date.now() > deadline) return;
+              const l = work[eNext++];
+              const html = await fetchText(l.pageUrl as string);
+              if (html) {
+                const d = parseLocationPageJsonLd(html);
+                if (d) {
+                  if (d.address) l.address = d.address;
+                  if (d.phone)   l.phone   = d.phone;
+                  if (d.lat != null) l.lat = d.lat;
+                  if (d.lng != null) l.lng = d.lng;
+                  if (d.city)    l.city    = d.city;
+                  filled++;
+                  const flags: string[] = [];
+                  if (l.lat == null || l.lng == null) flags.push('no map coordinates');
+                  if (!l.phone)   flags.push('no phone');
+                  if (!l.address) flags.push('no address');
+                  l.healthFlags = flags;
+                }
+              }
+              eDone++;
+              send({ type: 'progress', done: eDone, total: work.length, seed: l.title });
+              if (eDone % 25 === 0) {
+                try { await persistEnrich(); } catch (e) { console.error('[OrbitIQ] enrich checkpoint failed:', e); }
+              }
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(ENRICH_CONCURRENCY, work.length) }, () => enrichWorker()));
+          const localScan = await persistEnrich();
+          const stillPending = (localScan.locations ?? []).filter(l => l.isClient && l.pageUrl && (!l.address || l.lat == null)).length;
+          console.log(`[OrbitIQ] Office details: ${eDone}/${work.length} pages this pass, ${filled} filled, ${stillPending} still pending`);
+          send({ type: 'done', localScan, completed: eDone, filled, remaining: stillPending });
+          controller.close();
+          return;
+        }
+
         // ── v7.307 REVIEWS MODE: per-office Google rating + review-count lookup ───────
         // Wayne's "Fetch reviews" button. Reviews don't ride the keyword map-pack scan (the
         // client often isn't in a city's pack), so this does ONE google_maps lookup per office
