@@ -66,6 +66,9 @@ interface Analysis {
   profoundSnapshot:    any;
   opportunities:       any[];
   personas:            any[];
+  // v7.501: set by GET /api/projects/[id] only when the analysis's stored data could
+  // not be read. Sizes are measured by Postgres (octet_length), never estimated.
+  snapshotUnavailable?: { reason: string; totalBytes?: number; limitBytes?: number } | null;
 }
 interface Project {
   id:                       string;
@@ -1808,6 +1811,26 @@ export default function ProjectBriefPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
+            </div>
+          )}
+
+          {/* v7.501 (Const I.5): the analysis exists but its stored data could not be read.
+              Without this the panels rendered empty and read as measured zeros. */}
+          {analysis?.snapshotUnavailable && (
+            <div role="alert" className="flex-shrink-0 m-3 rounded-xl p-4 flex items-start gap-3"
+              style={{ background: 'var(--ca-239-68-68-0_1)', border: '1px solid var(--ca-239-68-68-0_3)' }}>
+              <svg className="w-5 h-5 shrink-0 mt-0.5" style={{ color: 'var(--c-f87171)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm font-medium" style={{ color: 'var(--c-f87171)' }}>This analysis&apos;s data could not be loaded</p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--c-ef4444)' }}>
+                  {typeof analysis.snapshotUnavailable.totalBytes === 'number' && analysis.snapshotUnavailable.totalBytes > 0
+                    ? <>The data is still stored ({(analysis.snapshotUnavailable.totalBytes / 1_000_000).toFixed(1)} MB measured in the database) but could not be read for this page. </>
+                    : <>The stored data could not be read for this page. </>}
+                  Panels that depend on it may show as empty — those are not measured zeros.
+                </p>
+              </div>
             </div>
           )}
 
