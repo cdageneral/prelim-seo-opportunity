@@ -24,6 +24,7 @@ import { buildCategoryModel } from '@/lib/category/categoryModel';
 import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: mirror the Keyword panel's local-pack product lines
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298: competitor-brand guard (Const III.1a)
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
+import { checkListingIntegrity } from '@/lib/local/listingIntegrity';   // v7.502
 import { InsightPanel } from './InsightBanner';   // v7.366: insight-sentence layer · v7.415: one card, no accent slabs
 import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
 import {
@@ -127,8 +128,9 @@ function rankChip(rank: number | null): React.CSSProperties {
 // "Rating pending" for sitemap-discovered locations not yet seen in a scanned map
 // pack (NOT a defect — address/phone are known, just no GBP rating yet); reserve
 // "Incomplete" for a genuine gap (missing address, or rating with zero reviews).
-function locStatus(l: { verified: boolean; rating: number | null; reviews: number; address: string }):
+function locStatus(l: { verified: boolean; rating: number | null; reviews: number; address: string; integrity?: string[] }):
   { label: string; color: string; icon: string; hint: string } {
+  if (l.integrity && l.integrity.length) return { label: 'Needs re-scan', color: 'var(--c-f6c061)', icon: '⚠', hint: 'The stored address or Google profile is not this office\'s own — re-run the local scan' };
   if (l.verified) return { label: 'Verified', color: 'var(--c-5ee68f)', icon: '✓', hint: 'Real Google rating, reviews and address on file' };
   if (l.rating == null) return { label: 'Rating pending', color: 'var(--c-7aa7ff)', icon: '◷', hint: 'Discovered from the client sitemap — Google rating is captured when this location appears in a scanned map pack' };
   return { label: 'Incomplete', color: 'var(--c-f6c061)', icon: '⚠', hint: 'Listing is missing an address or has no reviews' };
@@ -354,7 +356,12 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return { pack, reviews, sov, opps, index };
   }, [scan]);
 
-  const clientLocations = useMemo(() => (scan?.locations ?? []).filter(l => l.isClient), [scan]);
+  // v7.502 — every office row is read through the shared integrity check (the same one the
+  // review rollup and the PDF use): a Google profile attached to several offices, or a
+  // site-wide template address, is withheld rather than shown as that office's own.
+  const integrity = useMemo(() => checkListingIntegrity(scan?.locations ?? []), [scan]);
+  const clientLocations = useMemo(() => integrity.listings.filter(l => l && l.isClient), [integrity]);
+  const ratedLocations = useMemo(() => clientLocations.filter(l => l.rating != null).length, [clientLocations]);
   // v7.306: Locations tab search filter (city / address / phone / name). No cap — show the full footprint (Const I.6).
   const filteredLocations = useMemo(() => {
     const q = locQuery.trim().toLowerCase();
@@ -828,11 +835,19 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <div style={{ fontSize: 13, fontWeight: 700 }}>Business locations &amp; listing health</div>
                 <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginBottom: 12 }}>
                   {scan.source && scan.source.indexOf('manual') === 0
-                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> read from your Locations URL, with real address, phone &amp; map coordinates. Google ratings/reviews are pending until a per-office Google lookup.</>
+                    ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(clientLocations.length)} locations</b> read from your Locations URL. {ratedLocations > 0 ? <>Google rating on file for {fmt(ratedLocations)} of {fmt(clientLocations.length)}.</> : <>Google ratings/reviews are pending until a per-office Google lookup.</>}</>
                     : (scan.source === 'kml' || scan.source === 'sitemap-pages')
                     ? <><b style={{ color: 'var(--c-5ee68f)' }}>{fmt(scan.locations.length)} locations</b> discovered from the client's own sitemap{scan.source === 'kml' ? ' (locations.kml — with GPS, address &amp; phone)' : ' location pages'}. Ratings/reviews are backfilled from the live map-pack scan.</>
                     : <>Google Business listings discovered via Maps brand search ({fmt(scan.locations.length)} matched to "{projectName}").</>}
                 </div>
+                {(integrity.templateAddressRows > 0 || integrity.sharedProfileRows > 0) && (
+                  <div data-v502-integrity style={{ fontSize: 12, color: 'var(--c-e2e2f6)', background: 'var(--ca-245-158-11-0_12)', border: '1px solid var(--ca-245-158-11-0_3)', borderRadius: 8, padding: '9px 12px', marginBottom: 12, lineHeight: 1.5 }}>
+                    <b style={{ color: 'var(--c-f6c061)' }}>Some stored office details are not that office's own.</b>{' '}
+                    {integrity.templateAddressRows > 0 && <>{fmt(integrity.templateAddressRows)} office{integrity.templateAddressRows !== 1 ? 's' : ''} carried the same site-wide address and phone, so address and phone are hidden. </>}
+                    {integrity.sharedProfileRows > 0 && <>{fmt(integrity.sharedProfileRows)} office{integrity.sharedProfileRows !== 1 ? 's' : ''} were matched to {fmt(integrity.sharedProfileGroups)} Google profile{integrity.sharedProfileGroups !== 1 ? 's' : ''} that belong{integrity.sharedProfileGroups === 1 ? 's' : ''} to one office each, so those ratings are hidden and not counted. </>}
+                    Re-run the local scan to re-read each office page, then Fetch reviews.
+                  </div>
+                )}
                 {clientLocations.length === 0
                   ? <div style={{ fontSize: 12.5, color: 'var(--c-f6c061)' }}>No client locations were discovered. Confirm the site exposes a sitemap/locations page, or that the business name matches the Google Business Profile.</div>
                   : <>
@@ -856,6 +871,8 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                               {l.pageUrl ? <> · <a href={l.pageUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--c-8b85ff)' }}>View page ↗</a></> : null}
                             </div>
                             {l.healthFlags.length > 0 && <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-f6c061)' }}>{l.healthFlags.join(' · ')}</div>}
+                            {l.duplicateOf && <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-f6c061)' }}>Same address as {l.duplicateOf} — possible duplicate page</div>}
+                            {l.aliasPages && l.aliasPages.length > 0 && <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--c-8888aa)' }}>Also listed at {l.aliasPages.length} other page{l.aliasPages.length !== 1 ? 's' : ''}</div>}
                           </div>
                         </div>
                       ))}
