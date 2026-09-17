@@ -1,3 +1,68 @@
+# v7.502 — Office locations show each office's own address, phone and Google rating (2026-09-17)
+
+Wayne, looking at Sono Bello's Locations tab: every card read "5250 Carillon Point, Kirkland, WA",
+"(316) 364-7179", "★ 4.9 · 153 reviews" and "Verified".
+
+## What was measured (stored `_localScan`, project 87dee221, 141 offices)
+
+- **54 of 141** offices carried the Kirkland HQ address and the same phone.
+- **74 of 141** offices carried a Google profile that was also attached to another office
+  (11 profiles). Example: Des Moines held Ontario, CA's profile.
+- Stored totals before: 141 offices "rated", 32,887 reviews. Through the new integrity read:
+  67 offices keep a rating, 16,859 reviews.
+
+## Root causes
+
+1. `parseLocationPageJsonLd` returned the FIRST JSON-LD node with an address. On
+   sonobello.com that is the site-wide `#organization` node (Kirkland HQ). The office's own
+   `LocalBusiness` node (e.g. Woodland Hills: 21650 Oxnard Street Suite #1450, 91367,
+   (818) 435-4259, GPS 34.1790159,-118.6011882) sits further down the same @graph.
+2. The per-office Google lookup then searched "Sono Bello Kirkland" for those 54 offices, and
+   when no result matched the office city it fell back to the brand listing with the MOST
+   REVIEWS — so a profile from another city was written onto the office and marked Verified.
+
+## What changed
+
+- **`lib/local/sitemap.ts`** — the parser ranks nodes: site-root entities (`/#organization`,
+  `/#place`, `/#website` …) are never an office; LocalBusiness subtypes outrank a generic
+  Organization. A page with only site-root nodes returns null (honest gap, I.5).
+- **NEW `lib/local/listingIntegrity.ts`** — one read-time check (II.7): a Google place id on
+  more than one office → rating, reviews, place id and Verified withheld on all of them; the
+  same address on 3+ offices → address, phone and city withheld; two offices at one address with
+  distinct profiles → labelled possible duplicate. Never mutates stored data.
+- Read through it: the review rollup and listing index (`lib/local/build.ts`), the Assessment PDF
+  local page (`lib/pdf/assessmentTemplate.ts`), the Insights local markets
+  (`lib/insightsPanel/decision.ts`), and the Locations tab.
+- **`app/api/projects/[id]/local-scan/route.ts`** — Google profile must be within 2 km of the
+  office's GPS, else the same ZIP, else the same street number + city. The most-reviews fallback
+  is removed. After page enrichment, two location pages stating the same address are merged into
+  one office (`aliasPages`).
+- **Locations tab** — header counts ratings actually on file (no longer "pending" beside a
+  rating); a notice states how many offices had withheld details and says to re-run the scan;
+  cards show "Needs re-scan".
+
+## Duplicates
+
+Woodbridge (VA) / Woodbridge, NJ and Wilmington (NC) / Wilmington-Newark (DE) are separate real
+offices on sonobello.com's location list — not duplicates.
+
+## To correct stored projects
+
+Re-run the local scan (free page reads), then Fetch reviews (one SerpAPI search per office).
+
+## Downstream (II.6a)
+
+Review rollup, local index, PDF local page and Insights local markets all read the same integrity
+check. Stored Insights decision blocks (v7.497) refresh on the next Generate.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite from the v7.501 zip: base 3242 PASS / 31 FAIL → change 3270 PASS / 31 FAIL,
+  identical FAIL set. v414 harness alias added for the new import (dated note). 28 new v502 checks;
+  negative control on the v7.501 base fails 9.
+- Integrity check run in Chrome against the live stored Sono Bello scan (numbers above).
+
 # v7.501 — A project too large for one database response loads again, losslessly (2026-09-17)
 
 Wayne: *"what happened to the panels and data in the sonobello project? It was all there yesterday
