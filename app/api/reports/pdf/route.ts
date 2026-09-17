@@ -429,6 +429,7 @@ export async function POST(req: NextRequest) {
     // section above already uses, so one report can no longer print two rival sets.
     competitorDomains,
     localScan:    (((snap as any)?._localScan) ?? null),
+    localDemand:  (((snap as any)?._localDemand) ?? null),   // v7.504 (II.6b)
     hasLocalIntent: buildLocalPackKeywordSet(snap, kwRows).size > 0,
     segments:     (((snap as any)?._audienceSegments) ?? null),
     journeyTopics,
