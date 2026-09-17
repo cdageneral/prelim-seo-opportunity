@@ -1,3 +1,65 @@
+# v7.504 — Local demand by location: how much search sits in each office's market (2026-09-17)
+
+Wayne: *"Is there a way to know the keywords that are local intent as they relate to each
+individual location, so we can know how much volume is in each location?"*
+
+## The two bases, kept apart
+
+- **City-named keywords** ("liposuction wichita falls") — the searcher wrote the market into
+  the query, so the volume already on file IS that market's demand. Attributed to the office
+  whose city the keyword names. No request, no cost.
+- **Portable keywords** ("lipo near me", "coolsculpting cost") — name no place, so a national
+  figure says nothing about one market. These are read from **Google Ads average monthly
+  searches for that market**, one request per market.
+
+Google Ads does not report volume for coordinates — *"if you specify coordinates the data will
+be provided for the country these coordinates belong to"*
+(dataforseo.com/help-center/sv-for-city-or-coordinates, read 2026-09-17). So each office is
+matched to a **City** geo target by its own city and state. An office that matches none is
+listed as unmeasured, never quietly attached to its state — which would report a whole state's
+demand as one office's market.
+
+Offices inside one Google market share its searchers: the row says so, and the portfolio total
+counts each market once.
+
+## Cost and time, stated before anything is spent (I.5b)
+
+One task per market, up to 1,000 keywords in the same task — so spend follows the number of
+markets, not the keyword count. **$0.09 per task at list price** ($0.06 on the standard queue);
+141 offices in ~141 markets is about **$12.69**. Live mode is capped at **12 requests/minute**,
+so a full read takes roughly 12 minutes; requests are paced, the panel shows the count and ETA,
+and the run checkpoints every 5 markets and auto-continues, so a killed function never discards
+paid-for work. The ledger records the **measured** per-task cost the API returns.
+
+## What shipped
+
+- **NEW `lib/local/localDemand.ts`** — the pure model: the keyword split, market resolution,
+  per-office attribution, shared-market detection and portfolio totals.
+- **NEW `app/api/projects/[id]/local-demand/route.ts`** — dryRun estimate, then a paced,
+  checkpointed streaming read; stores `_localDemand` on the displayed analysis.
+- **`lib/apis/dataforseo.ts`** — the free Google Ads geo-target list and the Search Volume
+  task; `dfsPost` now returns the whole result array (Search Volume puts one row per keyword
+  there, so reading only the first would drop 999 of 1,000).
+- **`lib/usage/pricing.ts` / `record.ts`** — `search_volume` registered as its own metered
+  unit with a dated list-price cross-check (I.5b).
+- **Local panel → Demand tab** — cost card, live progress with ETA, sortable table, Excel
+  export (rows, unmeasured offices, and the exact keywords priced).
+- **Assessment PDF** — a "Local search — demand by market" section reading the stored rows and
+  the same totals builder as the panel (II.6a / II.6b).
+
+## Reporting threshold
+
+Google rounds and suppresses low volumes per market. A keyword it reports no figure for in a
+market is counted as **below reporting threshold**, shown as such on the row and in the PDF —
+never as a zero (I.5).
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: base 3242 PASS / 31 FAIL → 3321 PASS / 31 FAIL, identical FAIL set; 30 new
+  v504 checks including the PDF section rendered through the real `buildAssessmentHTML` and a
+  source check that the read never asks for volume by coordinates.
+
 # v7.503 — The local scan reads the project it is scanning, however large it is (2026-09-17)
 
 Wayne, re-running the Sono Bello local scan: **"Failed to execute 'json' on 'Response':
