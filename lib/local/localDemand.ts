@@ -46,6 +46,13 @@ export interface DemandLocationRow {
 
 export interface DemandUnresolved { key: string; title: string; reason: string }
 
+/**
+ * v7.509 — a matched Google Ads geo target. `locationType` is Google's own type for the
+ * place ("City", "Town", "Municipality", …), carried so the panel can name what it
+ * matched rather than implying every market is a city.
+ */
+export interface ResolvedMarket { locationCode: number; locationName: string; locationType: string }
+
 export interface LocalDemand {
   builtAt:        string;
   languageCode:   string;
@@ -134,24 +141,37 @@ export function splitLocalKeywords(
 /**
  * Resolve each office to a Google Ads geo target. Matching is literal: the office's
  * city (and state, when the list carries it) against the geo target's own name. An
- * office that does not match any City-type target is reported unresolved — never
- * silently attached to its state or country, which would report a whole state's demand
- * as one office's market.
+ * office that does not match any target is reported unresolved — never silently
+ * attached to its state or country, which would report a whole state's demand as one
+ * office's market.
+ *
+ * v7.509 — the list is no longer filtered to `location_type = "City"` before matching.
+ * Google types a geo target by what the place IS, and a place people call a city is
+ * often typed something else: Amherst, New York is a TOWN, so the six City-typed
+ * "Amherst" targets are all in other states and an office with "Amherst, New York" on
+ * file matched none of them. Matching still requires the target's FIRST name part to be
+ * the office's city, which is what keeps a county or state row ("Erie County,New York")
+ * from ever being taken as a city. A City-typed target still wins when one exists for
+ * the same city and state; only when none does is another type taken, and the type is
+ * carried on the result so the panel can name it.
  */
 export function resolveOfficeLocations(
   offices: LocalListing[],
   dfsLocations: Array<{ locationCode: number; locationName: string; locationType: string; countryIso: string }>,
-): { resolved: Record<string, { locationCode: number; locationName: string }>; unresolved: DemandUnresolved[] } {
-  const byCityState: Record<string, { locationCode: number; locationName: string }> = {};
-  const byCity: Record<string, Array<{ locationCode: number; locationName: string }>> = {};
+): { resolved: Record<string, ResolvedMarket>; unresolved: DemandUnresolved[] } {
+  const byCityState: Record<string, ResolvedMarket> = {};        // City-typed only
+  const byCityStateAny: Record<string, ResolvedMarket> = {};     // any type
+  const byCity: Record<string, ResolvedMarket[]> = {};           // City-typed only
+  const byCityAny: Record<string, ResolvedMarket[]> = {};        // any type
   for (let i = 0; i < dfsLocations.length; i++) {
     const L = dfsLocations[i];
-    if (String(L.locationType ?? '').toLowerCase() !== 'city') continue;
+    const type = String(L.locationType ?? '');
+    const isCityType = type.toLowerCase() === 'city';
     const parts = String(L.locationName ?? '').split(',').map(s => s.trim()).filter(Boolean);
     if (parts.length < 2) continue;
     const city = normCity(parts[0]);
     if (!city) continue;
-    const entry = { locationCode: L.locationCode, locationName: L.locationName };
+    const entry: ResolvedMarket = { locationCode: L.locationCode, locationName: L.locationName, locationType: type };
     // v7.508 — a Google geo target names the city, then EVERY level above it:
     // "Amherst,Erie County,New York,United States". Keying only on the part right after
     // the city matched the county, so an office with its state on file still read as
@@ -160,11 +180,13 @@ export function resolveOfficeLocations(
       const level = normCity(parts[j]);
       if (!level) continue;
       const k = city + '|' + level;
-      if (!byCityState[k]) byCityState[k] = entry;
+      if (!byCityStateAny[k]) byCityStateAny[k] = entry;
+      if (isCityType && !byCityState[k]) byCityState[k] = entry;
     }
-    (byCity[city] = byCity[city] || []).push(entry);
+    (byCityAny[city] = byCityAny[city] || []).push(entry);
+    if (isCityType) (byCity[city] = byCity[city] || []).push(entry);
   }
-  const resolved: Record<string, { locationCode: number; locationName: string }> = {};
+  const resolved: Record<string, ResolvedMarket> = {};
   const unresolved: DemandUnresolved[] = [];
   for (let i = 0; i < offices.length; i++) {
     const o = offices[i];
@@ -173,16 +195,29 @@ export function resolveOfficeLocations(
     const city = normCity(o.city || fromAddr.city);
     const stateRaw = fromAddr.state;
     const state = normCity(STATE_BY_ABBR[stateRaw.toLowerCase()] || stateRaw);   // an abbreviation maps to the full name the geo-target list uses; a full name passes through
+    const shown = o.city || fromAddr.city;
     if (!city) { unresolved.push({ key, title: o.title, reason: 'no city on file — re-run the local scan' }); continue; }
-    const exact = state ? byCityState[city + '|' + state] : undefined;
+    const exact = state ? (byCityState[city + '|' + state] ?? byCityStateAny[city + '|' + state]) : undefined;
     if (exact) { resolved[key] = exact; continue; }
     const cands = byCity[city] ?? [];
+    const candsAny = byCityAny[city] ?? [];
     if (cands.length === 1) { resolved[key] = cands[0]; continue; }
-    if (cands.length > 1) {
-      unresolved.push({ key, title: o.title, reason: `"${o.city || fromAddr.city}" matches ${cands.length} markets — needs the state from a fresh scan` });
+    if (cands.length === 0 && candsAny.length === 1) { resolved[key] = candsAny[0]; continue; }
+    // v7.509 — say what was actually read. "needs the state from a fresh scan" was wrong
+    // whenever the state WAS on file and simply had no market of its own (I.5).
+    if (candsAny.length > 1) {
+      unresolved.push({
+        key, title: o.title,
+        reason: state
+          ? `"${shown}, ${stateRaw}" is not one of the ${candsAny.length} Google markets named "${shown}" — nearest named: ${candsAny.slice(0, 3).map(c => c.locationName).join('; ')}`
+          : `"${shown}" matches ${candsAny.length} markets and this office has no state on file — re-run the local scan`,
+      });
       continue;
     }
-    unresolved.push({ key, title: o.title, reason: `no Google market named "${o.city || fromAddr.city}"` });
+    unresolved.push({
+      key, title: o.title,
+      reason: state ? `no Google market named "${shown}, ${stateRaw}"` : `no Google market named "${shown}"`,
+    });
   }
   return { resolved, unresolved };
 }
