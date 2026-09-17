@@ -42,7 +42,7 @@ import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExclude
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import {
   parseSitemapIndex, parseUrlset, parseKmlPlacemarks, parseLocationUrls,
-  pickLocationSitemap, parseLocationPageJsonLd, parseEmbeddedLocationMarkers, type KmlLocation,
+  pickLocationSitemap, parseLocationPageJsonLd, parseEmbeddedLocationMarkers, parseVisibleOfficeAddress, type KmlLocation,
 } from '@/lib/local/sitemap';
 // v7.338 — generic multi-level store-locator directory crawler (Yext-style /{country}/{state}/{city}/{slug}).
 import { crawlLocations } from '@/lib/local/crawl';
@@ -479,7 +479,7 @@ export async function POST(
           const priorLocs: LocalListing[] = prior?.locations ?? [];
           const pendingIdx: number[] = [];
           priorLocs.forEach((l, i) => {
-            if (l.isClient && l.pageUrl && (!l.address || l.lat == null || !l.phone)) pendingIdx.push(i);
+            if (l.isClient && l.pageUrl && !(l as any).detailFetchedAt && (!l.address || l.lat == null || !l.phone)) pendingIdx.push(i);
           });
           if (!prior || priorLocs.length === 0) {
             if (dryRun) { send({ type: 'done', dryRun: true, plan: { model: 'enrich', offices: 0, pending: 0, estCalls: 0 } }); }
@@ -501,7 +501,7 @@ export async function POST(
             const merged: LocalListing[] = priorLocs.slice();
             for (let k = 0; k < pendingIdx.length; k++) {
               const w = work[k];
-              if (w && (w.address || w.lat != null || w.phone)) merged[pendingIdx[k]] = w;
+              if (w && (w as any).detailFetchedAt) merged[pendingIdx[k]] = w;   // v7.507: the attempt is stored too
             }
             const ls: LocalScan = { ...(prior as LocalScan), locations: merged, builtAt: new Date().toISOString() };
             await db.update(analyses)
@@ -516,7 +516,10 @@ export async function POST(
               const l = work[eNext++];
               const html = await fetchText(l.pageUrl as string);
               if (html) {
-                const d = parseLocationPageJsonLd(html);
+                // v7.507 — some office pages carry no business node at all (Sono Bello:
+                // Rockford, Lubbock, Goodyear, Chico). Their address is in plain text on
+                // the page, so it is read literally, guarded by the page's own city.
+                const d = parseLocationPageJsonLd(html) ?? parseVisibleOfficeAddress(html, l.pageUrl as string);
                 if (d) {
                   if (d.address) l.address = d.address;
                   if (d.phone)   l.phone   = d.phone;
@@ -531,6 +534,9 @@ export async function POST(
                   l.healthFlags = flags;
                 }
               }
+              // v7.507 — stamp the ATTEMPT (the v7.410 lesson). A page that carries no
+              // address in any form must resolve, not stay pending and re-read forever.
+              (l as any).detailFetchedAt = new Date().toISOString();
               eDone++;
               send({ type: 'progress', done: eDone, total: work.length, seed: l.title });
               if (eDone % 25 === 0) {
@@ -540,7 +546,7 @@ export async function POST(
           };
           await Promise.all(Array.from({ length: Math.min(ENRICH_CONCURRENCY, work.length) }, () => enrichWorker()));
           const localScan = await persistEnrich();
-          const stillPending = (localScan.locations ?? []).filter(l => l.isClient && l.pageUrl && (!l.address || l.lat == null)).length;
+          const stillPending = (localScan.locations ?? []).filter(l => l.isClient && l.pageUrl && !(l as any).detailFetchedAt && (!l.address || l.lat == null)).length;
           console.log(`[OrbitIQ] Office details: ${eDone}/${work.length} pages this pass, ${filled} filled, ${stillPending} still pending`);
           send({ type: 'done', localScan, completed: eDone, filled, remaining: stillPending });
           controller.close();
