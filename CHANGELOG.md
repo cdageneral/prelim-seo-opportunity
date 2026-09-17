@@ -1,3 +1,49 @@
+# v7.500 — Insights: the claim gate reads which measure a phrase is about (2026-09-17)
+
+Aflac Generate insights was refused after three repair rounds: *"These sentences claim a standing
+the data contradicts — 'Aflac is best-in-class in AI-answer visibility …' (claims search strength
+('best-in-class') but the client's search standing is below …)"*. The draft was right. Aflac leads
+both measured AI metrics (named rate 55.3%, 1st of 8; citations 1st of 6) and sits below the field on
+search, and the prompt permits "best-in-class" where standing is "leads". The gate was wrong.
+
+## Why the gate got it wrong
+
+- **Whole-sentence dimension tagging.** `checkStandingClaims` (v7.496) tagged a sentence as search if
+  any search word appeared anywhere in it ("organic", "SERP", "keywords"), and checked every strength
+  phrase in that sentence against search standing. The AI branch only ran when the sentence had no
+  search word at all. So an AI claim sharing a sentence with a search caveat was always judged as a
+  search claim. The repair message then told the model the opposite of the prompt, and all three
+  rounds failed the same way.
+- **Line breaks were thrown away before splitting.** `narrativeText` joins every field with `\n`,
+  but the splitter collapsed whitespace first. Unpunctuated list items fused into one "sentence", so a
+  client mention in one item was paired with a phrase in another (the fourth rejected quote was four
+  separate items glued together).
+
+## What changed
+
+- **`lib/insightsPanel/claimGate.ts`**: each strength/weakness phrase is scoped to its own clause
+  (bounded by `, ; : ( ) — –` and but/while/whereas/yet/although/though/however). The dimensions
+  named inside that clause are checked, and both are checked when both are named ("leads in search
+  and AI answers" is still judged on search). A clause that names neither falls back to the nearest
+  dimension word in the sentence, and a tie checks both. The weakness branch uses the same
+  attribution.
+- The splitter splits on line breaks first, then on sentence punctuation.
+- Prompt, route, blob shape, panel, PDF: unchanged. The gate still fails closed. It now judges the
+  measure the sentence actually names.
+
+## Verification
+
+- Project `tsc --noEmit` clean.
+- Retained suite (from `orbitiq-v7.499.zip`): base 3208 PASS / 31 FAIL → 3219 PASS / 31 FAIL, FAIL set
+  byte-identical (environment-bound Chromium/legacy checks). 11 new checks: `v500-gate` ×10 (the four
+  verbatim Aflac rejections now allow; search-strength beside an AI lead, a both-dimension clause,
+  "ranks well", nearest-word fallback and AI weakness while AI leads still reject; search weakness
+  while search is below still allows) + `v500-src` (splitter). Negative control: against the v7.499
+  gate the four Aflac cases FAIL with the exact production reason; the six strict cases pass on both.
+- All 12 `v496-gate` checks pass unchanged.
+- Art. VIII: I (no data path touched), II.6a/b (no metric changed, PDF unaffected), II.9 (no query
+  touched), IV/V.5 (no UI change), VI/VII (package 7.500.0, changelog).
+
 # v7.499 — Insights: a draft over a length limit is corrected, not discarded (2026-09-16)
 
 Wayne clicked Generate insights on Aflac and got *"Generation could not be verified against the
