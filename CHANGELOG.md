@@ -1,3 +1,37 @@
+# v7.509 — A market Google does not file under "City" (2026-09-17)
+
+v7.508 cut the unresolved markets from six to four on the live Sono Bello scan, and Buffalo was
+not one of the two it fixed.
+
+## What was measured
+
+- The office's stored address reads `500 Corporate Parkway, Suite 140, Amherst, New York, 14226`
+  (Local panel, Locations tab, 2026-09-17), and the parser reads city `Amherst`, state `New York`
+  from it — confirmed against the shipped function.
+- The live dry run on the v7.508 build still answered `"Amherst" matches 6 markets`. With every
+  level above the city keyed, that can only mean one thing: **none of the six Google markets named
+  "Amherst" is in New York.**
+- `resolveOfficeLocations` only ever looked at targets whose `location_type` is `City`. Google
+  types a geo target by what the place IS, and Amherst, New York is a town, not a city.
+
+## What changed
+
+- **`lib/local/localDemand.ts`** — the geo-target list is no longer filtered to `City` before
+  matching. A target still qualifies only when its FIRST name part is the office's city, which is
+  what keeps a county or state row (`Erie County,New York,United States`) from ever being taken as
+  a city. A City-typed target still wins whenever one exists for the same city and state; another
+  type is taken only when none does, and Google's own type is carried on the result.
+- **The unresolved reason now says what was read.** "needs the state from a fresh scan" was simply
+  wrong whenever the state WAS on file and the city had no market of its own; that case now names
+  the state and the markets that do exist (I.5).
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: 3392 PASS / 31 FAIL, FAIL set identical to base (3242 PASS / 31 FAIL). Eight new
+  checks, including the county row that must never be taken as a city and the City-typed target
+  that must still win.
+
 # v7.508 — A city named with its county resolves to its own market (2026-09-17)
 
 The v7.504 demand estimate still reported six offices as ambiguous after v7.507 filled their
