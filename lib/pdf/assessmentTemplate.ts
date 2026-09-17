@@ -29,6 +29,7 @@
 
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
 import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand';   // v7.504 (II.6b)
+import { buildDemandGaps, demandGapTotals, GAP_LABEL } from '@/lib/local/demandGaps';   // v7.505 (II.6b)
 import type { SovComputed } from '@/lib/sov/model';
 import { normSovDomain } from '@/lib/sov/model';
 // v7.492: top-6 + placements on both product ladders — the SAME helper the panel
@@ -1093,6 +1094,33 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${(dem.rows ?? []).length > top.length ? `<p class="figsub" style="margin-top:8px;">Top ${n0(top.length)} of ${n0((dem.rows ?? []).length)} locations by monthly demand; the full table is in the app and its export.</p>` : ''}
       ${unresolved > 0 ? `<p class="figsub" style="margin-top:6px;">${n0(unresolved)} location${unresolved !== 1 ? 's' : ''} could not be matched to a Google market, so ${unresolved !== 1 ? 'they carry' : 'it carries'} no in-market figure here.</p>` : ''}
       <div class="src">Source: ${esc(dem.source)} — ${n0((dem.portableKeywords ?? []).length)} place-free keywords priced in every market, plus the stored volume of keywords that name a market. ${n0(tot.belowThreshold)} keyword-market pairs fell below the reporting threshold and are counted as unmeasured, never as zero.</div>`));
+
+    // v7.505 — the same demand set against what the client holds in that market. Same
+    // shared builder the panel renders (II.6a); omitted when every market is clean.
+    const gapRows = buildDemandGaps((d.localScan?.locations ?? []) as any, dem.rows ?? [], d.localScan?.keywords ?? []);
+    const gaps = gapRows.filter(g => g.gap !== 'covered' && g.gap !== 'not-measured');
+    if (gaps.length > 0) {
+      const gt = demandGapTotals(gapRows);
+      const gRows = gaps.slice(0, 14).map(g => `<tr>
+        <td><b>${esc(g.title)}</b>${g.city ? `<br><span style="color:var(--muted); font-size:8.5px;">${esc(g.city)}</span>` : ''}</td>
+        <td>${g.demandMeasured ? vol(g.demandMonthly) : '-'}</td>
+        <td>${esc(GAP_LABEL[g.gap])}</td>
+        <td style="font-size:8.5px;">${esc(g.reason)}</td>
+      </tr>`).join('');
+      pages.push(pageWrap('LOCAL SEARCH - DEMAND NOT BEING SERVED', 'LOCAL SEARCH', `
+        <h2 class="h2">Where the demand is not being served</h2>
+        <p class="lede">Each market's measured demand set against what is held there: the map packs this scan found, and the location's own Google listing. Nothing is scored or weighted — each row names the one measured fact standing between the market and its demand, biggest market first.</p>
+        <div class="two" style="margin-bottom:13px;">
+          ${tile('Monthly demand with a gap', vol(gt.atStake), `Across ${n0(gaps.length)} location${gaps.length !== 1 ? 's' : ''}; each market counted once.`, 'bad')}
+          ${tile('Locations with no Google profile', n0(gt.byKind['no-profile'].offices), `${vol(gt.byKind['no-profile'].demand)} monthly searches sit behind them — a listing cannot rank before it exists.`)}
+        </div>
+        <table class="dt" style="margin-bottom:6px;">
+          <tr><th>Location</th><th style="width:.9in;">Demand /mo</th><th style="width:1.5in;">What is in the way</th><th style="width:2.6in;">Measured</th></tr>
+          ${gRows}
+        </table>
+        ${gaps.length > 14 ? `<p class="figsub" style="margin-top:8px;">Top ${n0(14)} of ${n0(gaps.length)} locations with a measured gap; the full list is in the app and its export.</p>` : ''}
+        <div class="src">Source: the per-market demand above, the map-pack rows from this local scan, and each location's stored Google listing. A location with nothing measurably wrong is not listed; a market whose demand has not been read is excluded rather than scored.</div>`));
+    }
   }
 
   // ── v7.427: Product Insights — search and AI by product (Const II.6b) ──────
