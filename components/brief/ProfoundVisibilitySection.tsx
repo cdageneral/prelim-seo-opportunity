@@ -3,6 +3,10 @@
 /*
  * ProfoundVisibilitySection (v7.316)
  * ----------------------------------
+ * v7.498: every Profound export is read in CHUNKS (Blob.stream()) instead of one file.text()
+ *   string — an 858 MB Responses export blew Chrome's single-string cap and surfaced as a false
+ *   schema error. Parse output unchanged; progress shows MB read of MB total; a read failure is
+ *   reported as a read failure (ProfoundReadError), never as a schema mismatch.
  * v7.316: added Step 5 — Citation Landscape (citations_data.csv): a 5th upload box that
  *   parses the granular citation-source export (one row per cited URL: hostname, platform,
  *   category, mentioned). Surfaces four insights — owned-vs-competitor citation gap, earned-
@@ -262,43 +266,145 @@ function clientDomainRoot(clientName: string): string {
 }
 
 // ─── Robust RFC-4180 streaming parser (handles quoted fields w/ embedded commas + newlines) ──
-async function streamCsv(
-  file: File,
-  onRow: (row: string[], idx: number) => void,
-  onProgress: (frac: number, rows: number) => void,
-): Promise<number> {
-  const text = await file.text();
-  const len = text.length;
-  let i = text.charCodeAt(0) === 0xfeff ? 1 : 0;
+// v7.498 — reads the file in CHUNKS through Blob.stream() instead of one `file.text()`.
+// Incident (2026-09-16, Aflac): an 858,079,417-byte Responses export was rejected with a false
+// "schema does not match" diagnostic. `file.text()` has to materialise the whole file as ONE
+// JavaScript string, and Chrome caps a string at 2^29-24 (~536.9M) characters — the file was far
+// past that. The parse state machine below is unchanged character-for-character; the only
+// difference is that its state (field / row / inQ) now survives a chunk boundary, so memory stays
+// flat at any file size. Two boundary cases are held back one character so they resolve exactly as
+// they did on the whole string: a `"` inside quotes (may be the first half of an escaped `""`), and
+// a `\r` (may be the first half of `\r\n`). Progress is measured in BYTES read of `file.size`.
+export class ProfoundReadError extends Error {
+  fileName: string; bytes: number; cause?: unknown;
+  constructor(fileName: string, bytes: number, cause: unknown) {
+    const why = cause instanceof Error ? cause.message : String(cause || 'unknown error');
+    super(`The browser could not read ${fileName || 'the file'} (${fmtBytes(bytes)}): ${why}`);
+    this.name = 'ProfoundReadError';
+    this.fileName = fileName; this.bytes = bytes; this.cause = cause;
+  }
+}
+
+// Decimal units (1 MB = 1,000,000 B) — the same basis macOS Finder shows, so the size on screen
+// matches the size the user sees on their own file.
+export function fmtBytes(n: number): string {
+  if (!(n >= 0)) return '—';
+  if (n < 1e3) return `${n} B`;
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)} KB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`;
+  return `${(n / 1e9).toFixed(2)} GB`;
+}
+
+export interface CsvFeeder { push(chunk: string, final: boolean): void; rows(): number }
+
+// The state machine, fed text in pieces. Exported so the retained suite can prove that ANY
+// chunking of a file yields exactly the rows the whole-string parse yields (Const V.6).
+export function createCsvFeeder(onRow: (row: string[], idx: number) => void): CsvFeeder {
   let field = '';
   let row: string[] = [];
   let inQ = false;
   let idx = 0;
-  let lastYield = 0;
-  while (i < len) {
-    const c = text[i];
-    if (inQ) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
-        inQ = false; i++; continue;
+  let carry = '';
+  let first = true;
+  return {
+    rows: () => idx,
+    push(chunk: string, final: boolean) {
+      let text = carry + chunk;
+      carry = '';
+      let i = 0;
+      if (first && text.length > 0) { first = false; if (text.charCodeAt(0) === 0xfeff) i = 1; }
+      let len = text.length;
+      if (!final) {
+        // Hold back the trailing run of `"` / `\r` characters: each one's meaning depends on the
+        // character AFTER it (`""` escape vs close-quote, `\r\n` vs bare `\r`), which may be in the
+        // next chunk. Re-feeding the run at the head of the next chunk is exact in every state, and
+        // it guarantees the one-character lookahead below never reads past `len`.
+        let h = len;
+        while (h > i) { const d = text.charCodeAt(h - 1); if (d === 34 || d === 13) h--; else break; }
+        carry = text.slice(h, len); len = h;
       }
-      field += c; i++; continue;
-    }
-    if (c === '"') { inQ = true; i++; continue; }
-    if (c === ',') { row.push(field); field = ''; i++; continue; }
-    if (c === '\n' || c === '\r') {
-      if (c === '\r' && text[i + 1] === '\n') i++;
-      row.push(field); field = '';
-      onRow(row, idx); idx++; row = [];
-      i++;
-      if (idx - lastYield >= 4000) { lastYield = idx; onProgress(i / len, idx); await new Promise((r) => setTimeout(r)); }
-      continue;
-    }
-    field += c; i++;
+      while (i < len) {
+        const c = text[i];
+        if (inQ) {
+          if (c === '"') {
+            if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+            inQ = false; i++; continue;
+          }
+          // fast path: copy the run up to the next quote in one slice
+          let j = text.indexOf('"', i);
+          if (j === -1 || j > len) j = len;
+          field += text.slice(i, j); i = j; continue;
+        }
+        if (c === '"') { inQ = true; i++; continue; }
+        if (c === ',') { row.push(field); field = ''; i++; continue; }
+        if (c === '\n' || c === '\r') {
+          if (c === '\r' && text[i + 1] === '\n') i++;
+          row.push(field); field = '';
+          onRow(row, idx); idx++; row = [];
+          i++;
+          continue;
+        }
+        // fast path: copy the unquoted run up to the next special character
+        let j = i + 1;
+        while (j < len) { const d = text.charCodeAt(j); if (d === 44 || d === 10 || d === 13 || d === 34) break; j++; }
+        field += text.slice(i, j); i = j;
+      }
+      if (final) {
+        if (field.length > 0 || row.length > 0) { row.push(field); onRow(row, idx); idx++; }
+        field = ''; row = [];
+      }
+    },
+  };
+}
+
+const CSV_YIELD_ROWS = 4000;
+
+function progressFor(label: string, setProgress: (p: Progress | null) => void) {
+  const passStart = Date.now();
+  return (pct: number, rows: number, bytes: number, totalBytes: number) =>
+    setProgress({ label, pct, rows, startedAt: passStart, bytes, totalBytes });
+}
+
+async function streamCsv(
+  file: File,
+  onRow: (row: string[], idx: number) => void,
+  onProgress: (frac: number, rows: number, bytesRead: number, totalBytes: number) => void,
+): Promise<number> {
+  const total = typeof file.size === 'number' ? file.size : 0;
+  let lastYield = 0;
+  const feeder = createCsvFeeder((row, idx) => {
+    onRow(row, idx);
+  });
+  // Blob.stream() is universal in the browsers OrbitIQ supports. The text() branch exists ONLY for
+  // test doubles that expose text() alone; a real File always takes the stream path.
+  if (typeof (file as { stream?: unknown }).stream !== 'function') {
+    let text: string;
+    try { text = await file.text(); } catch (e) { throw new ProfoundReadError(file.name, total, e); }
+    feeder.push(text, true);
+    onProgress(1, feeder.rows(), total, total);
+    return feeder.rows();
   }
-  if (field.length > 0 || row.length > 0) { row.push(field); onRow(row, idx); idx++; }
-  onProgress(1, idx);
-  return idx;
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try { reader = (file.stream() as ReadableStream<Uint8Array>).getReader(); }
+  catch (e) { throw new ProfoundReadError(file.name, total, e); }
+  const decoder = new TextDecoder('utf-8');
+  let bytesRead = 0;
+  for (;;) {
+    let res: ReadableStreamReadResult<Uint8Array>;
+    try { res = await reader.read(); }
+    catch (e) { throw new ProfoundReadError(file.name, total, e); }
+    if (res.done) break;
+    bytesRead += res.value.byteLength;
+    feeder.push(decoder.decode(res.value, { stream: true }), false);
+    if (feeder.rows() - lastYield >= CSV_YIELD_ROWS) {
+      lastYield = feeder.rows();
+      onProgress(total > 0 ? Math.min(1, bytesRead / total) : 0, feeder.rows(), bytesRead, total);
+      await new Promise((r) => setTimeout(r));
+    }
+  }
+  feeder.push(decoder.decode(), true);
+  onProgress(1, feeder.rows(), bytesRead, total);
+  return feeder.rows();
 }
 
 // ─── Header resolution + validation (v7.379) ────────────────────────────────────
@@ -522,7 +628,9 @@ async function serverDelete(pid: string): Promise<void> {
 // ─── Compute all metrics from the currently-loaded files ────────────────────────
 type FileMap = Partial<Record<SlotKey, File>>;
 
-interface Progress { label: string; pct: number; rows: number; startedAt: number; }
+// v7.498: bytes/totalBytes let the bar say how much of a large file is read; startedAt is per PASS
+// (the Responses file is read twice) so the ETA is not polluted by the previous pass.
+interface Progress { label: string; pct: number; rows: number; startedAt: number; bytes?: number; totalBytes?: number; }
 
 // v7.417 — exported so the retained regression suite can run the REAL parser against Wayne's
 // REAL five Profound exports at full scale (Const V.4 / V.6), rather than a replica of it in the
@@ -533,7 +641,6 @@ export async function computeAll(
   clientName: string,
   setProgress: (p: Progress | null) => void,
 ): Promise<Metrics> {
-  const startedAt = Date.now();
   const slots: SlotMap = {};
 
   // ── Sentiment pass: tracked roster + per-brand / per-theme sentiment ──
@@ -631,7 +738,7 @@ export async function computeAll(
         else if (n > p) mentionByBrand[a].neg++;
         else mentionByBrand[a].neutral++;
       });
-    }, (pct, r) => setProgress({ label: 'Sentiment', pct, rows: r, startedAt }));
+    }, progressFor('Sentiment', setProgress));
     slots.sentiment = { fileName: f.name, rows };
   }
 
@@ -714,7 +821,7 @@ export async function computeAll(
         const ks = Object.keys(seen);
         for (let k = 0; k < ks.length; k++) bag[ks[k]] = (bag[ks[k]] || 0) + 1;
       }
-    }, (pct, r) => setProgress({ label: 'Responses', pct, rows: r, startedAt }));
+    }, progressFor('Responses', setProgress));
 
     // ── Layer C · structural assertions (v7.379) ──
     // Aliasing fixes header RENAMES. These catch the other failure mode: a column that still
@@ -810,7 +917,7 @@ export async function computeAll(
           }
         }
       }
-    }, (pct, r) => setProgress({ label: 'Responses (analysing)', pct, rows: r, startedAt }));
+    }, progressFor('Responses (analysing)', setProgress));
     slots.visibility = { fileName: f.name, rows };
 
     // v7.420 — the client's own tallies ARE Profound's `mentioned?` column. Re-deriving them by
@@ -915,7 +1022,7 @@ export async function computeAll(
         try { host = new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { continue; }
         if (host) domainCount[host] = (domainCount[host] || 0) + 1;
       }
-    }, (pct, r) => setProgress({ label: 'Platforms & Citations', pct, rows: r, startedAt }));
+    }, progressFor('Platforms & Citations', setProgress));
     slots.platforms = { fileName: f.name, rows };
   }
   const cRoot = clientDomainRoot(client);
@@ -940,7 +1047,7 @@ export async function computeAll(
       demandTopicShare[topic] = (demandTopicShare[topic] || 0) + sh;
       demandTopicCount[topic] = (demandTopicCount[topic] || 0) + 1;
       demandPromptsArr.push({ prompt, share: sh, topic });
-    }, (pct, r) => setProgress({ label: 'Prompt Volume', pct, rows: r, startedAt }));
+    }, progressFor('Prompt Volume', setProgress));
     slots.demand = { fileName: f.name, rows };
   }
 
@@ -992,7 +1099,7 @@ export async function computeAll(
         if (host) mentionHost[host] = (mentionHost[host] || 0) + 1;
         if (plat) mentionPlat[plat] = (mentionPlat[plat] || 0) + 1;
       }
-    }, (pct, r) => setProgress({ label: 'Citation Landscape', pct, rows: r, startedAt }));
+    }, progressFor('Citation Landscape', setProgress));
     slots.citations = { fileName: f.name, rows };
   }
 
@@ -1297,6 +1404,9 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
       // diagnostic, and drop any previously-rendered metrics so a stale panel can never be
       // mistaken for the result of this upload.
       if (e instanceof ProfoundParseError) { setParseErr(e); setMetrics(null); }
+      // v7.498: a file the browser could not READ is not a schema problem and not a wrong export —
+      // say exactly that, with the size, so the fix (not the file's columns) is what gets looked at.
+      else if (e instanceof ProfoundReadError) { setError(e.message + ' — nothing was computed or saved from it.'); setMetrics(null); }
       else setError('Could not parse that file — check it is the matching Profound export. ' + (e instanceof Error ? e.message : ''));
     } finally {
       setProgress(null);
@@ -1417,7 +1527,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
               Parsing {progress.label}…
             </span>
             <span className="text-orbit-tertiary tabular-nums">
-              {Math.round(progress.pct * 100)}% · {fmt(progress.rows)} rows
+              {Math.round(progress.pct * 100)}%{progress.totalBytes ? ` · ${fmtBytes(progress.bytes || 0)} of ${fmtBytes(progress.totalBytes)}` : ''} · {fmt(progress.rows)} rows
               {progress.pct > 0.02 ? ` · ~${Math.max(1, Math.round(((Date.now() - progress.startedAt) / progress.pct) * (1 - progress.pct) / 1000))}s left` : ''}
             </span>
           </div>
