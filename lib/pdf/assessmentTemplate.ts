@@ -28,6 +28,7 @@
  */
 
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
+import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand';   // v7.504 (II.6b)
 import type { SovComputed } from '@/lib/sov/model';
 import { normSovDomain } from '@/lib/sov/model';
 // v7.492: top-6 + placements on both product ladders — the SAME helper the panel
@@ -188,6 +189,9 @@ export interface AssessmentData {
   // through unfiltered (pre-v7.407 behaviour, byte-for-byte).
   competitorDomains?: string[] | null;
   localScan?: LocalScan | null;
+  // v7.504 (Const II.6b) — per-market demand measured by the Local panel's demand
+  // read. Its own section below; absent ⇒ section omitted entirely (I.5).
+  localDemand?: LocalDemand | null;
   // v7.407: does this project have a local component at all (configured
   // locations / a local footprint)? Used ONLY to decide whether the absence of a
   // local scan is an honest gap worth naming (Const I.5) or simply not
@@ -1058,6 +1062,38 @@ export function buildAssessmentHTML(d: AssessmentData): string {
   // on this analysis now omits the local section entirely (the Const I.5
   // default: omitted, never estimated). No local figure appears anywhere else
   // in the report in that state either way.
+
+  // ── v7.504: local demand by market (Const II.6b) ───────────────────────────
+  // Reads the panel's STORED demand rows verbatim — nothing is recomputed here,
+  // and the two bases stay separate on the page exactly as they are on screen.
+  // Absent ⇒ omitted (I.5). ASCII-safe glyphs only (the v7.414 rule).
+  if (d.localDemand && (d.localDemand.rows ?? []).some(r => r.measuredAt || r.cityNamedVolume > 0)) {
+    const dem = d.localDemand;
+    const tot = demandPortfolioTotals(dem.rows ?? []);
+    const top = (dem.rows ?? []).slice().sort((a, b) => b.totalVolume - a.totalVolume).slice(0, 14);
+    const rowsHtml = top.map(r => `<tr>
+      <td><b>${esc(r.title)}</b>${r.city ? `<br><span style="color:var(--muted); font-size:8.5px;">${esc(r.city)}${r.state ? ', ' + esc(r.state) : ''}</span>` : ''}</td>
+      <td>${r.measuredAt ? vol(r.portableVolume) : '<span style="color:var(--muted);">not measured</span>'}</td>
+      <td>${vol(r.cityNamedVolume)}</td>
+      <td style="text-align:right;"><b>${r.measuredAt || r.cityNamedVolume > 0 ? vol(r.totalVolume) : '-'}</b></td>
+      <td style="font-size:8.5px; color:var(--muted);">${(r.sharesMarket ?? []).length > 0 ? `shares this market with ${n0(r.sharesMarket.length)} other location${r.sharesMarket.length !== 1 ? 's' : ''}` : ''}</td>
+    </tr>`).join('');
+    const unresolved = (dem.unresolved ?? []).length;
+    pages.push(pageWrap('LOCAL SEARCH - DEMAND BY MARKET', 'LOCAL SEARCH', `
+      <h2 class="h2">Where the local demand actually sits</h2>
+      <p class="lede">Two measured bases, kept apart. Keywords that NAME a market carry that market's demand already. Keywords that name no place are measured in each market through Google's own average monthly searches for that location. Locations inside one Google market share its searchers, so the portfolio figure counts each market once.</p>
+      <div class="two" style="margin-bottom:13px;">
+        ${tile('Markets measured', n0(tot.markets), `Across ${n0(tot.offices)} locations on file.`)}
+        ${tile('Total monthly demand', vol(tot.totalVolume), `${vol(tot.portableVolume)} in-market plus ${vol(tot.cityNamedVolume)} from keywords that name a market.`)}
+      </div>
+      <table class="dt" style="margin-bottom:6px;">
+        <tr><th>Location</th><th style="width:1in;">In-market /mo</th><th style="width:1.2in;">Names this market /mo</th><th style="width:.9in; text-align:right;">Total /mo</th><th style="width:1.6in;"></th></tr>
+        ${rowsHtml}
+      </table>
+      ${(dem.rows ?? []).length > top.length ? `<p class="figsub" style="margin-top:8px;">Top ${n0(top.length)} of ${n0((dem.rows ?? []).length)} locations by monthly demand; the full table is in the app and its export.</p>` : ''}
+      ${unresolved > 0 ? `<p class="figsub" style="margin-top:6px;">${n0(unresolved)} location${unresolved !== 1 ? 's' : ''} could not be matched to a Google market, so ${unresolved !== 1 ? 'they carry' : 'it carries'} no in-market figure here.</p>` : ''}
+      <div class="src">Source: ${esc(dem.source)} — ${n0((dem.portableKeywords ?? []).length)} place-free keywords priced in every market, plus the stored volume of keywords that name a market. ${n0(tot.belowThreshold)} keyword-market pairs fell below the reporting threshold and are counted as unmeasured, never as zero.</div>`));
+  }
 
   // ── v7.427: Product Insights — search and AI by product (Const II.6b) ──────
   // Reads the SAME shared basis the panel renders (lib/productInsights via the
