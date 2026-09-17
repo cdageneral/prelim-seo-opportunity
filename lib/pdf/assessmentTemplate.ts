@@ -27,6 +27,7 @@
  *         partner co-brand (v7.377, Wayne 2026-07-17).
  */
 
+import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
 import type { SovComputed } from '@/lib/sov/model';
 import { normSovDomain } from '@/lib/sov/model';
 // v7.492: top-6 + placements on both product ladders — the SAME helper the panel
@@ -441,7 +442,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     reviews: buildReviewRollup(scan.locations ?? []),
     solv:    buildShareOfLocalVoice(scan.keywords ?? []),
     index:   buildLocalIndex(buildPackRollup(scan.keywords ?? []), buildReviewRollup(scan.locations ?? []), scan.locations ?? []),
-    clientLocs: (scan.locations ?? []).filter(l => l.isClient),
+    clientLocs: checkListingIntegrity(scan.locations ?? []).listings.filter(l => l && l.isClient),   // v7.502: same integrity read as the panel
   } : null;
 
   // ── v7.376: audience segments + journey (conditional — same rules as the panels) ──
