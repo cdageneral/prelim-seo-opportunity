@@ -48,6 +48,7 @@ import { computeSov, ctrAt, CTR_SOURCE_LABEL, normSovDomain } from '@/lib/sov/mo
 import { buildRivalRankMap, accumulateLadder, type RivalRankMap, type ProductRow } from '@/lib/productInsights';
 import { classifyLocalKeywords, buildClientRelevance } from '@/lib/local/detect';
 import { buildShareOfLocalVoice, type LocalScan } from '@/lib/local/build';
+import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
 import { buildQuadrant } from '@/lib/insightsPanel/build';
 
 // ─── shapes ──────────────────────────────────────────────────────────────────
@@ -554,7 +555,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
   // ── LOCAL MARKETS ────────────────────────────────────────────────────────────
   let local: LocalMarkets | null = null;
   try {
-    const listings = localScan?.locations ?? [];
+    const listings = checkListingIntegrity(localScan?.locations ?? []).listings;   // v7.502: shared integrity read
     const geoVocab = Array.from(new Set(listings.map(l => String(l.city ?? '').toLowerCase().trim()).filter(Boolean)));
     const relevance = buildClientRelevance(ctx.guardedCategories, clientDomain, competitorDomains, pool.filter(i => !i.isGap).slice(0, 4000).map(i => i.keyword));
     const locals = classifyLocalKeywords(pool.filter(i => !i.isBranded).map(i => ({ keyword: i.keyword, searchVolume: i.searchVolume, position: i.featurePlacement ? null : i.position, isGap: i.isGap, competitor: i.competitor })), { geoVocab, relevanceTokens: relevance });
