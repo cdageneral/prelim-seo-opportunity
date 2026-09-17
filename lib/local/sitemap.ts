@@ -240,7 +240,7 @@ export interface LocationDetail {
 
 /**
  * v7.303 — parse a location page's schema.org JSON-LD (LocalBusiness / FinancialService /
- * Organization / Place) for its REAL address, phone and GPS. Returns the first business node
+ * Organization / Place) for its REAL address, phone and GPS. v7.502: ranks candidate nodes (office LocalBusiness first, site-root entities excluded) instead of the first node
  * that carries a postal address. Pure string/JSON parsing — no DOM, no network, no modeling
  * (Const I.1: every field traces to the client's own structured markup). null when absent.
  */
@@ -249,15 +249,26 @@ export function parseLocationPageJsonLd(html: string): LocationDetail | null {
   const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) blocks.push(m[1]);
+  // v7.502 — RANK the candidates instead of returning the first node with an address.
+  // Yoast/RankMath sites put the SITE-WIDE Organization (HQ address) at the top of the
+  // @graph on every page, and the office's own LocalBusiness node further down. v7.303
+  // returned the first match, so every office on sonobello.com was stamped with the
+  // Kirkland HQ address and the national phone line. Now: a site-root entity
+  // (@id "https://site/#organization" / "#place" / "#website") is NEVER an office;
+  // a LocalBusiness-family node outranks a generic Organization/Place. When only
+  // site-root nodes carry an address the page yields null — an honest gap (Const I.5).
+  let best: LocationDetail | null = null;
+  let bestScore = -1;
   for (let i = 0; i < blocks.length; i++) {
     let data: any;
     try { data = JSON.parse(blocks[i].trim()); } catch { continue; }
     const nodes: any[] = Array.isArray(data) ? data : (Array.isArray(data['@graph']) ? data['@graph'] : [data]);
     for (let j = 0; j < nodes.length; j++) {
       const n = nodes[j];
-      if (!n || typeof n !== 'object' || !n.address) continue;
+      if (!n || typeof n !== 'object' || !n.address || typeof n.address !== 'object') continue;
+      if (isSiteRootEntity(n)) continue;
       const a = n.address || {};
-      const street = Array.isArray(a.streetAddress) ? a.streetAddress.filter(Boolean).join(', ') : String(a.streetAddress || '');
+      const street = Array.isArray(a.streetAddress) ? a.streetAddress.filter(Boolean).join(', ') : String(a.streetAddress || '').trim();
       const city = String(a.addressLocality || '').trim();
       const state = String(a.addressRegion || '').trim();
       const zip = String(a.postalCode || '').trim();
@@ -265,13 +276,50 @@ export function parseLocationPageJsonLd(html: string): LocationDetail | null {
       const address = [street, cityState, zip].filter(Boolean).join(', ');
       const phone = String(n.telephone || '').trim();
       const g = n.geo || {};
-      const latN = Number(g.latitude), lngN = Number(g.longitude);
-      const lat = isFinite(latN) && g.latitude != null && g.latitude !== '' ? latN : null;
-      const lng = isFinite(lngN) && g.longitude != null && g.longitude !== '' ? lngN : null;
-      if (street || phone || lat != null) return { address, city, state, zip, phone, lat, lng };
+      const latN = Number(String(g.latitude ?? '').trim()), lngN = Number(String(g.longitude ?? '').trim());
+      const lat = isFinite(latN) && g.latitude != null && String(g.latitude).trim() !== '' ? latN : null;
+      const lng = isFinite(lngN) && g.longitude != null && String(g.longitude).trim() !== '' ? lngN : null;
+      if (!(street || phone || lat != null)) continue;
+      const score = (isLocalBusinessType(n['@type']) ? 10 : 0) + (street ? 2 : 0) + (lat != null ? 1 : 0) + (phone ? 1 : 0);
+      if (score > bestScore) { bestScore = score; best = { address, city, state, zip, phone, lat, lng }; }
     }
   }
-  return null;
+  return best;
+}
+
+const LOCAL_BUSINESS_TYPES = [
+  'localbusiness', 'medicalbusiness', 'medicalclinic', 'physician', 'dentist', 'store',
+  'financialservice', 'bankorcreditunion', 'automatedteller', 'insuranceagency',
+  'healthandbeautybusiness', 'dayspa', 'professionalservice', 'legalservice', 'attorney',
+  'restaurant', 'foodestablishment', 'autodealer', 'autorepair', 'lodgingbusiness', 'hotel',
+  'realestateagent', 'homeandconstructionbusiness', 'sportsactivitylocation', 'hospital',
+  'optician', 'pharmacy', 'veterinarycare', 'childcare', 'emergencyservice', 'governmentoffice',
+];
+
+/** true when the node's @type (string or array) is a schema.org LocalBusiness subtype. */
+export function isLocalBusinessType(t: unknown): boolean {
+  const list = Array.isArray(t) ? t : [t];
+  for (let i = 0; i < list.length; i++) {
+    const v = String(list[i] ?? '').toLowerCase().replace(/^https?:\/\/schema\.org\//, '');
+    if (LOCAL_BUSINESS_TYPES.indexOf(v) >= 0) return true;
+  }
+  return false;
+}
+
+/**
+ * true when a JSON-LD node is a SITE-WIDE entity: its @id is the site root plus a
+ * fragment ("https://www.x.com/#organization", "/#place"). Those are emitted on every page
+ * by SEO plugins and describe the company/HQ, never the office the page is about.
+ */
+export function isSiteRootEntity(n: any): boolean {
+  const id = String(n?.['@id'] ?? '').trim();
+  if (!id) return false;
+  const hash = id.indexOf('#');
+  if (hash < 0) return false;
+  const base = id.slice(0, hash);
+  const frag = id.slice(hash + 1).toLowerCase();
+  const rootish = base === '' || base === '/' || /^https?:\/\/[^\/]+\/?$/i.test(base);
+  return rootish && /^(organization|organisation|place|website|localbusiness|business|company|corporation|brand|publisher)$/.test(frag);
 }
 
 /** City + state vocabulary from discovered locations (lowercase) for the geo detector. */

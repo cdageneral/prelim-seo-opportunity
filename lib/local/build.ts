@@ -13,6 +13,7 @@
  */
 
 import type { LocalIntent } from './detect';
+import { checkListingIntegrity } from './listingIntegrity';
 
 // ─── Persisted shapes ───────────────────────────────────────────────────────────
 
@@ -39,6 +40,9 @@ export interface LocalListing {
   // difference between "not looked up yet" and "looked up, no profile exists" — the
   // second is a real finding, not a gap (Const I.5), and must never print as a zero.
   reviewsFetchedAt?: string;
+  // v7.502: other location pages on the client's site that describe this SAME office
+  // (identical street address read from each page's own markup) — merged into one row.
+  aliasPages?: string[];
 }
 
 export interface LocalPackMember {
@@ -148,7 +152,9 @@ export interface ReviewRollup {
 }
 
 export function buildReviewRollup(locations: LocalListing[]): ReviewRollup {
-  const client = locations.filter(l => l.isClient && l.rating != null);
+  // v7.502 — a Google profile attached to several offices is nobody's rating; the shared
+  // integrity check withholds it here so the panel and the PDF count it the same way.
+  const client = checkListingIntegrity(locations ?? []).listings.filter(l => l && l.isClient && l.rating != null);
   let totalReviews = 0, weighted = 0;
   let best = 0, worst = 5;
   for (let i = 0; i < client.length; i++) {
@@ -259,6 +265,9 @@ export function buildLocalOpportunities(
   const med = median(vols);
 
   // Listing-health (P0)
+  // v7.502 — read through the shared integrity check (a shared Google profile or a site-wide
+  // template address is withheld, never scored as the office's own).
+  locations = checkListingIntegrity(locations ?? []).listings;
   for (let i = 0; i < locations.length; i++) {
     const l = locations[i];
     if (!l.isClient) continue;
@@ -338,7 +347,7 @@ export function buildLocalIndex(
   const presence = pack.withPack > 0 ? pack.inPack / pack.withPack : 0;                 // 0–1
   const rankQuality = pack.avgRank > 0 ? Math.max(0, (4 - pack.avgRank) / 3) : 0;        // rank1→1, rank3→0.33
   const reviewScore = reviews.avgRating > 0 ? Math.min(1, reviews.avgRating / 5) : 0;    // 0–1
-  const clientLocs = locations.filter(l => l.isClient);
+  const clientLocs = checkListingIntegrity(locations ?? []).listings.filter(l => l && l.isClient);   // v7.502
   const verified = clientLocs.filter(l => l.verified && l.healthFlags.length === 0).length;
   const listings = clientLocs.length > 0 ? verified / clientLocs.length : 0;             // 0–1
   const score = Math.round((presence * 40) + (rankQuality * 25) + (reviewScore * 20) + (listings * 15));
