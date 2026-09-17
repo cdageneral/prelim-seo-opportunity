@@ -70,13 +70,23 @@ export function normCity(c: string): string {
   return String(c ?? '').toLowerCase().replace(CITY_NOISE, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** "123 Main St, Wichita Falls, TX 76308" → { city: 'Wichita Falls', state: 'TX' } */
+/**
+ * Address → { city, state }. Handles both shapes the parsers produce:
+ *   "123 Main St, Wichita Falls, TX 76308"                     (state and ZIP together)
+ *   "21650 Oxnard Street Suite #1450, Woodland Hills, California, 91367"  (ZIP on its own)
+ * v7.506: the second shape is what schema.org markup yields, and reading it as the first
+ * put the STATE in the city field ("California"), which no Google market is named after.
+ */
 export function cityStateFromAddress(address: string): { city: string; state: string } {
   const parts = String(address ?? '').split(',').map(s => s.trim()).filter(Boolean);
   if (parts.length < 2) return { city: '', state: '' };
-  const tail = parts[parts.length - 1];
-  const m = /^([A-Za-z .]+?)\s*\d{5}(?:-\d{4})?$/.exec(tail);
-  const state = (m ? m[1] : tail).trim();
+  const last = parts[parts.length - 1];
+  if (/^\d{5}(?:-\d{4})?$/.test(last)) {
+    // …, City, State, ZIP
+    return { city: parts[parts.length - 3] || '', state: parts[parts.length - 2] || '' };
+  }
+  const m = /^([A-Za-z .]+?)\s*\d{5}(?:-\d{4})?$/.exec(last);
+  const state = (m ? m[1] : last).trim();
   const city = parts[parts.length - 2] || '';
   return { city, state };
 }
@@ -155,7 +165,7 @@ export function resolveOfficeLocations(
     const fromAddr = cityStateFromAddress(o.address ?? '');
     const city = normCity(o.city || fromAddr.city);
     const stateRaw = fromAddr.state;
-    const state = normCity(STATE_BY_ABBR[stateRaw.toLowerCase()] || stateRaw);
+    const state = normCity(STATE_BY_ABBR[stateRaw.toLowerCase()] || stateRaw);   // an abbreviation maps to the full name the geo-target list uses; a full name passes through
     if (!city) { unresolved.push({ key, title: o.title, reason: 'no city on file — re-run the local scan' }); continue; }
     const exact = state ? byCityState[city + '|' + state] : undefined;
     if (exact) { resolved[key] = exact; continue; }
