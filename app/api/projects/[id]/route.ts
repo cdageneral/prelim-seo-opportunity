@@ -55,7 +55,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z }      from 'zod';
 import { db }     from '@/db';
 import { projects, analyses, opportunities, personas } from '@/db/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, getTableColumns } from 'drizzle-orm';
 import { MARKETS } from '@/lib/utils/markets';
 // v7.373: per-project access wall + audit. No-ops while AUTH_ENFORCED is off.
 import { checkProjectAccess } from '@/lib/auth/access';
@@ -64,6 +64,9 @@ import { recordEvent } from '@/lib/auth/audit';
 // v7.411: the page's "which analysis do I display" rule, shared so the server
 // hydrates exactly the row the client will read (Const II.7).
 import { pickDisplayAnalysis } from '@/lib/analysis/displayAnalysis';
+// v7.501: a single analysis can outgrow Neon's per-response cap on its own; its
+// snapshots are then read in measured pieces and reassembled, losslessly.
+import { readSnapshotColumn, PIECE_BUDGET } from '@/lib/analysis/snapshotPieces';
 
 async function ensureColumns() {
   try {
@@ -184,6 +187,12 @@ const UpdateSchema = z.object({
 
 /** Neon's HTTP driver hard-refuses a single response above this many bytes. */
 const NEON_HTTP_RESPONSE_LIMIT = 67_108_864;
+
+/** v7.501: an analysis whose measured JSONB is at or under this is read the
+ *  v7.411 way, in one query. Above it, its snapshots are read in pieces. The
+ *  margin below the cap covers the driver's JSON envelope and the opportunity +
+ *  persona rows that ride along with the single-query read. */
+const SINGLE_READ_BUDGET = 40_000_000;
 
 /** How many analyses the project page has always received. Unchanged — this
  *  release changes WHAT each row carries, not how many rows come back. */
@@ -319,39 +328,84 @@ async function loadAnalysisChildren(analysisId: string) {
   }
 }
 
-/** Load ONE analysis in full — snapshots, opportunities and personas — in its
- *  own query, so it gets its own response budget rather than sharing one with
- *  four rows nobody reads. If even this single row exceeds the limit, return the
- *  head plus the measured sizes instead of throwing: the project opens and says
- *  what is wrong (Const I.5) rather than 500-ing into a silent redirect. */
+/** v7.501 — the scalar analysis columns, NAMED (Const II.9a): every schema
+ *  column except the three snapshots, which are read separately in pieces. */
+function analysisScalarColumns() {
+  const { semrushSnapshot, serpApiSnapshot, profoundSnapshot, ...rest } = getTableColumns(analyses);
+  void semrushSnapshot; void serpApiSnapshot; void profoundSnapshot;
+  return rest;
+}
+
+/** v7.501 — read an analysis that is too large for one response: scalar row,
+ *  children, then each snapshot column in as many queries as its measured size
+ *  needs. Every byte stored comes back; nothing is sampled or trimmed (I.6). */
+async function hydrateAnalysisInPieces(
+  head: AnalysisHead,
+  bytes: { semrushBytes: number; serpApiBytes: number; profoundBytes: number },
+): Promise<Record<string, unknown>> {
+  const [scalarRows, children] = await Promise.all([
+    db.select(analysisScalarColumns()).from(analyses).where(eq(analyses.id, head.id)).limit(1),
+    loadAnalysisChildren(head.id),
+  ]);
+  const scalar = scalarRows[0];
+  if (!scalar) throw new Error(`analysis ${head.id} not found`);
+  // Sequential on purpose: one large piece in memory at a time on the way in.
+  const semrushSnapshot  = await readSnapshotColumn(head.id, 'semrush_snapshot',  bytes.semrushBytes,  PIECE_BUDGET);
+  const serpApiSnapshot  = await readSnapshotColumn(head.id, 'serpapi_snapshot',  bytes.serpApiBytes,  PIECE_BUDGET);
+  const profoundSnapshot = await readSnapshotColumn(head.id, 'profound_snapshot', bytes.profoundBytes, PIECE_BUDGET);
+  return {
+    ...scalar,
+    semrushSnapshot,
+    serpApiSnapshot,
+    profoundSnapshot,
+    ...children,
+    hasSemrushSnapshot:  head.hasSemrushSnapshot,
+    hasSerpApiSnapshot:  head.hasSerpApiSnapshot,
+    hasProfoundSnapshot: head.hasProfoundSnapshot,
+  };
+}
+
+/** Load ONE analysis in full — snapshots, opportunities and personas.
+ *  v7.411: in its own query, so it gets its own response budget.
+ *  v7.501: the size is measured FIRST. At or under SINGLE_READ_BUDGET it is one
+ *  query as before; above it (or if that query fails anyway) the snapshots are
+ *  read in pieces. Only if the pieced read also fails does the row degrade to a
+ *  snapshot-free row with measured sizes (Const I.5), which the page now states
+ *  on screen instead of rendering empty panels. */
 async function hydrateAnalysis(head: AnalysisHead): Promise<Record<string, unknown>> {
-  try {
-    const full = await db.query.analyses.findFirst({
-      where: eq(analyses.id, head.id),
-      with: {
-        opportunities: { orderBy: (o, { asc }) => [asc(o.rank)] },
-        personas:      true,
-      },
-    });
-    if (full) {
-      return {
-        ...full,
-        hasSemrushSnapshot:  head.hasSemrushSnapshot,
-        hasSerpApiSnapshot:  head.hasSerpApiSnapshot,
-        hasProfoundSnapshot: head.hasProfoundSnapshot,
-      };
+  const bytes = await measureSnapshotBytes(head.id).catch(() => null);
+
+  if (!bytes || bytes.totalBytes <= SINGLE_READ_BUDGET) {
+    try {
+      const full = await db.query.analyses.findFirst({
+        where: eq(analyses.id, head.id),
+        with: {
+          opportunities: { orderBy: (o, { asc }) => [asc(o.rank)] },
+          personas:      true,
+        },
+      });
+      if (full) {
+        return {
+          ...full,
+          hasSemrushSnapshot:  head.hasSemrushSnapshot,
+          hasSerpApiSnapshot:  head.hasSerpApiSnapshot,
+          hasProfoundSnapshot: head.hasProfoundSnapshot,
+        };
+      }
+    } catch (err) {
+      console.error(`[OrbitIQ v7.501] analysis ${head.id} single-query read failed — trying the pieced read:`, err);
     }
-  } catch (err) {
-    console.error(
-      `[OrbitIQ v7.411] analysis ${head.id} could not be read in full — degrading to a snapshot-free row:`,
-      err,
-    );
   }
 
-  const [children, bytes] = await Promise.all([
-    loadAnalysisChildren(head.id),
-    measureSnapshotBytes(head.id).catch(() => null),
-  ]);
+  if (bytes) {
+    try {
+      return await hydrateAnalysisInPieces(head, bytes);
+    } catch (err) {
+      console.error(`[OrbitIQ v7.501] analysis ${head.id} pieced read failed — degrading to a snapshot-free row:`, err);
+    }
+  }
+
+  const children = await loadAnalysisChildren(head.id);
   return {
     ...head,
     semrushSnapshot:  null,
@@ -359,7 +413,7 @@ async function hydrateAnalysis(head: AnalysisHead): Promise<Record<string, unkno
     profoundSnapshot: null,
     ...children,
     snapshotUnavailable: {
-      reason: 'This analysis is larger than the database can return in one response.',
+      reason: 'This analysis could not be read from the database.',
       ...(bytes ?? { limitBytes: NEON_HTTP_RESPONSE_LIMIT }),
     },
   };
