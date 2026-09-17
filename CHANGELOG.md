@@ -1,3 +1,35 @@
+# v7.507 — Offices whose page carries no markup at all (2026-09-17)
+
+The v7.506 pass filled 137 of 141 Sono Bello offices and then kept finding the same four
+pending: Rockford, Lubbock, Goodyear, Chico.
+
+## What was measured
+
+- Those four pages carry **no business node in their markup** — only Organization, Place and
+  WebPage, which are the site-wide entities v7.502 refuses. The office's real address is in
+  plain text on the page: `6850 Spring Creek Road<br>Rockford, IL 61114`, with the office
+  phone (1-779-323-8762) as a `tel:` link beside the national 1-800 line.
+- Because nothing filled, they stayed "pending" and every pass re-read them — the same shape
+  as the v7.410 review loop, where the fix was to stamp the ATTEMPT rather than the result.
+
+## What changed
+
+- **`lib/local/sitemap.ts`** — `parseVisibleOfficeAddress` reads that text literally when the
+  markup yields nothing, with two guards: the matched city must be the city the page is about
+  (its slug), so an address for a neighbouring office elsewhere on the page can never be taken;
+  and a toll-free number (800/888/877/866/855/844/833) is never treated as an office phone. No
+  GPS is invented — text carries none, so coordinates stay empty.
+- **`app/api/projects/[id]/local-scan/route.ts`** — every office-page read is stamped
+  `detailFetchedAt`, and the pending set is "missing detail AND never read". A page that
+  genuinely carries no address now resolves instead of being re-read forever.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: base 3242 PASS / 31 FAIL → 3380 PASS / 31 FAIL, identical FAIL set; 10 new
+  v507 checks on HTML that mirrors the live Rockford page, including the two guards (a second
+  city's address on the same page is not taken; a page about another city yields nothing).
+
 # v7.506 — Office details finish, however slow the client site is (2026-09-17)
 
 Found while checking v7.505 on the live Sono Bello scan: the re-run had filled real addresses,
