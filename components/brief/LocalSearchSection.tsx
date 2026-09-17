@@ -26,6 +26,7 @@ import { buildCategoryGuard } from '@/lib/category/categoryGuard';     // v7.298
 import { buildServiceCatalog, buildSeedsFromServiceTerms, DEFAULT_SERVICE_CAP, type ServiceSeed } from '@/lib/local/seeds';
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';   // v7.502
 import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand';   // v7.504
+import { buildDemandGaps, demandGapTotals, GAP_LABEL } from '@/lib/local/demandGaps';   // v7.505
 import { InsightPanel } from './InsightBanner';   // v7.366: insight-sentence layer · v7.415: one card, no accent slabs
 import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
 import {
@@ -640,6 +641,14 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     return filtered.sort((a, b) => b.totalVolume - a.totalVolume);
   }, [demand, demQuery]);
   const demandTotals = useMemo(() => demandPortfolioTotals(demand?.rows ?? []), [demand]);
+  // v7.505 — demand against what the client actually holds in that market. Pure
+  // classification over measured inputs (demand rows, scanned packs, integrity-checked
+  // listings); no score, no weighting.
+  const gapRows = useMemo(
+    () => buildDemandGaps(clientLocations as any, demand?.rows ?? [], scan?.keywords ?? []),
+    [clientLocations, demand, scan],
+  );
+  const gapTotals = useMemo(() => demandGapTotals(gapRows), [gapRows]);
 
   const exportDemand = useCallback(async () => {
     if (!demand) return;
@@ -661,9 +670,16 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Demand by location');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((demand.unresolved ?? []).map(u => ({ Location: u.title, 'Not measured because': u.reason }))), 'Not measured');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buildDemandGaps(clientLocations as any, demand.rows ?? [], scan?.keywords ?? []).map(g => ({
+      Location: g.title, City: g.city, Market: g.market,
+      'Demand / mo': g.demandMeasured ? g.demandMonthly : 'not measured',
+      'What is in the way': GAP_LABEL[g.gap], Measured: g.reason,
+      'Packs found': g.packsFound, 'Packs held': g.packsHeld,
+      Rating: g.rating == null ? 'none on file' : g.rating, Reviews: g.reviews,
+    }))), 'Demand vs coverage');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((demand.portableKeywords ?? []).map(k => ({ Keyword: k }))), 'Keywords priced');
     XLSX.writeFile(wb, `${(projectName || 'client').replace(/\s+/g, '-')}-demand-by-location.xlsx`);
-  }, [demand, projectName]);
+  }, [demand, projectName, clientLocations, scan]);
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -1091,6 +1107,46 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                           ))}
                         </tbody>
                       </table>
+                    </div>
+
+                    {/* v7.505 — demand vs coverage */}
+                    <div data-v505-gaps style={{ marginTop: 18, borderTop: '1px solid var(--c-1e1e2e)', paddingTop: 14 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>Where the demand is not being served</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--c-8888aa)', marginTop: 3, maxWidth: 780, lineHeight: 1.5 }}>
+                        Each market&rsquo;s measured demand set against what you hold there — the map packs this scan found, and the office&rsquo;s own Google listing. Markets are counted once, and the demand figure is this market&rsquo;s monthly searches, not a traffic or revenue forecast.
+                      </div>
+                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+                        <MiniCard k="DEMAND WITH A GAP" v={fmt(gapTotals.atStake)} d="monthly searches in markets with something measurably wrong" color="var(--c-f6c061)" />
+                        <MiniCard k="NO GOOGLE PROFILE" v={fmt(gapTotals.byKind['no-profile'].offices)} d={`${fmt(gapTotals.byKind['no-profile'].demand)} /mo behind them`} color="var(--c-f08a8a)" />
+                        <MiniCard k="ABSENT FROM PACK" v={fmt(gapTotals.byKind['absent-from-pack'].offices)} d={`${fmt(gapTotals.byKind['absent-from-pack'].demand)} /mo`} />
+                        <MiniCard k="UNDER THE REVIEW BAR" v={fmt(gapTotals.byKind['weak-reputation'].offices)} d={`${fmt(gapTotals.byKind['weak-reputation'].demand)} /mo`} />
+                      </div>
+                      <div style={{ overflowX: 'auto', marginTop: 12 }}>
+                        <table className="orbit-table" style={{ fontSize: 12 }}>
+                          <thead>
+                            <tr><th>Location</th><th style={{ textAlign: 'right' }}>Demand / mo</th><th>What is in the way</th><th>Measured</th></tr>
+                          </thead>
+                          <tbody>
+                            {gapRows.filter(r => r.gap !== 'covered').slice(0, 40).map((r, i) => (
+                              <tr key={r.key || i}>
+                                <td><b>{r.title}</b>{r.city ? <span style={{ color: 'var(--c-8888aa)' }}> · {r.city}</span> : null}</td>
+                                <td style={{ textAlign: 'right' }}>{r.demandMeasured ? fmt(r.demandMonthly) : <span style={{ color: 'var(--c-555570)' }}>—</span>}</td>
+                                <td><span className="ipill" style={r.gap === 'no-profile' || r.gap === 'absent-from-pack'
+                                  ? { background: 'var(--ca-239-68-68-0_13)', color: 'var(--c-f08a8a)' }
+                                  : r.gap === 'not-measured'
+                                    ? { background: 'var(--ca-136-136-170-0_12)', color: 'var(--c-8888aa)' }
+                                    : { background: 'var(--ca-245-158-11-0_15)', color: 'var(--c-f6c061)' }}>{GAP_LABEL[r.gap]}</span></td>
+                                <td style={{ fontSize: 10.5, color: 'var(--c-8888aa)' }}>{r.reason}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {gapRows.filter(r => r.gap !== 'covered').length === 0
+                        ? <div style={{ fontSize: 12, color: 'var(--c-5ee68f)', marginTop: 10 }}>Nothing measured is wrong in any market on file.</div>
+                        : <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)', marginTop: 8 }}>
+                            {fmt(gapRows.filter(r => r.gap === 'covered').length)} market{gapRows.filter(r => r.gap === 'covered').length !== 1 ? 's' : ''} had nothing measurably wrong and {gapRows.filter(r => r.gap !== 'covered').length > 40 ? `only the top 40 of ${fmt(gapRows.filter(r => r.gap !== 'covered').length)} gap rows are shown; the Excel export carries them all.` : 'are not listed here.'}
+                          </div>}
                     </div>
 
                     {(demand.unresolved ?? []).length > 0 && (
