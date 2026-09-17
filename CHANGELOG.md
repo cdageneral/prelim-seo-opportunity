@@ -1,3 +1,46 @@
+# v7.505 — Where the local demand is not being served (2026-09-17)
+
+The third piece of Wayne's request: now that each market's demand is measured (v7.504) and each
+office's listing is its own again (v7.502), the panel says which markets are worth acting on and
+what is standing in the way.
+
+## How a row is decided
+
+No score, no weighting — each row names the ONE measured fact between a market and its demand,
+tested in this order:
+
+1. **No Google profile** — a per-office lookup ran and returned no Business Profile. The market's
+   demand is unreachable until the listing exists.
+2. **Absent from the pack** — packs appeared on this market's scanned keywords and the office is
+   in none of them.
+3. **Under the review bar** — the office appears, but sits below 4.0 stars or under 25 reviews,
+   the floors the panel has used since v7.180.
+4. **Incomplete listing** — appears, rating fine, but address or phone is missing.
+5. **Nothing measured wrong** — not listed.
+6. **Not measured yet** — demand or coverage has not been read for that market. Excluded from the
+   totals rather than scored as zero (I.5).
+
+Markets are counted once, so two offices in one metro never double the demand at stake, and the
+demand figure is that market's monthly searches — not a traffic or revenue forecast, which the
+panel and the report both say.
+
+## What shipped
+
+- **NEW `lib/local/demandGaps.ts`** — the shared classifier and totals.
+- **Local panel → Demand tab** — a "Where the demand is not being served" block: demand with a
+  gap, offices with no profile, absent from pack, under the review bar, then the ranked rows with
+  the measured reason on each. The Excel export gains a **Demand vs coverage** sheet.
+- **Assessment PDF** — a "Local search — demand not being served" section reading the same
+  builder (II.6a / II.6b); omitted entirely when nothing is measurably wrong.
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: base 3242 PASS / 31 FAIL → 3352 PASS / 31 FAIL, identical FAIL set; 20 new v505
+  checks — each gap kind on its own fixture, the shared-market total, the ranking, and the PDF
+  section rendered through the real `buildAssessmentHTML` (present when gaps exist, absent when
+  none do).
+
 # v7.504 — Local demand by location: how much search sits in each office's market (2026-09-17)
 
 Wayne: *"Is there a way to know the keywords that are local intent as they relate to each
