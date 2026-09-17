@@ -36,6 +36,7 @@ import { analyses, projects, projectKeywords } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
+import { normAddress, distanceKm, PROFILE_MATCH_KM } from '@/lib/local/listingIntegrity';
 import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 // v7.336 (QC audit B3): server-side snapshot hydration — same helper the v7.335 PDF route uses.
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
@@ -139,10 +140,11 @@ const hasKmlExt = (u: string): boolean => /\.kml(\?|#|$)/i.test(u);
 async function enrichOfficesFromPages(
   listings: LocalListing[],
   send: (o: unknown) => void,
-): Promise<void> {
+): Promise<Record<number, boolean>> {
+  const pageRead: Record<number, boolean> = {};   // v7.502: index → address read from its own page
   const targets = listings.filter(l => l.pageUrl && (l.lat == null || !l.address || !l.phone));
   const total = targets.length;
-  if (total === 0) return;
+  if (total === 0) return pageRead;
   const startedAt = Date.now();
   let next = 0, done = 0;
   const worker = async (): Promise<void> => {
@@ -153,7 +155,7 @@ async function enrichOfficesFromPages(
       if (html) {
         const d = parseLocationPageJsonLd(html);
         if (d) {
-          if (d.address) l.address = d.address;
+          if (d.address) { l.address = d.address; pageRead[listings.indexOf(l)] = true; }
           if (d.phone)   l.phone   = d.phone;
           if (d.lat != null) l.lat = d.lat;
           if (d.lng != null) l.lng = d.lng;
@@ -170,6 +172,34 @@ async function enrichOfficesFromPages(
     }
   };
   await Promise.all(Array.from({ length: Math.min(KW_CONCURRENCY, targets.length) }, () => worker()));
+  return pageRead;
+}
+
+// v7.502 — two location pages that each state the SAME street address in their own markup
+// describe one office (e.g. a metro page and a neighbourhood page). Merge them into one row,
+// keeping the first page and recording the other under aliasPages. Only rows whose address
+// was read from their own page are compared, so an address copied from anywhere else can
+// never merge two offices. Returns the merged count.
+function mergeSameAddressOffices(listings: LocalListing[], pageReadIdx: Record<number, boolean>): { listings: LocalListing[]; merged: number } {
+  const firstByAddr: Record<string, LocalListing> = {};
+  const out: LocalListing[] = [];
+  let merged = 0;
+  for (let i = 0; i < listings.length; i++) {
+    const l = listings[i];
+    const na = pageReadIdx[i] ? normAddress(l.address) : '';
+    if (!na) { out.push(l); continue; }
+    const keep = firstByAddr[na];
+    if (keep) {
+      const pages = keep.aliasPages ?? [];
+      if (l.pageUrl && pages.indexOf(l.pageUrl) < 0 && l.pageUrl !== keep.pageUrl) pages.push(l.pageUrl);
+      keep.aliasPages = pages;
+      merged++;
+      continue;
+    }
+    firstByAddr[na] = l;
+    out.push(l);
+  }
+  return { listings: out, merged };
 }
 
 // v7.302 — discover offices from a manually-provided URL: HTML locations page, sitemap, or KML.
@@ -514,11 +544,23 @@ export async function POST(
               reviewCalls++;
               // Match the office's OWN Google Business Profile among the results: client brand
               // match + a real rating first, then prefer a same-city address, else most reviews.
+              // v7.502 — the profile must be THIS office's: within PROFILE_MATCH_KM of the
+              // office's own GPS, else the same ZIP, else the same street number + city.
+              // The v7.307 fallback "brand listing with the most reviews" is gone — it wrote
+              // one Kirkland profile onto 54 offices. No match = no profile for this office.
               const mine = places.filter(p => isClientPlace(p) && p.rating != null);
-              const cityLc = city.toLowerCase();
+              const cityLc = city.toLowerCase().trim();
+              const zipOf = (a: string): string => { const m = /\b(\d{5})(?:-\d{4})?\b(?!.*\b\d{5}\b)/.exec(String(a || '')); return m ? m[1] : ''; };
+              const numOf = (a: string): string => { const m = /^\s*(\d+)/.exec(String(a || '')); return m ? m[1] : ''; };
+              const officeZip = zipOf(l.address), officeNum = numOf(l.address);
+              const byGps = (l.lat != null && l.lng != null)
+                ? mine.filter(p => p.lat != null && p.lng != null && distanceKm(l.lat as number, l.lng as number, p.lat as number, p.lng as number) <= PROFILE_MATCH_KM)
+                    .sort((a, b) => distanceKm(l.lat as number, l.lng as number, a.lat as number, a.lng as number) - distanceKm(l.lat as number, l.lng as number, b.lat as number, b.lng as number))
+                : [];
               const pick: MapsPlace | undefined =
-                mine.find(p => cityFromAddress(p.address).toLowerCase() === cityLc) ||
-                mine.slice().sort((a, b) => (b.reviews || 0) - (a.reviews || 0))[0];
+                byGps[0] ||
+                (officeZip ? mine.find(p => zipOf(p.address) === officeZip) : undefined) ||
+                (officeNum && cityLc ? mine.find(p => numOf(p.address) === officeNum && cityFromAddress(p.address).toLowerCase().indexOf(cityLc) >= 0) : undefined);
               if (pick && pick.rating != null) {
                 l.rating  = pick.rating;
                 l.reviews = pick.reviews;
@@ -617,7 +659,12 @@ export async function POST(
         // v7.303 — enrich offices with real address/phone/GPS from each page's JSON-LD (real run only).
         // v7.338 — crawl-sourced offices already carry full address/GPS/phone, so this is a no-op for
         // them (enrich only targets rows still missing data); it still backfills sitemap/KML rows.
-        if (!dryRun && listings.length > 0) await enrichOfficesFromPages(listings, send);
+        if (!dryRun && listings.length > 0) {
+          const pageRead = await enrichOfficesFromPages(listings, send);
+          const dedup = mergeSameAddressOffices(listings, pageRead);
+          if (dedup.merged > 0) console.log(`[OrbitIQ] local-scan: merged ${dedup.merged} location page(s) that state the same office address`);
+          listings = dedup.listings;
+        }
 
         // ── v7.299 KEYWORD MODE: scan each real local-intent keyword's map pack ───────
         if (keywordMode) {
