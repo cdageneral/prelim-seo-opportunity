@@ -333,3 +333,65 @@ export function geoVocabFromLocations(locs: KmlLocation[]): string[] {
   }
   return Object.keys(set);
 }
+
+/**
+ * v7.507 — an office page whose markup carries NO business node, only visible text.
+ * Four Sono Bello pages are like this (Rockford, Lubbock, Goodyear, Chico): the address
+ * sits in a plain paragraph — "6850 Spring Creek Road<br>Rockford, IL 61114" — and the
+ * office phone is a `tel:` link beside the national one.
+ *
+ * This reads that text literally. Two guards keep it honest (Const I.1):
+ *   • the city in the matched address must be the city the page is about (its slug or
+ *     title), so a nearby office named elsewhere on the page can never be picked up;
+ *   • a toll-free number (800/888/877/866/855/844/833) is never taken as an office phone —
+ *     that is the brand's national line, which appears on every page.
+ * No GPS is invented: text carries none, so `lat`/`lng` stay null.
+ */
+export function parseVisibleOfficeAddress(html: string, pageUrl: string): LocationDetail | null {
+  const text = String(html ?? '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h1|h2|h3|li)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/[ \t]+/g, ' ');
+  const slug = String(pageUrl ?? '').replace(/\/+$/, '').split('/').pop() || '';
+  const slugWords = slug.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+  const re = /(\d+[^\n,]{3,70})\n\s*([A-Za-z .'-]{2,40}),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const street = m[1].trim();
+    const city = m[2].trim();
+    const state = m[3].trim();
+    const zip = m[4].trim();
+    const cityKey = city.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    // the page must be about this city
+    let aboutThisCity = false;
+    if (slugWords) {
+      const cityFirst = cityKey.split(' ')[0];
+      if (slugWords.indexOf(cityFirst) >= 0 || cityKey.indexOf(slugWords.split(' ')[0]) >= 0) aboutThisCity = true;
+    }
+    if (!aboutThisCity) continue;
+    return { address: [street, city + ', ' + state, zip].join(', '), city, state, zip, phone: parseOfficePhone(html), lat: null, lng: null };
+  }
+  return null;
+}
+
+const TOLL_FREE = /^1?(800|888|877|866|855|844|833)/;
+
+/** The first `tel:` number on the page that is not the brand's toll-free line. */
+export function parseOfficePhone(html: string): string {
+  const re = /href\s*=\s*["']tel:([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(String(html ?? ''))) !== null) {
+    const digits = m[1].replace(/[^0-9]/g, '');
+    if (digits.length < 10 || TOLL_FREE.test(digits)) continue;
+    const d = digits.length === 11 && digits.charAt(0) === '1' ? digits.slice(1) : digits;
+    if (d.length !== 10) continue;
+    return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  }
+  return '';
+}

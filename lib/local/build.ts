@@ -43,6 +43,10 @@ export interface LocalListing {
   // v7.502: other location pages on the client's site that describe this SAME office
   // (identical street address read from each page's own markup) — merged into one row.
   aliasPages?: string[];
+  // v7.507: WHEN this office's own page was last READ for its address/phone/GPS. Absent =
+  // never read. Stamped on every attempt, so a page that carries no address in any form
+  // resolves instead of being re-read on every pass (the v7.410 lesson).
+  detailFetchedAt?: string;
 }
 
 export interface LocalPackMember {
