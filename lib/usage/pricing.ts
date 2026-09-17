@@ -89,6 +89,19 @@ export const MEASURED_COST_PROVIDERS: MeasuredCostEntry[] = [
     source:   'https://dataforseo.com/pricing/ai-optimization/llm-mentions',
     asOf:     '2026-08-12',
   },
+  {
+    // v7.504 — DataForSEO Keywords Data · Google Ads Search Volume (live).
+    // One task = one location + up to 1,000 keywords, which is how the per-location
+    // local demand read is billed.
+    provider: 'dataforseo',
+    unit:     'search_volume',
+    label:    'DataForSEO Search Volume',
+    note:     'Cost is read from the `cost` field DataForSEO returns on every Search Volume task and stored per call — the actual dollars charged, not a rate applied to a count.',
+    crossCheckPerUnit: 0.09,
+    crossCheckNote:    'List price $0.09 per live task (up to 1,000 keywords, one location) — $0.06 on the standard queue (dataforseo.com/apis/keyword-data-api, read 2026-09-17). CROSS-CHECK only — never charged and never added to a total; the measured per-task cost is what the ledger bills against.',
+    source:   'https://dataforseo.com/apis/keyword-data-api',
+    asOf:     '2026-09-17',
+  },
 ];
 
 export interface TokenRate { inputPerM: number; outputPerM: number; } // USD per 1,000,000 tokens

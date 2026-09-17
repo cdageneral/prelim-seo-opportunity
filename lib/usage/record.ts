@@ -96,7 +96,7 @@ export const SEMRUSH_RATES: Record<string, number> = {
 const SEMRUSH_DEFAULT_RATE = 10;
 
 export type Provider = 'semrush' | 'serpapi' | 'profound' | 'anthropic' | 'openai' | 'dataforseo';
-export type Unit     = 'units' | 'searches' | 'calls' | 'tokens' | 'images' | 'llm_mentions';   // v7.426: llm_mentions = DataForSEO AI Optimization requests (measured cost)
+export type Unit     = 'units' | 'searches' | 'calls' | 'tokens' | 'images' | 'llm_mentions' | 'search_volume';   // v7.504: search_volume = DataForSEO Google Ads Search Volume tasks (measured cost)   // v7.426: llm_mentions = DataForSEO AI Optimization requests (measured cost)
 
 interface RecordInput {
   provider:  Provider;
