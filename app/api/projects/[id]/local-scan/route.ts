@@ -51,7 +51,7 @@ import { buildServiceSeeds, buildSeedsFromServiceTerms, gridKeyword, orderLocati
 import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
 // v7.407: the shared "which analysis is this project showing" rule — the same one
 // the project page uses, so the scan target and the report's read target cannot drift.
-import { pickDisplayAnalysis } from '@/lib/analysis/displayAnalysis';
+import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';   // v7.503 (II.9)
 
 export const maxDuration = 300;
 
@@ -392,12 +392,16 @@ export async function POST(
   // `_localScan` on a row the report never opens — local silently vanished from
   // the PDF while the panel still showed it from its own browser cache. Both
   // sides now share pickDisplayAnalysis (Const II.7).
-  const recent = await db.query.analyses.findMany({
-    where:   eq(analyses.projectId, projectId),
-    orderBy: (a: any, { desc }: any) => [desc(a.triggeredAt)],
-    limit:   5,
-  });
-  const analysis = pickDisplayAnalysis(recent as any[]) as any;
+  // v7.503 (Const II.9) — the pick is made on SCALAR heads and only the semrush
+  // snapshot is read, in its own query (pieced when it is larger than one response
+  // can carry). The previous `findMany({ limit: 5 })` selected every column of five
+  // rows: on Sono Bello, whose one analysis measures 63 MB, Neon refused the
+  // response and this route 500'd with an empty body — which the panel showed as
+  // "Failed to execute 'json' on 'Response': Unexpected end of JSON input".
+  const loaded = await loadDisplayAnalysisWithSemrush(projectId);
+  const analysis: any = loaded
+    ? { id: loaded.head.id, status: loaded.head.status, semrushSnapshot: loaded.semrushSnapshot, semrushBytes: loaded.head.semrushBytes }
+    : null;
   if (!analysis) {
     return NextResponse.json({ error: 'No analysis found. Run an analysis first.' }, { status: 400 });
   }
