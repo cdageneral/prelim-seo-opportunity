@@ -1,3 +1,41 @@
+# v7.506 — Office details finish, however slow the client site is (2026-09-17)
+
+Found while checking v7.505 on the live Sono Bello scan: the re-run had filled real addresses,
+phones and GPS for **45 of 141** offices. The rest had nothing.
+
+## What was measured
+
+- The office-page read runs INSIDE the scan under a 120-second budget. sonobello.com serves a
+  location page in roughly 8 seconds, so at ten at a time the budget buys about 45 pages and the
+  remaining 96 keep the honest gap they started with.
+- Those 96 offices then have no city or state of their own, which is also why the v7.504 demand
+  estimate could resolve only 45 of 141 markets.
+
+## What changed
+
+- **`app/api/projects/[id]/local-scan/route.ts`** — the office-page read is now also its own
+  pass (`enrichMode`): a 200-second budget, twelve at a time, a checkpoint every 25 offices, and
+  a pending count the panel uses to auto-continue. The in-scan read is unchanged, so a fast site
+  still finishes in one go.
+- **Locations tab** — when any office still lacks an address or map coordinates, the tab says how
+  many and offers **Fill office details**, with live progress and an ETA. It costs nothing: page
+  reads only, no provider call.
+- **`lib/local/localDemand.ts`** — the address parser now reads the shape schema.org markup
+  actually produces, `"…, Woodland Hills, California, 91367"`, where the ZIP is its own part.
+  Read as the older `"…, Wichita Falls, TX 76308"` shape it put **California** in the city field,
+  and no Google market is named after a state. Both shapes are covered by the retained checks,
+  including two Woodbridges that must resolve to different markets (NJ and VA).
+
+## Verified
+
+- Project `tsc --noEmit` clean (V.1a).
+- Retained suite: base 3242 PASS / 31 FAIL → 3370 PASS / 31 FAIL, identical FAIL set; 18 new v506
+  checks on the real address strings from the live scan, plus source checks that the pass is
+  budgeted and checkpointed.
+- One pre-existing v501 source check was **amended, not removed**: it piped into `grep -q`, which
+  closes the pipe early and under `set -o pipefail` failed at random on a large file. Same
+  assertion, different plumbing.
+
 # v7.505 — Where the local demand is not being served (2026-09-17)
 
 The third piece of Wayne's request: now that each market's demand is measured (v7.504) and each
