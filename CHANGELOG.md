@@ -1,3 +1,97 @@
+# v7.499 — Insights: a draft over a length limit is corrected, not discarded (2026-09-16)
+
+Wayne clicked Generate insights on Aflac and got *"Generation could not be verified against the
+stored data and was discarded … JSON shape invalid: playbook.4.keyStat: String must contain at most
+160 character(s)"*. Nothing was wrong with the data. The model wrote a competitor key stat longer
+than the field allows, and every repair round missed it.
+
+## Why the repairs could not fix it
+
+- The system prompt showed the playbook shape as `"keyStat":"one stat"` and stated no length limit
+  for any field. The schema caps 27 string fields (keyStat 160, headline 320, …).
+- A shape failure was sent the grounding repair message ("re-query the tools for real stored
+  values … match decision.standing"). Nothing in it said *shorten this field*. Three rounds, same
+  failure, then the refusal — worded as a grounding failure, which it was not.
+- The shape error listed at most 3 issues and never the actual length.
+
+## What changed
+
+- **NEW `lib/insightsPanel/shapeLimits.ts`** — walks the zod schema and returns every capped string
+  field (`playbook[].keyStat ≤ 160`, …). The limits the model is told are read from the validator,
+  so the two cannot drift.
+- **Prompt:** a LENGTH LIMITS line built from `GeneratedSchema`; keyStat is one short figure with
+  its label, never a sentence.
+- **Shape errors** name field, actual length and limit (`playbook.4.keyStat: 197 characters,
+  limit 160`), up to 8 issues.
+- **Format repair is its own round** (`MAX_SHAPE_REPAIRS = 2`, separate from the 3 grounding
+  repairs): the message names the fields, restates every limit, and says to cut words without
+  altering any number. Still time-gated (v7.487). A format give-up says format, not grounding.
+- Still fail-closed: nothing is truncated or padded server-side (that could cut a verified number),
+  and nothing unverified is stored. Blob shape, stored `schema` stamp, panel and PDF unchanged.
+
+## Gate
+
+- tsc (project tsconfig, no target override) clean on v7.497 live + v7.498 + v7.499 overlay.
+- Retained suite: v7.498 base 3196 PASS / 34 FAIL → v7.499 3208 PASS / 34 FAIL, FAIL set identical.
+  12 new v499 checks run against the real `GeneratedSchema` extracted from route.ts, incl. the Aflac
+  reproduction (197-char keyStat rejected, message names it). One v487 check (repair gate within a
+  900-char window of `repairs++`) amended with a dated note: the new format branch sits between
+  the gate and the increment; the check now asserts the gate precedes BOTH increments.
+- II.6a/b: no metric, denominator or blob field changed — PDF and rollups unaffected. II.9: no query
+  touched. IV/V.5: no UI change. I.5b: no new provider.
+
+# v7.498 — Profound uploads read in chunks: large exports no longer fail (2026-09-16)
+
+Wayne uploaded the Aflac Step 1 Responses export and got *"Upload rejected — the export schema
+does not match … no row matched the 'Visibility' run type"*. The export was fine. It was too big.
+
+## What was measured
+
+- File: `visibility.csv`, **858,079,417 bytes**, 185,624 data rows, 79 columns. Header and type
+  vocabulary are the normal shape (`type` = `Visibility`, `mentions`, `mentioned?`).
+- `streamCsv()` read every Profound file with `await file.text()` — the whole file as ONE
+  JavaScript string. V8 caps a string at 0x1fffffe8 (~536.9M) characters. Running the v7.497 parser
+  on this file in Node reproduces it exactly: `Cannot create a string longer than 0x1fffffe8
+  characters`. In Chrome the failure surfaced as a zero-row parse, which the v7.379 assertion then
+  reported as a schema problem — the wrong diagnosis, pointing at the wrong fix.
+- There was no file size limit anywhere, and no size shown on screen.
+
+## What changed (`components/brief/ProfoundVisibilitySection.tsx` only)
+
+- **`streamCsv` reads `Blob.stream()` in chunks** through a streaming `TextDecoder`. The CSV state
+  machine (quotes, `""` escapes, CR/LF/CRLF, BOM) is the v7.497 one; its state now survives a chunk
+  boundary. A trailing run of `"`/`\r` is held back to the next chunk, so the one-character
+  lookahead never reads past the chunk. Memory stays flat at any file size. The state machine is
+  exported as `createCsvFeeder` so the suite can prove chunk-invariance.
+- **A read failure is reported as a read failure.** New `ProfoundReadError` names the file and its
+  size; `runCompute` shows it as its own message and never as the schema panel.
+- **Progress shows size.** The bar reads `NN% · 412.0 MB of 858.1 MB · rows · ~Ns left`
+  (decimal MB, the basis Finder uses). The ETA is timed per pass — the Responses file is read twice
+  and the second pass no longer inherits the first pass's elapsed time.
+- No computation, denominator, stored field or PDF surface changed.
+
+## Verification
+
+- **Old vs new on a real export** (Aflac 7-day, 156,081,219 B, 41,169 rows): metrics JSON
+  byte-identical except `updatedAt`. New path 1.0 s / 116 MB RSS vs old 2.3 s / 737 MB.
+- **Full 858 MB file, new path:** parsed in 5.2 s at 130 MB RSS. Reconciled against an independent
+  Python `csv` parse of the same file: Visibility answers 185,623 = 185,623; strict `type ==
+  Visibility` 83,327 = 83,327; `mentioned? = Yes` 20,076 = 20,076. Client derived: Aflac Insurance.
+  Progress finished at 858,079,417 of 858,079,417 bytes.
+- `tsc --noEmit` on the real project config: clean.
+- Retained suite: base 3,184 pass / 32 fail → change 3,184 pass / 32 fail, FAIL set identical
+  (pre-existing); **12 new v498 checks, all pass** — including a chunk-boundary fuzz (15,000
+  chunkings of 3,000 adversarial CSVs, 0 mismatches against the v7.497 whole-string parser), stream
+  path never calls `text()`, identical `computeAll` metrics on both paths, and `ProfoundReadError`
+  on a failing stream.
+- Styling: one text string added inside an existing progress span and an existing error box; no new
+  colour tokens or classes (IV.6 — no new surface). II.6a: no metric changed. II.9: no query touched.
+
+## Not changed / noted
+
+- The panel intro still says the client is found by "matching this project's name" — stale since
+  v7.420 (client is derived from `mentioned?`). Left for a copy fix; not part of this release.
+
 # v7.497 — Insights decision block: bounded, and stored with the narrative (2026-09-16)
 
 Follow-up to v7.496, measured on the live Sono Bello project the moment v7.496 was deployed
