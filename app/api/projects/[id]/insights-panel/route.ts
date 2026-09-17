@@ -82,6 +82,7 @@ import { buildQuadrant, buildCoverageSummary } from '@/lib/insightsPanel/build';
 import { buildDecisionInputs, type DecisionInputs } from '@/lib/insightsPanel/decision';
 import { readComputed, makeComputed, isoOrNull, type DecisionBasis } from '@/lib/insightsPanel/computed';   // v7.497
 import { checkStandingClaims } from '@/lib/insightsPanel/claimGate';
+import { limitsPromptLine, describeShapeIssues, isShapeProblem, shapeRepairMessage, SHAPE_ERROR_PREFIX } from '@/lib/insightsPanel/shapeLimits';   // v7.499
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -92,6 +93,9 @@ const NDJSON_NO_STORE = { 'Cache-Control': 'no-store, no-transform', 'Content-Ty
 
 const MAX_TOOL_TURNS = 16;
 const MAX_REPAIRS = 3;
+// v7.499 — a FORMAT failure (field over its length cap, bad JSON) has its own
+// budget; it never spends a grounding repair. Both still fail closed.
+const MAX_SHAPE_REPAIRS = 2;
 
 // ── v7.487 — the wall-clock budget ───────────────────────────────────────────
 // Why this exists: the platform kills the function at `maxDuration` WITHOUT any
@@ -232,6 +236,8 @@ function insightsSystemPrompt(ctx: SeerContext): string {
     ' "localMarkets":{"summary":"where demand concentrates, where the brand is present/absent, where the pack is beatable","markets":[{"city":"...","finding":"..."}]} or null when decision.local is null,',
     ' "shifts":[{"title":"...","body":"..."}],',
     ' "sources":["panel · what was read", ...]}',
+    // v7.499 — limits derived from GeneratedSchema, so the prompt can never drift from the validator.
+    'LENGTH LIMITS (characters, hard — a field over its limit discards the whole generation): ' + limitsPromptLine(GeneratedSchema) + '. keyStat is ONE short figure with its label, never a sentence.',
     'playbook: one row per competitor in decision.plays that holds page-1 volume (skip brands with nothing measured). localMarkets.markets: the cities that matter most by demand and by gap. shifts: AI Overviews / AI answers / PAA as measured today.',
     'WORKFLOW: read the census (especially decision) first. Drill with tools only for the specific evidence a finding needs. Then write the single JSON object.',
   ].join('\n');
@@ -347,7 +353,7 @@ function parseGenerated(draft: string): { blob: z.infer<typeof GeneratedSchema> 
   let obj: unknown;
   try { obj = JSON.parse(text.slice(start, end + 1)); } catch (e: any) { return { parseError: `JSON parse failed: ${e?.message ?? 'unknown'}` }; }
   const parsed = GeneratedSchema.safeParse(obj);
-  if (!parsed.success) return { parseError: 'JSON shape invalid: ' + parsed.error.issues.slice(0, 3).map(i => `${i.path.join('.')}: ${i.message}`).join(' · ') };
+  if (!parsed.success) return { parseError: SHAPE_ERROR_PREFIX + describeShapeIssues(parsed.error.issues, obj) };
   return { blob: parsed.data };
 }
 
@@ -516,6 +522,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
 
         emit({ type: 'status', label: 'Reading the data across panels', step: 3, steps: 5, ...clock() });
         let repairs = 0;
+        let shapeRepairs = 0;   // v7.499
         let stored: any = null;
 
         // v7.487 — ONE closure for "stop querying, write the answer from what we
@@ -586,7 +593,20 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
               };
               break;
             }
-            if (repairs >= MAX_REPAIRS) {
+            // v7.499 — a format failure is repaired as a format failure: its own
+            // counter, its own instruction (field, limit, actual length), its own
+            // refusal wording. It is NOT a grounding failure and must not say so.
+            const shapeFail = isShapeProblem(problem);
+            if (shapeFail ? shapeRepairs >= MAX_SHAPE_REPAIRS : repairs >= MAX_REPAIRS) {
+              if (shapeFail) {
+                emit({
+                  type: 'error',
+                  error: 'The draft did not fit the panel format after ' + MAX_SHAPE_REPAIRS + ' corrections and was discarded. ' + (problem ?? '') + ' Try again — nothing was saved.',
+                  refusal: true,
+                });
+                await finish();
+                return;
+              }
               // Fail CLOSED (v7.463): unverified insights are never stored or shown.
               emit({
                 type: 'error',
@@ -601,11 +621,18 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
               // and say nothing. Refuse in words instead, still storing nothing.
               emit({
                 type: 'error',
-                error: 'The grounding check failed and there was not enough time left to re-query safely, so the generation was discarded — nothing unverified was saved. ' + (problem ?? '') + ' Try again.',
+                error: (shapeFail ? 'The draft did not fit the panel format' : 'The grounding check failed') + ' and there was not enough time left to re-query safely, so the generation was discarded — nothing unverified was saved. ' + (problem ?? '') + ' Try again.',
                 refusal: true,
               });
               await finish();
               return;
+            }
+            if (shapeFail) {
+              shapeRepairs++;
+              emit({ type: 'status', label: `Format check failed — correcting the draft (${shapeRepairs}/${MAX_SHAPE_REPAIRS})`, step: 4, steps: 5, ...clock() });
+              messages.push({ role: 'assistant', content: draft });
+              messages.push({ role: 'user', content: shapeRepairMessage(problem ?? '', GeneratedSchema) });
+              continue;
             }
             repairs++;
             emit({ type: 'status', label: `Grounding check failed — re-querying (${repairs}/${MAX_REPAIRS})`, step: 4, steps: 5, ...clock() });
