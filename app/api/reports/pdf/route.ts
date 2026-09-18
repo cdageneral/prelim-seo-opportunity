@@ -21,7 +21,7 @@ import { hydrateSnapshotForPool }             from '@/lib/utils/hydrateSnapshot'
 // panel badges and the Local panel's picker gates on (Const II.7) — the report
 // uses it to tell "this brand has no local component" apart from "this brand
 // competes locally but the scan is missing", so the second case can say so.
-import { buildKwPool, computeVolumeMetrics, buildLocalPackKeywordSet } from '@/lib/utils/kwVolume';
+import { buildKwPool, computeVolumeMetrics, computeRankedSplit, buildLocalPackKeywordSet } from '@/lib/utils/kwVolume';
 import { computeSov }                          from '@/lib/sov/model';
 // v7.376: the report's audience-segment + journey sections run the SAME canonical
 // topic build and attribution the panels do — the chain moved to lib/ this release
@@ -146,6 +146,8 @@ export async function POST(req: NextRequest) {
     includeDemand:     true,   // same footprint basis as the Exec hero (v7.305)
   });
   const metrics = computeVolumeMetrics(pool);
+  // v7.512: the Google Ranks Volume Opportunity card's split, off the SAME pool (Const II.7).
+  const rankedSplit = computeRankedSplit(pool);
   const sov = computeSov({
     analysis:    { ...(analysis as any), semrushSnapshot: snap },
     competitors: competitorDomains,
@@ -420,6 +422,7 @@ export async function POST(req: NextRequest) {
     poolCount:    pool.length,
     keywordScope,
     metrics,
+    rankedSplit,
     sov,
     profound,
     authority:    ((project as any).authoritySnapshot ?? null),
