@@ -1,3 +1,125 @@
+# v7.512 — The PDF's market page now shows the same split as the Google Ranks card (2026-09-18)
+
+Wayne, comparing the Aflac Assessment PDF with the app: the PDF said Aflac captures **8.2M** on page 1,
+while the Google Ranks panel showed **52.9M + 45.8M** sitting in positions 1–10.
+
+## What was measured
+
+Same page-1 volume, printed two different ways over two different totals.
+
+| | Units | Total it divides by | Aflac page-1 |
+|---|---|---|---|
+| Google Ranks · Volume Opportunity card | per **year** | keywords Aflac **ranks for** (133.6M/yr) | 98.7M/yr |
+| Assessment PDF · 09 Demand vs. Capture | per **month** | the **whole landscape** — ranked + competitor gaps + expansion demand (226.8M/mo, 16,933 kws) | 8.2M/mo |
+
+8.2M × 12 = 98.7M. Nothing was lost; the page simply never showed the ranked view or the annual unit,
+so a reader had no way to line it up with the screen.
+
+## What changed
+
+- **`lib/utils/kwVolume.ts`** — new `computeRankedSplit(pool)`: ranked keywords split into positions
+  1–3 / 4–10 / 11+, plus the competitor-gap and expansion-demand counts that make up the rest of the
+  landscape. Direct tallies over real rows. The Google Ranks card and the PDF now both read it (II.7).
+- `computeVolumeMetrics` uses the same "usable position" rule as the card: a stored position of 0,
+  negative or non-finite is not a ranking. It had been counted as page 1 in the PDF/Exec totals and
+  ignored on the card.
+- **`components/brief/GoogleSerpSection.tsx`** — the Volume Opportunity card's totals come from the
+  shared split instead of inline sums. Same numbers on screen; no visual change.
+- **`app/api/reports/pdf/route.ts`** — builds the split off the report's own pool and passes it in.
+- **`lib/pdf/assessmentTemplate.ts`** — page 09:
+  - the lede names what the landscape is made of (ranked / competitor / expansion counts);
+  - every tile carries **/mo and /yr**;
+  - new figure **"Where your ranked keywords sit"** — the app card's headline (% outside the top 3)
+    and its three bars in the app's annual units with the percentages, plus a line stating
+    page-1 volume in both units (`8.2M/mo = 98.7M/yr`);
+  - reports without a split on file keep the original figure — nothing is estimated.
+- The app card's "Moving 5 … could unlock ~X" line is **not** carried into the PDF; it is a
+  0.3 × (positions 4–10 volume) projection, not measured data.
+
+## Parity trace (II.6a)
+
+Page-1 volume, the landscape total and the capture rate are unchanged for any pool without
+zero/invalid positions. Exec hero, delivery package and PDF all read `computeVolumeMetrics`, so the
+position rule applies to all three at once. II.9: no query added or changed.
+
+## Verified
+
+- Project `tsc --noEmit` clean; real `next build` compiled successfully.
+- Retained suite **3430 PASS / 27 FAIL** vs base **3409 PASS / 27 FAIL** — identical FAIL set, zero new failures.
+- 21 new v7.512 checks: split arithmetic (bars sum exactly, gaps/demand excluded, unpositioned rows
+  counted in 11+ as on screen), page-1 identical across both views, and a render of page 09 at
+  Aflac's scale asserting the app's figures print (52.9M / 45.8M / 34.9M per yr, 60%, 8.2M/mo = 98.7M/yr).
+- Page 09 rendered in Chromium to a Letter PDF: fits one page.
+
+Built on v7.511 (packaged, not yet live) — this release ships both. v7.511's `package.json` had picked
+up an unused `esbuild` dependency (no app import; a harness leftover). It is dropped here: `package.json`
+ships as live plus the version bump, and `package-lock.json` is not touched.
+
+# v7.511 — The Executive Summary was still on a basis retired 91 releases ago (2026-09-17)
+
+Wayne, looking at Aflac: *"why does the exec dashboard say 7.2% but in the ai answer panel it is
+18.2%?"* Two cards, one client, one export, two numbers.
+
+## What was measured
+
+Both figures were correct arithmetic over different inputs, and the exec card was reading a basis
+this project deliberately threw away.
+
+| | Numerator | Denominator | Aflac |
+|---|---|---|---|
+| AI Answer Engines panel | `clientHits` — Profound's own `mentioned?` flag | `scoredRuns` — answers naming ≥1 brand | **18.2%** |
+| Executive Summary card | `visHits` — brand-token match, rows typed *exactly* `Visibility` | `visRuns` — same strict rows | **7.2% of 18,511** |
+
+- v7.381 put the exec card on the strict `type == 'Visibility'` basis, because on the one export
+  available then it reconciled with Profound's dashboard.
+- **v7.420 retired that basis** after proving it a coincidence: on the American Express export it
+  selects 873 of 42,111 answers (2%) and reads 17.41% against a dashboard 88%. The panel moved to
+  Profound's real denominator — answers naming at least one brand — with the client tally taken
+  from the vendor's own `mentioned?` column.
+- The panel was migrated. The Assessment PDF was migrated in v7.422. **This card was not**, and it
+  has been stating a second number for the same client ever since.
+- A repo sweep found the exec file was the ONLY consumer of the strict tallies — and one more
+  divergence in a client deliverable, below.
+
+## What changed
+
+- **`components/brief/ExecutiveSummarySection.tsx`** — the AI pillar reads the panel's own basis and
+  nothing else: `clientHits` over `scoredRuns`, and `engines` (the scored per-engine series) in place
+  of the strict `visEngines`. Analyses saved before v7.420 carry no `scoredRuns` and fall back to
+  `totalRuns` — the exact fallback `Analysis()` uses, so old projects agree too. The sub-label states
+  the denominator it actually divided by, and does **not** claim the brand-naming basis on a
+  pre-v7.420 metric that did not use it (I.5).
+- **The strict fields are off the exec type.** `visRuns` / `visHits` / `visPromptN` / `visEngines`
+  are no longer declared in this file's `ProfoundMetrics`. The panel still writes them for
+  back-compat; a future read of them here will not compile. That is the guard.
+- **`lib/export/deliveryPackage.ts`** — the same defect, in a **client deliverable**. The manifest
+  shipped `promptRuns: totalRuns` beside `clientHits`, so anyone dividing the two got the whole-file
+  basis (83.15% on the AmEx export) while the panel and the PDF stated 88.02%. It now carries
+  `scoredRuns`, keeps `promptRuns` as the honest total, and names the basis in a `basis` field so the
+  number cannot be read against the wrong denominator (II.6a).
+
+## Verified
+
+- **Real `next build` compiled successfully**; project `tsc --noEmit` clean (V.1a).
+- Retained suite **3409 PASS / 26 FAIL** against base **3400 PASS / 30 FAIL**. Zero new failures, and
+  **four pre-existing failures fixed**: the `profound380` checks still asserted the strict basis and
+  had been failing un-updated since v7.420. Amended with dated notes, never deleted.
+- **Sixteen checks added or amended.** The load-bearing one is a *render* assertion, not a source
+  grep: the exec card is rendered and its printed figure is checked against `clientHits / scoredRuns`
+  computed from the fixture (10.5%), with an explicit assertion that the retired strict figure (1.8%)
+  is **not** what the card prints. A source grep could not have caught this bug.
+- **The fixture was the reason it was never caught.** `exec382r`'s metrics object was a v7.381-era
+  artifact: it carried the six-engine strict series while `engines` held one whole-file row, and it
+  had no `scoredRuns` at all — so the harness could not tell the two bases apart. It is now the shape
+  the panel has written since v7.420, with engine runs summing to `scoredRuns` and engine hits to
+  `clientHits`, and a check that holds that integrity.
+- **II.6a downstream sweep:** every reader of this metric was traced. Panel — already correct.
+  Assessment PDF (`lib/pdf/assessmentTemplate.ts`) — already on `scoredRuns` since v7.422, unchanged.
+  Delivery package — fixed here. No other module reads `clientHits` / `scoredRuns` / the strict fields.
+- **II.9:** no query touched — both changed modules are render/serialize layers.
+- **IV.6 / V.5:** dual-theme render passes; light and dark render identical text. Zero new colour
+  tokens — the change adds no styling.
+
 # v7.510 — The country at the end of an address is not a state (2026-09-17)
 
 With v7.509 live the dry run resolved 52 of 137 markets and left 85 unresolved, every reason
