@@ -110,13 +110,15 @@ interface ProfoundMetrics {
   totalCites:        number;
   clientDomainCites: number;
   promptN:           number;
-  // v7.381: Profound-matched (strict `type == 'Visibility'`) tallies, added by the panel in
-  // v7.380. OPTIONAL — metrics saved by an earlier version carry none, and the exec then falls
-  // back to the blended figure exactly as the panel does, so the two never disagree.
-  visRuns?:          number;
-  visHits?:          number;
-  visPromptN?:       number;
-  visEngines?:       Array<{ platform: string; runs: number; hits: number }>;
+  // v7.420: Profound's own denominator — answers naming AT LEAST ONE brand. This is the ONLY
+  // visibility basis this file reads; `clientHits` above is its numerator and `engines` above is
+  // its per-engine series, both already on it. OPTIONAL: metrics saved before v7.420 carry no
+  // scoredRuns and fall back to `totalRuns`, exactly as the panel's own Analysis() does.
+  // v7.511: the strict `type == 'Visibility'` fields (visRuns / visHits / visPromptN / visEngines)
+  // are deliberately NOT declared here. The panel still writes them for back-compat, but v7.420
+  // retired that basis and reading it here is what made this card disagree with the panel. Leaving
+  // them off the type is the guard — a future read of them will not compile.
+  scoredRuns?:       number;
   updatedAt:         string;
 }
 
@@ -740,16 +742,22 @@ export default function ExecutiveSummarySection({
   // is the fallback ONLY when that panel has no data (honest gap, I.5). One aiVisPct
   // drives the score pillar, the bar, the landscape line, and the card by construction.
   // v7.381: reconcile with the AI Answer Engines panel AND with Profound's own dashboard.
-  // The panel's headline scores the STRICT prompt set (`type == 'Visibility'`) — Profound's own
-  // denominator — while topic whitespace and prompt gaps keep the full footprint. The exec pillar
-  // is a VIEW over that panel (Const II.6), so it must read the same strict tallies or the summary
-  // and the panel below it will state two different visibility numbers for the same client.
-  const pfStrict = pfHasData && typeof pfMetrics!.visRuns === 'number' && (pfMetrics!.visRuns as number) > 0;
-  const pfScoreRuns = pfStrict ? (pfMetrics!.visRuns as number) : (pfHasData ? pfMetrics!.totalRuns : 0);
-  const pfScoreHits = pfStrict ? (pfMetrics!.visHits as number) : (pfHasData ? pfMetrics!.clientHits : 0);
-  const pfScoreEngines = (pfStrict && (pfMetrics!.visEngines || []).length)
-    ? (pfMetrics!.visEngines as Array<{ platform: string; runs: number; hits: number }>)
-    : (pfHasData ? pfMetrics!.engines : []);
+  // v7.511 ⚠ THE v7.381 STRICT BASIS IS GONE. v7.420 retired `type == 'Visibility'` after proving
+  // it was a one-export coincidence (it selects 873 of 42,111 answers on the AmEx export and reads
+  // 17.41% against a dashboard 88%), and moved the panel to Profound's real denominator: answers
+  // naming AT LEAST ONE brand (`scoredRuns`), with the client tally taken from the vendor's own
+  // `mentioned?` flag (`clientHits`). The panel and the Assessment PDF were migrated; THIS CARD WAS
+  // NOT, so it kept dividing strict-set hits by strict-set runs and stated a different number from
+  // the panel directly below it — Aflac read 7.2% of 18,511 here against the panel's 18.2%.
+  // This pillar is a VIEW over that panel (Const II.6), so it now reads the panel's own basis and
+  // nothing else: same numerator, same denominator, same engine series. There is no second
+  // methodology left in this file, and no strict field is read here any more.
+  // Analyses saved before v7.420 carry no `scoredRuns` and fall back to `totalRuns` — the exact
+  // fallback `Analysis()` in ProfoundVisibilitySection.tsx uses, so old projects still agree too.
+  const pfScored = pfHasData && typeof pfMetrics!.scoredRuns === 'number' && (pfMetrics!.scoredRuns as number) > 0;
+  const pfScoreRuns = pfScored ? (pfMetrics!.scoredRuns as number) : (pfHasData ? pfMetrics!.totalRuns : 0);
+  const pfScoreHits = pfHasData ? pfMetrics!.clientHits : 0;
+  const pfScoreEngines = pfHasData ? pfMetrics!.engines : [];
   const pfVisExact: number | null = pfHasData && pfScoreRuns > 0 ? (100 * pfScoreHits / pfScoreRuns) : null;
   const aiEnginesZero = pfHasData ? pfScoreEngines.filter(e => e.hits === 0).length : 0;
   const aiEnginesTot  = pfHasData ? pfScoreEngines.length : 0;
@@ -760,8 +768,14 @@ export default function ExecutiveSummarySection({
     : llmMentionPct !== null ? llmMentionPct
     : aioAvail > 0 ? aioRate
     : null;
+  // v7.511: the sub-label states the basis it actually divided by. On the v7.420 basis that is
+  // "answers naming a brand" — the panel's own wording, so the two cards read as one statement.
+  // A pre-v7.420 stored metric has no scoredRuns and divides by every answer, so it must NOT claim
+  // the brand-naming basis it did not use (Const I.5 — the label names the real denominator).
   const aiVisDenom =
-    pfHasData ? `of ${pfScoreRuns.toLocaleString()} AI answers across ${aiEnginesTot} engines${pfStrict ? ' · Profound Visibility prompts' : ''}`
+    pfHasData ? (pfScored
+      ? `of ${pfScoreRuns.toLocaleString()} AI answers naming a brand · ${aiEnginesTot} engines`
+      : `of ${pfScoreRuns.toLocaleString()} AI answers across ${aiEnginesTot} engines`)
     : llmMentionPct !== null ? `of ${llmMentionTotal} AI responses citing you`
     : aioAvail > 0 ? `of ${aioAvail} AI Overviews citing you`
     : 'run an AI probe to measure';
@@ -1194,16 +1208,18 @@ export default function ExecutiveSummarySection({
         <SovPanel analysis={analysis} competitors={manualDomains} dbKeywords={dbKeywords} clientLabel={projectName ?? propClientDomain} title="Share of Voice on Google" variant="exec" />
 
         {/* v7.382: when the AI Answer Engines panel (09) has data, the right-hand slot
-            shows per-engine citation rates — the SAME strict series the AI pillar scores
-            off, so the chart and the headline can never state two numbers (Const II.6).
-            With no Profound data it falls back to the LLM-probe view below, unchanged. */}
+            shows per-engine citation rates — the SAME series the AI pillar scores off, so
+            the chart and the headline can never state two numbers (Const II.6).
+            With no Profound data it falls back to the LLM-probe view below, unchanged.
+            v7.511: that series is now the panel's `engines` (scored basis), not the retired
+            strict `visEngines`, so this caption names the brand-naming basis too. */}
         {pfHasData && engineSeries.length > 0 ? (
           <div className="orbit-card oiq-rise p-4" style={{ ['--oiq-i' as any]: 1 }}>
             <p className="text-orbit-secondary text-xs font-medium mb-1">
               AI visibility by engine · % of answers citing {pfMetrics!.client}
             </p>
             <p style={{ fontSize: 9, color: 'var(--c-4a4a70)', marginTop: 2, marginBottom: 12 }}>
-              {pfStrict ? 'Profound Visibility prompt set' : 'all tested prompts'} · {pfScoreRuns.toLocaleString()} answers across {engineSeries.length} engine{engineSeries.length === 1 ? '' : 's'}
+              {pfScored ? 'answers naming a brand' : 'all tested answers'} · {pfScoreRuns.toLocaleString()} answers across {engineSeries.length} engine{engineSeries.length === 1 ? '' : 's'}
             </p>
             <div className="flex flex-col gap-2.5">
               {engineSeries.map((e, i) => {

@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, type ReactNode } from 'react';
-import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, computeRankedSplit, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import { computeSov, PAGE1_CTR_SUM, normSovDomain, type SovRawEntry } from '@/lib/sov/model';   // v7.335: shared SoV model (QC audit B2)
 import SegmentDownloadButton from './SegmentDownloadButton';
 import { exportRankBucketXLSX } from '@/lib/export/rankBucketExport';
@@ -1145,7 +1145,7 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
   // Filter to !isGap: this section is about client rankings only (gap kws have no client position).
   // Pool options identical to KeywordsPanel, so ranked + excluded gaps always
   // sum to exactly the Keyword Landscape total.
-  const { topKws, gapKwCount, gapVolMonthly, demandKwCount, demandVolMonthly } = useMemo(() => {
+  const { topKws, gapKwCount, gapVolMonthly, demandKwCount, demandVolMonthly, rankedSplit } = useMemo(() => {
     const clientDomain = analysis?.semrushSnapshot?.domain ?? domain ?? '';
     const pool = buildKwPool({
       semrushSnapshot:  analysis?.semrushSnapshot,
@@ -1177,6 +1177,9 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
       gapVolMonthly: gaps.reduce((s, k) => s + k.searchVolume, 0),
       demandKwCount:    demand.length,
       demandVolMonthly: demand.reduce((s, k) => s + (k.searchVolume ?? 0), 0),
+      // v7.512: the Volume Opportunity card's totals come from the shared split the
+      // Assessment PDF also prints, so the two surfaces cannot drift (Const II.7).
+      rankedSplit: computeRankedSplit(pool),
     };
   }, [analysis, dbKeywords, domain, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
 
@@ -1204,9 +1207,9 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
   const totalKws = topKws.length;                               // all ranked (matches Keyword Landscape)
   const page1Kws = posKws.filter(k => k.position <= 10).length;
   const top3Kws  = posKws.filter(k => k.position <= 3).length;
-  const totalVol = topKws.reduce((s, k) => s + (k.searchVolume ?? 0), 0);
-  const top3Vol  = posKws.filter(k => k.position <= 3) .reduce((s, k) => s + k.searchVolume, 0);
-  const page1Vol = posKws.filter(k => k.position <= 10).reduce((s, k) => s + k.searchVolume, 0);
+  const totalVol = rankedSplit.rankedMonthly;   // v7.512: shared basis with the PDF
+  const top3Vol  = rankedSplit.top3Monthly;
+  const page1Vol = rankedSplit.page1Monthly;
   const posVol   = posKws.reduce((s, k) => s + k.searchVolume, 0);
 
   const weightedPos = posVol > 0
