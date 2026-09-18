@@ -329,8 +329,21 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
       quickWins: plan.scope.quickWins,
     },
     shareOfVoicePct: rank.shareOfVoice ? rank.shareOfVoice.sovPct : null,
+    // v7.511 — this shipped `promptRuns: totalRuns` beside `clientHits`, so anyone dividing the
+    // two got the whole-file basis (83.15% on the AmEx export) while the panel and the PDF stated
+    // Profound's own (88.02%). Same defect as the exec card this release fixes, in a CLIENT
+    // deliverable. It now carries the panel's stored denominator — answers naming a brand — names
+    // it in `basis` so the number can never be read against the wrong one, and keeps `promptRuns`
+    // as the honest total. Pre-v7.420 metrics have no scoredRuns and fall back to totalRuns, the
+    // same fallback the panel and the PDF use (Const II.6a).
     aiVisibility: profound && (profound.totalRuns > 0 || (profound.citeTotal || 0) > 0)
-      ? { promptRuns: profound.totalRuns ?? 0, clientHits: profound.clientHits ?? 0, ownedCitationShare: profound.citeOwnedShare ?? null }
+      ? {
+          promptRuns: profound.totalRuns ?? 0,
+          scoredRuns: (profound.scoredRuns && profound.scoredRuns > 0) ? profound.scoredRuns : (profound.totalRuns ?? 0),
+          basis: (profound.scoredRuns && profound.scoredRuns > 0) ? 'answers naming a brand' : 'all tested answers',
+          clientHits: profound.clientHits ?? 0,
+          ownedCitationShare: profound.citeOwnedShare ?? null,
+        }
       : null,
     authority: (authorityScoped?.domains ?? []).some((d: any) => d?.role === 'client' && d?.overview?.refDomains > 0)
       ? { hasData: true } : null,
