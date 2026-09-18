@@ -42,6 +42,7 @@ import {
   localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight,
   fmtInsightVol, type Insight,
 } from '@/lib/insights';
+import type { RankedSplit } from '@/lib/utils/kwVolume';
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice, buildLocalIndex,
   type LocalScan,
@@ -181,6 +182,9 @@ export interface AssessmentData {
    *  null/absent = no selection active (full footprint). Real stored entries only. */
   keywordScope?: { excludedCount: number; excludedKw: number; names: string[] } | null;
   metrics: { totalMonthly: number; totalAnnual: number; page1Monthly: number; page1Annual: number; captureRate: number };
+  /** v7.512: the Google Ranks "Volume Opportunity Analysis" card's split (lib/utils/kwVolume
+   *  computeRankedSplit, same pool). Absent ⇒ the ranked-footprint figure is omitted, never estimated. */
+  rankedSplit?: RankedSplit | null;
   sov: SovComputed | null;
   profound: ProfoundMetrics | null;
   authority?: AuthoritySnapshot | null;
@@ -891,20 +895,44 @@ export function buildAssessmentHTML(d: AssessmentData): string {
     </div>`));
 
   // Demand & capture
-  pages.push(pageWrap('DEMAND VS. CAPTURE', 'PART I · THE MARKET', `
-    <h1 class="pg">The size of the market — and your share of it.</h1>
-    <div class="lede">Your footprint spans <b>${n0(d.poolCount)} tracked keywords</b> carrying <b>${vol(m.totalMonthly)} searches every month</b> (${vol(m.totalAnnual)}/yr). You hold a page-1 position on ${p1(m.captureRate * 100)} of that demand — the rest is being answered by someone else.</div>
-    <div class="tiles c3" style="margin-bottom:18px;">
-      ${tile('Monthly search demand', vol(m.totalMonthly), `${vol(m.totalAnnual)} searches per year across the scanned footprint.`)}
-      ${tile('Demand you capture on page 1', vol(m.page1Monthly), `${p1(m.captureRate * 100)} of the footprint — searches where you hold a top-10 position.`)}
-      ${tile('Demand beyond page 1', vol(offPage1Monthly), 'Searches happening every month where your best position is 11 or worse — or absent.', 'bad')}
+  // v7.512 (Const II.6/II.7): this page now carries the SAME ranked-footprint split the app's
+  // Google Ranks "Volume Opportunity Analysis" card shows (computeRankedSplit, one pool), in the
+  // app's annual units with monthly beside them. Before this, the page printed only the full-
+  // landscape total in MONTHLY units while the card printed ranked-only in ANNUAL units — the
+  // same page-1 volume read as "8.2M" here and "98.7M" on screen (Aflac, 2026-09-18).
+  const rs  = d.rankedSplit && d.rankedSplit.rankedMonthly > 0 ? d.rankedSplit : null;
+  const yr  = (mo: number) => vol(mo * 12);
+  const rsPct = (mo: number) => (rs && rs.rankedMonthly > 0 ? (mo / rs.rankedMonthly) * 100 : 0);
+  const rsOutsideTop3 = rs ? rs.rankedMonthly - rs.top3Monthly : 0;
+  const landscapeMix = rs
+    ? ` — <b>${n0(rs.rankedKw)}</b> you already rank for${rs.gapKw > 0 ? `, <b>${n0(rs.gapKw)}</b> competitor keywords you don't rank for yet` : ''}${rs.demandKw > 0 ? `, <b>${n0(rs.demandKw)}</b> expansion keywords from demand research` : ''}`
+    : '';
+  const rankedFigure = rs ? `
+    <div class="figtitle">Where your ranked keywords sit</div>
+    <div class="figsub">The ${n0(rs.rankedKw)} keywords you already rank for · annual searches (monthly in brackets) · same basis as the app's Google Ranks panel</div>
+    <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:10px;">
+      <div style="font-size:30px; font-weight:800; letter-spacing:-.02em; line-height:1; color:var(--critical);">${Math.round(rsPct(rsOutsideTop3))}%</div>
+      <div style="font-size:10.5px; color:var(--ink2); line-height:1.45;">of ranked volume sits outside the top 3 — <b>${yr(rsOutsideTop3)}/yr</b> (${vol(rsOutsideTop3)}/mo) in positions 4+, out of ${yr(rs.rankedMonthly)}/yr (${vol(rs.rankedMonthly)}/mo) you rank for.</div>
     </div>
+    ${barRow('Positions 1–3', rsPct(rs.top3Monthly), `${yr(rs.top3Monthly)}/yr (${rsPct(rs.top3Monthly).toFixed(1)}%)`, 'var(--violet)', '1.3in', '1.45in')}
+    ${barRow('Positions 4–10', rsPct(rs.pos4to10Monthly), `${yr(rs.pos4to10Monthly)}/yr (${rsPct(rs.pos4to10Monthly).toFixed(1)}%)`, 'var(--aqua)', '1.3in', '1.45in')}
+    ${barRow('Page 2+ (11+)', rsPct(rs.page2PlusMonthly), `${yr(rs.page2PlusMonthly)}/yr (${rsPct(rs.page2PlusMonthly).toFixed(1)}%)`, 'var(--critical)', '1.3in', '1.45in')}
+    <div class="src">Source: ranking scans — real volumes and positions. Page-1 volume is the same figure in both views: ${vol(rs.page1Monthly)}/mo = ${yr(rs.page1Monthly)}/yr.${rs.unpositionedKw > 0 ? ` Page 2+ includes ${n0(rs.unpositionedKw)} ranked keyword${rs.unpositionedKw === 1 ? '' : 's'} with no position on file, as the app does.` : ''}</div>` : `
     <div class="figtitle">Captured vs. open demand</div>
     <div class="figsub">Monthly search volume · real query volumes and positions</div>
     ${barRow('Page-1 captured', m.totalMonthly > 0 ? (m.page1Monthly / m.totalMonthly) * 100 : 0, `${vol(m.page1Monthly)}/mo`, 'var(--blue)', '1.6in')}
     ${barRow('Beyond page 1', m.totalMonthly > 0 ? (offPage1Monthly / m.totalMonthly) * 100 : 0, `${vol(offPage1Monthly)}/mo`, 'var(--critical)', '1.6in')}
-    <div class="src">Source: demand + ranking scans — per-keyword volumes and positions are real rows; page-1 = position ≤ 10.</div>
-    <div class="callout"><div class="t">READ</div><p>Capture rate is the single most honest summary of a search program: it weighs every ranking by the real demand behind it. The pages that follow break the uncaptured share down — who holds it on Google, and who answers it inside AI engines.</p></div>`));
+    <div class="src">Source: demand + ranking scans — per-keyword volumes and positions are real rows; page-1 = position ≤ 10.</div>`;
+  pages.push(pageWrap('DEMAND VS. CAPTURE', 'PART I · THE MARKET', `
+    <h1 class="pg">The size of the market — and your share of it.</h1>
+    <div class="lede">Your tracked landscape spans <b>${n0(d.poolCount)} keywords</b>${landscapeMix}. Together they carry <b>${vol(m.totalMonthly)} searches every month</b> (${vol(m.totalAnnual)}/yr). You hold a page-1 position on ${vol(m.page1Monthly)}/mo (${vol(m.page1Annual)}/yr) — ${p1(m.captureRate * 100)} of that demand. The rest is being answered by someone else.</div>
+    <div class="tiles c3" style="margin-bottom:18px;">
+      ${tile('Monthly search demand', `${vol(m.totalMonthly)}<small>/mo</small>`, `${vol(m.totalAnnual)} searches per year across the full keyword landscape.`)}
+      ${tile('Demand you capture on page 1', `${vol(m.page1Monthly)}<small>/mo</small>`, `${vol(m.page1Annual)}/yr · ${p1(m.captureRate * 100)} of the landscape — searches where you hold a top-10 position.`)}
+      ${tile('Demand beyond page 1', `${vol(offPage1Monthly)}<small>/mo</small>`, `${vol(offPage1Monthly * 12)}/yr where your best position is 11 or worse — or you don't rank at all.`, 'bad')}
+    </div>
+    ${rankedFigure}
+    <div class="callout"><div class="t">READ</div><p>Capture rate weighs every ranking by the real demand behind it. The ranked view shows how well the keywords you already hold are converting into top positions; the landscape view shows how much of the market you are not yet in. The pages that follow break the uncaptured share down — who holds it on Google, and who answers it inside AI engines.</p></div>`));
 
   // Share of Voice
   if (sov) {
