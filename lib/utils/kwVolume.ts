@@ -789,8 +789,11 @@ export function buildKwPool({
 /** Sums a pool into volume metrics. */
 export function computeVolumeMetrics(pool: KwPoolItem[]): Omit<VolumeMetrics, 'pool'> {
   const totalMonthly = pool.reduce((s, k) => s + k.searchVolume, 0);
+  // v7.512: a position of 0 / negative / non-finite is not a ranking. The Google Ranks
+  // card already ignored those rows; this sum counted them as page 1, so the PDF and the
+  // card could print different page-1 figures from the same pool. One rule now (II.7).
   const page1Monthly = pool
-    .filter(k => k.position !== null && k.position <= 10)
+    .filter(k => { const p = usablePosition(k.position); return p !== null && p <= 10; })
     .reduce((s, k) => s + k.searchVolume, 0);
   return {
     totalMonthly,
@@ -799,6 +802,54 @@ export function computeVolumeMetrics(pool: KwPoolItem[]): Omit<VolumeMetrics, 'p
     page1Annual:  page1Monthly * 12,
     captureRate:  totalMonthly > 0 ? page1Monthly / totalMonthly : 0,
   };
+}
+
+// ─── v7.512: ranked-footprint split (one basis for the app card AND the PDF) ──
+// The Google Ranks "Volume Opportunity Analysis" card and the Assessment PDF's
+// Demand-vs-Capture page used to derive their numbers separately: the card from
+// the RANKED rows (client rankings only), the PDF from the WHOLE pool (ranked +
+// competitor gaps + expansion demand). Same page-1 volume, different totals and
+// different units, so the two read as a contradiction (Aflac: "8.2M" in the PDF
+// vs "98.7M" on screen — the same figure, monthly vs annual). Both surfaces now
+// read this one function (Const II.6/II.7). Direct tallies over real rows only.
+export interface RankedSplit {
+  rankedKw:          number;  // client ranking rows (not a competitor gap, not expansion demand)
+  rankedMonthly:     number;  // their monthly volume
+  top3Monthly:       number;  // position 1–3
+  page1Monthly:      number;  // position 1–10
+  pos4to10Monthly:   number;  // position 4–10
+  page2PlusMonthly:  number;  // ranked rows at 11+ or with no position on file
+  unpositionedKw:    number;  // ranked rows with no usable position (counted in page2Plus, as on screen)
+  gapKw:             number;  // competitor keywords where the client does not rank
+  gapMonthly:        number;
+  demandKw:          number;  // expansion demand keywords the footprint never ranked for
+  demandMonthly:     number;
+}
+
+/** A position the Google Ranks panel treats as real (same rule as its topKws map). */
+function usablePosition(p: number | null | undefined): number | null {
+  return p != null && p > 0 && isFinite(p) ? p : null;
+}
+
+export function computeRankedSplit(pool: KwPoolItem[]): RankedSplit {
+  const out: RankedSplit = {
+    rankedKw: 0, rankedMonthly: 0, top3Monthly: 0, page1Monthly: 0, pos4to10Monthly: 0,
+    page2PlusMonthly: 0, unpositionedKw: 0, gapKw: 0, gapMonthly: 0, demandKw: 0, demandMonthly: 0,
+  };
+  for (const k of pool) {
+    const v = k.searchVolume ?? 0;
+    if (k.isGap) { out.gapKw++; out.gapMonthly += v; continue; }
+    if (k.origin === 'demand') { out.demandKw++; out.demandMonthly += v; continue; }
+    out.rankedKw++;
+    out.rankedMonthly += v;
+    const p = usablePosition(k.position);
+    if (p === null) out.unpositionedKw++;
+    if (p !== null && p <= 3)  out.top3Monthly  += v;
+    if (p !== null && p <= 10) out.page1Monthly += v;
+  }
+  out.pos4to10Monthly  = out.page1Monthly - out.top3Monthly;
+  out.page2PlusMonthly = out.rankedMonthly - out.page1Monthly;
+  return out;
 }
 
 /** Convenience: build pool + compute metrics in one call. */
