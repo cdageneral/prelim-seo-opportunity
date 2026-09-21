@@ -30,6 +30,7 @@ export default function DashboardPage() {
   // works signed-out while AUTH_ENFORCED is off.
   const [me, setMe]           = useState<Me | null>(null);
   const [enforced, setEnforced] = useState(false);
+  const [hasScout, setHasScout] = useState(false);   // v7.513
   // v7.401: tile/list toggle + live search. `view` starts at 'tile' so the server
   // and first client render agree (no hydration mismatch), then the stored
   // preference is applied in an effect.
@@ -59,7 +60,20 @@ export default function DashboardPage() {
     window.location.href = '/sign-in';
   }
 
-  useEffect(() => { fetchProjects(); fetchMe(); }, []);
+  // v7.513: product access (Orbit / Scout). A Scout-only account has no business on
+  // the project dashboard, so it is sent to /scout; an account with Scout gets the
+  // link. Any failure leaves the dashboard exactly as it was before v7.513.
+  async function fetchProducts() {
+    try {
+      const res = await fetch('/api/scout/access', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.orbit === false && data.scout === true) { window.location.replace('/scout'); return; }
+      setHasScout(Boolean(data.scout));
+    } catch { /* product access optional */ }
+  }
+
+  useEffect(() => { fetchProjects(); fetchMe(); fetchProducts(); }, []);
 
   // v7.401: restore the remembered view after mount.
   useEffect(() => { setView(readStoredView()); }, []);
@@ -108,6 +122,16 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             {/* v7.185: global dark/light theme toggle */}
             <ThemeToggle />
+          {/* v7.513: Scout — the quick prospect snapshot that lives outside projects */}
+          {hasScout && (
+            <Link
+              href="/scout"
+              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors"
+            >
+              <i className="ti ti-radar-2" aria-hidden="true" />
+              Scout
+            </Link>
+          )}
           {/* v7.373: admin panel (users, roles, activity) — owner/admin, or during
               the pre-enforcement setup window */}
           {showAdmin && (
