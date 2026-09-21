@@ -178,6 +178,23 @@ function Shell({ me, onSignOut, children }: { me: Me | null; onSignOut: () => vo
 function UsersTab({ loading, users, projects, projName, reload }:
   { loading: boolean; users: AdminUser[]; projects: Proj[]; projName: (id: string) => string; reload: () => void }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  // v7.513: product access (Orbit / Scout) lives in its own table + route, so it is
+  // loaded beside the user list rather than threaded through /api/admin/users.
+  const [prod, setProd] = useState<Record<string, ProductAccess>>({});
+  const [prodDefaults, setProdDefaults] = useState<ProductAccess>({ orbit: true, scout: false, cap: 5 });
+  const [prodError, setProdError] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('/api/admin/products', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(d => {
+      if (d) { setProd(d.access ?? {}); if (d.defaults) setProdDefaults(d.defaults); }
+    }).catch(() => { /* columns fall back to the defaults */ });
+  }, []);
+  async function saveProduct(userId: string, patch: Partial<ProductAccess>) {
+    setProdError(null);
+    const res = await fetch('/api/admin/products', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, ...patch }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setProdError(data.error ?? 'Could not save product access.'); return; }
+    setProd(prev => ({ ...prev, [userId]: data.access }));
+  }
 
   if (loading) return <div className="space-y-2">{[...Array(4)].map((_, i) => <div key={i} className="h-14 bg-orbit-card rounded-lg animate-pulse" />)}</div>;
   if (!users.length) return (
@@ -203,11 +220,12 @@ function UsersTab({ loading, users, projects, projName, reload }:
           </p>
         </div>
       )}
-    <div className="orbit-card overflow-hidden p-0">
+      {prodError && <p role="alert" className="mb-3 rounded-lg border border-orbit-red/40 bg-orbit-red/10 px-3.5 py-2.5 text-[12px] text-orbit-red">{prodError}</p>}
+    <div className="orbit-card overflow-x-auto p-0">
       <table className="w-full text-[13px]">
         <thead>
           <tr className="text-left">
-            {['User', 'Role', 'Projects', 'Last login', 'Status', ''].map((h, i) => (
+            {['User', 'Role', 'Orbit', 'Scout', 'Scout runs / day', 'Projects', 'Last login', 'Status', ''].map((h, i) => (
               <th key={i} className="font-mono text-[9.5px] uppercase tracking-wider text-orbit-tertiary px-4 py-3 border-b border-orbit-border">{h}</th>
             ))}
           </tr>
@@ -215,7 +233,8 @@ function UsersTab({ loading, users, projects, projName, reload }:
         <tbody>
           {users.map(u => (
             <UserRow key={u.id} u={u} projects={projects} projName={projName}
-              open={openId === u.id} onToggle={() => setOpenId(openId === u.id ? null : u.id)} reload={reload} />
+              open={openId === u.id} onToggle={() => setOpenId(openId === u.id ? null : u.id)} reload={reload}
+              access={prod[u.id] ?? prodDefaults} onAccess={patch => saveProduct(u.id, patch)} />
           ))}
         </tbody>
       </table>
@@ -224,9 +243,25 @@ function UsersTab({ loading, users, projects, projName, reload }:
   );
 }
 
-function UserRow({ u, projects, projName, open, onToggle, reload }:
-  { u: AdminUser; projects: Proj[]; projName: (id: string) => string; open: boolean; onToggle: () => void; reload: () => void }) {
+/** v7.513: which products an account may open, and its daily Scout cap. */
+interface ProductAccess { orbit: boolean; scout: boolean; cap: number | null }
+
+function ProductToggle({ on, locked, label, onChange }: { on: boolean; locked: boolean; label: string; onChange: (next: boolean) => void }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={locked} onClick={() => onChange(!on)}
+      title={locked ? 'Owners and admins always have both products' : label}
+      className={`relative inline-block w-[34px] h-[19px] rounded-full border transition-colors ${on ? 'bg-orbit-accent border-orbit-accent' : 'bg-orbit-surface border-orbit-border'} ${locked ? 'opacity-50 cursor-not-allowed' : ''}`}>
+      <span className={`absolute top-[2px] w-[13px] h-[13px] rounded-full transition-all ${on ? 'left-[17px] bg-[color:var(--on-fill-accent)]' : 'left-[2px] bg-orbit-secondary'}`} />
+    </button>
+  );
+}
+
+function UserRow({ u, projects, projName, open, onToggle, reload, access, onAccess }:
+  { u: AdminUser; projects: Proj[]; projName: (id: string) => string; open: boolean; onToggle: () => void; reload: () => void;
+    access: ProductAccess; onAccess: (patch: Partial<ProductAccess>) => void }) {
   const initials = u.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+  const seesAll = u.role === 'owner' || u.role === 'admin';
+  const orbitOn = seesAll || access.orbit, scoutOn = seesAll || access.scout;
   return (
     <>
       <tr className="hover:bg-orbit-accent/[0.03]">
@@ -237,6 +272,15 @@ function UserRow({ u, projects, projName, open, onToggle, reload }:
           </div>
         </td>
         <td className="px-4 py-3 border-b border-orbit-border"><RoleBadge role={u.role} /></td>
+        <td className="px-4 py-3 border-b border-orbit-border"><ProductToggle on={orbitOn} locked={seesAll} label={`Orbit access for ${u.name}`} onChange={v => onAccess({ orbit: v })} /></td>
+        <td className="px-4 py-3 border-b border-orbit-border"><ProductToggle on={scoutOn} locked={seesAll} label={`Scout access for ${u.name}`} onChange={v => onAccess({ scout: v })} /></td>
+        <td className="px-4 py-3 border-b border-orbit-border">
+          {seesAll ? <span className="font-mono text-[10px] text-orbit-tertiary">no cap</span>
+            : !scoutOn ? <span className="font-mono text-[10px] text-orbit-tertiary">—</span>
+            : <input type="number" min={0} max={200} aria-label={`Scout runs per day for ${u.name}`} defaultValue={access.cap ?? 5} key={`${u.id}-${access.cap}`}
+                onBlur={e => { const n = Math.max(0, Math.min(200, Math.round(Number(e.target.value)))); if (Number.isFinite(n) && n !== access.cap) onAccess({ cap: n }); }}
+                className="w-16 rounded-md border border-orbit-border bg-orbit-surface px-2 py-1 font-mono text-[11px] text-orbit-primary focus:outline-none focus:border-orbit-accent" />}
+        </td>
         <td className="px-4 py-3 border-b border-orbit-border">
           {u.role === 'owner' || u.role === 'admin'
             ? <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-orbit-surface border border-orbit-border text-orbit-secondary">All ({projects.length})</span>
@@ -260,7 +304,7 @@ function UserRow({ u, projects, projName, open, onToggle, reload }:
       </tr>
       {open && (
         <tr>
-          <td colSpan={6} className="bg-orbit-surface/50 border-b border-orbit-border px-4 py-4">
+          <td colSpan={9} className="bg-orbit-surface/50 border-b border-orbit-border px-4 py-4">
             <ManageDrawer u={u} projects={projects} reload={reload} onClose={onToggle} />
           </td>
         </tr>
