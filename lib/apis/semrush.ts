@@ -151,6 +151,15 @@ async function semrushGet(params: Record<string, string>): Promise<string> {
   return body;
 }
 
+// ─── v7.513 (Scout): generic row reader ──────────────────────────────────────
+// Scout (lib/scout/*) issues small, filtered `domain_organic` / `phrase_questions`
+// requests that none of the report-shaped functions below cover. It goes through
+// the SAME choke point (`semrushGet`), so every row is billed to the usage ledger
+// exactly like the rest of the app (Const I.5b) and no second HTTP client exists.
+export async function semrushRows(params: Record<string, string>): Promise<Record<string, string>[]> {
+  return parseSemrushCSV(await semrushGet(params));
+}
+
 // ─── v7.457: how many API units are actually left ────────────────────────────
 // Wayne, 2026-08-14, after a portfolio run died mid-way: *"there are still credits left
 // to my knowledge"* — and he was right. Semrush bills **10 units per returned row**, and
