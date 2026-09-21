@@ -13,6 +13,10 @@ const nextConfig = {
     outputFileTracingIncludes: {
       '/api/reports/pdf': ['./node_modules/@sparticuz/chromium/bin/**'],
       '/api/reports/pdf/route': ['./node_modules/@sparticuz/chromium/bin/**'],
+      // v7.513: the Scout snapshot PDF launches the same Chromium build.
+      // Keys are globs, and "[id]" would read as a character class — so match by wildcard.
+      '/api/scout/runs/*/pdf': ['./node_modules/@sparticuz/chromium/bin/**'],
+      '/api/scout/runs/*/pdf/route': ['./node_modules/@sparticuz/chromium/bin/**'],
     },
   },
   webpack: (config, { isServer }) => {

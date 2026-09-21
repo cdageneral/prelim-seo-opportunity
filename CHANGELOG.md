@@ -1,3 +1,95 @@
+# v7.513 — Scout: a quick prospect snapshot that lives outside projects (2026-09-21)
+
+Wayne: *"a new section within orbit that is outside of the projects … to do a quick teaser analysis … enter a
+prospect's domain and maybe one or two more input fields … gather data and insights to generate a client facing
+pdf report."* Designed over six mockup rounds the same day (`GEO/scout-mockup-v1…v6.html`); v6 is what shipped.
+
+## What it is
+
+- **`/scout`** — prospect domain, **Full domain or up to 3 products**, industry, market, and up to 3 competitors:
+  Semrush's organic competitors as chips (publishers and aggregators flagged) **and/or typed by hand** (a manual
+  entry is checked against Semrush and its organic-keyword count shown; a domain with no data is reported, not blocked).
+- **Six-step run** with "step X of 6", what it is doing, elapsed time, and an ETA taken from the **median of real
+  finished runs** — until there is history it says so rather than guessing (Const IV.2/IV.3).
+- **A 5–7 page client PDF** built around ONE opening, not a rank report: cover → the opening → the field →
+  demand map → search meets AI → inside the opening → from here. Pages whose data is missing are dropped.
+- **Recent scouts** with PDF re-download (rendered from the STORED result — never re-spends a unit) and
+  **Convert to project** (carries domain, market, industry, competitors; needs Orbit access + a write role).
+- **Admin → Users:** three new columns — **Orbit**, **Scout**, **Scout runs / day**. Owners/admins always have both.
+  Everyone else defaults to **Orbit on, Scout off**, so nothing changes for the existing team until an admin flips it.
+  A Scout-only account is sent from the dashboard to `/scout`; accounts with Scout get a Scout link on the dashboard.
+
+## How the opening is picked — rules, not a blended score (`lib/scout/opportunity.ts`, `lib/scout/config.ts`)
+
+1. Keywords are grouped into themes (full domain) or assigned to the named products (product scope).
+2. A theme is **open** when the prospect is on page one for under 5% of its searches and a chosen competitor is on page one.
+3. It must clear a demand floor (10,000 searches a month).
+4. Three measured checks: **authority** within 5 points of the theme leader · the leader ranks **2× the pages** ·
+   **3+ searches already at 11–20**. Two of three qualifies.
+5. The report names ONE **binding constraint**: CONTENT (authority fine, pages missing) or AUTHORITY (domain trails).
+6. If no open theme qualifies, a theme the prospect already ranks for but where recorded AI answers name a rival
+   (you < 30%, rival ≥ 50% — the Product Insights thresholds) leads as **AI CITATION**.
+7. Otherwise the run is **NO CLEAR OPENING** and the PDF leads with the field view. Scout never manufactures one.
+   Too little data → **THIN DATA**, and no PDF is made.
+
+Every threshold is one constant in `lib/scout/config.ts` and is printed on the page where it is applied.
+
+## Data integrity (Const I)
+
+- **Exact above a floor, and the floor is printed.** Each competitor's highest-volume page-one searches are pulled
+  sorted by volume. A list that comes back full is complete only above its last row's volume, so the universe keeps
+  searches STRICTLY above the highest such floor and the prospect is pulled with the same floor. Inside that set
+  "competitor X is not on page one" is a fact, not a sampling gap. **The row limits are a Wayne-approved I.6
+  exception** (a teaser that must run in minutes on a bounded Semrush budget) — never silent: the floor is on the report.
+- **AI page = recorded answers**, read from DataForSEO's LLM Mentions index (ChatGPT + Google AI Overviews) with the
+  same matchers Product Insights uses. Nothing is prompted or generated. Labelled "directional, not a score".
+  DataForSEO not configured, or no answers found → the page is dropped and the method note says why.
+- **No LLM writes a sentence on the report.** Claude only sorts: it returns index lists over keywords Scout already
+  holds, every index is validated, and all counts and volumes are summed from Semrush rows. Headlines, findings and
+  the closing questions are templates filled from the measured figures.
+- **No dollar or revenue projections.** Semrush traffic appears once (bubble size) and is labelled an estimate.
+- **Spend guard:** the Semrush balance is read and compared with the run's unit ceiling before anything is
+  requested; a run is claimed atomically (queued → running), so a double click cannot bill twice; per-user daily cap.
+  Ceilings: full domain with 3 competitors **7,940 units**; 3 products with 3 competitors **15,440 units**. Actual
+  spend is measured per run (rows × the verified per-line rate) and shown on the run.
+
+## The close (page "From here")
+
+Relationship-first, per Wayne's edits: a short note signed **"The iQuanti team"**, three questions chosen by the
+binding constraint (regulated industries get the review-cycle wording), and ONE ask — *"Let's set up a 30-minute call
+to talk it through … Just reply to whoever sent you this report."* No rep name, booking link, QR code or email —
+iQuanti has none to print. No "no deck", no "we bring more than this", no "useful on its own".
+
+## Architecture notes
+
+- Product access and runs live in **their own tables** (`user_product_access`, `scout_runs`), created at runtime.
+  Deliberately NOT columns on `app_users`/`projects`: an unqualified select there reads every schema column, so a
+  new column would 500 sign-in or the dashboard on any lambda that had not run the ALTER (the v7.268/v7.327 lesson).
+- **Const II.9:** `result` is the only blob column and exactly one query reads it, one row at a time; every other
+  query names its columns. Repo grep for bare `select()` / `findFirst` across the Scout files: none.
+- `lib/apis/semrush.ts` gains one export, `semrushRows()`, over the existing `semrushGet` choke point — Scout's
+  units reach the ledger like everything else (currently **unattributed**, since a Scout run is not a project).
+- `next.config.js`: the Scout PDF route is added to `outputFileTracingIncludes` by wildcard (keys are globs;
+  `[id]` would read as a character class). Verified in the build's `.nft.json`.
+- **Const II.6b:** Scout is not a project panel, so it has no Assessment-PDF section; its deliverable IS its own PDF.
+- **Const II.6c:** no Scout module imports the Hours Saved module (source-level check in the suite).
+
+## Verification
+
+Project `tsc` clean · real `next build` clean (7 Scout routes + `/scout`) · retained suite **3505 PASS / 27 FAIL**
+against a base of **3430 / 27** with a byte-identical FAIL set (the known Chromium-unavailable baseline) — **72 new
+v7.513 checks**: 34 fixture checks on the real universe/picker/template code, 12 source-level gates, 26 WCAG
+token-contrast checks for both themes. The report was rendered in real Chromium for three cases — opening + AI,
+no opening, and a worst-case stress fixture (9 long theme names, long domains and URLs, 10 questions): every page
+fits one Letter sheet. The Scout screen was rendered in light and dark.
+
+## Not in this release
+
+- Rep-chosen lead theme and admin-editable thresholds (constants for now).
+- A "Scout" bucket on the API Usage dashboard — Scout spend shows as unattributed until then.
+- Page-type classification of competitor pages (the mockup's "Explainer / Cost / Tool" table) — replaced by the
+  leader's top winning URLs, which are measured.
+
 # v7.512 — The PDF's market page now shows the same split as the Google Ranks card (2026-09-18)
 
 Wayne, comparing the Aflac Assessment PDF with the app: the PDF said Aflac captures **8.2M** on page 1,
