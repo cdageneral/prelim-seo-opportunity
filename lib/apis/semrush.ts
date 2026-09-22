@@ -411,15 +411,19 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
     domain,
     database,
     display_limit: '10',
-    export_columns: 'Dn,Co,Or,Ot,Nr',
+    // v7.515 — was 'Dn,Co,Or,Ot,Nr'. In domain_organic_organic the shared-keyword count is Np
+    // ("Common Keywords") and relevance is Cr ("Competitor Relevance"); Co/Nr are not columns of
+    // this report, so every competitor read 0 shared keywords and 0 relevance (Scout chips showed
+    // "0 shared kw"; the Orbit narrative prompt was told the top competitor shares 0 keywords).
+    export_columns: 'Dn,Cr,Np,Or,Ot',
   });
 
   return parseSemrushCSV(raw).map(row => ({
     domain:          row['Domain'] ?? '',
-    commonKeywords:  parseInt(row['Common Keywords'] ?? '0'),
-    organicKeywords: parseInt(row['Organic Keywords'] ?? '0'),
-    organicTraffic:  parseInt(row['Organic Traffic'] ?? '0'),
-    relevance:       parseFloat(row['Relevance'] ?? '0'),
+    commonKeywords:  parseInt(row['Common Keywords'] ?? '0') || 0,
+    organicKeywords: parseInt(row['Organic Keywords'] ?? '0') || 0,
+    organicTraffic:  parseInt(row['Organic Traffic'] ?? '0') || 0,
+    relevance:       parseFloat(row['Competitor Relevance'] ?? row['Relevance'] ?? '0') || 0,
   }));
 }
 
