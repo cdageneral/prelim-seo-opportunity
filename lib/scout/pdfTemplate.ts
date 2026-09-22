@@ -133,7 +133,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
       : `Google already trusts you here. The AI engines are drawing on other sources.`;
     const aiLine = aRead ? `Across ${n0(aRead.answers)} recorded AI answers on this theme, you were named in ${n0(aRead.named[me] ?? 0)}${o.leader ? ` and ${esc(short(o.leader))} in ${n0(aRead.named[o.leader] ?? 0)}` : ''}.` : '';
     p1 = page('THE OPENING', `<h3>${h}</h3>
-      <div class="hero"><div><div class="k" style="color:#a5a0ff">MONTHLY SEARCHES IN THIS THEME</div><div class="big">${vol(lead.demand)} <small>/mo</small></div>
+      <div class="hero"><div><div class="opp">${esc(cap(o.theme))} theme is a key opportunity</div><div class="k" style="color:#a5a0ff">MONTHLY SEARCHES IN THIS THEME</div><div class="big">${vol(lead.demand)} <small>/mo</small></div>
         <p>Across ${n0(lead.count)} ${esc(floorNote)}. You're on page one for <b>${lead.prospectP1 === 0 ? 'none' : n0(lead.prospectP1)}</b> of them${leaderS ? `; ${esc(short(leaderS.domain))} is on page one for <b>${n0(leaderS.p1Keywords)}</b>` : ''}.</p></div>
         <div><div class="k" style="color:#fff;margin-bottom:8px">SHARE OF THE ${n0(lead.count)} ${esc(o.theme.toUpperCase())} SEARCHES ON PAGE ONE</div>${bars}</div></div>
       <div class="fig">${o.constraint === 'ai_citation' ? 'What the search data says' : 'Why this one is winnable'} <span>three measured checks</span></div>
@@ -334,7 +334,7 @@ h3{font:600 30px/1.12 Fraunces,Georgia,serif;letter-spacing:-.02em;margin:9px 0 
 .cover{background:var(--ink);color:#fff;padding:0}.cover .orb{position:absolute;inset:0;width:100%;height:100%}.cover .inner{padding:60px 58px 36px;display:flex;flex-direction:column;height:100%;position:relative}
 .cover .k{color:#a5a0ff}.cover h1{font:600 48px/1.05 Fraunces,Georgia,serif;letter-spacing:-.02em;max-width:5.9in;margin:0}.cover h1 u{color:#a5a0ff}.csub{color:#c9c8e6;max-width:5.2in;font-size:14.5px;margin:16px 0 46px}.cover .ft{border-color:#2a2a3d;color:#8888aa}
 .hero{display:grid;grid-template-columns:1.1fr 1fr;gap:26px;align-items:center;background:var(--ink);color:#fff;border-radius:12px;padding:22px 26px;margin:6px 0 4px}
-.hero .big{font:800 84px/0.92 Inter,system-ui,sans-serif;letter-spacing:-.045em;margin-top:6px}.hero .big small{font-size:24px;font-weight:600;color:#a5a0ff;letter-spacing:0}
+.hero .opp{font:700 17px/1.2 Fraunces,Georgia,serif;color:#fff;margin-bottom:12px}.hero .big{font:800 84px/0.92 Inter,system-ui,sans-serif;letter-spacing:-.045em;margin-top:6px}.hero .big small{font-size:24px;font-weight:600;color:#a5a0ff;letter-spacing:0}
 .hero p{margin:10px 0 0;font-size:12px;color:#c9c8e6}.hero p b{color:#fff}
 .hb{display:grid;grid-template-columns:1.25in 1fr .45in;gap:8px;align-items:center;font-size:10.5px;color:#c9c8e6;margin:6px 0}.hb b{color:#fff;text-align:right}.ht{height:9px;background:#26263a;border-radius:5px}.ht i{display:block;height:100%;border-radius:5px;min-width:2px}
 .ev{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}.evb{border:1px solid var(--grid);border-radius:10px;padding:13px}.evb .n{font:800 32px/1 Inter,system-ui,sans-serif;letter-spacing:-.035em}.evb .n span{font-size:14px;color:var(--muted);letter-spacing:0;font-weight:700}
