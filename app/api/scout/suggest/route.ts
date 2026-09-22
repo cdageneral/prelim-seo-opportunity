@@ -15,6 +15,7 @@ import { requireScout } from '@/lib/scout/access';
 import { suggestCompetitors, pullOverview, newMeter } from '@/lib/scout/semrushScout';
 import { normDomain, isValidDomain, PUBLISHER_DOMAINS } from '@/lib/scout/config';
 import { getMarket } from '@/lib/utils/markets';
+import { setUsageScout } from '@/lib/usage/context';
 
 const Body = z.object({ domain: z.string().min(3).max(200), market: z.string().max(4).optional(), check: z.string().max(200).optional() });
 
@@ -27,6 +28,7 @@ export async function POST(req: NextRequest) {
   const domain = normDomain(p.data.domain); const db = getMarket(p.data.market).code;
   if (!isValidDomain(domain)) return NextResponse.json({ error: `"${p.data.domain}" is not a domain. Enter it like example.com.` }, { status: 400 });
 
+  setUsageScout(null);   // v7.514 — Scout spend before a run exists (suggestions + manual check)
   try {
     if (p.data.check) {
       const c = normDomain(p.data.check);
