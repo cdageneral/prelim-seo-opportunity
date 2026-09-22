@@ -33,6 +33,7 @@ import {
   fmt, fmtUSD, fmtRate, fmtTime, lineKey, providerLabel, unitLabel,
   sumKeywordCounts, costByProject, hoursByProject,
   type RollupPayload, type CostPayload, type HoursPayload, type KwCount,
+  rowKey, rowNoun, type ProductFilter,
 } from '@/lib/usage/rollupView';
 
 export interface UsageReportInput {
@@ -50,7 +51,7 @@ export interface UsageReportInput {
    * from before v7.483; the report simply omits the statement rather than
    * inventing one (Const I.5).
    */
-  scope?: { statement: string; rangeLabel: string; dated: boolean; projectFiltered: boolean } | null;
+  scope?: { statement: string; rangeLabel: string; dated: boolean; projectFiltered: boolean; product?: ProductFilter } | null;
 }
 
 const esc = (s: unknown): string =>
@@ -80,6 +81,10 @@ function kwCell(projectId: string | null, counts: Record<string, KwCount>): stri
 export function buildUsageHTML(input: UsageReportInput): string {
   const { rollup, cost, hours, keywordCounts, generatedAt, scope } = input;
   const scoped = !!scope && (scope.dated || scope.projectFiltered);
+  // v7.514 — the Scout view has no Keywords / Hours columns (a run is not a project).
+  const product: ProductFilter = scope?.product ?? 'orbit';
+  const scoutView = product === 'scout';
+  const noun = (n: number) => rowNoun(product, n);
 
   const grand    = rollup?.grandTotals ?? [];
   const projects = rollup?.projects ?? [];
@@ -96,7 +101,7 @@ export function buildUsageHTML(input: UsageReportInput): string {
   if (cost) {
     headTiles.push(`<div class="tile accent"><div class="k">Estimated spend</div>
       <div class="v">${esc(fmtUSD(cost.grandTotalUSD))}</div>
-      <div class="d">Across ${esc(fmt(projects.length))} ${projects.length === 1 ? 'project' : 'projects'}. A computed estimate at registry rates, not the invoice.</div></div>`);
+      <div class="d">Across ${esc(fmt(projects.length))} ${esc(noun(projects.length))}. A computed estimate at registry rates, not the invoice.</div></div>`);
   }
   if (hours) {
     headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; internal</div>
@@ -105,10 +110,10 @@ export function buildUsageHTML(input: UsageReportInput): string {
         ? `Across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'} <b>initiated in this period</b>, at their current credited totals.`
         : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope, across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}.`}</div></div>`);
   }
-  headTiles.push(`<div class="tile"><div class="k">Projects metered</div>
+  headTiles.push(`<div class="tile"><div class="k">${scoutView ? 'Scout runs metered' : product === 'all' ? 'Projects and Scout runs metered' : 'Projects metered'}</div>
     <div class="v">${esc(fmt(projects.length))}</div>
-    <div class="d">Every project with a recorded call, plus the unattributed bucket where one exists.</div></div>`);
-  headTiles.push(`<div class="tile"><div class="k">Keywords under management</div>
+    <div class="d">${scoutView ? 'Every Scout run with a recorded call, plus the before-a-run bucket (competitor suggestions) where one exists.' : 'Every project with a recorded call, plus the unattributed bucket where one exists.'}</div></div>`);
+  if (!scoutView) headTiles.push(`<div class="tile"><div class="k">Keywords under management</div>
     <div class="v">${kw.loaded === 0 ? '<span class="dash">&mdash;</span>' : esc(fmt(kw.total)) + (kwComplete ? '' : '<small>&hellip;</small>')}</div>
     <div class="d">${kw.loaded === 0
       ? 'No keyword counts were available when this report was produced.'
@@ -184,8 +189,8 @@ export function buildUsageHTML(input: UsageReportInput): string {
   // ── Per-project table ─────────────────────────────────────────────────────
   const thead = `
     <tr>
-      <th class="l">Project</th>
-      <th>Keywords</th>
+      <th class="l">${scoutView ? 'Scout run' : product === 'all' ? 'Project / Scout run' : 'Project'}</th>
+      ${scoutView ? '' : '<th>Keywords</th>'}
       ${hours ? '<th>Hours saved</th>' : ''}
       ${grand.map(l => `<th>${esc(providerLabel(l.provider))}<span class="sub">${esc(unitLabel(l.unit))}</span></th>`).join('')}
       ${cost ? '<th>Est. cost<span class="sub">USD</span></th>' : ''}
@@ -195,22 +200,24 @@ export function buildUsageHTML(input: UsageReportInput): string {
   const rowHTML = (proj: RollupPayload['projects'][number]): string => {
     const byKey = new Map(proj.lines.map(l => [lineKey(l), l]));
     const hp = proj.projectId ? hoursMap.get(proj.projectId) : undefined;
+    const isScout = proj.product === 'scout';
+    const sub = isScout && proj.scout ? [proj.scout.userName, proj.scout.createdAt ? fmtTime(proj.scout.createdAt) : null].filter(Boolean).join(' &middot; ') : '';
     return `<tr>
-      <td class="l">${proj.projectId ? `<b>${esc(proj.projectName)}</b>` : `<i class="dash">${esc(proj.projectName)}</i>`}</td>
-      <td class="n">${kwCell(proj.projectId, keywordCounts ?? {})}</td>
+      <td class="l">${proj.projectId ? `<b>${esc(proj.projectName)}</b>` : `<i class="dash">${esc(proj.projectName)}</i>`}${isScout && product === 'all' ? ' <span class="sub2">SCOUT</span>' : ''}${sub ? `<div class="sub2">${sub}</div>` : ''}</td>
+      ${scoutView ? '' : `<td class="n">${isScout ? '<span class="dash">&mdash;</span>' : kwCell(proj.projectId, keywordCounts ?? {})}</td>`}
       ${hours ? `<td class="n">${hp ? esc(fmt(hp.hours)) : '<span class="dash">&mdash;</span>'}</td>` : ''}
       ${columns.map(col => {
         const l = byKey.get(col);
         return `<td class="n">${l ? esc(fmt(l.total)) : '<span class="dash">&mdash;</span>'}</td>`;
       }).join('')}
-      ${cost ? `<td class="n money">${esc(fmtUSD(costMap.get(proj.projectId ?? 'unattributed') ?? 0))}</td>` : ''}
+      ${cost ? `<td class="n money">${esc(fmtUSD(costMap.get(rowKey(proj)) ?? 0))}</td>` : ''}
       <td class="r sub2">${esc(fmtTime(proj.lastActivity))}</td>
     </tr>`;
   };
 
   const totalRow = `<tr class="tot">
-    <td class="l">All projects</td>
-    <td class="n">${kw.loaded === 0 ? '<span class="dash">&mdash;</span>' : esc(fmt(kw.total)) + (kwComplete ? '' : '&hellip;')}</td>
+    <td class="l">All ${esc(noun(2))}</td>
+    ${scoutView ? '' : `<td class="n">${kw.loaded === 0 ? '<span class="dash">&mdash;</span>' : esc(fmt(kw.total)) + (kwComplete ? '' : '&hellip;')}</td>`}
     ${hours ? `<td class="n">${esc(fmt(hours.grandHours))}</td>` : ''}
     ${grand.map(l => `<td class="n">${esc(fmt(l.total))}</td>`).join('')}
     ${cost ? `<td class="n money">${esc(fmtUSD(cost.grandTotalUSD))}</td>` : ''}
@@ -219,10 +226,13 @@ export function buildUsageHTML(input: UsageReportInput): string {
 
   const pages = chunk(projects, ROWS_PER_PAGE);
   const tablePages = pages.map((slice, i) => `
-    <h1 class="pg sm">By project${pages.length > 1 ? ` <span class="ofn">${i + 1} of ${pages.length}</span>` : ''}</h1>
-    ${i === 0 ? `<div class="lede">Every project that has recorded a metered call. Real projects rank by consumption;
-      calls made outside a project context roll up as <i>Unattributed</i>. A dash is an honest gap &mdash; no data of that
-      kind for that project &mdash; never a zero.</div>` : ''}
+    <h1 class="pg sm">${scoutView ? 'By Scout run' : product === 'all' ? 'By project and Scout run' : 'By project'}${pages.length > 1 ? ` <span class="ofn">${i + 1} of ${pages.length}</span>` : ''}</h1>
+    ${i === 0 ? (scoutView
+      ? `<div class="lede">Every Scout run that has recorded a metered call, newest first. Spend made before a run existed
+      (competitor suggestions and manual-competitor checks) rolls up as one bucket. A dash is an honest gap &mdash; never a zero.</div>`
+      : `<div class="lede">Every project that has recorded a metered call. Real projects rank by consumption;
+      calls made outside a project context roll up as <i>Unattributed</i>.${product === 'all' ? ' Scout runs follow the projects, marked SCOUT.' : ''} A dash is an honest gap &mdash; no data of that
+      kind for that project &mdash; never a zero.</div>`) : ''}
     <table class="dt">
       <thead>${thead}</thead>
       <tbody>

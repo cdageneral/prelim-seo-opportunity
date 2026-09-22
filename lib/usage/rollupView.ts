@@ -30,12 +30,18 @@
 
 // ── Payload shapes, exactly as the three routes return them ────────────────────
 export interface Line { provider: string; unit: string; usage: number; baseline: number; total: number; calls: number; }
-export interface ProjectRollup { projectId: string | null; projectName: string; lines: Line[]; lastActivity: string | null; }
-export interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRollup[]; note?: string; }
+// v7.514 — a row is either a project (Orbit) or a Scout run. `product` says which;
+// for a Scout row `projectId` carries the scout_runs id (null = Scout spend before
+// a run existed, i.e. competitor suggestions) and `scout` carries what to show.
+export type UsageProduct = 'orbit' | 'scout';
+export type ProductFilter = UsageProduct | 'all';
+export interface ScoutRowMeta { domain: string | null; userName: string | null; createdAt: string | null; status: string | null; scope: string | null; }
+export interface ProjectRollup { projectId: string | null; projectName: string; lines: Line[]; lastActivity: string | null; product?: UsageProduct; scout?: ScoutRowMeta | null; }
+export interface RollupPayload { asOf: string; grandTotals: Line[]; projects: ProjectRollup[]; note?: string; product?: ProductFilter; }
 
 // Cost rollup (v7.363; registry rebuilt v7.396) — USD at registry rates (Const I.5a).
 export interface UnpricedLine { provider: string; unit: string; quantity: number; calls: number; reason: string; unregistered: boolean; }
-export interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number; unpriced: UnpricedLine[]; }
+export interface ProjectCost { projectId: string | null; projectName: string; costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number; unpriced: UnpricedLine[]; product?: UsageProduct; }
 export interface RateCardModel { label: string; inputPerM: number; outputPerM: number; }
 export interface RateCardUnit { label: string; usdPerUnit: number; plan: string; basis: string; source: string; asOf: string; }
 export interface RateCardUnpriced { label: string; reason: string; asOf: string; }
@@ -155,7 +161,9 @@ export function sumKeywordCounts(counts: Record<string, KwCount>): { total: numb
 /** Per-project USD, keyed to match the usage rollup's project ids. */
 export function costByProject(cost: CostPayload | null): Map<string, number> {
   const m = new Map<string, number>();
-  (cost?.projects ?? []).forEach(p => m.set(p.projectId ?? 'unattributed', p.costUSD));
+  // v7.514 — keyed by rowKey so a Scout run and a project never share a bucket;
+  // the legacy 'unattributed' key is kept for the pre-v7.514 PDF template path.
+  (cost?.projects ?? []).forEach(p => { m.set(rowKey(p), p.costUSD); if (p.product !== 'scout') m.set(p.projectId ?? 'unattributed', p.costUSD); });
   return m;
 }
 
@@ -306,7 +314,23 @@ export function rangeQuery(r: UsageRange | null | undefined): string {
 // it does carry real spend, so it must be selectable like anything else.
 export const UNATTRIBUTED = '__unattributed__';
 
+/** v7.514 — parse ?product= ; anything unrecognised is 'all' (never a silent narrowing). */
+export function parseProductFilter(v: string | null | undefined): ProductFilter {
+  return v === 'orbit' || v === 'scout' ? v : 'all';
+}
+export const PRODUCT_LABEL: Record<ProductFilter, string> = { orbit: 'Orbit', scout: 'Scout', all: 'Orbit + Scout' };
+/** The row key the dashboard and cost map share: a Scout row and a project row can never collide. */
+export function rowKey(row: { projectId: string | null; product?: UsageProduct }): string {
+  return `${row.product === 'scout' ? 's' : 'p'}:${row.projectId ?? UNATTRIBUTED}`;
+}
+/** What a row is called in prose: project vs Scout run. */
+export function rowNoun(product: ProductFilter, n: number): string {
+  const one = product === 'scout' ? 'Scout run' : product === 'all' ? 'row' : 'project';
+  return n === 1 ? one : one + 's';
+}
+
 export function projectKey(projectId: string | null): string { return projectId ?? UNATTRIBUTED; }
+// NOTE (v7.514): projectKey is kept for the project-only callers; the dashboard's picker and cost map use rowKey.
 
 export function selectionIsFiltered(sel: Set<string> | null, total: number): boolean {
   return !!sel && sel.size < total;
@@ -323,7 +347,7 @@ export function selectionIsFiltered(sel: Set<string> | null, total: number): boo
  */
 export function filterRollupByProjects(rollup: RollupPayload, sel: Set<string> | null): RollupPayload {
   if (!sel) return rollup;
-  const projects = (rollup.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  const projects = (rollup.projects ?? []).filter(p => sel.has(rowKey(p)));
   const grand = new Map<string, Line>();
   for (const p of projects) {
     for (const l of p.lines) {
@@ -344,7 +368,7 @@ export function filterRollupByProjects(rollup: RollupPayload, sel: Set<string> |
 /** The same narrowing for the cost payload, with every total re-summed from the survivors. */
 export function filterCostByProjects(cost: CostPayload | null, sel: Set<string> | null): CostPayload | null {
   if (!cost || !sel) return cost;
-  const projects = (cost.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  const projects = (cost.projects ?? []).filter(p => sel.has(rowKey(p)));
   const sum = (f: (p: ProjectCost) => number) => projects.reduce((s, p) => s + (f(p) || 0), 0);
   return {
     ...cost,
@@ -359,7 +383,8 @@ export function filterCostByProjects(cost: CostPayload | null, sel: Set<string> 
 /** The same narrowing for the hours payload. Hours are NOT date-scoped, but they ARE per project. */
 export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<string> | null): HoursPayload | null {
   if (!hours || !sel) return hours;
-  const projects = (hours.projects ?? []).filter(p => sel.has(projectKey(p.projectId)));
+  // v7.514 — hours are always PROJECT rows, so they match the selection under the project rowKey.
+  const projects = (hours.projects ?? []).filter(p => sel.has(rowKey({ projectId: p.projectId, product: 'orbit' })));
   return {
     ...hours,
     projects,
@@ -378,13 +403,19 @@ export function scopeStatement(
   selected: number | null,
   total: number,
   hours?: { dated?: boolean; projectCount?: number; undatedExcluded?: number } | null,
+  product: ProductFilter = 'orbit',
 ): string {
   const parts: string[] = [];
-  parts.push(rangeIsBounded(range) ? `Spend and usage cover ${rangeLabel(range).toLowerCase()}` : 'Spend and usage cover all recorded activity');
+  // v7.514 — name the product. Orbit is the default and the historical view;
+  // Scout rows are runs, not projects, and the noun says so.
+  const what = product === 'scout' ? 'Scout spend and usage' : product === 'all' ? 'Orbit and Scout spend and usage' : 'Spend and usage';
+  parts.push(rangeIsBounded(range) ? `${what} cover ${rangeLabel(range).toLowerCase()}` : `${what} cover all recorded activity`);
   parts.push(selected === null || selected >= total
-    ? `across all ${total} ${total === 1 ? 'project' : 'projects'}`
-    : `across ${selected} of ${total} projects`);
+    ? `across all ${total} ${rowNoun(product, total)}`
+    : `across ${selected} of ${total} ${rowNoun(product, total)}`);
   let s = parts.join(' ') + '.';
+  if (product === 'scout') s += ' Scout has no Keywords or Hours Saved figures: a run reads a bounded sample and delivers its own PDF.';
+  if (product === 'orbit') s += ' Scout spend is shown separately under the Scout toggle.';
   if (rangeIsBounded(range)) {
     // v7.484 — hours ARE dated now, but on a different basis from spend, and
     // saying which basis is the whole point of this sentence.

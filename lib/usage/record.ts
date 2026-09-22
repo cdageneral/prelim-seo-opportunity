@@ -24,7 +24,7 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { db, apiUsage } from '@/db';
-import { currentUsageProject } from './context';
+import { currentUsageProject, currentUsageProduct, currentUsageScoutRun } from './context';
 
 /**
  * Self-healing migration (v7.321) — create the `api_usage` ledger table if the
@@ -60,6 +60,11 @@ export function ensureUsageTable(): Promise<void> {
     `);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS api_usage_project_id_idx ON api_usage (project_id)`);
     await db.execute(sql`CREATE INDEX IF NOT EXISTS api_usage_created_at_idx ON api_usage (created_at)`);
+    // v7.514 — product attribution (Orbit vs Scout). Added here, not by drizzle
+    // push, exactly like the table itself. Pre-existing rows keep NULL = Orbit.
+    await db.execute(sql`ALTER TABLE api_usage ADD COLUMN IF NOT EXISTS product TEXT`);
+    await db.execute(sql`ALTER TABLE api_usage ADD COLUMN IF NOT EXISTS scout_run_id UUID`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS api_usage_scout_run_id_idx ON api_usage (scout_run_id)`);
   })().catch((err) => {
     // Reset the memo so a later call can retry; never surface to the caller.
     _tableEnsured = null;
@@ -133,6 +138,8 @@ export async function recordUsage(input: RecordInput): Promise<void> {
       keyHash:   input.keyHash ?? null,
       kind:      'usage',
       meta:      input.meta ?? null,
+      product:   currentUsageProduct(),     // v7.514 — 'orbit' | 'scout'
+      scoutRunId: currentUsageScoutRun(),
     });
   } catch (err) {
     // Accounting must never break the real call — but v7.398: it must not be
