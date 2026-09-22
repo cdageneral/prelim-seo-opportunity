@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable, getLedgerFailures } from '@/lib/usage/record';
+import { ensureScoutTables } from '@/lib/scout/store';
 import { priceLine, auditRegistry, RATE_CARD, PRICING_ASOF, PLAN_QUOTA_CAVEAT } from '@/lib/usage/pricing';
 import { parseProductFilter, type UsageProduct } from '@/lib/usage/rollupView';
 
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest) {
   const product = parseProductFilter(req.nextUrl.searchParams.get('product'));   // v7.514
   try {
     await ensureUsageTable();
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS scout_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), domain text NOT NULL, user_name text, status text NOT NULL DEFAULT 'queued', scope text NOT NULL DEFAULT 'domain', created_at timestamp NOT NULL DEFAULT now())`);
+    await ensureScoutTables();   // v7.515 — the real Scout schema, not a minimal stand-in
 
     // One row per (project, provider, model, unit): real measured sums.
     // v7.399 — RAW SQL for the same reason /api/usage was rewritten: a drizzle
