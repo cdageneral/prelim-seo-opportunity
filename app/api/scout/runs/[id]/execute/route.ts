@@ -13,7 +13,7 @@ import { NextResponse } from 'next/server';
 import { requireScout } from '@/lib/scout/access';
 import { getRun, claimRun } from '@/lib/scout/store';
 import { executeRun } from '@/lib/scout/run';
-import { setUsageProject } from '@/lib/usage/context';
+import { setUsageScout } from '@/lib/usage/context';
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const g = await requireScout();
@@ -22,7 +22,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   if (!g.isAdmin && g.user && run.userId !== g.user.sub) return NextResponse.json({ error: 'Not your run' }, { status: 403 });
   if (!(await claimRun(params.id))) return NextResponse.json({ status: run.status, note: 'Already started.' });
-  setUsageProject(null);   // Scout spend is not a project's spend — it reaches the ledger unattributed.
+  setUsageScout(params.id);   // v7.514 — every call below is ledgered as Scout spend on THIS run.
   await executeRun(params.id);
   const done = await getRun(params.id);
   return NextResponse.json({ status: done?.status ?? 'failed', error: done?.error ?? null });
