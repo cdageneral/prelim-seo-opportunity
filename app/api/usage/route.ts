@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable } from '@/lib/usage/record';
+import { parseProductFilter, type UsageProduct, type ScoutRowMeta } from '@/lib/usage/rollupView';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,8 @@ interface ProjectRollup {
   projectName: string;
   lines: Line[];
   lastActivity: string | null;
+  product: UsageProduct;          // v7.514
+  scout: ScoutRowMeta | null;     // v7.514 — set on Scout rows (projectId = scout run id)
 }
 
 function foldLine(map: Map<string, Line>, provider: string, unit: string, kind: string, qty: number, calls: number) {
@@ -53,8 +56,12 @@ export async function GET(req: NextRequest) {
   const from = bound(req.nextUrl.searchParams.get('from'));
   const to   = bound(req.nextUrl.searchParams.get('to'));
   const dated = !!from || !!to;
+  // v7.514 — ?product=orbit|scout|all. Rows written before v7.514 have product NULL
+  // and read as Orbit (Scout did not exist). Scout rows group by RUN, not project.
+  const product = parseProductFilter(req.nextUrl.searchParams.get('product'));
   try {
     await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS scout_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), domain text NOT NULL, user_name text, status text NOT NULL DEFAULT 'queued', scope text NOT NULL DEFAULT 'domain', created_at timestamp NOT NULL DEFAULT now())`);
 
     // v7.399 — RAW SQL, not a drizzle aggregate-alias select.
     // This route reported serpapi stuck at exactly 23,920 and NO dataforseo line
@@ -67,8 +74,15 @@ export async function GET(req: NextRequest) {
     // own answer (Const I.1).
     const raw: any = await db.execute(sql`
       SELECT
+        COALESCE(u.product, 'orbit')                   AS "product",
         u.project_id                                   AS "projectId",
         p.client_name                                  AS "projectName",
+        u.scout_run_id                                 AS "scoutRunId",
+        s.domain                                       AS "scoutDomain",
+        s.user_name                                    AS "scoutUser",
+        s.created_at                                   AS "scoutCreated",
+        s.status                                       AS "scoutStatus",
+        s.scope                                        AS "scoutScope",
         u.provider                                     AS "provider",
         u.unit                                         AS "unit",
         u.kind                                         AS "kind",
@@ -76,15 +90,18 @@ export async function GET(req: NextRequest) {
         COUNT(*)::int                                  AS "calls",
         MAX(u.created_at)                              AS "last"
       FROM api_usage u
-      LEFT JOIN projects p ON p.id = u.project_id
+      LEFT JOIN projects   p ON p.id = u.project_id
+      LEFT JOIN scout_runs s ON s.id = u.scout_run_id
       WHERE u.kind <> 'selftest'
+        ${product === 'orbit' ? sql`AND COALESCE(u.product, 'orbit') = 'orbit'` : product === 'scout' ? sql`AND u.product = 'scout'` : sql``}
         ${dated ? sql`AND u.kind <> 'baseline'` : sql``}
         ${from  ? sql`AND u.created_at >= ${from}::timestamptz` : sql``}
         ${to    ? sql`AND u.created_at <  ${to}::timestamptz`   : sql``}
-      GROUP BY u.project_id, p.client_name, u.provider, u.unit, u.kind
+      GROUP BY COALESCE(u.product, 'orbit'), u.project_id, p.client_name, u.scout_run_id, s.domain, s.user_name, s.created_at, s.status, s.scope, u.provider, u.unit, u.kind
     `);
     const grouped: Array<{
-      projectId: string | null; projectName: string | null; provider: string;
+      product: string; projectId: string | null; projectName: string | null; provider: string;
+      scoutRunId: string | null; scoutDomain: string | null; scoutUser: string | null; scoutCreated: any; scoutStatus: string | null; scoutScope: string | null;
       unit: string; kind: string; quantity: any; calls: any; last: any;
     }> = raw?.rows ?? raw ?? [];
 
@@ -92,15 +109,24 @@ export async function GET(req: NextRequest) {
     const grand = new Map<string, Line>();
 
     for (const r of grouped) {
-      const pid = r.projectId ?? '__unattributed__';
+      const isScout = r.product === 'scout';
+      const id = isScout ? r.scoutRunId : r.projectId;
+      const pid = `${isScout ? 's' : 'p'}:${id ?? '__unattributed__'}`;
       let entry = projMap.get(pid);
       if (!entry) {
         entry = {
-          rollup: {
-            projectId: r.projectId ?? null,
-            projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
-            lines: [], lastActivity: null,
-          },
+          rollup: isScout
+            ? {
+                projectId: r.scoutRunId ?? null,
+                projectName: r.scoutRunId ? (r.scoutDomain ?? 'Scout run (deleted)') : 'Scout · before a run (competitor suggestions)',
+                lines: [], lastActivity: null, product: 'scout',
+                scout: { domain: r.scoutDomain ?? null, userName: r.scoutUser ?? null, createdAt: r.scoutCreated ? new Date(r.scoutCreated).toISOString() : null, status: r.scoutStatus ?? null, scope: r.scoutScope ?? null },
+              }
+            : {
+                projectId: r.projectId ?? null,
+                projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
+                lines: [], lastActivity: null, product: 'orbit', scout: null,
+              },
           lines: new Map<string, Line>(),
         };
         projMap.set(pid, entry);
@@ -117,10 +143,11 @@ export async function GET(req: NextRequest) {
 
     const projectsOut: ProjectRollup[] = Array.from(projMap.values())
       .map(e => ({ ...e.rollup, lines: Array.from(e.lines.values()).sort((a, b) => a.provider.localeCompare(b.provider) || a.unit.localeCompare(b.unit)) }))
-      // Real projects first (by spend), Unattributed last.
+      // Real projects first (by spend), then Scout runs (newest first), unattributed buckets last.
       .sort((a, b) => {
-        if (a.projectId === null) return 1;
-        if (b.projectId === null) return -1;
+        const rank = (x: ProjectRollup) => x.projectId === null ? 2 : x.product === 'scout' ? 1 : 0;
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
+        if (a.product === 'scout' && b.product === 'scout') return (b.scout?.createdAt ?? '').localeCompare(a.scout?.createdAt ?? '');
         const at = a.lines.reduce((s, l) => s + l.total, 0);
         const bt = b.lines.reduce((s, l) => s + l.total, 0);
         return bt - at;
@@ -132,6 +159,7 @@ export async function GET(req: NextRequest) {
       // and the report label themselves from the SERVER's answer, not from what
       // the client believes it asked for.
       range: { from, to },
+      product,
       baselinesExcluded: dated,
       grandTotals: Array.from(grand.values()).sort((a, b) => a.provider.localeCompare(b.provider) || a.unit.localeCompare(b.unit)),
       projects: projectsOut,
@@ -141,6 +169,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       asOf: new Date().toISOString(),
       range: { from, to },
+      product,
       baselinesExcluded: dated,
       grandTotals: [], projects: [],
       note: 'Usage ledger is empty or not yet migrated. It populates as API calls are made on this version.',
