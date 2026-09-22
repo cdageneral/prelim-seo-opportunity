@@ -49,10 +49,10 @@ import {
   PROVIDER_LABEL, UNIT_LABEL, PROVIDER_ICON,
   resolveRange, rangeIsBounded, rangeLabel, rangeQuery, scopeStatement,
   filterRollupByProjects, filterCostByProjects, filterHoursByProjects,
-  projectKey, selectionIsFiltered, RANGE_OPTIONS, ALL_TIME,
+  rowKey, rowNoun, PRODUCT_LABEL, selectionIsFiltered, RANGE_OPTIONS, ALL_TIME,
   type Line, type RollupPayload, type CostPayload,
   type HoursPayload, type HoursProject, type KwCount,
-  type UsageRange, type RangeKey,
+  type UsageRange, type RangeKey, type ProductFilter,
 } from '@/lib/usage/rollupView';
 
 export default function UsageRollup() {
@@ -86,6 +86,11 @@ export default function UsageRollup() {
   // null = every project. A Set names exactly the selected ones.
   const [projectSel, setProjectSel] = useState<Set<string> | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // v7.514 — which PRODUCT the dashboard shows. Orbit (projects) by default —
+  // the view every earlier release showed — Scout (prospect snapshots, one row
+  // per run), or both. The two spend routes filter server-side on the ledger's
+  // `product` column (Wayne, 2026-09-21: "a toggle for orbit vs scout").
+  const [product, setProduct] = useState<ProductFilter>('orbit');
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -94,10 +99,13 @@ export default function UsageRollup() {
       // (spend by call date, hours by project-initiation date) and the scope
       // sentence says which is which; the per-project keyword count stays live.
       const q = rangeQuery(range);
+      const pq = `${q ? q + '&' : '?'}product=${product}`;
+      // Hours Saved is a PROJECT deliverable metric — a Scout run has none, so the
+      // Scout view does not ask for it (and never shows an empty hours column).
       const [res, costRes, hoursRes] = await Promise.all([
-        fetch(`/api/usage${q}`, { cache: 'no-store' }),
-        fetch(`/api/usage/cost${q}`, { cache: 'no-store' }),
-        fetch(`/api/usage/hours${q}`, { cache: 'no-store' }),
+        fetch(`/api/usage${pq}`, { cache: 'no-store' }),
+        fetch(`/api/usage/cost${pq}`, { cache: 'no-store' }),
+        product === 'scout' ? Promise.resolve(null) : fetch(`/api/usage/hours${q}`, { cache: 'no-store' }),
       ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
@@ -110,7 +118,7 @@ export default function UsageRollup() {
       // `payload.scope.total` off it throws inside render and takes the entire
       // dashboard down with it. So the body is shape-checked before it is trusted,
       // and anything unrecognised degrades to "no hours column" (Const I.5).
-      if (hoursRes.ok) {
+      if (hoursRes && hoursRes.ok) {
         try {
           const h = await hoursRes.json();
           setHours(isHoursPayload(h) ? h : null);
@@ -121,7 +129,7 @@ export default function UsageRollup() {
     } finally {
       setLoading(false);
     }
-  }, [range]);
+  }, [range, product]);
 
   // Re-runs whenever the range changes, so Refresh and a range change take the
   // same path and the keyword fan-out below re-runs with them.
@@ -133,7 +141,8 @@ export default function UsageRollup() {
   // up into a single oversized response. Re-runs whenever the rollup reloads, so
   // Refresh refreshes this column too.
   useEffect(() => {
-    const ids = (data?.projects ?? []).map(p => p.projectId).filter((id): id is string => !!id);
+    // v7.514 — only PROJECT rows have a keyword landscape; a Scout row's id is a run id.
+    const ids = (data?.projects ?? []).filter(p => p.product !== 'scout').map(p => p.projectId).filter((id): id is string => !!id);
     if (ids.length === 0) { setKwCounts({}); setKwPending(0); return; }
 
     let cancelled = false;
@@ -171,7 +180,8 @@ export default function UsageRollup() {
   const viewHours  = filterHoursByProjects(hours, projectSel);
   const dated      = rangeIsBounded(range);
   const projFiltered = selectionIsFiltered(projectSel, allProjectCount);
-  const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount, viewHours);
+  const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount, viewHours, product);
+  const scoutView  = product === 'scout';   // v7.514 — hides the two project-only columns
 
   // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
   useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
@@ -204,7 +214,7 @@ export default function UsageRollup() {
         // report says out loud which rows it does and does not include (v7.483).
         body:    JSON.stringify({
           rollup: view, cost: viewCost, hours: viewHours, keywordCounts: kwCounts,
-          scope: { statement: scopeLine, rangeLabel: rangeLabel(range), dated, projectFiltered: projFiltered },
+          scope: { statement: scopeLine, rangeLabel: rangeLabel(range), dated, projectFiltered: projFiltered, product },
         }),
       });
       if (!res.ok) {
@@ -229,7 +239,7 @@ export default function UsageRollup() {
       // Revoked on the next tick so the browser has started the download.
       if (url) setTimeout(() => URL.revokeObjectURL(url as string), 30_000);
     }
-  }, [view, viewCost, viewHours, kwCounts, scopeLine, range, dated, projFiltered]);
+  }, [view, viewCost, viewHours, kwCounts, scopeLine, range, dated, projFiltered, product]);
 
   const grand = view?.grandTotals ?? [];
   const projects = view?.projects ?? [];
@@ -257,7 +267,7 @@ export default function UsageRollup() {
             API Usage Dashboard
           </h2>
           <p className="text-orbit-secondary text-sm mt-1">
-            Real metered credit consumption across every project. Provider dashboards remain the billing source of truth.
+            Real metered credit consumption across {product === 'scout' ? 'every Scout run' : product === 'all' ? 'every project and Scout run' : 'every project'}. Provider dashboards remain the billing source of truth.
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
@@ -305,6 +315,18 @@ export default function UsageRollup() {
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11px] font-semibold text-orbit-secondary uppercase tracking-wide mr-1">Scope</span>
 
+          {/* v7.514 — product toggle. Changing it refetches both spend routes with
+              ?product= and clears the row selection (the rows are a different set). */}
+          <div role="radiogroup" aria-label="Product" className="flex rounded-lg border border-orbit-border bg-orbit-surface p-0.5">
+            {(['orbit', 'scout', 'all'] as ProductFilter[]).map(k => (
+              <button key={k} type="button" role="radio" aria-checked={product === k}
+                onClick={() => { if (k !== product) { setProduct(k); setProjectSel(null); setHoursOpen(null); } }}
+                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${product === k ? 'bg-orbit-accent text-[color:var(--on-fill-accent)]' : 'text-orbit-secondary hover:text-orbit-primary'}`}>
+                {PRODUCT_LABEL[k]}
+              </button>
+            ))}
+          </div>
+
           {/* Date presets */}
           <select
             value={range.key}
@@ -350,7 +372,7 @@ export default function UsageRollup() {
               className="flex items-center gap-1.5 text-sm px-2.5 py-1.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors disabled:opacity-50"
             >
               <i className="ti ti-filter" aria-hidden="true" />
-              {!projFiltered ? `All projects (${allProjectCount})` : `${projectSel!.size} of ${allProjectCount} projects`}
+              {!projFiltered ? `All ${rowNoun(product, allProjectCount)} (${allProjectCount})` : `${projectSel!.size} of ${allProjectCount} ${rowNoun(product, allProjectCount)}`}
               <i className={`ti ti-chevron-${pickerOpen ? 'up' : 'down'} text-[10px]`} aria-hidden="true" />
             </button>
             {pickerOpen && (
@@ -360,7 +382,7 @@ export default function UsageRollup() {
                   <button onClick={() => setProjectSel(new Set())} className="text-[11px] text-orbit-accent hover:underline">Clear</button>
                 </div>
                 {(data?.projects ?? []).map(pr => {
-                  const k = projectKey(pr.projectId);
+                  const k = rowKey(pr);
                   const on = !projectSel || projectSel.has(k);
                   return (
                     <label key={k} className="flex items-center gap-2 px-1 py-1 text-xs text-orbit-primary cursor-pointer hover:bg-orbit-muted/30 rounded">
@@ -369,12 +391,12 @@ export default function UsageRollup() {
                         onChange={() => setProjectSel(prev => {
                           // First click off "all" materialises the full set, so the
                           // box the operator just unticked is the only one removed.
-                          const base = prev ? new Set(prev) : new Set((data?.projects ?? []).map(x => projectKey(x.projectId)));
+                          const base = prev ? new Set(prev) : new Set((data?.projects ?? []).map(x => rowKey(x)));
                           if (base.has(k)) base.delete(k); else base.add(k);
                           return base;
                         })}
                       />
-                      <span className={pr.projectId ? '' : 'italic text-orbit-tertiary'}>{pr.projectName}</span>
+                      <span className={pr.projectId ? '' : 'italic text-orbit-tertiary'}>{pr.product === 'scout' && product === 'all' ? 'Scout · ' : ''}{pr.projectName}{pr.scout?.createdAt ? <span className="text-orbit-tertiary"> · {fmtTime(pr.scout.createdAt)}</span> : null}</span>
                     </label>
                   );
                 })}
@@ -539,15 +561,16 @@ export default function UsageRollup() {
           <div className="orbit-card p-4">
             <h3 className="text-orbit-primary text-sm font-semibold mb-3 flex items-center gap-2">
               <i className="ti ti-table text-orbit-secondary" aria-hidden="true" />
-              By project
+              {product === 'scout' ? 'By Scout run' : product === 'all' ? 'By project and Scout run' : 'By project'}
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-orbit-tertiary text-left border-b border-orbit-border">
-                    <th className="py-2 pr-4 font-medium">Project</th>
-                    {/* v7.446: Keyword Landscape size, read off the panel's own basis. */}
-                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                    <th className="py-2 pr-4 font-medium">{product === 'scout' ? 'Scout run' : product === 'all' ? 'Project / Scout run' : 'Project'}</th>
+                    {/* v7.446: Keyword Landscape size, read off the panel's own basis.
+                        v7.514: project-only — hidden in the Scout view. */}
+                    {!scoutView && <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
                       Keywords
                       {/* The idle label matches its sibling sub-labels; the LIVE progress
                           steps up to text-orbit-secondary, because orbit-tertiary measures
@@ -555,14 +578,14 @@ export default function UsageRollup() {
                       <span className={`block text-[10px] font-normal ${kwDone ? 'text-orbit-tertiary' : 'text-orbit-secondary'}`}>
                         {!kwDone ? `counting · ${kwPending} left` : dated ? 'live · not dated' : 'all keywords'}
                       </span>
-                    </th>
+                    </th>}
                     {/* v7.447: hours credited on real evidence, expandable per project. */}
-                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                    {!scoutView && <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
                       Hours Saved
                       <span className="block text-[10px] text-orbit-tertiary font-normal">
                         {dated ? 'initiated in period' : `of ${fmt(hours?.scope?.total ?? 0)} in scope`}
                       </span>
-                    </th>
+                    </th>}
                     {grand.map(l => (
                       <th key={lineKey(l)} className="py-2 px-3 font-medium text-right whitespace-nowrap">
                         {PROVIDER_LABEL[l.provider] ?? l.provider}
@@ -579,26 +602,39 @@ export default function UsageRollup() {
                 <tbody>
                   {projects.map(proj => {
                     const byKey = new Map(proj.lines.map(l => [lineKey(l), l]));
-                    const nameCell = proj.projectId
+                    const isScout = proj.product === 'scout';
+                    // v7.514 — a Scout row names the prospect domain, who ran it and when;
+                    // it links to /scout (a run is not a project page).
+                    const nameCell = isScout
+                      ? <span>
+                          <Link href="/scout" className="text-orbit-primary hover:text-orbit-accent font-medium transition-colors">{proj.projectName}</Link>
+                          {product === 'all' && <span className="ml-1.5 font-mono text-[9px] px-1.5 py-0.5 rounded border border-orbit-accent/30 bg-orbit-accent/10 text-orbit-accent">SCOUT</span>}
+                          {proj.scout && (proj.scout.userName || proj.scout.createdAt) && (
+                            <span className="block text-[10px] text-orbit-tertiary">
+                              {[proj.scout.userName, proj.scout.createdAt ? fmtTime(proj.scout.createdAt) : null, proj.scout.scope === 'products' ? 'products' : null, proj.scout.status && proj.scout.status !== 'ready' ? proj.scout.status.replace('_', ' ') : null].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
+                        </span>
+                      : proj.projectId
                       ? <Link href={`/projects/${proj.projectId}`} className="text-orbit-primary hover:text-orbit-accent font-medium transition-colors">{proj.projectName}</Link>
                       : <span className="text-orbit-tertiary italic">{proj.projectName}</span>;
-                    const hp = proj.projectId ? hoursMap.get(proj.projectId) : undefined;
-                    const open = !!proj.projectId && hoursOpen === proj.projectId;
+                    const hp = proj.projectId && !isScout ? hoursMap.get(proj.projectId) : undefined;
+                    const open = !!proj.projectId && !isScout && hoursOpen === proj.projectId;
                     return (
-                      <Fragment key={proj.projectId ?? 'unattributed'}>
+                      <Fragment key={rowKey(proj)}>
                       <tr className="border-b border-orbit-border/40">
                         <td className="py-2 pr-4">{nameCell}</td>
-                        <td className="py-2 px-3 text-right tabular-nums text-orbit-secondary">
+                        {!scoutView && <td className="py-2 px-3 text-right tabular-nums text-orbit-secondary">
                           {(() => {
-                            if (!proj.projectId) return <span className="text-orbit-tertiary" title="Calls made outside a project have no keyword landscape">—</span>;
+                            if (!proj.projectId || isScout) return <span className="text-orbit-tertiary" title={isScout ? 'A Scout run reads a bounded sample — it has no keyword landscape' : 'Calls made outside a project have no keyword landscape'}>—</span>;
                             const v = kwCounts[proj.projectId];
                             if (v === undefined)   return <span className="text-orbit-tertiary" aria-label="counting">···</span>;
                             if (v === 'error')     return <span className="text-orbit-amber" title="Couldn't read this project's keyword count">?</span>;
                             if (v === null)        return <span className="text-orbit-tertiary" title="No analysis with keyword data yet">—</span>;
                             return fmt(v);
                           })()}
-                        </td>
-                        <td className="py-2 px-3 text-right tabular-nums">
+                        </td>}
+                        {!scoutView && <td className="py-2 px-3 text-right tabular-nums">
                           {!hp
                             ? <span className="text-orbit-tertiary" title={proj.projectId ? 'No analysis with data for this project yet' : 'Calls made outside a project have no delivery scope'}>—</span>
                             : (
@@ -611,7 +647,7 @@ export default function UsageRollup() {
                                 <i className={`ti ti-chevron-${open ? 'up' : 'down'} text-[10px]`} aria-hidden="true" />
                               </button>
                             )}
-                        </td>
+                        </td>}
                         {columns.map(col => {
                           const l = byKey.get(col);
                           return (
@@ -621,7 +657,7 @@ export default function UsageRollup() {
                           );
                         })}
                         <td className="py-2 px-3 text-right tabular-nums text-orbit-primary font-medium">
-                          {cost ? fmtUSD(costMap.get(proj.projectId ?? 'unattributed') ?? 0) : <span className="text-orbit-tertiary">—</span>}
+                          {cost ? fmtUSD(costMap.get(rowKey(proj)) ?? 0) : <span className="text-orbit-tertiary">—</span>}
                         </td>
                         <td className="py-2 pl-3 text-right text-orbit-tertiary whitespace-nowrap">{fmtTime(proj.lastActivity)}</td>
                       </tr>
@@ -630,7 +666,7 @@ export default function UsageRollup() {
                           rather than asserted (Const I.5). */}
                       {open && hp && (
                         <tr className="border-b border-orbit-border/40">
-                          <td colSpan={columns.length + 4} className="py-3 px-3 bg-orbit-muted/20">
+                          <td colSpan={columns.length + (scoutView ? 2 : 4)} className="py-3 px-3 bg-orbit-muted/20">
                             <div className="text-[11px] text-orbit-secondary mb-2">
                               <strong className="text-orbit-primary">{fmt(hp.hours)} hrs</strong> credited from{' '}
                               <strong className="text-orbit-primary">{hp.creditedCount}</strong> of {hp.totalCount} activities
@@ -663,17 +699,17 @@ export default function UsageRollup() {
                   })}
                   {/* Grand total row */}
                   <tr className="border-t-2 border-orbit-border font-semibold">
-                    <td className="py-2 pr-4 text-orbit-primary">All projects</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
+                    <td className="py-2 pr-4 text-orbit-primary">All {rowNoun(product, 2)}</td>
+                    {!scoutView && <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
                       {kwSum.loaded === 0
                         ? <span className="text-orbit-tertiary font-normal">—</span>
                         : <span title={kwDone ? undefined : `Subtotal of ${kwSum.loaded} project(s) counted so far`}>
                             {fmt(kwTotal)}{kwDone ? '' : '…'}
                           </span>}
-                    </td>
-                    <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
+                    </td>}
+                    {!scoutView && <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
                       {viewHours ? fmt(viewHours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
-                    </td>
+                    </td>}
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
                     ))}
@@ -685,7 +721,7 @@ export default function UsageRollup() {
             </div>
           </div>
 
-          <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
+          {!scoutView && <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
             <strong className="text-orbit-secondary">Hours Saved</strong> is the manual effort this project would have taken
             a team to deliver by hand, at the rates set in Admin &rarr; Hours Saved
             {hours?.activitiesUpdatedAt ? ` (last edited ${fmtTime(hours.activitiesUpdatedAt)})` : ''}. The hours are a
@@ -698,15 +734,15 @@ export default function UsageRollup() {
             client-facing Assessment PDF and every delivery export (Wayne, 2026-08-14; Const II.6c) — it describes what the
             platform saved <em>us</em>, not what the client received.
             {hours?.usingSeed && <> <span className="text-orbit-amber">The stored activity list was empty, so the built-in defaults are in use.</span></>}
-          </p>
+          </p>}
 
-          <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
+          {!scoutView && <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
             <strong className="text-orbit-secondary">Keywords</strong> is each project's Keyword Landscape
             &ldquo;All Keywords&rdquo; figure — the client&rsquo;s full ranked footprint plus every competitor-gap
             keyword attributed to a competitor domain, with no volume floor, read off the same pool the panel
             itself counts. It is a database read, so refreshing it costs no API credit. A dash means that project
             has no analysis with keyword data yet.
-          </p>
+          </p>}
 
           <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
             <strong className="text-orbit-secondary">How this is counted:</strong> Semrush units = rows returned × published
