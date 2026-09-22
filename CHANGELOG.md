@@ -1,3 +1,15 @@
+# v7.517 — Scout opening names its theme as the opportunity (2026-09-21)
+
+Wayne: *"lets label this with the theme name ie. Savings Theme is a key opportunity."* The page-01 hero now opens with
+"<Theme> theme is a key opportunity" (e.g. "Savings accounts theme is a key opportunity") above the existing
+MONTHLY SEARCHES IN THIS THEME figure, so the 1.4M reads as that theme's number, not the whole field's. Label only —
+no figure, rule or selection changed.
+
+Verification: project `tsc` clean · real `next build` clean · retained suite re-run, FAIL set identical to the baseline,
+1 new v7.517 source gate · page 01 rendered at normal and stress lengths, no overflow.
+
+---
+
 # v7.516 — Scout insights are reasoned per case, not defaulted (2026-09-21)
 
 Wayne: *"why does every report show the same insight? these insights need to be real and accurate … Not all reports can
