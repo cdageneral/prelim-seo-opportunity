@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { resolveAccess, usedToday } from '@/lib/scout/access';
 import { medianRunSeconds } from '@/lib/scout/store';
-import { INDUSTRIES, MAX_COMPETITORS, MAX_PRODUCTS, unitCeiling } from '@/lib/scout/config';
+import { INDUSTRIES, MAX_COMPETITORS, MAX_PRODUCTS } from '@/lib/scout/config';
 import { MARKETS } from '@/lib/utils/markets';
 import { aiReadAvailable } from '@/lib/scout/aiRead';
 
@@ -23,8 +23,8 @@ export async function GET() {
     user: g.user ? { id: g.user.sub, name: g.user.name, role: g.user.role } : null,
     orbit: g.access.orbit, scout: g.access.scout, cap: g.access.cap, usedToday: used, isAdmin: g.isAdmin, canWrite: g.canWrite,
     timing, aiRead: aiReadAvailable(),
+    // v7.515 — 4 competitors; the screen prices the real count with lib/scout/config unitCeiling().
     limits: { competitors: MAX_COMPETITORS, products: MAX_PRODUCTS },
-    ceilings: { domain: [0, 1, 2, 3].map(c => unitCeiling('domain', c, 0)), products: [1, 2, 3].map(p => [0, 1, 2, 3].map(c => unitCeiling('products', c, p))) },
     industries: INDUSTRIES.map(i => ({ key: i.key, label: i.label })),
     markets: MARKETS.map(m => ({ code: m.code, label: m.label })),
   });
