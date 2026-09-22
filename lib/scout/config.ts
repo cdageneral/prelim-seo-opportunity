@@ -13,7 +13,7 @@
  * floor the pull reached, and every figure is exact ABOVE that floor.
  */
 
-export const SCOUT_VERSION = 'v7.515';
+export const SCOUT_VERSION = 'v7.516';
 
 /**
  * Max competitors and products per run. v7.515 (Wayne, 2026-09-21): competitors 3 → 4.
@@ -107,7 +107,8 @@ export function isValidDomain(d: string): boolean {
 
 /** Ceiling on Semrush units a run can spend, from the same limits the pulls use. */
 export function unitCeiling(scope: 'domain' | 'products', competitors: number, products: number): number {
-  const overview = (competitors + 1) * 10;
+  // v7.516: domain_ranks (10) + backlinks_overview for Authority Score (45) per site
+  const overview = (competitors + 1) * (10 + 45);
   const questions = QUESTION_ROWS * 40;
   if (scope === 'domain') {
     return overview + questions + (competitors * ROWS_PER_COMPETITOR_DOMAIN + ROWS_PROSPECT_DOMAIN) * 10;

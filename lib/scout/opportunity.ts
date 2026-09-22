@@ -181,8 +181,18 @@ export function buildThemes(u: Universe, assignment: Map<string, string>, compet
 
 // ─── The picker ──────────────────────────────────────────────────────────────
 
-export type Constraint = 'content' | 'authority' | 'ai_citation';
-export interface Check { pass: boolean; you: number; them: number | null }
+/**
+ * v7.516 — the constraint is DERIVED from which measured gap exists, never defaulted:
+ *   authority    — both Authority Scores are known and the leader is more than AUTHORITY_TOLERANCE ahead
+ *   content      — the leader ranks PAGES_GAP_MULTIPLE× as many pages on page one as you have in the top 20
+ *   optimization — no page gap, but you already have NEAR_WIN_MIN+ searches at positions 11–20
+ * Before v7.516 "content" was simply whatever was left when authority passed — and Authority Score read 0
+ * for every domain (domain_ranks has no such column), so authority always "passed" and every report said
+ * "a content problem, not an authority one" regardless of the data.
+ */
+export type Constraint = 'content' | 'optimization' | 'authority' | 'ai_citation';
+/** `known` is false when a figure the check needs was not returned; a check that is not known never passes. */
+export interface Check { pass: boolean; you: number | null; them: number | null; known?: boolean }
 export interface Opening {
   theme:       string;
   constraint:  Constraint;
@@ -195,12 +205,14 @@ export function evaluateOpenTheme(t: ThemeStat, authority: Record<string, number
   if (t.state !== 'open' || !t.leader || t.demand < DEMAND_FLOOR_MONTHLY) return null;
   const you = authority[prospectDomain]; const them = authority[t.leader.domain];
   const authKnown = typeof you === 'number' && typeof them === 'number';
-  const authority_: Check = { pass: authKnown && (you as number) >= (them as number) - AUTHORITY_TOLERANCE, you: (you ?? 0) as number, them: (them ?? null) as number | null };
-  const pages: Check = { pass: t.leader.pages >= Math.max(1, t.prospectPages) * PAGES_GAP_MULTIPLE && t.leader.pages >= 2, you: t.prospectPages, them: t.leader.pages };
-  const nearWins: Check = { pass: t.nearWins.length >= NEAR_WIN_MIN, you: t.nearWins.length, them: null };
+  const authority_: Check = { pass: authKnown && (you as number) >= (them as number) - AUTHORITY_TOLERANCE, you: typeof you === 'number' ? you : null, them: typeof them === 'number' ? them : null, known: authKnown };
+  const pages: Check = { pass: t.leader.pages >= Math.max(1, t.prospectPages) * PAGES_GAP_MULTIPLE && t.leader.pages >= 2, you: t.prospectPages, them: t.leader.pages, known: true };
+  const nearWins: Check = { pass: t.nearWins.length >= NEAR_WIN_MIN, you: t.nearWins.length, them: null, known: true };
   const passed = [authority_, pages, nearWins].filter(c => c.pass).length;
   if (passed < CHECKS_TO_QUALIFY) return null;
-  return { theme: t.name, constraint: authority_.pass ? 'content' : 'authority', leader: t.leader.domain, checks: { authority: authority_, pages, nearWins }, passed };
+  const authorityGap = authKnown && !authority_.pass;
+  const constraint: Constraint = authorityGap ? 'authority' : pages.pass ? 'content' : 'optimization';
+  return { theme: t.name, constraint, leader: t.leader.domain, checks: { authority: authority_, pages, nearWins }, passed };
 }
 
 /** Largest qualifying open theme; ties → more near-wins. */
@@ -239,9 +251,9 @@ export function pickAiOpening(themes: ThemeStat[], reads: AiThemeRead[], prospec
   return {
     theme: c.t.name, constraint: 'ai_citation', leader: c.rival, passed: 0,
     checks: {
-      authority: { pass: typeof you === 'number' && typeof them === 'number' && you >= them - AUTHORITY_TOLERANCE, you: (you ?? 0) as number, them: (them ?? null) as number | null },
-      pages:     { pass: false, you: c.t.prospectPages, them: c.t.leader?.pages ?? null },
-      nearWins:  { pass: c.t.nearWins.length >= NEAR_WIN_MIN, you: c.t.nearWins.length, them: null },
+      authority: { pass: typeof you === 'number' && typeof them === 'number' && you >= them - AUTHORITY_TOLERANCE, you: typeof you === 'number' ? you : null, them: typeof them === 'number' ? them : null, known: typeof you === 'number' && typeof them === 'number' },
+      pages:     { pass: false, you: c.t.prospectPages, them: c.t.leader?.pages ?? null, known: true },
+      nearWins:  { pass: c.t.nearWins.length >= NEAR_WIN_MIN, you: c.t.nearWins.length, them: null, known: true },
     },
   };
 }

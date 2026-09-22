@@ -8,7 +8,7 @@
  * run can state its own measured unit spend (rows × the verified per-line rate).
  */
 
-import { semrushRows, getDomainOverview, getCompetitors, getApiUnitsBalance } from '@/lib/apis/semrush';
+import { semrushRows, getDomainOverview, getCompetitors, getApiUnitsBalance, getBacklinksOverview } from '@/lib/apis/semrush';
 import { SEMRUSH_RATES } from '@/lib/usage/record';
 import type { DomainPull, PullRow } from './opportunity';
 import { PUBLISHER_DOMAINS, SUGGEST_ROWS, QUESTION_ROWS, normDomain } from './config';
@@ -54,15 +54,30 @@ export async function pullOrganic(opts: {
 }
 
 export interface DomainFacts { domain: string; organicKeywords: number; organicTraffic: number; authorityScore: number | null; found: boolean }
-export async function pullOverview(domain: string, database: string, meter: UnitMeter): Promise<DomainFacts> {
+/**
+ * v7.516 — Authority Score now comes from `backlinks_overview` (`ascore`, 45 units/request), the report that
+ * actually carries it. `domain_ranks` has no Authority Score column, so the old read parsed a missing header
+ * as 0 for EVERY domain — the authority check then always "passed" (0 ≥ 0 − 5). A missing or failed read is
+ * null (unknown), never 0, and an unknown score can never pass or fail the authority check.
+ */
+export async function pullOverview(domain: string, database: string, meter: UnitMeter, withAuthority = true): Promise<DomainFacts> {
+  let facts: DomainFacts;
   try {
     const o = await getDomainOverview(domain, database);
     bill(meter, 'domain_ranks', 1);
     const found = o.organicKeywords > 0 || o.organicTraffic > 0;
-    return { domain, organicKeywords: o.organicKeywords, organicTraffic: o.organicTraffic, authorityScore: found && Number.isFinite(o.authorityScore) ? o.authorityScore : null, found };
+    facts = { domain, organicKeywords: o.organicKeywords, organicTraffic: o.organicTraffic, authorityScore: null, found };
   } catch {
     return { domain, organicKeywords: 0, organicTraffic: 0, authorityScore: null, found: false };
   }
+  if (withAuthority && facts.found) {
+    try {
+      const b = await getBacklinksOverview(domain, 'root_domain');
+      bill(meter, 'backlinks_overview', 1);
+      if (b && Number.isFinite(b.ascore)) facts.authorityScore = b.ascore;
+    } catch { /* unknown stays null */ }
+  }
+  return facts;
 }
 
 export interface Suggestion { domain: string; commonKeywords: number; organicKeywords: number; publisher: boolean }

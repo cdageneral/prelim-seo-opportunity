@@ -57,7 +57,21 @@ const STATE = {
   held:      { fill: '#2a78d6', ink: '#ffffff', label: 'Held' },
 } as const;
 
-export function buildScoutHtml(r: ScoutResult): string {
+/**
+ * v7.516 — runs stored by v7.513–v7.515 read Authority Score from domain_ranks, which has no such column, so
+ * every domain was stored as 0. Re-rendering one of those reports must not print "0 vs 0 — within 5 points":
+ * the scores are treated as unknown (null) and the report says authority could not be compared.
+ */
+export function withKnownAuthority(r: ScoutResult): ScoutResult {
+  const v = Number(String(r.version ?? '').replace(/^v7\./, ''));
+  // the bug's signature: a pre-v7.516 run where EVERY site reads exactly 0 (a real score of 0 for all is not plausible)
+  if (!(v >= 513 && v <= 515) || !r.facts.length || !r.facts.every(f => f.authorityScore === 0)) return r;
+  const opening = r.opening ? { ...r.opening, checks: { ...r.opening.checks, authority: { pass: false, you: null, them: null, known: false } } } : null;
+  return { ...r, facts: r.facts.map(f => ({ ...f, authorityScore: null })), field: r.field.map(f => ({ ...f, authority: null })), opening };
+}
+
+export function buildScoutHtml(r0: ScoutResult): string {
+  const r = withKnownAuthority(r0);
   const me = r.input.domain;
   const comps = r.input.competitors.map(c => c.domain);
   const o = r.opening;
@@ -78,6 +92,7 @@ export function buildScoutHtml(r: ScoutResult): string {
   // ── cover ──
   const coverH = !o ? `Where <u>${esc(me)}</u> stands in search and AI answers.`
     : o.constraint === 'ai_citation' ? `You rank for ${esc(o.theme.toLowerCase())}. AI answers <u>recommend someone else</u>.`
+    : o.constraint === 'optimization' && lead!.nearWinVolume > 0 ? `${vol(lead!.nearWinVolume)} searches a month in ${esc(o.theme.toLowerCase())} sit <u>one page away</u>.`
     : `${vol(lead!.demand)} searches a month are <u>open</u> in ${esc(o.theme.toLowerCase())}.`;
   const cover = `<section class="pg cover"><svg viewBox="0 0 816 1056" class="orb" aria-hidden="true"><g fill="none" stroke="#6C63FF" stroke-opacity=".35"><circle cx="680" cy="285" r="100"/><circle cx="680" cy="285" r="190"/><circle cx="680" cy="285" r="295"/><circle cx="680" cy="285" r="410"/></g><circle cx="680" cy="285" r="10" fill="#fff"/><circle cx="582" cy="258" r="8" fill="#6C63FF"/><circle cx="794" cy="440" r="12" fill="#6C63FF"/><circle cx="445" cy="460" r="7" fill="#6C63FF"/><circle cx="374" cy="148" r="6" fill="#eda100"/></svg>
   <div class="inner"><div class="k">iQ.IMPACT · OPPORTUNITY SNAPSHOT</div><div style="flex:1"></div><h1>${coverH}</h1>
@@ -88,24 +103,33 @@ export function buildScoutHtml(r: ScoutResult): string {
   let p1 = '';
   if (o && lead) {
     const leaderS = lead.rivals.find(x => x.domain === o.leader) ?? null;
-    const h = o.constraint === 'content' ? `${esc(cap(o.theme))} is your most winnable gap, and it's a <u>content</u> problem, not an authority one.`
-      : o.constraint === 'authority' ? `${esc(cap(o.theme))} is your largest open gap, and <u>authority</u> is what stands in the way.`
-      : `You're on page one for ${esc(o.theme.toLowerCase())}, yet AI answers name <u>${esc(short(o.leader ?? 'a competitor'))}</u> instead.`;
+    // v7.516 — every sentence here is built from THIS run's checks: which gap exists, the leader, the counts.
+    const c0 = o.checks; const L = esc(short(o.leader ?? 'the leader')); const th = esc(o.theme.toLowerCase());
+    const authKnown = c0.authority.you !== null && c0.authority.them !== null;
+    const authGap = authKnown ? (c0.authority.them as number) - (c0.authority.you as number) : 0;
+    const h = o.constraint === 'content' ? `In ${th}, ${L} ranks <u>${n0(c0.pages.them ?? 0)} pages</u> on page one to your ${n0(c0.pages.you ?? 0)}. The gap is content${authKnown && c0.authority.pass ? ', not authority' : ''}.`
+      : o.constraint === 'optimization' ? `You already rank for ${n0(c0.nearWins.you ?? 0)} ${th} searches just off page one. The gap is <u>optimization</u>, not new content.`
+      : o.constraint === 'authority' ? `${L} carries ${n0(authGap)} more points of Authority Score than you, and in ${th} <u>authority</u> is what stands in the way.`
+      : `You're on page one for ${th}, yet AI answers name <u>${esc(short(o.leader ?? 'a competitor'))}</u> instead.`;
     const bars = [{ d: me, s: lead.share, n: lead.prospectP1, mine: true }, ...lead.rivals.map(x => ({ d: x.domain, s: x.p1Share, n: x.p1Keywords, mine: false }))]
       .sort((a, b) => b.s - a.s).map(b => `<div class="hb"><span>${esc(short(b.d))}${b.mine ? ' (you)' : ''}</span><div class="ht"><i style="width:${(b.s * 100).toFixed(1)}%;background:${b.mine ? '#fff' : '#6C63FF'}"></i></div><b>${pct(b.s)}</b></div>`).join('');
-    const c = o.checks;
+    const c = { ...o.checks, pages: { ...o.checks.pages, you: o.checks.pages.you ?? 0 }, nearWins: { ...o.checks.nearWins, you: o.checks.nearWins.you ?? 0 } };
     const aRead = r.ai?.reads.find(x => x.theme === o.theme) ?? null;
-    const authCard = `<div class="evb"><div class="t">Authority</div><div class="n" style="color:${c.authority.pass ? 'var(--ink)' : 'var(--crit)'}">${c.authority.them === null ? '—' : n0(c.authority.you)} <span>vs ${c.authority.them === null ? '—' : n0(c.authority.them)}</span></div>
-      <div class="mini"><i style="width:${Math.min(100, c.authority.you)}%;background:var(--indigo)"></i></div><div class="mini"><i style="width:${Math.min(100, c.authority.them ?? 0)}%;background:var(--grey)"></i></div>
-      <p>${c.authority.them === null ? 'Semrush returned no authority score for one of the two domains.' : c.authority.pass ? `Your Semrush Authority Score is within ${AUTHORITY_TOLERANCE} points of ${esc(short(o.leader ?? ''))}, or ahead. Authority isn't what's holding you back here.` : `${esc(short(o.leader ?? ''))} carries more authority. Closing this gap takes links and coverage as well as pages.`}</p></div>`;
+    const authCard = `<div class="evb"><div class="t">Authority</div><div class="n" style="color:${!authKnown ? 'var(--ink2)' : c.authority.pass ? 'var(--ink)' : 'var(--crit)'}">${c.authority.you === null ? '—' : n0(c.authority.you)} <span>vs ${c.authority.them === null ? '—' : n0(c.authority.them)}</span></div>
+      <div class="mini"><i style="width:${Math.min(100, c.authority.you ?? 0)}%;background:var(--indigo)"></i></div><div class="mini"><i style="width:${Math.min(100, c.authority.them ?? 0)}%;background:var(--grey)"></i></div>
+      <p>${!authKnown ? `Semrush returned no Authority Score for ${c.authority.you === null && c.authority.them === null ? 'either domain' : c.authority.you === null ? esc(me) : esc(short(o.leader ?? ''))}, so authority is neither ruled in nor out.` : c.authority.pass ? `Your Semrush Authority Score is within ${AUTHORITY_TOLERANCE} points of ${esc(short(o.leader ?? ''))}, or ahead. Authority isn't what's holding you back here.` : `${esc(short(o.leader ?? ''))} carries more authority. Closing this gap takes links and coverage as well as pages.`}</p></div>`;
     const pagesCard = `<div class="evb"><div class="t">Pages on the theme</div><div class="n" style="color:${c.pages.pass ? 'var(--crit)' : 'var(--ink)'}">${n0(c.pages.you)} <span>vs ${n0(c.pages.them ?? 0)}</span></div>
       <div class="mini"><i style="width:${c.pages.them ? Math.min(100, (c.pages.you / Math.max(c.pages.you, c.pages.them)) * 100) : 0}%;background:${c.pages.pass ? 'var(--crit)' : 'var(--indigo)'}"></i></div><div class="mini"><i style="width:${c.pages.them ? Math.min(100, (c.pages.them / Math.max(c.pages.you, c.pages.them)) * 100) : 0}%;background:var(--grey)"></i></div>
       <p>${esc(short(o.leader ?? ''))} has ${n0(c.pages.them ?? 0)} distinct pages on page one for this theme. You have ${n0(c.pages.you)} ranking anywhere in the top 20.</p></div>`;
     const nearCard = `<div class="evb"><div class="t">Already close</div><div class="n" style="color:${c.nearWins.pass ? 'var(--good)' : 'var(--ink)'}">${n0(c.nearWins.you)}</div>
       <div class="mini"><i style="width:${lead.count ? Math.min(100, (c.nearWins.you / lead.count) * 100) : 0}%;background:var(--good)"></i></div>
       <p>${c.nearWins.you === 1 ? 'search sits' : 'searches sit'} at positions 11–20${lead.nearWinVolume ? `, worth ${vol(lead.nearWinVolume)} searches a month` : ''}. ${c.nearWins.pass ? 'One page away from the clicks.' : `Fewer than ${NEAR_WIN_MIN}, so there is little to build from.`}</p></div>`;
-    const verdict = o.constraint === 'content' ? `The demand is there, your domain is strong enough, and the pages aren't.`
-      : o.constraint === 'authority' ? `The demand is there, but ${esc(short(o.leader ?? ''))} carries more authority. Pages alone won't close this one.`
+    const verdict = o.constraint === 'content'
+        ? `${L} has ${n0(c.pages.them ?? 0)} pages winning these searches; you have ${n0(c.pages.you ?? 0)}${authKnown && c.authority.pass ? `, and your Authority Score (${n0(c.authority.you as number)}) is within ${AUTHORITY_TOLERANCE} points of theirs (${n0(c.authority.them as number)})` : ''}. More pages on the theme is the first move.${!authKnown ? ' Authority could not be compared, so it is not ruled out.' : ''}`
+      : o.constraint === 'optimization'
+        ? `${n0(c.nearWins.you ?? 0)} searches${lead.nearWinVolume ? ` worth ${vol(lead.nearWinVolume)} a month` : ''} already sit at positions 11–20, and ${L} ranks ${n0(c.pages.them ?? 0)} pages to your ${n0(c.pages.you ?? 0)}. The pages exist; they need to rank higher.`
+      : o.constraint === 'authority'
+        ? `${L}'s Authority Score is ${n0(c.authority.them as number)} to your ${n0(c.authority.you as number)}.${c.pages.pass ? ` They also rank ${n0(c.pages.them ?? 0)} pages to your ${n0(c.pages.you ?? 0)}, but` : ''} pages alone won't close a ${n0(authGap)}-point authority gap.`
       : `Google already trusts you here. The AI engines are drawing on other sources.`;
     const aiLine = aRead ? `Across ${n0(aRead.answers)} recorded AI answers on this theme, you were named in ${n0(aRead.named[me] ?? 0)}${o.leader ? ` and ${esc(short(o.leader))} in ${n0(aRead.named[o.leader] ?? 0)}` : ''}.` : '';
     p1 = page('THE OPENING', `<h3>${h}</h3>
@@ -251,6 +275,10 @@ export function buildScoutHtml(r: ScoutResult): string {
   const asks = (o?.constraint === 'authority') ? [
     [`Is ${theme} a growth priority this year, or is the quiet there deliberate?`, `Some gaps are a choice. That changes everything about what comes next.`],
     [`What's being done today to earn coverage and links from other sites?`, `Authority is built outside your own website, and it tends to sit with a different team than content does.`],
+    [`Is anyone watching how AI assistants describe you yet?`, `Most teams we talk to are just starting. We can share what we're seeing across the industry.`]]
+  : (o?.constraint === 'optimization') ? [
+    [`Who owns the ${theme} pages that rank just off page one today?`, `Pages at positions 11–20 usually need updating rather than replacing, so it helps to know who can change them.`],
+    [`How often do those pages get refreshed?`, r.input.regulated ? `In regulated categories even small page edits go through review, and that often sets the pace.` : `A page that hasn't been touched in a while is often the easiest one to move.`],
     [`Is anyone watching how AI assistants describe you yet?`, `Most teams we talk to are just starting. We can share what we're seeing across the industry.`]]
   : (o?.constraint === 'ai_citation') ? [
     [`Is ${theme} where you most need to be the recommended name?`, `AI answers are becoming the first shortlist. It helps to know which shortlist matters most.`],

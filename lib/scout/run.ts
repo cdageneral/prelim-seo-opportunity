@@ -211,7 +211,7 @@ export async function executeRun(runId: string): Promise<void> {
       themes: themes.map(lite), opening, detail, ai, notes,
       usage: { semrushUnits: meter.units, semrushRows: meter.rows, semrushCalls: meter.calls, aiCostUSD: aiCost },
     };
-    const headline = opening ? `${opening.theme} · ${opening.constraint === 'ai_citation' ? 'AI citation' : opening.constraint}` : null;
+    const headline = opening ? `${opening.theme} · ${opening.constraint === 'ai_citation' ? 'AI citation' : opening.constraint}` : null;   // constraint derived per case (v7.516)
     await finishRun(runId, { status: opening ? 'ready' : 'no_opening', headline, units: meter.units, result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
