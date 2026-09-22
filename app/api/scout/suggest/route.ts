@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
       const c = normDomain(p.data.check);
       if (!isValidDomain(c)) return NextResponse.json({ error: `"${p.data.check}" is not a domain.` }, { status: 400 });
       if (c === domain) return NextResponse.json({ error: 'That is the prospect itself.' }, { status: 400 });
-      const f = await pullOverview(c, db, newMeter());
+      const f = await pullOverview(c, db, newMeter(), false);
       const root = c.split('.').slice(-2).join('.');
       return NextResponse.json({ competitor: { domain: c, organicKeywords: f.organicKeywords, found: f.found, publisher: PUBLISHER_DOMAINS.has(c) || PUBLISHER_DOMAINS.has(root) } });
     }
