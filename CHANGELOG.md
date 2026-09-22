@@ -1,3 +1,32 @@
+# v7.519 — Scout PDF: "AI Answers Read", no AI vendor named, page 05 labelled Google, est. traffic on the leader's pages (2026-09-21)
+
+Four notes from Wayne on the live synchrony run:
+
+1. *"lets call that AI Answers Read"* — the page-04 column is now **AI Answers Read**, and the source line says what it
+   counts: up to 50 recorded answers per engine (ChatGPT and Google AI Overviews), so 100 at most per theme.
+2. *"lets remove the source dataforseo"* — the page-04 callout, its source line, the methods footer and the
+   "not configured" run note no longer name DataForSEO; they name the engines whose answers were read. Constitution
+   amended to v0.29 (I.1: naming the platform instead of the vendor is allowed; naming a wrong vendor is not).
+3. *"i am unclear if this is for Google or for LLMs?"* — page 05 now says it is Google organic search: "Largest Google
+   searches in the theme", "Their Google rank" / "Your Google rank", "Pages ranking on Google", and the lede points to
+   page 04 for AI answers.
+4. *"why is there no their rank and best ranked competitor"* — on "savings account" none of the competitors ranks in
+   Google's top 10 (competitor pulls are page one only and were complete down to 14,800/mo, so a 74,000/mo search is
+   not a truncation). The row now says **none on page one** instead of a bare dash, and the source line defines it.
+5. *"instead of searches can we have est. traffic using the volume multiplied by the avg ctr for that current rank
+   position"* — the leader's "pages winning the most" table shows **Est. traffic / mo** = Σ volume × CTR at that page's
+   current Google rank, from the one shared curve (lib/sov/model, GrowthSRC 2025 · 200K-kw study), ranked by it, and
+   disclosed on the page as modeled, not measured (Const I.5a). New `leaderPagesOf()` in lib/scout/opportunity.ts; run.ts
+   calls it instead of its inline copy. Runs made before v7.519 carry no per-page traffic and keep the old Searches
+   column rather than show an invented number — re-run to get the new column.
+
+Verification: `tsc` + `next build` clean · suite 3616 PASS, FAIL set identical to baseline · new v7.519 harness
+(24 checks: CTR math, traffic ordering, headers, disclosure, "none on page one", no vendor named, old-run fallback) +
+4 source gates · pages 04 and 05 rendered.
+
+---
+
+
 # v7.518 — Scout authority comparison states its direction (2026-09-21)
 
 Wayne, on a live run (synchrony.com 73 vs ally.com 69): *"you mention that the authority is within 5 points to Ally,
