@@ -135,7 +135,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
     p1 = page('THE OPENING', `<h3>${h}</h3>
       <div class="hero"><div><div class="k" style="color:#a5a0ff">MONTHLY SEARCHES IN THIS THEME</div><div class="big">${vol(lead.demand)} <small>/mo</small></div>
         <p>Across ${n0(lead.count)} ${esc(floorNote)}. You're on page one for <b>${lead.prospectP1 === 0 ? 'none' : n0(lead.prospectP1)}</b> of them${leaderS ? `; ${esc(short(leaderS.domain))} is on page one for <b>${n0(leaderS.p1Keywords)}</b>` : ''}.</p></div>
-        <div><div class="k" style="color:#fff;margin-bottom:8px">SHARE OF THESE SEARCHES ON PAGE ONE</div>${bars}</div></div>
+        <div><div class="k" style="color:#fff;margin-bottom:8px">SHARE OF THE ${n0(lead.count)} ${esc(o.theme.toUpperCase())} SEARCHES ON PAGE ONE</div>${bars}</div></div>
       <div class="fig">${o.constraint === 'ai_citation' ? 'What the search data says' : 'Why this one is winnable'} <span>three measured checks</span></div>
       <div class="ev">${authCard}${pagesCard}${nearCard}</div>
       <div class="verdict"><span class="st">BINDING CONSTRAINT · ${o.constraint === 'ai_citation' ? 'AI CITATION' : o.constraint.toUpperCase()}</span><div><b>${verdict}</b>${aiLine ? `<br><span>${aiLine}${r.ai ? ` See page ${String(pageNo + 4).padStart(2, '0')}.` : ''}</span>` : ''}</div></div>
@@ -196,13 +196,29 @@ export function buildScoutHtml(r0: ScoutResult): string {
     <div class="fig">Authority vs page-one searches <span>bubble size = Semrush estimated monthly organic visits</span></div>
     <svg viewBox="0 0 708 344" width="100%">${grid}${xt}<text x="366" y="341" text-anchor="middle" font-size="8.5" font-weight="700" fill="#898781" letter-spacing="1">SEMRUSH AUTHORITY SCORE →</text>${dots}</svg>
     ${noAuth.length ? `<div class="basis">Not plotted — Semrush returned no Authority Score: ${esc(noAuth.join(', '))}.</div>` : ''}
-    <div class="fig">Monthly searches where each site is on page one <span>${n0(r.counts.themed)} searches measured</span></div>${volBars}
+    <div class="fig">Monthly searches where each site is on page one <span>all ${n0(r.counts.themed)} searches measured, across ${n0(r.themes.length)} themes</span></div>${volBars}
+    ${(() => { // v7.516 — say where YOUR page-one volume sits, so a strong field bar never reads as contradicting a theme you don't hold
+      const held = [...r.themes].filter(t => t.prospectP1Volume > 0).sort((a, b) => b.prospectP1Volume - a.prospectP1Volume);
+      if (!held.length || !mine.p1Volume) return '';
+      const top = held.slice(0, 2); const topSum = top.reduce((s2, t) => s2 + t.prospectP1Volume, 0);
+      const miss = o && lead && lead.prospectP1Volume === 0 ? ` In ${esc(o.theme.toLowerCase())}, the theme on page 01, you hold none of it.` : '';
+      return `<div class="basis" style="font-size:9.5px">Where your ${vol(mine.p1Volume)}/mo comes from: ${top.map(t => `${esc(t.name)} (${vol(t.prospectP1Volume)})`).join(' and ')}${held.length > 2 ? ` — ${Math.round((topSum / mine.p1Volume) * 100)}% of it` : ''}.${miss}</div>`;
+    })()}
     <div class="call"><b>You're on page one for ${n0(mine.p1Keywords)} of the ${n0(r.counts.themed)} searches measured.</b> ${(() => { const top = [...F].filter(f => !f.isProspect).sort((a, b) => b.p1Keywords - a.p1Keywords)[0]; return top ? `${esc(short(top.domain))} is on page one for ${n0(top.p1Keywords)}.` : ''; })()}</div>
     <div class="basis">Measured set: ${esc(floorNote)} where ${esc(me)} ranks in the top 20 or a selected competitor ranks on page one, grouped into the themes on the next page. Semrush, ${esc(r.marketLabel)}, ${esc(dateStr)}. Visits are a Semrush estimate.</div>`);
 
   // ── 03 demand map ──
   const shown = r.themes.slice(0, 9);
   const boxes = treemap(shown.map(t => t.demand), 708, 400);
+  // v7.516 (Wayne): name the leader of every theme — the measured site on page one for the most of its searches,
+  // you included. Same denominator as the share figures (page-one keyword counts); ties are named as ties.
+  const leaderOf = (t: ThemeLite) => {
+    const c = [{ d: me, s: t.share, n: t.prospectP1, mine: true }, ...t.rivals.map(x => ({ d: x.domain, s: x.p1Share, n: x.p1Keywords, mine: false }))];
+    const max = Math.max(0, ...c.map(x => x.n));
+    return max === 0 ? [] : c.filter(x => x.n === max);
+  };
+  const leaderLabel = (t: ThemeLite) => { const L0 = leaderOf(t); if (!L0.length) return 'no measured site on page one';
+    const names = L0.map(x => x.mine ? 'you' : short(x.d)); return `${L0.length > 1 ? 'tied: ' + names.join(', ') : names[0]} · ${pct(L0[0].s)}`; };
   const tm = boxes.map(b => {
     const t = shown[b.i]; const st = STATE[t.state]; const isLead = !!o && t.name === o.theme; const big = b.w > 190 && b.h > 110; const small = b.w < 190 || b.h < 70;
     const fs0 = big ? 17 : small ? 9.5 : 12.5; const words = t.name;
@@ -214,7 +230,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
       ${isLead && !small ? `<text x="11" y="19" font-size="8" font-weight="800" letter-spacing="1.2">THE OPENING</text>` : ''}
       <text x="11" y="${isLead && !small ? 38 : small ? 15 : 22}" font-size="${fs}" font-weight="700" font-family="Fraunces,Georgia,serif">${esc(words)}</text>
       ${small ? `<text x="11" y="29" font-size="10.5" font-weight="800">${vol(t.demand)} · ${pct(t.share)}</text>`
-        : `<text x="11" y="${(isLead ? 38 : 22) + (big ? 40 : 26)}" font-size="${big ? 36 : 21}" font-weight="800" letter-spacing="-1">${vol(t.demand)}</text><text x="11" y="${(isLead ? 38 : 22) + (big ? 58 : 41)}" font-size="9.5">${n0(t.count)} searches · you're on page one for ${pct(t.share)}</text>`}
+        : `<text x="11" y="${(isLead ? 38 : 22) + (big ? 40 : 26)}" font-size="${big ? 36 : 21}" font-weight="800" letter-spacing="-1">${vol(t.demand)}</text><text x="11" y="${(isLead ? 38 : 22) + (big ? 58 : 41)}" font-size="9.5">${n0(t.count)} searches · you're on page one for ${pct(t.share)}</text><text x="11" y="${(isLead ? 38 : 22) + (big ? 73 : 55)}" font-size="9.5" font-weight="700">Leader: ${esc(leaderLabel(t))}</text>`}
       </g></svg></g>`;
   }).join('');
   const openThemes = r.themes.filter(t => t.state === 'open');
@@ -222,6 +238,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
   const p3 = page('THE DEMAND MAP', `<h3>Where your category's searches go, and <u>who catches them</u>.</h3><p class="lede">Each block is a theme, sized by monthly searches. Colour shows how much of page one you hold.</p>
     <svg viewBox="0 0 708 400" width="100%">${tm}</svg>
     <div class="lg"><span><i style="background:#2a78d6"></i>Held — you're on page one for ${pct(HELD_FROM_SHARE)}+ of the theme's searches</span><span><i style="background:#eda100"></i>Contested — ${pct(OPEN_BELOW_SHARE)}–${pct(HELD_FROM_SHARE)}</span><span><i style="background:#d03b3b"></i>Open to you — under ${pct(OPEN_BELOW_SHARE)}</span></div>
+    <table class="d lt"><tr><th>Theme</th><th class="n">Searches / mo</th><th class="n">You on page one</th><th>Leader · share of the theme's searches on page one</th></tr>${shown.map(t => { const L0 = leaderOf(t); return `<tr><td>${esc(t.name)}</td><td class="n">${vol(t.demand)}</td><td class="n">${pct(t.share)}</td><td${L0.some(x => x.mine) ? ' style="color:#2a78d6;font-weight:700"' : ''}>${esc(leaderLabel(t))}</td></tr>`; }).join('')}</table>
     <div class="fig">Demand you're on page one for vs demand you miss <span>monthly searches</span></div>
     <div class="capbar"><i style="width:${(capFrac * 100).toFixed(1)}%"></i></div>
     <div class="caprow"><span><b style="color:#2a78d6">${vol(r.totals.prospectP1Volume)}</b> where you're on page one today</span><span><b style="color:var(--crit)">${vol(Math.max(0, r.totals.demand - r.totals.prospectP1Volume))}</b> where you aren't</span></div>
@@ -331,7 +348,7 @@ h3{font:600 30px/1.12 Fraunces,Georgia,serif;letter-spacing:-.02em;margin:9px 0 
 .q{border-radius:8px;padding:10px 11px;border:1px solid var(--grid)}.q .qt{font-size:8.5px;font-weight:800;letter-spacing:.09em;margin-bottom:7px}.q span{display:inline-block;font-size:10px;background:#fff;border:1px solid var(--grid);border-radius:4px;padding:2px 7px;margin:0 4px 4px 0}.q em{font-size:9.5px;color:var(--muted)}.q p{margin:3px 0 0;font-size:9px;color:var(--ink2)}
 .q.a{background:#eefaee}.q.a .qt{color:var(--good)}.q.b{background:#eef0fd}.q.b .qt{color:var(--indigo)}.q.c{background:#fdf8ec}.q.c .qt{color:#8a5a00}.q.d{background:#fdf0ef}.q.d .qt{color:var(--crit)}.q span.lead{border:1.5px solid var(--crit);font-weight:700}
 table.heat{width:100%;border-collapse:separate;border-spacing:3px;font-size:10.5px}table.heat th{font-size:8px;letter-spacing:.06em;color:var(--muted);font-weight:700;text-transform:uppercase;padding:2px}table.heat td.c{width:82px;height:21px;border-radius:3px;text-align:center;font-weight:700;font-size:10px}table.heat td.mine{outline:1.5px solid var(--indigo)}
-table.d{width:100%;border-collapse:collapse;font-size:10.5px}table.d th{font-size:8px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);text-align:left;padding:5px 6px;border-bottom:1.5px solid var(--ink)}table.d td{padding:5.5px 6px;border-bottom:1px solid var(--grid)}table.d .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}table.d td.url{font-size:9.5px;color:var(--ink2);word-break:break-all}
+table.lt td,table.lt th{padding:2.5px 6px!important;font-size:9px}table.lt{margin-top:8px}table.d{width:100%;border-collapse:collapse;font-size:10.5px}table.d th{font-size:8px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);text-align:left;padding:5px 6px;border-bottom:1.5px solid var(--ink)}table.d td{padding:5.5px 6px;border-bottom:1px solid var(--grid)}table.d .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}table.d td.url{font-size:9.5px;color:var(--ink2);word-break:break-all}
 .vb{display:inline-block;height:6px;background:var(--indigo);border-radius:3px;vertical-align:middle;margin-right:7px}
 .two{display:grid;grid-template-columns:1fr 1.25fr;gap:16px;align-items:start}
 .qs{display:flex;flex-wrap:wrap;gap:6px}.qs span{font:400 11.5px Fraunces,Georgia,serif;font-style:italic;background:var(--paper);border-radius:5px;padding:5px 10px}.qs em{font:700 8.5px Inter,system-ui,sans-serif;color:var(--muted);margin-left:7px;font-style:normal}
