@@ -1,3 +1,18 @@
+# v7.518 — Scout authority comparison states its direction (2026-09-21)
+
+Wayne, on a live run (synchrony.com 73 vs ally.com 69): *"you mention that the authority is within 5 points to Ally,
+however arent we 5 points higher than Ally? you need to build in the decision making to know whether something is
+greater or lower. Higher authority signals are always stronger."* The check itself was right (ahead passes), but the
+sentence said "within 5 points … or ahead" for every passing case. The wording is now chosen from the direction:
+**ahead** — "your Authority Score (73) is 4 points higher than ally.com's (69) … authority is on your side" (number shown
+in green); **level** — "matches"; **close behind (1–5)** — "only N points below … close enough that authority isn't what's
+holding you back"; **behind by more than 5** — the authority constraint, as before. Selection rules unchanged.
+
+Verification: `tsc` + `next build` clean · suite FAIL set identical to baseline · 4 new direction checks (ahead, level,
+close-behind, far-behind) on the real template · page 01 rendered for the 73-vs-69 case.
+
+---
+
 # v7.517 — Scout opening names its theme as the opportunity (2026-09-21)
 
 Wayne: *"lets label this with the theme name ie. Savings Theme is a key opportunity."* The page-01 hero now opens with
