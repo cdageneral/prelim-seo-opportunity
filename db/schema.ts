@@ -253,6 +253,10 @@ export const apiUsage = pgTable('api_usage', {
   keyHash:    text('key_hash'),              // masked fingerprint of the key used (supports multiple keys/provider)
   kind:       text('kind').notNull().default('usage'),  // 'usage' | 'baseline' (manual reconciliation anchor)
   meta:       jsonb('meta'),                 // extra provenance: tokens in/out, model, status, note
+  // v7.514: which PRODUCT spent it — 'orbit' (projects) or 'scout' (prospect snapshots).
+  // NULL on every row written before v7.514, which read as 'orbit' (Scout did not exist).
+  product:    text('product'),
+  scoutRunId: uuid('scout_run_id'),          // the Scout run the call belonged to (product = 'scout'), else null
   createdAt:  timestamp('created_at').defaultNow().notNull(),
 });
 
