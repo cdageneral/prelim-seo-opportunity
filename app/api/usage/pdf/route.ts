@@ -60,6 +60,7 @@ const Schema = z.object({
   scope: z.object({
     statement: z.string(), rangeLabel: z.string(),
     dated: z.boolean(), projectFiltered: z.boolean(),
+    product: z.enum(['orbit', 'scout', 'all']).optional(),   // v7.514
   }).nullable().optional(),
 });
 
