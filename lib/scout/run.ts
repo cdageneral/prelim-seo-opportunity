@@ -12,7 +12,7 @@ import { getMarket } from '@/lib/utils/markets';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import {
   MAX_TERMS_PER_PRODUCT, ROWS_PER_COMPETITOR_DOMAIN, ROWS_PROSPECT_DOMAIN, ROWS_PER_COMPETITOR_TERM,
-  ROWS_PROSPECT_TERM, AI_THEMES_MAX, SCOUT_VERSION, getIndustry, unitCeiling,
+  ROWS_PROSPECT_TERM, AI_THEMES_MAX, SCOUT_VERSION, PULL_CONCURRENCY, getIndustry, unitCeiling,
 } from './config';
 import {
   buildUniverse, mergeUniverses, buildThemes, floorOf, pickSearchOpening, pickAiOpening, quadrantOf,
@@ -59,6 +59,18 @@ export interface ScoutResult {
   usage: { semrushUnits: number; semrushRows: number; semrushCalls: number; aiCostUSD: number };
 }
 
+/**
+ * v7.515 — pulls run at most PULL_CONCURRENCY at a time (a bound on the Semrush burst; at the
+ * 4-competitor cap every pull still runs at once). Results keep input order, and any failure
+ * still rejects (same as Promise.all).
+ */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length); let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+
 const lite = (t: ThemeStat): ThemeLite => ({
   name: t.name, count: t.count, demand: t.demand, prospectP1: t.prospectP1, prospectP1Volume: t.prospectP1Volume, share: t.share, state: t.state,
   rivals: t.rivals, leader: t.leader?.domain ?? null, nearWinCount: t.nearWins.length, nearWinVolume: t.nearWinVolume, prospectPages: t.prospectPages,
@@ -91,7 +103,7 @@ export async function executeRun(runId: string): Promise<void> {
 
     // 1 ── footprint + authority
     await setProgress(runId, 1, STEPS[0]);
-    const facts = await Promise.all([prospect, ...comps].map(d => pullOverview(d, db, meter)));
+    const facts = await mapLimit([prospect, ...comps], PULL_CONCURRENCY, d => pullOverview(d, db, meter));
     if (!facts[0].found) {
       await finishRun(runId, { status: 'thin', headline: null, units: meter.units, result: { version: SCOUT_VERSION, thin: `Semrush has no organic data for ${prospect} in the ${getMarket(db).label} database.` } });
       return;
@@ -103,7 +115,7 @@ export async function executeRun(runId: string): Promise<void> {
     let productTerms: Record<string, string[]> | null = null;
     if (scope === 'domain') {
       await setProgress(runId, 2, STEPS[1]);
-      const compPulls = await Promise.all(comps.map(d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_DOMAIN, meter })));
+      const compPulls = await mapLimit(comps, PULL_CONCURRENCY, d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_DOMAIN, meter }));
       await setProgress(runId, 3, STEPS[2]);
       const myPull = await pullOrganic({ domain: prospect, database: db, maxPos: 20, limit: ROWS_PROSPECT_DOMAIN, aboveVolume: floorOf(compPulls), meter });
       universe = buildUniverse({ prospect: myPull, competitors: compPulls, brandTokens });
@@ -113,7 +125,7 @@ export async function executeRun(runId: string): Promise<void> {
       const slices: Array<{ product: string; term: string }> = [];
       for (const p of run.products) for (const t of productTerms[p] ?? []) slices.push({ product: p, term: t });
       const compBySlice: DomainPull[][] = [];
-      for (const s of slices) compBySlice.push(await Promise.all(comps.map(d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_TERM, term: s.term, meter }))));
+      for (const s of slices) compBySlice.push(await mapLimit(comps, PULL_CONCURRENCY, d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_TERM, term: s.term, meter })));
       await setProgress(runId, 3, STEPS[2]);
       const parts: Universe[] = [];
       for (let i = 0; i < slices.length; i++) {

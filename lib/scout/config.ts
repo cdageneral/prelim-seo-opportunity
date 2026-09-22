@@ -13,11 +13,17 @@
  * floor the pull reached, and every figure is exact ABOVE that floor.
  */
 
-export const SCOUT_VERSION = 'v7.513';
+export const SCOUT_VERSION = 'v7.515';
 
-/** Max competitors and products per run. */
-export const MAX_COMPETITORS = 3;
+/**
+ * Max competitors and products per run. v7.515 (Wayne, 2026-09-21): competitors 3 → 4.
+ * Four is the most the client PDF can chart with EVERY site on EVERY chart and each section
+ * still on one Letter page — so no chart ever has to leave a competitor off (Const I.6).
+ */
+export const MAX_COMPETITORS = 4;
 export const MAX_PRODUCTS    = 3;
+/** Semrush pulls in flight at once (prospect + competitors) — a bound, not a behaviour change at 4. */
+export const PULL_CONCURRENCY = 5;
 export const MAX_TERMS_PER_PRODUCT = 2;
 
 /** Semrush row limits (10 units per returned row). */
@@ -78,6 +84,12 @@ export const PUBLISHER_DOMAINS = new Set([
   'valuepenguin.com', 'marketwatch.com', 'consumerreports.org', 'trustpilot.com', 'g2.com', 'capterra.com',
   'medium.com', 'indeed.com', 'glassdoor.com', 'tripadvisor.com', 'x.com', 'twitter.com', 'instagram.com', 'tiktok.com',
 ]);
+
+/** Publisher/aggregator check — drives the warning chip only, never removes a domain. */
+export function isPublisherDomain(d: string): boolean {
+  const root = d.split('.').slice(-2).join('.');
+  return PUBLISHER_DOMAINS.has(d) || PUBLISHER_DOMAINS.has(root);
+}
 
 export function normDomain(input: string): string {
   const raw = String(input ?? '').trim().toLowerCase();

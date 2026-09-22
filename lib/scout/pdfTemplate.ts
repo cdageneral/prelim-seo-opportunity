@@ -136,13 +136,33 @@ export function buildScoutHtml(r: ScoutResult): string {
   const yMaxRaw = Math.max(1, ...F.map(f => f.p1Keywords)); const yMax = Math.ceil(yMaxRaw * 1.2 / 10) * 10;
   const tMax = Math.max(1, ...F.map(f => f.traffic));
   const X = (a: number) => 56 + ((a - aMin) / Math.max(1, aMax - aMin)) * 620, Y = (v: number) => 310 - (v / yMax) * 270;
-  const dots = F.filter(f => f.authority !== null).sort((a, b) => b.traffic - a.traffic).map(f => {
+  // v7.515 — with up to four competitors (five dots) bubbles can cluster, so labels are laid out after the dots: each label keeps its
+  // dot's side, and a label that would overlap one already placed (same side, within ~190px across) moves
+  // down in 24px steps, with a thin leader line back to its dot. Positions only; no figure changes.
+  const placed: Array<{ x0: number; x1: number; y: number }> = [];
+  const dotRows = F.filter(f => f.authority !== null).sort((a, b) => b.traffic - a.traffic).map(f => {
     const cx = X(f.authority as number), cy = Y(f.p1Keywords), rad = 9 + Math.sqrt(f.traffic / tMax) * 24;
     const right = cx < 520; const lx = right ? cx + rad + 6 : cx - rad - 6; const anchor = right ? 'start' : 'end';
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${f.isProspect ? '#4338CA' : '#c9c8c1'}" fill-opacity="${f.isProspect ? 1 : .8}"/>
-      <text x="${lx.toFixed(1)}" y="${(cy - 2).toFixed(1)}" text-anchor="${anchor}" font-size="11" font-weight="800" fill="${f.isProspect ? '#4338CA' : '#0b0b14'}">${esc(f.isProspect ? 'You' : short(f.domain))}</text>
-      <text x="${lx.toFixed(1)}" y="${(cy + 10).toFixed(1)}" text-anchor="${anchor}" font-size="9" fill="${f.isProspect ? '#4338CA' : '#52514e'}">${n0(f.p1Keywords)} on page one · AS ${n0(f.authority as number)}</text>`;
-  }).join('');
+    return { f, cx, cy, rad, lx, anchor, ly: cy - 2 };
+  });
+  for (const d of [...dotRows].sort((a, b) => Number(b.f.isProspect) - Number(a.f.isProspect) || a.ly - b.ly)) {
+    const name = d.f.isProspect ? 'You' : short(d.f.domain);
+    const w = Math.max(name.length * 6.6, 90);                       // 11px bold label / 9px subline, generous
+    const x0 = d.anchor === 'start' ? d.lx : d.lx - w, x1 = x0 + w;
+    const you = dotRows.find(r => r.f.isProspect);   // never write a competitor's label over your own dot
+    const overYou = (y: number) => !!you && !d.f.isProspect && you.cx - you.rad < x1 && x0 < you.cx + you.rad && y - 11 < you.cy + you.rad && you.cy - you.rad < y + 14;
+    const free = (y: number) => y >= 14 && y <= 300 && !overYou(y) && !placed.some(q => q.x0 < x1 && x0 < q.x1 && Math.abs(q.y - y) < 25);
+    let y = d.ly;
+    for (let k = 1; k <= 12 && !free(y); k++) { const dn = d.ly + 25 * k, up = d.ly - 25 * k; y = free(dn) ? dn : free(up) ? up : d.ly; if (y !== d.ly) break; }
+    d.ly = y; placed.push({ x0, x1, y });
+  }
+  const dots = dotRows.map(({ f, cx, cy, rad }) => `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rad.toFixed(1)}" fill="${f.isProspect ? '#4338CA' : '#c9c8c1'}" fill-opacity="${f.isProspect ? 1 : .8}"/>`).join('')
+    + dotRows.map(({ f, cx, cy, rad, lx, ly, anchor }) => {
+      const moved = Math.abs(ly - (cy - 2)) > 6;
+      const lead = moved ? `<line x1="${(anchor === 'start' ? cx + rad * .7 : cx - rad * .7).toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(anchor === 'start' ? lx - 2 : lx + 2).toFixed(1)}" y2="${(ly - 4).toFixed(1)}" stroke="#898781" stroke-width=".6"/>` : '';
+      return `${lead}<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" font-size="11" font-weight="800" fill="${f.isProspect ? '#4338CA' : '#0b0b14'}">${esc(f.isProspect ? 'You' : short(f.domain))}</text>
+      <text x="${lx.toFixed(1)}" y="${(ly + 12).toFixed(1)}" text-anchor="${anchor}" font-size="9" fill="${f.isProspect ? '#4338CA' : '#52514e'}">${n0(f.p1Keywords)} on page one · AS ${n0(f.authority as number)}</text>`;
+    }).join('');
   const grid = [0, .25, .5, .75, 1].map(g => `<line x1="56" y1="${Y(yMax * g)}" x2="676" y2="${Y(yMax * g)}" stroke="${g === 0 ? '#0b0b14' : '#e1e0d9'}"/><text x="50" y="${Y(yMax * g) + 3}" text-anchor="end" font-size="8.5" fill="#898781">${n0(yMax * g)}</text>`).join('');
   const xt = [0, .25, .5, .75, 1].map(g => `<text x="${X(aMin + (aMax - aMin) * g)}" y="326" text-anchor="middle" font-size="8.5" fill="#898781">${n0(aMin + (aMax - aMin) * g)}</text>`).join('');
   const vMax = Math.max(1, ...F.map(f => f.p1Volume));

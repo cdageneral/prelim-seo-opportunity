@@ -53,6 +53,9 @@ export async function ensureScoutTables(): Promise<void> {
     created_at   timestamp NOT NULL DEFAULT now()
   )`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS scout_runs_user_created_idx ON scout_runs(user_id, created_at DESC)`);
+  // v7.515 — soft delete: a deleted run leaves the list and its stored report is cleared, but the
+  // row stays so the API Usage ledger still attributes that run's real spend to its domain.
+  await db.execute(sql`ALTER TABLE scout_runs ADD COLUMN IF NOT EXISTS deleted_at timestamp`);
   ensured = true;
 }
 
@@ -109,16 +112,36 @@ function toRun(r: Record<string, any>): RunRow {
   };
 }
 
-export async function createRun(input: {
-  userId: string | null; userName: string | null; userEmail: string | null; domain: string; market: string;
-  industry: string; scope: string; products: string[]; competitors: Array<{ domain: string; manual: boolean }>;
-}): Promise<string> {
+export interface RunInput {
+  domain: string; market: string; industry: string; scope: string; products: string[]; competitors: Array<{ domain: string; manual: boolean }>;
+}
+
+/** v7.515 — `draft: true` saves the setup without running it (status 'draft', nothing spent, not counted against the cap). */
+export async function createRun(input: RunInput & { userId: string | null; userName: string | null; userEmail: string | null; draft?: boolean }): Promise<string> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`INSERT INTO scout_runs (user_id, user_name, user_email, domain, market, industry, scope, products, competitors)
+  const status = input.draft ? 'draft' : 'queued';
+  const r = rowsOf(await db.execute(sql`INSERT INTO scout_runs (user_id, user_name, user_email, domain, market, industry, scope, products, competitors, status)
     VALUES (${input.userId}, ${input.userName}, ${input.userEmail}, ${input.domain}, ${input.market}, ${input.industry}, ${input.scope},
-            ${JSON.stringify(input.products)}::jsonb, ${JSON.stringify(input.competitors)}::jsonb)
+            ${JSON.stringify(input.products)}::jsonb, ${JSON.stringify(input.competitors)}::jsonb, ${status})
     RETURNING id`))[0];
   return String(r.id);
+}
+
+/** v7.515 — edit a saved (draft) setup in place. Only drafts: a run that has executed keeps the inputs its report was built from. */
+export async function updateDraft(id: string, input: RunInput): Promise<boolean> {
+  await ensureScoutTables();
+  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET domain = ${input.domain}, market = ${input.market}, industry = ${input.industry},
+    scope = ${input.scope}, products = ${JSON.stringify(input.products)}::jsonb, competitors = ${JSON.stringify(input.competitors)}::jsonb
+    WHERE id = ${id} AND status = 'draft' AND deleted_at IS NULL RETURNING id`));
+  return r.length === 1;
+}
+
+/** v7.515 — soft delete. Refused while the run is executing (its request is still writing to the row). */
+export async function deleteRun(id: string): Promise<boolean> {
+  await ensureScoutTables();
+  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET deleted_at = now(), result = NULL
+    WHERE id = ${id} AND deleted_at IS NULL AND status NOT IN ('queued', 'running') RETURNING id`));
+  return r.length === 1;
 }
 
 const LIST_SQL = sql`id, user_id, user_name, domain, market, industry, scope, products, competitors, status, step, steps_total,
@@ -126,7 +149,7 @@ const LIST_SQL = sql`id, user_id, user_name, domain, market, industry, scope, pr
 
 export async function getRun(id: string): Promise<RunRow | null> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE id = ${id} LIMIT 1`))[0];
+  const r = rowsOf(await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE id = ${id} AND deleted_at IS NULL LIMIT 1`))[0];
   return r ? toRun(r) : null;
 }
 
@@ -134,28 +157,28 @@ export async function listRuns(opts: { userId: string | null; all: boolean; limi
   await ensureScoutTables();
   const lim = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const res = opts.all || !opts.userId
-    ? await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs ORDER BY created_at DESC LIMIT ${lim}`)
-    : await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE user_id = ${opts.userId} ORDER BY created_at DESC LIMIT ${lim}`);
+    ? await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${lim}`)
+    : await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE user_id = ${opts.userId} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ${lim}`);
   return rowsOf(res).map(toRun);
 }
 
 export async function getRunResult(id: string): Promise<any | null> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`SELECT result FROM scout_runs WHERE id = ${id} LIMIT 1`))[0];
+  const r = rowsOf(await db.execute(sql`SELECT result FROM scout_runs WHERE id = ${id} AND deleted_at IS NULL LIMIT 1`))[0];
   return r?.result ?? null;
 }
 
 export async function countRunsSince(userId: string, since: Date): Promise<number> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`SELECT count(*)::int AS c FROM scout_runs WHERE user_id = ${userId} AND created_at >= ${since.toISOString()}::timestamptz AND status <> 'failed'`))[0];
+  const r = rowsOf(await db.execute(sql`SELECT count(*)::int AS c FROM scout_runs WHERE user_id = ${userId} AND created_at >= ${since.toISOString()}::timestamptz AND status NOT IN ('failed', 'draft')`))[0];
   const n = Number(r?.c); return Number.isFinite(n) ? n : 0;
 }
 
-/** Atomically claim a queued run so a double-click cannot execute (and bill) it twice. */
+/** Atomically claim a queued (or saved draft) run so a double-click cannot execute (and bill) it twice. */
 export async function claimRun(id: string): Promise<boolean> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET status = 'running', started_at = now(), step = 0, step_label = 'Starting'
-    WHERE id = ${id} AND status = 'queued' RETURNING id`));
+  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET status = 'running', started_at = now(), step = 0, step_label = 'Starting', created_at = now()
+    WHERE id = ${id} AND status IN ('queued', 'draft') AND deleted_at IS NULL RETURNING id`));
   return r.length === 1;
 }
 
