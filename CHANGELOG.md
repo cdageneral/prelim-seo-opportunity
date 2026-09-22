@@ -1,3 +1,46 @@
+# v7.516 — Scout insights are reasoned per case, not defaulted (2026-09-21)
+
+Wayne: *"why does every report show the same insight? these insights need to be real and accurate … Not all reports can
+have the same issue."* — then: *"if that is the insight then so be it - but want to confirm there is logic and reasoning
+behind each report."* Checked against the three stored synchrony.com runs. Two defects made every report read the same:
+
+1. **Authority Score was 0 for every domain.** Scout read it from Semrush `domain_ranks`, which has no Authority Score
+   column, so the missing header parsed as 0 (stored run b4133ac9: synchrony, ally, marcus, axos all 0). The authority
+   check (`you ≥ leader − 5`) was therefore always 0 ≥ −5 → pass, and the PDF printed "0 vs 0 — within 5 points".
+   **Fix:** Authority Score now comes from `backlinks_overview` (`ascore`, 45 units per site). A missing read is null
+   (unknown) — never 0 — and an unknown score can neither pass nor fail the check.
+2. **The constraint was "content" by elimination.** It was `authority passed ? content : authority`, so "content" was
+   named even when the leader had no page advantage, and the headline was one fixed sentence for every run.
+   **Fix:** the constraint is derived from the gap that actually exists, in order —
+   **authority** (both scores known, leader more than 5 points ahead) → **content** (leader ranks 2×+ the pages you have in
+   the top 20) → **optimization** (no page gap, but 3+ of your searches already sit at positions 11–20). No qualifying
+   gap → the theme doesn't lead the report. Headline, verdict, cover line and closing questions are built from that
+   case's leader, page counts, near-wins and scores. "Not authority" is only said when both scores are known and close.
+
+**Stored runs (v7.513–v7.515):** where every site stored exactly 0, the report now treats authority as unknown and says
+so ("could not be compared, so it is not ruled out") instead of printing a false comparison. Re-run those prospects to
+get the real Authority Score. **Cost:** +45 Semrush units per site per run (the unit ceiling on the screen includes it);
+the manual-competitor check does not buy one.
+
+**Also in this release (Wayne, same session):**
+- *"one says you are not on page one and the other says you are winning all of page 1"* — the two charts had different,
+  unlabelled scopes: page 01 is one theme (Savings accounts, 19 searches, synchrony 0%), page 02 is every measured search
+  across all themes (synchrony 3.4M/mo, almost all from Retail credit cards and Credit cards). Page 01's chart is now titled
+  with its theme and count; page 02 says "all N searches measured, across K themes" and adds a line naming where your
+  page-one volume comes from and that you hold none of the page-01 theme.
+- *"can you add who the leader in each of the categories are?"* — the demand map names each theme's leader in its block
+  and in a table under the map (theme, searches/mo, your share, leader · share). Leader = the measured site on page one for
+  the most of the theme's searches, **you included**; ties are named as ties; no page-one presence says so.
+
+## Verification
+
+Project `tsc` clean · real `next build` clean · retained suite **3582 PASS / 27 FAIL**, FAIL set identical to the
+baseline · **22 new v7.516 checks** (15 fixture checks running the real picker and template on four distinct cases —
+content, optimization, authority, unknown authority — plus the legacy-zero guard; 7 source gates). Three unit-ceiling
+checks (v7.513 ×2, v7.515 ×1) updated with dated notes for the +45/site. Opening page rendered for each case.
+
+---
+
 # v7.515 — Scout: edit a run's competitors, save and re-run, 4 competitors, delete a run (2026-09-21)
 
 Wayne: *"i need a way to remove and add a competitor and be able to save it and re run it. Also no limit on the number of
