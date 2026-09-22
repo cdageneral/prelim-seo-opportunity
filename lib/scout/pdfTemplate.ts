@@ -15,6 +15,7 @@
 
 import type { ScoutResult, ThemeLite, KeywordLite } from './run';
 import { OPEN_BELOW_SHARE, HELD_FROM_SHARE, DEMAND_FLOOR_MONTHLY, AI_NAMED_FROM, AUTHORITY_TOLERANCE, NEAR_WIN_MIN, PAGES_GAP_MULTIPLE } from './config';
+import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.519: named CTR model for the est.-traffic disclosure (Const I.5a)
 
 const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const n0 = (n: number) => Math.round(n).toLocaleString('en-US');
@@ -264,7 +265,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
     const h4 = both > 0 ? `${both === 1 ? 'The theme' : 'The themes'} you miss in Google ${both === 1 ? 'is' : 'are'} the same ${both === 1 ? 'one' : 'ones'} <u>AI leaves you out of</u>.` : `Who AI names when buyers ask about <u>your category</u>.`;
     const doms = [me, ...comps];
     const cell = (x: number) => { const bg = x >= .5 ? '#4338CA' : x >= AI_NAMED_FROM ? '#8f89f0' : x > 0 ? '#d9d6f7' : '#f1f0ec'; return `style="background:${bg};color:${x >= AI_NAMED_FROM ? '#fff' : x > 0 ? '#1f1a78' : '#b5b3aa'}"`; };
-    const heat = `<table class="heat"><tr><th style="text-align:left">Theme</th><th>Answers read</th>${doms.map((d, i) => `<th>${esc(i === 0 ? 'You' : short(d))}</th>`).join('')}</tr>${r.ai.reads.map(a => `<tr><td>${esc(a.theme)}</td><td class="c" style="background:none;color:var(--ink2)">${n0(a.answers)}</td>${doms.map((d, i) => { const x = a.answers ? (a.named[d] ?? 0) / a.answers : 0; return `<td class="c${i === 0 ? ' mine' : ''}" ${cell(x)}>${pct(x)}</td>`; }).join('')}</tr>`).join('')}</table>`;
+    const heat = `<table class="heat"><tr><th style="text-align:left">Theme</th><th>AI Answers Read</th>${doms.map((d, i) => `<th>${esc(i === 0 ? 'You' : short(d))}</th>`).join('')}</tr>${r.ai.reads.map(a => `<tr><td>${esc(a.theme)}</td><td class="c" style="background:none;color:var(--ink2)">${n0(a.answers)}</td>${doms.map((d, i) => { const x = a.answers ? (a.named[d] ?? 0) / a.answers : 0; return `<td class="c${i === 0 ? ' mine' : ''}" ${cell(x)}>${pct(x)}</td>`; }).join('')}</tr>`).join('')}</table>`;
     const leadRead = (o && r.ai.reads.find(x => x.theme === o.theme)) || r.ai.reads[0];
     const sMax = Math.max(1, ...leadRead.topSources.map(s => s.count));
     const srcBars = leadRead.topSources.slice(0, 6).map(s => bar(s.domain, s.count / sMax, `${n0(s.count)} answers`, s.domain === me, '2.2in', '.9in')).join('');
@@ -275,8 +276,8 @@ export function buildScoutHtml(r0: ScoutResult): string {
         <span class="ax ay">NOT ON PAGE ONE</span><div class="q c"><div class="qt">AI YES, GOOGLE NO</div>${q('ai_only')}<p>The brand is known. The pages aren't ranking.</p></div><div class="q d"><div class="qt">INVISIBLE IN BOTH</div>${q('neither')}<p>No pages to rank, nothing for AI to cite.</p></div></div>
       <div class="fig">Share of recorded answers naming each site <span>named in the answer text, or cited as a source</span></div>${heat}
       ${srcBars ? `<div class="fig">Sources AI cited most · ${esc(leadRead.theme)} <span>answers citing the domain</span></div>${srcBars}` : ''}
-      <div class="call"><b>Directional, not a score.</b> These are answers DataForSEO has recorded for questions containing each theme, up to 50 per engine. AI output changes from day to day; a full assessment tracks a fixed prompt set over time.</div>
-      <div class="basis">Source: DataForSEO LLM Mentions index (ChatGPT and Google AI Overviews), read ${esc(dateStr)}. "AI names you" = named or cited in at least ${pct(AI_NAMED_FROM)} of the answers read. "On page one" = the theme is held or contested on page 03.</div>`);
+      <div class="call"><b>Directional, not a score.</b> These are recorded ChatGPT and Google AI Overview answers to questions containing each theme, up to 50 per engine. AI output changes from day to day; a full assessment tracks a fixed prompt set over time.</div>
+      <div class="basis">Source: recorded ChatGPT and Google AI Overview answers, read ${esc(dateStr)}. "AI names you" = named or cited in at least ${pct(AI_NAMED_FROM)} of the AI answers read (up to 50 per engine, so 100 at most per theme). "On page one" = the theme is held or contested on page 03.</div>`);
   }
 
   // ── 05 inside the opening ──
@@ -284,18 +285,19 @@ export function buildScoutHtml(r0: ScoutResult): string {
   if (o && lead && r.detail) {
     const d = r.detail; const kMax = Math.max(1, ...d.topKeywords.map(k => k.volume));
     // Row counts are fixed so the page cannot overflow one Letter sheet (stress-checked in the retained suite).
-    const kwRow = (k: KeywordLite) => `<tr><td>${esc(k.keyword)}</td><td><i class="vb" style="width:${Math.max(3, (k.volume / kMax) * 120).toFixed(0)}px"></i>${n0(k.volume)}</td><td>${k.best ? esc(short(k.best.domain)) : '—'}</td><td class="n">${k.best ? '#' + k.best.position : '—'}</td><td class="n"${k.you && k.you <= 20 ? ' style="color:var(--good);font-weight:700"' : ''}>${k.you ? '#' + k.you : 'not in top 20'}</td></tr>`;
+    const kwRow = (k: KeywordLite) => `<tr><td>${esc(k.keyword)}</td><td><i class="vb" style="width:${Math.max(3, (k.volume / kMax) * 120).toFixed(0)}px"></i>${n0(k.volume)}</td><td${k.best ? '' : ' style="color:var(--ink2)"'}>${k.best ? esc(short(k.best.domain)) : 'none on page one'}</td><td class="n">${k.best ? '#' + k.best.position : '—'}</td><td class="n"${k.you && k.you <= 20 ? ' style="color:var(--good);font-weight:700"' : ''}>${k.you ? '#' + k.you : 'not in top 20'}</td></tr>`;
     const pMax = Math.max(1, ...d.pagesByDomain.map(p => p.pages));
     const pgBars = [...d.pagesByDomain].sort((a, b) => b.pages - a.pages).map(p => bar(p.isProspect ? `${short(p.domain)} (you)` : short(p.domain), p.pages / pMax, n0(p.pages), p.isProspect, '1.5in', '.4in')).join('');
-    const lp = d.leaderPages.slice(0, 4).map(p => `<tr><td class="url">${esc(path(p.url))}</td><td class="n">${n0(p.keywords)}</td><td class="n">${vol(p.volume)}</td></tr>`).join('');
-    p5 = page('INSIDE THE OPENING', `<h3>What winning ${esc(o.theme.toLowerCase())} <u>actually takes</u>.</h3><p class="lede">The searches, the pages that win them today, and the questions buyers ask.</p>
-      <div class="fig">Largest searches in the theme</div>
-      <table class="d"><tr><th>Search</th><th>Searches / mo</th><th>Best-ranked competitor</th><th class="n">Their rank</th><th class="n">You</th></tr>${d.topKeywords.slice(0, 8).map(kwRow).join('')}</table>
-      <div class="fig">Pages ranking for the theme <span>distinct URLs — competitors on page one, you anywhere in the top 20</span></div>
-      <div class="two"><div>${pgBars}</div>${lp ? `<table class="d"><tr><th>${esc(short(o.leader ?? ''))} · pages winning the most</th><th class="n">Searches</th><th class="n">Volume</th></tr>${lp}</table>` : '<div></div>'}</div>
+    const hasTr = d.leaderPages.length > 0 && d.leaderPages.every(p => typeof p.traffic === 'number');   // v7.519; runs before it carry no per-page traffic
+    const lp = d.leaderPages.slice(0, 4).map(p => `<tr><td class="url">${esc(path(p.url))}</td><td class="n">${hasTr ? vol(p.traffic!) : n0(p.keywords)}</td><td class="n">${vol(p.volume)}</td></tr>`).join('');
+    p5 = page('INSIDE THE OPENING', `<h3>What winning ${esc(o.theme.toLowerCase())} <u>actually takes</u>.</h3><p class="lede">The Google searches, the pages that win them on Google today, and the questions buyers ask. This page is Google organic search; AI answers are on page 04.</p>
+      <div class="fig">Largest Google searches in the theme <span>Google organic results</span></div>
+      <table class="d"><tr><th>Google search</th><th>Searches / mo</th><th>Best-ranked competitor</th><th class="n">Their Google rank</th><th class="n">Your Google rank</th></tr>${d.topKeywords.slice(0, 8).map(kwRow).join('')}</table>
+      <div class="fig">Pages ranking on Google for the theme <span>distinct URLs — competitors on page one, you anywhere in the top 20</span></div>
+      <div class="two"><div>${pgBars}</div>${lp ? `<table class="d"><tr><th>${esc(short(o.leader ?? ''))} · pages winning the most</th><th class="n">${hasTr ? 'Est. traffic / mo' : 'Searches'}</th><th class="n">Volume</th></tr>${lp}</table>` : '<div></div>'}</div>
       ${d.questions.length ? `<div class="fig">What buyers ask <span>Semrush question searches related to "${esc(d.questionSeed ?? '')}"</span></div><div class="qs">${d.questions.slice(0, 6).map(x => `<span>"${esc(x.question)}"<em>${vol(x.volume)}</em></span>`).join('')}</div>
       <div class="call"><b>These questions are what AI engines answer.</b> The sites cited in those answers tend to be the ones with a page that addresses the question directly.</div>` : ''}
-      <div class="basis">Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}. Ranks are organic positions; "not in top 20" means Semrush shows no ranking for ${esc(me)} in positions 1–20.</div>`);
+      <div class="basis">Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}. Ranks are Google organic positions; "not in top 20" means Semrush shows no Google ranking for ${esc(me)} in positions 1–20, and "none on page one" means none of the competitors measured ranks in positions 1–10.${hasTr ? ` Est. traffic is modeled, not measured: each search's monthly volume × the average click-through rate at the page's current Google rank (${esc(CTR_SOURCE_LABEL)}).` : ''}</div>`);
   }
 
   // ── 06 from here ──
@@ -321,7 +323,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
       <div class="sig"><span class="av">iQ</span><div><b>The iQuanti team</b><span>Search &amp; AI visibility</span></div></div></div>
       <div><div class="fig" style="margin-top:0">What we'd be curious about</div>${asks.map((a, i) => `<div class="ask" data-n="${i + 1}"><b>${esc(a[0])}</b><span>${esc(a[1])}</span></div>`).join('')}</div></div>
     <div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Just reply to whoever sent you this report and we'll find a time that works.</span></div>
-    <p class="method"><b>Sources &amp; method.</b> Rankings, search volumes, Authority Score, ranking URLs, question searches and traffic estimates: Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}; traffic is a Semrush estimate and is labelled where shown. AI answers: DataForSEO's recorded ChatGPT and Google AI Overview answers, read the same day. This snapshot reads each competitor's highest-volume page-one searches${r.floorVolume > 0 ? `, so every figure covers searches above ${n0(r.floorVolume)} a month and is exact within that set` : ''}; branded searches are excluded. ${r.input.scope === 'products' ? 'Searches were assigned to the named products' : 'Themes were grouped'} by Claude from the keyword list — it sorts, it does not supply numbers. Every sentence in this report is filled from the measured figures; none of it is written by an AI.${r.notes.length ? ' ' + esc(r.notes.join(' ')) : ''}</p>`);
+    <p class="method"><b>Sources &amp; method.</b> Rankings, search volumes, Authority Score, ranking URLs, question searches and traffic estimates: Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}; traffic is a Semrush estimate and is labelled where shown. AI answers: recorded ChatGPT and Google AI Overview answers, read the same day. This snapshot reads each competitor's highest-volume page-one searches${r.floorVolume > 0 ? `, so every figure covers searches above ${n0(r.floorVolume)} a month and is exact within that set` : ''}; branded searches are excluded. ${r.input.scope === 'products' ? 'Searches were assigned to the named products' : 'Themes were grouped'} by Claude from the keyword list — it sorts, it does not supply numbers. Every sentence in this report is filled from the measured figures; none of it is written by an AI.${r.notes.length ? ' ' + esc(r.notes.join(' ')) : ''}</p>`);
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>iQ.Impact Snapshot — ${esc(me)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

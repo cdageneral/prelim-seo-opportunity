@@ -15,6 +15,7 @@
  * on named, individually printed checks, and the report names ONE binding constraint.
  */
 
+import { CTR_BY_POSITION } from '@/lib/sov/model';   // v7.519: the ONE shared CTR curve (Const I.5a)
 import {
   OPEN_BELOW_SHARE, HELD_FROM_SHARE, DEMAND_FLOOR_MONTHLY, AUTHORITY_TOLERANCE,
   PAGES_GAP_MULTIPLE, NEAR_WIN_MIN, CHECKS_TO_QUALIFY, MIN_THEME_KEYWORDS,
@@ -53,6 +54,22 @@ export function isBranded(keyword: string, brandTokens: string[]): boolean {
 }
 
 /** The exclusive floor a set of pulls supports: the highest floor among the FULL lists. */
+/**
+ * v7.519 (Wayne: "instead of searches can we have est. traffic using the volume multiplied by the avg ctr for that
+ * current rank position") — the leader's pages in one theme. traffic = Σ volume × CTR at that page's current Google
+ * rank, from the ONE shared curve (lib/sov/model, Const I.5a — a labelled model, never shown as measured). Competitor
+ * rows are page-one pulls (1–10), so every rank falls on the study curve; anything else counts 0, never a guess.
+ */
+export function leaderPagesOf(theme: ThemeStat, leader: string, top = 5): Array<{ url: string; keywords: number; volume: number; traffic: number }> {
+  const m = new Map<string, { url: string; keywords: number; volume: number; traffic: number }>();
+  for (const k of theme.keywords) {
+    const r = k.rivals[leader]; if (!r?.url) continue;
+    const p = m.get(r.url) ?? { url: r.url, keywords: 0, volume: 0, traffic: 0 };
+    p.keywords++; p.volume += k.volume; p.traffic += k.volume * (CTR_BY_POSITION[r.position] ?? 0); m.set(r.url, p);
+  }
+  return Array.from(m.values()).map(p => ({ ...p, traffic: Math.round(p.traffic) })).sort((a, b) => b.traffic - a.traffic || b.volume - a.volume).slice(0, top);
+}
+
 export function floorOf(pulls: DomainPull[]): number {
   let f = 0;
   for (const p of pulls) if (p.full && p.floorVolume !== null && p.floorVolume > f) f = p.floorVolume;

@@ -15,7 +15,7 @@ import {
   ROWS_PROSPECT_TERM, AI_THEMES_MAX, SCOUT_VERSION, PULL_CONCURRENCY, getIndustry, unitCeiling,
 } from './config';
 import {
-  buildUniverse, mergeUniverses, buildThemes, floorOf, pickSearchOpening, pickAiOpening, quadrantOf,
+  buildUniverse, mergeUniverses, buildThemes, floorOf, leaderPagesOf, pickSearchOpening, pickAiOpening, quadrantOf,
   type Universe, type ThemeStat, type Opening, type AiThemeRead, type Quadrant, type DomainPull,
 } from './opportunity';
 import { pullOrganic, pullOverview, pullQuestions, newMeter, getApiUnitsBalance, type DomainFacts, type QuestionRow } from './semrushScout';
@@ -50,7 +50,7 @@ export interface ScoutResult {
   opening: Opening | null;
   detail: null | {
     topKeywords: KeywordLite[]; nearWins: KeywordLite[];
-    leaderPages: Array<{ url: string; keywords: number; volume: number }>;
+    leaderPages: Array<{ url: string; keywords: number; volume: number; traffic?: number }>;   // traffic: v7.519, modeled (volume × CTR at rank)
     pagesByDomain: Array<{ domain: string; isProspect: boolean; pages: number }>;
     questions: QuestionRow[]; questionSeed: string | null;
   };
@@ -173,7 +173,7 @@ export async function executeRun(runId: string): Promise<void> {
         if (!opening) opening = pickAiOpening(themes, reads, prospect, authority);
         ai = { reads, costUSD: aiCost, quadrants: reads.map(r => ({ theme: r.theme, quadrant: quadrantOf(themes.find(t => t.name === r.theme)!, r, prospect) })) };
       } else notes.push('No recorded AI answers matched these themes, so the AI page was left out.');
-    } else notes.push('DataForSEO is not configured, so the AI page was left out.');
+    } else notes.push('AI answer data is not configured, so the AI page was left out.');
 
     // 6 ── detail for the opening
     await setProgress(runId, 6, STEPS[5]);
@@ -181,15 +181,13 @@ export async function executeRun(runId: string): Promise<void> {
     if (opening) {
       const t = themes.find(x => x.name === opening!.theme)!;
       const leader = opening.leader;
-      const pageMap = new Map<string, { url: string; keywords: number; volume: number }>();
-      if (leader) for (const k of t.keywords) { const r = k.rivals[leader]; if (!r?.url) continue; const p = pageMap.get(r.url) ?? { url: r.url, keywords: 0, volume: 0 }; p.keywords++; p.volume += k.volume; pageMap.set(r.url, p); }
       const seed = t.keywords[0]?.keyword ?? null;
       let questions: QuestionRow[] = [];
       if (seed) { try { questions = await pullQuestions(seed, db, meter); } catch (e) { notes.push(`Buyer questions could not be read (${(e as Error).message.slice(0, 80)}).`); } }
       detail = {
         topKeywords: t.keywords.slice(0, 10).map(kwLite),
         nearWins: t.nearWins.slice(0, 8).map(kwLite),
-        leaderPages: Array.from(pageMap.values()).sort((a, b) => b.volume - a.volume).slice(0, 5),
+        leaderPages: leader ? leaderPagesOf(t, leader) : [],
         pagesByDomain: [{ domain: prospect, isProspect: true, pages: t.prospectPages }, ...t.rivals.map(r => ({ domain: r.domain, isProspect: false, pages: r.pages }))],
         questions, questionSeed: seed,
       };
