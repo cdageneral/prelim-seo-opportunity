@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable } from '@/lib/usage/record';
+import { ensureScoutTables } from '@/lib/scout/store';
 import { parseProductFilter, type UsageProduct, type ScoutRowMeta } from '@/lib/usage/rollupView';
 
 export const dynamic = 'force-dynamic';
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
   const product = parseProductFilter(req.nextUrl.searchParams.get('product'));
   try {
     await ensureUsageTable();   // self-create the ledger table on first open if prod never migrated it
-    await db.execute(sql`CREATE TABLE IF NOT EXISTS scout_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), domain text NOT NULL, user_name text, status text NOT NULL DEFAULT 'queued', scope text NOT NULL DEFAULT 'domain', created_at timestamp NOT NULL DEFAULT now())`);
+    await ensureScoutTables();   // v7.515 — the real Scout schema (incl. deleted_at), not a minimal stand-in
 
     // v7.399 — RAW SQL, not a drizzle aggregate-alias select.
     // This route reported serpapi stuck at exactly 23,920 and NO dataforseo line
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
         s.domain                                       AS "scoutDomain",
         s.user_name                                    AS "scoutUser",
         s.created_at                                   AS "scoutCreated",
-        s.status                                       AS "scoutStatus",
+        CASE WHEN s.deleted_at IS NOT NULL THEN 'deleted' ELSE s.status END                                       AS "scoutStatus",
         s.scope                                        AS "scoutScope",
         u.provider                                     AS "provider",
         u.unit                                         AS "unit",
@@ -97,7 +98,7 @@ export async function GET(req: NextRequest) {
         ${dated ? sql`AND u.kind <> 'baseline'` : sql``}
         ${from  ? sql`AND u.created_at >= ${from}::timestamptz` : sql``}
         ${to    ? sql`AND u.created_at <  ${to}::timestamptz`   : sql``}
-      GROUP BY COALESCE(u.product, 'orbit'), u.project_id, p.client_name, u.scout_run_id, s.domain, s.user_name, s.created_at, s.status, s.scope, u.provider, u.unit, u.kind
+      GROUP BY COALESCE(u.product, 'orbit'), u.project_id, p.client_name, u.scout_run_id, s.domain, s.user_name, s.created_at, s.status, s.deleted_at, s.scope, u.provider, u.unit, u.kind
     `);
     const grouped: Array<{
       product: string; projectId: string | null; projectName: string | null; provider: string;
