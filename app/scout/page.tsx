@@ -4,8 +4,11 @@
  * /scout — the Scout screen (v7.513).
  *
  * A quick prospect snapshot that lives OUTSIDE projects (Wayne, 2026-09-21):
- * enter a domain, choose full domain or up to three products, confirm up to three
+ * enter a domain, choose full domain or up to three products, confirm up to four
  * competitors (Semrush suggestions and/or typed by hand), run, download the PDF.
+ * v7.515: any run can be loaded back into the form to add or remove competitors, then
+ * saved as a setup (SAVED, nothing spent) or run again as a NEW report — the original
+ * report is never overwritten. Runs can be deleted.
  * One scrolling root (Const IV.1). The run shows "step X of 6", what it is doing,
  * elapsed time and — once real runs exist — an ETA from their median (IV.2/IV.3).
  * Theme-mapped orbit-* tokens only, so light and dark both hold (IV.6).
@@ -14,26 +17,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import ThemeToggle from '@/components/ThemeToggle';
+import { unitCeiling, isPublisherDomain } from '@/lib/scout/config';
 
 interface Access {
   user: { id: string; name: string; role: string } | null;
   orbit: boolean; scout: boolean; cap: number | null; usedToday: number; isAdmin: boolean; canWrite: boolean;
   timing: { seconds: number; runs: number } | null; aiRead: boolean;
   limits: { competitors: number; products: number };
-  ceilings: { domain: number[]; products: number[][] };
   industries: Array<{ key: string; label: string }>;
   markets: Array<{ code: string; label: string }>;
 }
 interface Suggestion { domain: string; commonKeywords: number; organicKeywords: number; publisher: boolean }
 interface Picked { domain: string; manual: boolean; note?: string; publisher?: boolean }
 interface Run {
-  id: string; userName: string | null; domain: string; scope: string; products: string[];
+  id: string; userName: string | null; domain: string; market: string; industry: string; scope: string; products: string[];
   competitors: Array<{ domain: string; manual: boolean }>; status: string; step: number; stepsTotal: number;
   stepLabel: string | null; startedAt: string | null; finishedAt: string | null; error: string | null;
   headline: string | null; units: number | null; projectId: string | null; createdAt: string;
 }
 
 const STATUS: Record<string, { label: string; cls: string }> = {
+  draft:      { label: 'SAVED',            cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' },
   ready:      { label: 'READY',            cls: 'bg-orbit-green/10 text-orbit-green border-orbit-green/30' },
   no_opening: { label: 'NO CLEAR OPENING', cls: 'bg-orbit-amber/10 text-orbit-amber border-orbit-amber/30' },
   thin:       { label: 'THIN DATA',        cls: 'bg-orbit-amber/10 text-orbit-amber border-orbit-amber/30' },
@@ -68,7 +72,14 @@ export default function ScoutPage() {
   const [busy, setBusy] = useState(false);
   const [converting, setConverting] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
+  // v7.515 — the run whose setup is loaded in the form (a SAVED draft is edited in place; anything else is a template for a new run)
+  const [editing, setEditing] = useState<{ id: string; status: string; domain: string; createdAt: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
+  const awaitingClaim = useRef(false);   // a SAVED setup reads 'draft' until the execute request claims it
 
   const loadRuns = useCallback(async () => {
     const res = await fetch('/api/scout/runs', { cache: 'no-store' });
@@ -87,12 +98,9 @@ export default function ScoutPage() {
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => () => { if (poll.current) clearInterval(poll.current); }, []);
 
-  const maxC = access?.limits.competitors ?? 3, maxP = access?.limits.products ?? 3;
-  const ceiling = useMemo(() => {
-    if (!access) return null;
-    const c = Math.min(picked.length, 3);
-    return scope === 'domain' ? access.ceilings.domain[c] : access.ceilings.products[Math.max(1, Math.min(products.length, 3)) - 1][c];
-  }, [access, picked.length, products.length, scope]);
+  const maxC = access?.limits.competitors ?? 4, maxP = access?.limits.products ?? 3;
+  // v7.515 — the ceiling is priced for the actual count with the same function the run checks against.
+  const ceiling = useMemo(() => access ? unitCeiling(scope, picked.length, Math.max(1, products.length)) : null, [access, picked.length, products.length, scope]);
   const capLeft = access && access.cap !== null ? Math.max(0, access.cap - access.usedToday) : null;
 
   async function suggest() {
@@ -104,7 +112,7 @@ export default function ScoutPage() {
     setSuggesting(false);
     if (!res.ok) { setError(data.error ?? 'Could not read competitors from Semrush.'); return; }
     setSuggestions(data.suggestions ?? []); setSuggestedFor(data.domain ?? d);
-    setPicked(prev => prev.filter(p => p.manual));
+    // v7.515 — keep what is already selected (an edited run's competitors must survive a refresh); "Remove all" clears.
   }
   function toggle(s: Suggestion) {
     setPicked(prev => prev.some(p => p.domain === s.domain) ? prev.filter(p => p.domain !== s.domain)
@@ -140,7 +148,8 @@ export default function ScoutPage() {
       if (!res.ok) return;
       const data = await res.json();
       setActive({ run: data.run, timing: data.timing ?? null, skew: Date.now() - new Date(data.serverNow).getTime() });
-      if (data.run.status !== 'queued' && data.run.status !== 'running') {
+      if (data.run.status !== 'draft') awaitingClaim.current = false;
+      if (data.run.status !== 'queued' && data.run.status !== 'running' && !(data.run.status === 'draft' && awaitingClaim.current)) {
         if (poll.current) clearInterval(poll.current);
         poll.current = null; setBusy(false); loadRuns(); loadAccess();
       }
@@ -149,18 +158,86 @@ export default function ScoutPage() {
     poll.current = setInterval(tick, 2500);
   }
 
-  async function start() {
-    setError(null);
-    if (!domain.trim()) { setError('Enter the prospect domain.'); return; }
-    if (!picked.length) { setError('Pick at least one competitor — suggest them from Semrush or add one by hand.'); return; }
-    if (scope === 'products' && !products.length) { setError('Add at least one product, or switch to Full domain.'); return; }
-    setBusy(true);
-    const res = await fetch('/api/scout/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: domain.trim(), market, industry, scope, products, competitors: picked.map(p => ({ domain: p.domain, manual: p.manual })) }) });
+  const setupBody = (draft: boolean) => JSON.stringify({ domain: domain.trim(), market, industry, scope, products, draft, competitors: picked.map(p => ({ domain: p.domain, manual: p.manual })) });
+  function checkSetup(): boolean {
+    if (!domain.trim()) { setError('Enter the prospect domain.'); return false; }
+    if (!picked.length) { setError('Pick at least one competitor — suggest them from Semrush or add one by hand.'); return false; }
+    if (scope === 'products' && !products.length) { setError('Add at least one product, or switch to Full domain.'); return false; }
+    return true;
+  }
+  /** Save the setup without running it. A loaded SAVED setup is updated in place; anything else becomes a new SAVED row. */
+  async function saveSetup(): Promise<string | null> {
+    const inPlace = editing?.status === 'draft';
+    const res = await fetch(inPlace ? `/api/scout/runs/${editing!.id}` : '/api/scout/runs', { method: inPlace ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: setupBody(true) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setBusy(false); setError(typeof data.error === 'string' ? data.error : 'Could not start the run.'); return; }
-    fetch(`/api/scout/runs/${data.id}/execute`, { method: 'POST' }).catch(() => { /* the poller reports the outcome */ });
-    watch(data.id);
+    if (!res.ok) { setError(typeof data.error === 'string' ? data.error : 'Could not save the setup.'); return null; }
+    return String(data.id);
+  }
+  async function save() {
+    setError(null); setNotice(null);
+    if (!checkSetup()) return;
+    setSaving(true);
+    const id = await saveSetup();
+    setSaving(false);
+    if (!id) return;
+    setEditing({ id, status: 'draft', domain: domain.trim(), createdAt: new Date().toISOString() });
+    setNotice(`Saved. It's in Recent scouts as SAVED — edit it or run it from there, or keep changing it here.`);
+    loadRuns();
+  }
+  async function start() {
+    setError(null); setNotice(null);
+    if (!checkSetup()) return;
+    setBusy(true);
+    let id: string | null;
+    if (editing?.status === 'draft') id = await saveSetup();     // run the saved setup itself, with any edits made here
+    else {
+      const res = await fetch('/api/scout/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: setupBody(false) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(typeof data.error === 'string' ? data.error : 'Could not start the run.'); id = null; } else id = String(data.id);
+    }
+    if (!id) { setBusy(false); return; }
+    setEditing(null);
+    execute(id);
+  }
+  /** Fire the run (the request stays open for the whole run) and poll its row for progress. */
+  function execute(id: string) {
+    awaitingClaim.current = true;
+    fetch(`/api/scout/runs/${id}/execute`, { method: 'POST' }).then(async r => {
+      if (r.status === 429 || r.status === 403 || r.status === 404) {
+        const d = await r.json().catch(() => ({}));
+        awaitingClaim.current = false; if (poll.current) clearInterval(poll.current); poll.current = null;
+        setBusy(false); setActive(null); setError(d.error ?? 'Could not start the run.'); loadRuns();
+      }
+    }).catch(() => { /* the poller reports the outcome */ });
+    watch(id);
+  }
+  /** Load any run's setup into the form: add or remove competitors, then save or run again. */
+  function loadIntoForm(r: Run) {
+    setError(null); setNotice(null); setConfirmDel(null);
+    setDomain(r.domain); setMarket(r.market || 'us'); setIndustry(r.industry || 'other');
+    setScope(r.scope === 'products' ? 'products' : 'domain'); setProducts(r.products ?? []); setProductDraft('');
+    setPicked(r.competitors.map(c => ({ domain: c.domain, manual: c.manual, publisher: isPublisherDomain(c.domain), note: c.manual ? 'added by hand' : undefined })));
+    if (suggestedFor !== r.domain) { setSuggestions(null); setSuggestedFor(''); }
+    setEditing({ id: r.id, status: r.status, domain: r.domain, createdAt: r.createdAt });
+    document.querySelector('[data-scout-scroll]')?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  function clearForm() {
+    setEditing(null); setNotice(null); setError(null); setDomain(''); setScope('domain'); setProducts([]); setPicked([]);
+    setSuggestions(null); setSuggestedFor(''); setManual('');
+  }
+  async function remove(r: Run) {
+    setDeleting(r.id); setError(null);
+    const res = await fetch(`/api/scout/runs/${r.id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    setDeleting(null); setConfirmDel(null);
+    if (!res.ok) { setError(data.error ?? 'Could not delete the run.'); return; }
+    if (editing?.id === r.id) setEditing(prev => prev && prev.status === 'draft' ? null : prev);
+    if (active?.run.id === r.id) setActive(null);
+    loadRuns();
+  }
+  function runSaved(r: Run) {
+    loadIntoForm(r); setEditing(null); setBusy(true);
+    execute(r.id);
   }
 
   async function download(r: Run) {
@@ -185,7 +262,7 @@ export default function ScoutPage() {
   async function signOut() { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/sign-in'; }
 
   const ar = active?.run;
-  const running = !!ar && (ar.status === 'queued' || ar.status === 'running');
+  const running = !!ar && (ar.status === 'queued' || ar.status === 'running' || (ar.status === 'draft' && busy));
   const elapsed = ar?.startedAt ? Math.max(0, (now - (active?.skew ?? 0) - new Date(ar.startedAt).getTime()) / 1000) : 0;
   const eta = active?.timing ? Math.max(0, active.timing.seconds - elapsed) : null;
 
@@ -224,6 +301,14 @@ export default function ScoutPage() {
               <section className="orbit-card p-6">
                 <h1 className="text-xl font-bold text-orbit-primary">Scout a prospect</h1>
                 <p className="text-sm text-orbit-secondary mt-1 mb-5">Enter a domain. Scout reads live search and AI-answer data, finds the single strongest opening, and builds a client-ready PDF.</p>
+                {editing && (
+                  <div className="mb-5 flex items-start justify-between gap-3 rounded-lg border border-orbit-accent/40 bg-orbit-accent/10 px-3.5 py-2.5 text-xs text-orbit-secondary" data-scout-editing>
+                    <span>{editing.status === 'draft'
+                      ? <><b className="text-orbit-primary">Editing a saved setup</b> · {editing.domain}. Save keeps your changes on it; Run Scout runs it.</>
+                      : <><b className="text-orbit-primary">Starting from the {fmtDate(editing.createdAt)} run</b> of {editing.domain}. That report stays as it is — saving or running here creates a new one.</>}</span>
+                    <button type="button" onClick={clearForm} disabled={running} className="shrink-0 font-semibold text-orbit-accent hover:underline disabled:opacity-50">Start fresh</button>
+                  </div>
+                )}
 
                 <label className={label}>Prospect domain</label>
                 <input className={`${input} text-base py-3`} placeholder="prospect.com" value={domain} disabled={running}
@@ -280,16 +365,24 @@ export default function ScoutPage() {
                     </div>
                   ) : <p className="text-xs text-orbit-secondary">Semrush returned no organic competitors for {suggestedFor}. Add them by hand below.</p>
                 )}
-                {picked.filter(p => p.manual).length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {picked.filter(p => p.manual).map(p => (
-                      <span key={p.domain} className="inline-flex items-center gap-2 rounded-full border border-dashed border-orbit-accent bg-orbit-accent/10 text-orbit-accent text-[13px] font-semibold px-3 py-1.5">
-                        ✓ {p.domain} <span className="text-orbit-tertiary font-normal text-[11px]">added by hand · {p.note}</span>
-                        <button type="button" aria-label={`Remove ${p.domain}`} onClick={() => setPicked(picked.filter(x => x.domain !== p.domain))}>✕</button>
-                      </span>
-                    ))}
+                {/* v7.515 — every selected competitor, suggested or typed, in one list with its own remove control */}
+                <div className="mt-3 rounded-lg border border-orbit-border bg-orbit-surface p-2.5" data-scout-selected>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary">Selected · {picked.length} of {maxC}</span>
+                    {picked.length > 1 && <button type="button" disabled={running} onClick={() => setPicked([])} className="text-[11px] font-semibold text-orbit-accent hover:underline disabled:opacity-50">Remove all</button>}
                   </div>
-                )}
+                  {!picked.length ? <p className="text-xs text-orbit-secondary px-0.5">None yet — pick from the suggestions or add a domain below.</p> : (
+                    <div className="flex flex-wrap gap-2">
+                      {picked.map(p => (
+                        <span key={p.domain} className={`inline-flex items-center gap-2 rounded-full border ${p.manual ? 'border-dashed' : ''} border-orbit-accent bg-orbit-accent/10 text-orbit-accent text-[13px] font-semibold px-3 py-1.5`}>
+                          {p.domain}
+                          <span className="text-orbit-tertiary font-normal text-[11px]">{p.manual ? `added by hand${p.note && p.note !== 'added by hand' ? ` · ${p.note}` : ''}` : 'suggested'}{p.publisher ? ' · publisher' : ''}</span>
+                          <button type="button" disabled={running} aria-label={`Remove ${p.domain}`} title={`Remove ${p.domain}`} className="disabled:opacity-40" onClick={() => setPicked(prev => prev.filter(x => x.domain !== p.domain))}>✕</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="flex gap-2 mt-2.5">
                   <input className={input} placeholder="Add a competitor domain, e.g. competitor.com" value={manual} disabled={running}
                     onChange={e => setManual(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addManual(); } }} />
@@ -304,10 +397,17 @@ export default function ScoutPage() {
                   {!access.aiRead && <div className="text-orbit-amber"><b className="block text-sm">AI page off</b>DataForSEO is not configured</div>}
                 </div>
                 {error && <p role="alert" className="mt-3 rounded-lg border border-orbit-red/40 bg-orbit-red/10 px-3.5 py-2.5 text-sm text-orbit-red">{error}</p>}
-                <button type="button" onClick={start} disabled={busy || running || capLeft === 0}
-                  className="mt-4 w-full rounded-lg bg-orbit-accent hover:bg-orbit-accent-light text-[color:var(--on-fill-accent)] text-sm font-bold py-3.5 transition-colors disabled:opacity-50">
-                  {running ? 'Running…' : capLeft === 0 ? 'Daily cap reached' : 'Run Scout'}
-                </button>
+                {notice && !error && <p role="status" className="mt-3 rounded-lg border border-orbit-green/40 bg-orbit-green/10 px-3.5 py-2.5 text-sm text-orbit-green">{notice}</p>}
+                <div className="mt-4 grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2.5">
+                  <button type="button" onClick={save} disabled={saving || busy || running}
+                    className="rounded-lg border border-orbit-accent text-orbit-accent text-sm font-bold py-3.5 transition-colors hover:bg-orbit-accent/10 disabled:opacity-50">
+                    {saving ? 'Saving…' : editing?.status === 'draft' ? 'Save changes' : 'Save setup'}
+                  </button>
+                  <button type="button" onClick={start} disabled={busy || running || saving || capLeft === 0}
+                    className="rounded-lg bg-orbit-accent hover:bg-orbit-accent-light text-[color:var(--on-fill-accent)] text-sm font-bold py-3.5 transition-colors disabled:opacity-50">
+                    {running ? 'Running…' : capLeft === 0 ? 'Daily cap reached' : editing && editing.status !== 'draft' ? 'Run again as a new report' : 'Run Scout'}
+                  </button>
+                </div>
               </section>
 
               <div className="space-y-6">
@@ -338,24 +438,48 @@ export default function ScoutPage() {
                     <button type="button" onClick={loadRuns} className="text-xs font-semibold text-orbit-accent hover:underline">Refresh</button>
                   </div>
                   {!runs.length ? <p className="text-sm text-orbit-secondary">No runs yet.</p> : (
-                    <div className="overflow-x-auto"><table className="w-full text-[13px]">
-                      <thead><tr className="text-left">{['Domain', 'Scope', 'Run', '', ''].map((h, i) => <th key={i} className="font-mono text-[9.5px] uppercase tracking-wider text-orbit-tertiary px-2 py-2 border-b border-orbit-border">{h}</th>)}</tr></thead>
-                      <tbody>{runs.map(r => { const st = r.projectId ? { label: 'IN ORBIT', cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' } : (STATUS[r.status] ?? STATUS.queued); const hasPdf = r.status === 'ready' || r.status === 'no_opening'; return (
-                        <tr key={r.id}>
-                          <td className="px-2 py-2.5 border-b border-orbit-border align-top"><div className="font-semibold text-orbit-primary">{r.domain}</div>
-                            <span className={`inline-block mt-1 font-mono text-[9.5px] font-bold px-1.5 py-0.5 rounded border ${st.cls}`}>{st.label}</span>
-                            {r.headline && <div className="text-[11px] text-orbit-secondary mt-1">{r.headline}</div>}</td>
-                          <td className="px-2 py-2.5 border-b border-orbit-border align-top text-orbit-secondary">{r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'}</td>
-                          <td className="px-2 py-2.5 border-b border-orbit-border align-top text-orbit-secondary whitespace-nowrap">{fmtDate(r.createdAt)}{access.isAdmin && r.userName ? <div className="text-[11px] text-orbit-tertiary">{r.userName}</div> : null}</td>
-                          <td className="px-2 py-2.5 border-b border-orbit-border align-top whitespace-nowrap">{hasPdf && <button type="button" onClick={() => download(r)} disabled={downloading === r.id} className="text-xs font-semibold text-orbit-accent hover:underline disabled:opacity-50">{downloading === r.id ? 'Building…' : 'PDF ↓'}</button>}</td>
-                          <td className="px-2 py-2.5 border-b border-orbit-border align-top whitespace-nowrap text-right">
-                            {r.projectId ? (access.orbit ? <Link href={`/projects/${r.projectId}`} className="text-xs font-semibold text-orbit-accent hover:underline">Open project →</Link> : null)
-                              : hasPdf && access.orbit && access.canWrite ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className="text-xs font-semibold text-orbit-accent hover:underline disabled:opacity-50">{converting === r.id ? 'Creating…' : 'Convert to project →'}</button> : null}
-                          </td>
-                        </tr>); })}</tbody>
-                    </table></div>
+                    <ul className="divide-y divide-orbit-border border-t border-orbit-border" data-scout-runs>
+                      {runs.map(r => {
+                        const st = r.projectId ? { label: 'IN ORBIT', cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' } : (STATUS[r.status] ?? STATUS.queued);
+                        const hasPdf = r.status === 'ready' || r.status === 'no_opening';
+                        const live = r.status === 'queued' || r.status === 'running' || (busy && active?.run.id === r.id);
+                        const isDraft = r.status === 'draft';
+                        const act = 'text-xs font-semibold text-orbit-accent hover:underline disabled:opacity-50';
+                        return (
+                        <li key={r.id} className={`py-3 ${editing?.id === r.id ? 'bg-orbit-accent/5 -mx-2 px-2 rounded-lg' : ''}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-orbit-primary truncate">{r.domain}</span>
+                                <span className={`font-mono text-[9.5px] font-bold px-1.5 py-0.5 rounded border ${st.cls}`}>{st.label}</span>
+                              </div>
+                              <div className="text-[11.5px] text-orbit-secondary mt-0.5">
+                                {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{access.isAdmin && r.userName ? ` · ${r.userName}` : ''}
+                              </div>
+                              {r.headline && <div className="text-[11.5px] text-orbit-primary mt-0.5">{r.headline}</div>}
+                            </div>
+                            <span className="shrink-0 text-[11.5px] text-orbit-tertiary whitespace-nowrap">{isDraft ? 'saved ' : ''}{fmtDate(r.createdAt)}</span>
+                          </div>
+                          {confirmDel === r.id ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-orbit-red/40 bg-orbit-red/10 px-2.5 py-1.5 text-xs text-orbit-red">
+                              <span>Delete this {isDraft ? 'saved setup' : 'run and its report'}? This can&apos;t be undone.</span>
+                              <button type="button" onClick={() => remove(r)} disabled={deleting === r.id} className="font-bold hover:underline disabled:opacity-50">{deleting === r.id ? 'Deleting…' : 'Yes, delete'}</button>
+                              <button type="button" onClick={() => setConfirmDel(null)} className="font-semibold text-orbit-secondary hover:underline">Cancel</button>
+                            </div>
+                          ) : !live && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                              {hasPdf && <button type="button" onClick={() => download(r)} disabled={downloading === r.id} className={act}>{downloading === r.id ? 'Building…' : 'PDF ↓'}</button>}
+                              {isDraft && <button type="button" onClick={() => runSaved(r)} disabled={busy || running || capLeft === 0} className={act}>Run</button>}
+                              <button type="button" onClick={() => loadIntoForm(r)} disabled={busy || running} className={act}>{isDraft ? 'Edit' : 'Edit & re-run'}</button>
+                              {r.projectId ? (access.orbit ? <Link href={`/projects/${r.projectId}`} className={act}>Open project →</Link> : null)
+                                : hasPdf && access.orbit && access.canWrite ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className={act}>{converting === r.id ? 'Creating…' : 'Convert to project →'}</button> : null}
+                              <button type="button" onClick={() => setConfirmDel(r.id)} className="text-xs font-semibold text-orbit-red hover:underline ml-auto">Delete</button>
+                            </div>
+                          )}
+                        </li>); })}
+                    </ul>
                   )}
-                  <p className="text-xs text-orbit-tertiary mt-3">{access.isAdmin ? 'Admins see every run.' : 'You see your own runs.'} NO CLEAR OPENING means no theme passed the evidence bar — the PDF still ships, leading with the field view. THIN DATA means too little came back to report honestly, so no PDF was made.</p>
+                  <p className="text-xs text-orbit-tertiary mt-3">{access.isAdmin ? 'Admins see every run.' : 'You see your own runs.'} SAVED is a setup that hasn't run yet — nothing was spent on it. Edit &amp; re-run loads a run's setup into the form; the original report is kept. NO CLEAR OPENING means no theme passed the evidence bar — the PDF still ships, leading with the field view. THIN DATA means too little came back to report honestly, so no PDF was made.</p>
                 </section>
               </div>
             </div>
