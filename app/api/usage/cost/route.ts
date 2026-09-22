@@ -34,6 +34,7 @@ import { db } from '@/db';
 import { sql } from 'drizzle-orm';
 import { ensureUsageTable, getLedgerFailures } from '@/lib/usage/record';
 import { priceLine, auditRegistry, RATE_CARD, PRICING_ASOF, PLAN_QUOTA_CAVEAT } from '@/lib/usage/pricing';
+import { parseProductFilter, type UsageProduct } from '@/lib/usage/rollupView';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,7 @@ interface UnpricedLine {
   reason: string; unregistered: boolean;
 }
 interface ProjectCost {
-  projectId: string | null; projectName: string;
+  projectId: string | null; projectName: string; product: UsageProduct;   // v7.514: Scout rows carry the run id in projectId
   costUSD: number; payPerUseUSD: number; planQuotaUSD: number; measuredUSD: number;
   models: ModelCost[]; unpriced: UnpricedLine[];
 }
@@ -67,8 +68,10 @@ function bound(v: string | null): string | null {
 export async function GET(req: NextRequest) {
   const from = bound(req.nextUrl.searchParams.get('from'));
   const to   = bound(req.nextUrl.searchParams.get('to'));
+  const product = parseProductFilter(req.nextUrl.searchParams.get('product'));   // v7.514
   try {
     await ensureUsageTable();
+    await db.execute(sql`CREATE TABLE IF NOT EXISTS scout_runs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), domain text NOT NULL, user_name text, status text NOT NULL DEFAULT 'queued', scope text NOT NULL DEFAULT 'domain', created_at timestamp NOT NULL DEFAULT now())`);
 
     // One row per (project, provider, model, unit): real measured sums.
     // v7.399 — RAW SQL for the same reason /api/usage was rewritten: a drizzle
@@ -77,8 +80,11 @@ export async function GET(req: NextRequest) {
     // See the v7.373 precedent (neon-http + drizzle aggregate alias → use execute).
     const raw: any = await db.execute(sql`
       SELECT
+        COALESCE(u.product, 'orbit')                                          AS "product",
         u.project_id                                                          AS "projectId",
         p.client_name                                                         AS "projectName",
+        u.scout_run_id                                                        AS "scoutRunId",
+        s.domain                                                              AS "scoutDomain",
         u.provider                                                            AS "provider",
         u.endpoint                                                            AS "endpoint",
         u.unit                                                                AS "unit",
@@ -88,13 +94,16 @@ export async function GET(req: NextRequest) {
         COALESCE(SUM((u.meta ->> 'costUSD')::numeric), 0)                     AS "measuredCost",
         COUNT(*)::int                                                         AS "calls"
       FROM api_usage u
-      LEFT JOIN projects p ON p.id = u.project_id
+      LEFT JOIN projects   p ON p.id = u.project_id
+      LEFT JOIN scout_runs s ON s.id = u.scout_run_id
       WHERE u.kind = 'usage'
+        ${product === 'orbit' ? sql`AND COALESCE(u.product, 'orbit') = 'orbit'` : product === 'scout' ? sql`AND u.product = 'scout'` : sql``}
         ${from ? sql`AND u.created_at >= ${from}::timestamptz` : sql``}
         ${to   ? sql`AND u.created_at <  ${to}::timestamptz`   : sql``}
-      GROUP BY u.project_id, p.client_name, u.provider, u.endpoint, u.unit
+      GROUP BY COALESCE(u.product, 'orbit'), u.project_id, p.client_name, u.scout_run_id, s.domain, u.provider, u.endpoint, u.unit
     `);
     const grouped: Array<{
+      product: string; scoutRunId: string | null; scoutDomain: string | null;
       projectId: string | null; projectName: string | null; provider: string;
       endpoint: string; unit: string; inputTokens: any; outputTokens: any;
       quantity: any; measuredCost: any; calls: any;
@@ -112,14 +121,18 @@ export async function GET(req: NextRequest) {
     let grandMeasuredUSD = 0;
 
     for (const r of grouped) {
-      const pid = r.projectId ?? '__unattributed__';
+      const isScout = r.product === 'scout';
+      const id = isScout ? r.scoutRunId : r.projectId;
+      const pid = `${isScout ? 's' : 'p'}:${id ?? '__unattributed__'}`;
       let entry = projMap.get(pid);
       if (!entry) {
-        entry = {
-          projectId: r.projectId ?? null,
-          projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
-          costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, measuredUSD: 0, models: [], unpriced: [],
-        };
+        entry = isScout
+          ? { projectId: r.scoutRunId ?? null, product: 'scout',
+              projectName: r.scoutRunId ? (r.scoutDomain ?? 'Scout run (deleted)') : 'Scout · before a run (competitor suggestions)',
+              costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, measuredUSD: 0, models: [], unpriced: [] }
+          : { projectId: r.projectId ?? null, product: 'orbit',
+              projectName: r.projectId ? (r.projectName ?? 'Unknown project') : 'Unattributed',
+              costUSD: 0, payPerUseUSD: 0, planQuotaUSD: 0, measuredUSD: 0, models: [], unpriced: [] };
         projMap.set(pid, entry);
       }
 
@@ -176,14 +189,15 @@ export async function GET(req: NextRequest) {
     const projectsOut = Array.from(projMap.values())
       .map(p => ({ ...p, models: p.models.sort((a, b) => b.costUSD - a.costUSD) }))
       .sort((a, b) => {
-        if (a.projectId === null) return 1;   // Unattributed last
-        if (b.projectId === null) return -1;
+        const rank = (x: ProjectCost) => x.projectId === null ? 2 : x.product === 'scout' ? 1 : 0;   // projects, then Scout runs, unattributed last
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
         return b.costUSD - a.costUSD;          // biggest spend first
       });
 
     return NextResponse.json({
       asOf: new Date().toISOString(),
       range: { from, to },
+      product,
       pricingAsOf: PRICING_ASOF,
       basis: BASIS_NOTE,
       planQuotaCaveat: PLAN_QUOTA_CAVEAT,
