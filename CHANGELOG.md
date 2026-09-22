@@ -1,3 +1,42 @@
+# v7.514 — API Usage tells Orbit from Scout (2026-09-21)
+
+Wayne: *"in the api usage we will need a toggle for orbit vs scout - so we need to track all calls and usage."*
+v7.513 shipped Scout with its spend reaching the ledger UNATTRIBUTED. This release makes every call carry its product.
+
+## What changed
+
+- **Ledger:** every `api_usage` row now carries `product` (`orbit` | `scout`) and `scout_run_id`. Both columns are added
+  at runtime by `ensureUsageTable()` (`ADD COLUMN IF NOT EXISTS`, never drizzle push). Rows written before v7.514 have
+  `product` NULL and read as **Orbit** everywhere — Scout did not exist when they were written, so that is a fact, not a guess.
+- **Attribution:** `setUsageScout(runId)` in `lib/usage/context.ts`. The Scout execute route attributes every call of a run
+  to that run; the suggest route (competitor suggestions, manual-competitor check) attributes to Scout with no run.
+  Nothing else in the app changes: the default product is Orbit, exactly as before.
+- **Routes:** `/api/usage` and `/api/usage/cost` take `?product=orbit|scout|all` (anything else = `all`, never a silent
+  narrowing). Scout rows group by **run** (joined to `scout_runs` for domain, who ran it, when, status, scope); Scout spend
+  from before a run exists is one bucket. Rows are ordered projects → Scout runs (newest first) → unattributed.
+- **Dashboard (`/usage`):** a **Orbit | Scout | Orbit + Scout** toggle in the scope bar. Default is Orbit — the view every
+  earlier release showed. The Scout view has no Keywords or Hours Saved columns (a run reads a bounded sample and delivers its
+  own PDF; there is no landscape and no deliverable metric) and does not call the hours route at all. Scout rows name the
+  prospect domain, who ran it and when, and link to `/scout`. In the combined view Scout rows carry a SCOUT badge.
+- **PDF export:** follows the same view — column set, headings, tile labels and the scope sentence all say which product.
+- **Shared basis (`lib/usage/rollupView.ts`):** `rowKey()` — a product-qualified key — replaces the bare project id for the
+  picker, the cost map and the folds, so a Scout run and a project can never share a bucket. `projectKey` stays for callers
+  that only ever see projects (hours).
+
+## Verification
+
+Project `tsc` clean · real `next build` clean · retained suite **3525 PASS / 27 FAIL** against the v7.513 base
+**3505 / 27**, FAIL set byte-identical to the known Chromium-unavailable baseline · **20 new v7.514 checks** (13 fixture
+checks on the real context/basis/template code + 7 source gates). Four earlier checks were updated with dated notes
+because the behaviour they pinned changed by design (v399 GROUP BY shape, v482 mock URL now carries `?product=`,
+v483 selection keys are `rowKey`, v484 scope sentence takes the product). The dashboard was rendered in real Chromium
+in all three views in light and dark with mocked payloads.
+
+## Not in this release
+
+- No live Scout run has been made yet, so the first Scout rows will appear after one.
+- A per-user Scout spend view (who spent what) — the run rows show the user; a roll-up by person is not built.
+
 # v7.513 — Scout: a quick prospect snapshot that lives outside projects (2026-09-21)
 
 Wayne: *"a new section within orbit that is outside of the projects … to do a quick teaser analysis … enter a
