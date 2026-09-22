@@ -1,3 +1,49 @@
+# v7.515 — Scout: edit a run's competitors, save and re-run, 4 competitors, delete a run (2026-09-21)
+
+Wayne: *"i need a way to remove and add a competitor and be able to save it and re run it. Also no limit on the number of
+competitors. And i need a way to delete a scout read out."* On the limit, Wayne then chose **4** (from 3) — the most the
+client PDF can chart with every site on every chart and each section still on one Letter page, so no chart ever has to leave
+a competitor off (Const I.6). A no-limit build with top-8 charts was built, tested and withdrawn at his call.
+
+## What changed
+
+- **Edit & re-run:** every run in Recent scouts has **Edit & re-run**. It loads that run's domain, market, industry, scope,
+  products and competitors into the form. Add or remove competitors (every selected one now sits in one **Selected** list with
+  its own ✕, suggested or typed), then **Save setup** or **Run again as a new report**. The original report is never
+  overwritten: a run that has executed keeps the inputs its report was built from (PATCH refuses anything but a draft).
+- **Saved setups:** **Save setup** stores the setup as **SAVED** (status `draft`) — nothing spent, not counted against the
+  daily cap. A saved setup can be edited in place (**Save changes**) or run (**Run** in the list, or **Run Scout** in the
+  form). Running it is cap-checked at the execute route, then claimed by the same atomic UPDATE as before (`status IN
+  ('queued','draft')`), so a double click still cannot bill twice.
+- **Delete:** **Delete** on any run that is not executing, with an in-page second confirmation (no browser dialog). Soft
+  delete: the run leaves every read path and its stored report is cleared (`result = NULL`), but the row stays so API Usage
+  still attributes that run's real spend to its domain, now marked *deleted*. Deleting never resets the daily cap.
+- **Competitors 3 → 4:** one constant (`MAX_COMPETITORS`) drives the validator, the access route and the screen. The unit
+  ceiling on the screen is priced for the real count with the same `unitCeiling()` the run checks the Semrush balance against.
+- **One validator:** `lib/scout/input.ts` `parseRunInput()` serves POST (new run or saved setup) and PATCH (edit a setup).
+- **Bounded pulls:** Scout's Semrush pulls go through `mapLimit(…, PULL_CONCURRENCY = 5)` — order kept, failures still
+  reject; at 4 competitors every pull still runs at once.
+- **PDF:** the field scatter lays out labels after the dots — a label that would collide moves in 25px steps with a thin
+  leader line, and no competitor label is written over your own dot. Positions only; no figure changes. 3-competitor reports
+  render as before.
+- **Semrush competitor columns (bug):** `getCompetitors()` asked `domain_organic_organic` for `Dn,Co,Or,Ot,Nr`. Co and Nr are
+  not columns of that report, so every competitor read **0 shared keywords** and 0 relevance — the Scout chips all showed
+  "0 shared kw", and the Orbit narrative prompt was told the top competitor shares 0 keywords. Now `Dn,Cr,Np,Or,Ot`
+  (Np = Common Keywords, Cr = Competitor Relevance). Same rows, same units.
+- **API Usage:** both usage routes call `ensureScoutTables()` (the real Scout schema, incl. `deleted_at`) instead of a minimal
+  stand-in CREATE; a deleted run's rows read status *deleted*.
+
+## Verification
+
+Project `tsc` clean · real `next build` clean · retained suite **3560 PASS / 27 FAIL** against the v7.514 base
+**3525 / 27**, FAIL set byte-identical to the known baseline · **35 new v7.515 checks** (20 fixture checks — validator, cap,
+mapLimit, ceiling, and a 4-competitor result built through the real picker charting every site on every chart — plus 15
+source gates). One v7.513 check (atomic claim) updated with a dated note for the draft claim. PDF rendered at 4 competitors
+with long domains: 7 pages, nothing overflows. Scout screen rendered light + dark with the edit → save → delete flow driven
+end to end against mocked routes.
+
+---
+
 # v7.514 — API Usage tells Orbit from Scout (2026-09-21)
 
 Wayne: *"in the api usage we will need a toggle for orbit vs scout - so we need to track all calls and usage."*
