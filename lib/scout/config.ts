@@ -13,7 +13,7 @@
  * floor the pull reached, and every figure is exact ABOVE that floor.
  */
 
-export const SCOUT_VERSION = 'v7.520';
+export const SCOUT_VERSION = 'v7.521';
 
 /**
  * Max competitors and products per run. v7.515 (Wayne, 2026-09-21): competitors 3 → 4.

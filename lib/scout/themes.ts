@@ -27,7 +27,12 @@ function firstJson(text: string): any {
 
 export interface ThemeAssignment { assignment: Map<string, string>; notRelevant: number; themeNames: string[] }
 
-/** Full-domain scope: discover 5–9 product/topic themes and assign every keyword. */
+/**
+ * Full-domain scope: discover 5–12 product themes and assign every keyword.
+ * v7.521 (Wayne 2026-09-23, option 2): one product per theme. The navyfederal.org run had "best cd rates" and
+ * "best checking accounts" filed under "Savings accounts" — a banker reads that as wrong. Related products are now
+ * separate themes even when small; a theme under MIN_THEME_KEYWORDS is set aside and counted, never merged.
+ */
 export async function groupIntoThemes(opts: { domain: string; industry: string; keywords: string[] }): Promise<ThemeAssignment> {
   const kws = opts.keywords;
   if (!kws.length) return { assignment: new Map(), notRelevant: 0, themeNames: [] };
@@ -35,7 +40,9 @@ export async function groupIntoThemes(opts: { domain: string; industry: string; 
   const prompt =
 `You are grouping search keywords for a marketing report about ${opts.domain} (industry: ${opts.industry}).
 
-Group the numbered keywords below into 5 to 9 THEMES. A theme is a product line or a buyer topic this business could plausibly own a section of its website for (for example "Accident insurance", "Term life insurance", "Claims and how-to"). Rules:
+Group the numbered keywords below into 5 to 12 THEMES. A theme is ONE product line or ONE buyer topic this business could plausibly own a section of its website for (for example "Accident insurance", "Term life insurance", "Claims and how-to"). Rules:
+- One product per theme. Related products are SEPARATE themes, never one: savings accounts, certificates of deposit and checking accounts are three themes; term life and whole life are two; auto loans and auto refinance are two. Do not create a family theme like "Deposit accounts" or "Bank accounts".
+- The theme name must describe every keyword in it. A reader must never find a keyword in a theme whose name does not cover it.
 - Theme names: 2-4 plain words, Title case first word only, no brand names, no "and more", no "Other".
 - Every keyword goes in exactly one theme, OR in "skip" if it is navigational, a brand name, a login/app/careers/customer-service query, or not relevant to what this business sells.
 - Do not invent keywords. Use only the index numbers given.
