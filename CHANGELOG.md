@@ -1,3 +1,19 @@
+# v7.521 — Scout: one product per theme (2026-09-23)
+
+Wayne, on the re-run navyfederal.org report: the "Savings accounts" theme on page 05 carried "best cd rates", "cd rates
+today" and "best checking accounts". He chose option 2 — split, don't relabel. The theme-grouping prompt now says one
+product per theme (savings, CDs and checking are three themes; term life and whole life are two), forbids family
+themes such as "Deposit accounts", requires the theme name to cover every keyword in it, and allows 5–12 themes
+(was 5–9). A split theme under MIN_THEME_KEYWORDS (4) is set aside and counted in the page-03 note, never merged.
+Page 03 charts and lists every theme (it trimmed to the 9 largest); the leader table goes dense above 9 rows and was
+rendered at 12 themes with no overflow. Numbers are unchanged for existing runs; re-run to get split themes. The
+opening can change: Savings alone may fall below a larger open theme.
+
+Verification: `tsc` + `next build` clean · suite 3636 PASS, FAIL set identical to baseline · new v7.521 harness
+(18 checks) + 1 source gate · 1 v7.516 gate updated (dated note) · page 03 rendered at 12 themes.
+
+---
+
 # v7.520 — Scout: deeper competitor pulls (300 rows per competitor, 600 for the prospect) (2026-09-23)
 
 Wayne, on the navyfederal.org run: the map had only 8 themes from 60 searches. Cause: each competitor's full-domain
