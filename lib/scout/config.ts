@@ -13,7 +13,7 @@
  * floor the pull reached, and every figure is exact ABOVE that floor.
  */
 
-export const SCOUT_VERSION = 'v7.516';
+export const SCOUT_VERSION = 'v7.520';
 
 /**
  * Max competitors and products per run. v7.515 (Wayne, 2026-09-21): competitors 3 → 4.
@@ -27,8 +27,11 @@ export const PULL_CONCURRENCY = 5;
 export const MAX_TERMS_PER_PRODUCT = 2;
 
 /** Semrush row limits (10 units per returned row). */
-export const ROWS_PER_COMPETITOR_DOMAIN  = 150;  // full-domain scope, per competitor
-export const ROWS_PROSPECT_DOMAIN        = 300;  // full-domain scope, prospect
+// v7.520 (Wayne 2026-09-23, "yes" to a deeper map): 150/300 → 300/600. On navyfederal.org vs usaa/usbank/penfed the
+// 150th competitor row was still 40,500/mo, so the floor sat at 40,500 and only 60 searches made it into themes
+// (146 dropped below the floor). The prospect keeps 2× the competitor depth so its own pull does not become the floor.
+export const ROWS_PER_COMPETITOR_DOMAIN  = 300;  // full-domain scope, per competitor
+export const ROWS_PROSPECT_DOMAIN        = 600;  // full-domain scope, prospect
 export const ROWS_PER_COMPETITOR_TERM    = 50;   // product scope, per competitor per term
 export const ROWS_PROSPECT_TERM          = 100;  // product scope, prospect per term
 export const QUESTION_ROWS               = 10;   // phrase_questions, 40 units per row
