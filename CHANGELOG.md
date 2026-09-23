@@ -1,3 +1,23 @@
+# v7.520 — Scout: deeper competitor pulls (300 rows per competitor, 600 for the prospect) (2026-09-23)
+
+Wayne, on the navyfederal.org run: the map had only 8 themes from 60 searches. Cause: each competitor's full-domain
+pull was capped at 150 rows, and for usaa.com / usbank.com / penfed.org the 150th row was still 40,500/mo, so the
+run's volume floor sat at 40,500 and 146 searches were dropped below it. The caps are now **300 rows per competitor**
+and **600 for the prospect** (the prospect keeps twice the competitor depth so its own pull does not become the
+floor). Nothing else changes: the floor is still measured from the pulls and disclosed on the report, the picker
+rules are unchanged, and the unit ceiling the screen prices is built from the same constants — a 4-competitor
+domain run now ceilings at 18,675 units (was 9,675). Existing runs are untouched; re-run to get the deeper map.
+
+Wayne also asked whether Savings winning on both synchrony.com and navyfederal.org was hardcoded. It is not — no theme
+name appears in the picker — and the reason was checked on the stored runs: Navy Federal's map had exactly one open
+theme (Savings, 0% on page one; every other theme held), so it was the only candidate. "high yield savings account"
+(550,000/mo) dominates that theme on both runs, so Savings will tend to read as open for banks.
+
+Verification: `tsc` + `next build` clean · suite 3617 PASS, FAIL set identical to baseline · 3 ceiling checks now read
+the constants (dated notes) · 1 new source gate.
+
+---
+
 # v7.519 — Scout PDF: "AI Answers Read", no AI vendor named, page 05 labelled Google, est. traffic on the leader's pages (2026-09-21)
 
 Four notes from Wayne on the live synchrony run:
