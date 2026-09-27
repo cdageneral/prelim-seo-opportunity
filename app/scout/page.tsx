@@ -12,6 +12,10 @@
  * One scrolling root (Const IV.1). The run shows "step X of 6", what it is doing,
  * elapsed time and — once real runs exist — an ETA from their median (IV.2/IV.3).
  * Theme-mapped orbit-* tokens only, so light and dark both hold (IV.6).
+ * v7.522: the form clears to blank as soon as a run starts (Wayne, 2026-09-26); list is "Recent Scout Reports";
+ * each row reads "Last run … by …" top-right, Download PDF / Convert to Orbit project are icon buttons, Edit & re-run
+ * sits under them with Delete (trash + word) bottom-right; no insight line on the row; search + paging run on the
+ * server so reports older than the newest 50 can be found (mockup v11, approved 2026-09-26).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -45,6 +49,30 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   running:    { label: 'RUNNING',          cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' },
   queued:     { label: 'QUEUED',           cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' },
 };
+// v7.522 — each status chip explains itself on hover (replaces the legend paragraph under the list)
+const STATUS_TIP: Record<string, string> = {
+  draft: "A setup that hasn't run yet — nothing was spent on it.",
+  ready: 'The run finished and found an opening. The PDF is ready.',
+  no_opening: 'No theme passed the evidence bar. The PDF still ships, leading with the field view.',
+  thin: 'Too little data came back to report honestly, so no PDF was made.',
+  failed: 'The run failed. Edit & re-run to try again.',
+  running: 'Running now.', queued: 'Starting.', orbit: 'Converted to an Orbit project.',
+};
+/** v7.522 — the row's top-right line: when it last ran (or was saved / started). */
+function whenLabel(r: { status: string; createdAt: string; startedAt: string | null; finishedAt: string | null }): string {
+  if (r.status === 'draft') return `Saved ${fmtDate(r.createdAt)}`;
+  if (r.status === 'queued' || r.status === 'running') return `Started ${fmtDate(r.startedAt ?? r.createdAt)}`;
+  return `Last run ${fmtDate(r.finishedAt ?? r.startedAt ?? r.createdAt)}`;
+}
+const Ico = ({ d, size = 15, fill = false }: { d: string; size?: number; fill?: boolean }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" fill={fill ? 'currentColor' : 'none'} stroke={fill ? 'none' : 'currentColor'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" dangerouslySetInnerHTML={{ __html: d }} />
+);
+const I_PDF = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 11v6"/><path d="m9.5 14.5 2.5 2.5 2.5-2.5"/>';
+const I_ORBIT = '<circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="10" ry="4.5" transform="rotate(-25 12 12)"/>';
+const I_RERUN = '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>';
+const I_PLAY = '<path d="M8 5v14l11-7z"/>';
+const I_TRASH = '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/>';
+const I_SEARCH = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>';
 const fmtSecs = (s: number) => s < 60 ? `${Math.max(0, Math.round(s))}s` : `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`;
 const fmtDate = (iso: string) => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const label = 'block font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary mb-1.5';
@@ -67,6 +95,13 @@ export default function ScoutPage() {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [total, setTotal] = useState(0);                  // v7.522 — all matching runs on the server, not just the page held here
+  const [query, setQuery] = useState('');
+  const [listLoading, setListLoading] = useState(false);
+  const queryRef = useRef('');
+  const listSeq = useRef(0);                              // a slower, older search response never overwrites a newer one
+  const runsRef = useRef<Run[]>([]);                      // the page already held, so Show older asks for the NEXT one
+  useEffect(() => { runsRef.current = runs; }, [runs]);
   const [active, setActive] = useState<{ run: Run; timing: Access['timing']; skew: number } | null>(null);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState(false);
@@ -81,10 +116,30 @@ export default function ScoutPage() {
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
   const awaitingClaim = useRef(false);   // a SAVED setup reads 'draft' until the execute request claims it
 
-  const loadRuns = useCallback(async () => {
-    const res = await fetch('/api/scout/runs', { cache: 'no-store' });
-    if (res.ok) setRuns((await res.json()).runs ?? []);
+  /** v7.522 — first page for the current search, or the next page appended (Show older reports). */
+  const loadRuns = useCallback(async (more = false) => {
+    const seq = ++listSeq.current;
+    const q = queryRef.current.trim();
+    setListLoading(true);
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (more) params.set('offset', String(runsRef.current.length));
+    const res = await fetch(`/api/scout/runs${params.toString() ? `?${params}` : ''}`, { cache: 'no-store' }).catch(() => null);
+    if (seq !== listSeq.current) return;
+    setListLoading(false);
+    if (!res || !res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    const page: Run[] = data.runs ?? [];
+    setRuns(prev => more ? [...prev, ...page.filter(r => !prev.some(p => p.id === r.id))] : page);
+    setTotal(Number(data.total ?? page.length));
   }, []);
+  // search as you type, debounced so each keystroke is not a query
+  useEffect(() => {
+    queryRef.current = query;
+    if (!access?.scout) return;
+    const t = setTimeout(() => { loadRuns(); }, query.trim() ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [query, access?.scout, loadRuns]);
   const loadAccess = useCallback(async () => {
     const res = await fetch('/api/scout/access', { cache: 'no-store' });
     const data = await res.json().catch(() => ({}));
@@ -94,7 +149,6 @@ export default function ScoutPage() {
   }, []);
 
   useEffect(() => { loadAccess(); }, [loadAccess]);
-  useEffect(() => { if (access?.scout) loadRuns(); }, [access?.scout, loadRuns]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => () => { if (poll.current) clearInterval(poll.current); }, []);
 
@@ -181,7 +235,7 @@ export default function ScoutPage() {
     setSaving(false);
     if (!id) return;
     setEditing({ id, status: 'draft', domain: domain.trim(), createdAt: new Date().toISOString() });
-    setNotice(`Saved. It's in Recent scouts as SAVED — edit it or run it from there, or keep changing it here.`);
+    setNotice(`Saved. It's in Recent Scout Reports as SAVED — edit it or run it from there, or keep changing it here.`);
     loadRuns();
   }
   async function start() {
@@ -196,8 +250,8 @@ export default function ScoutPage() {
       if (!res.ok) { setError(typeof data.error === 'string' ? data.error : 'Could not start the run.'); id = null; } else id = String(data.id);
     }
     if (!id) { setBusy(false); return; }
-    setEditing(null);
     execute(id);
+    clearForm();   // v7.522 — the form goes back to blank once the run is on its way; the run card and the list carry it
   }
   /** Fire the run (the request stays open for the whole run) and poll its row for progress. */
   function execute(id: string) {
@@ -210,6 +264,7 @@ export default function ScoutPage() {
       }
     }).catch(() => { /* the poller reports the outcome */ });
     watch(id);
+    setTimeout(() => { loadRuns(); }, 1200);   // v7.522 — the new run shows in the list straight away (the form has cleared)
   }
   /** Load any run's setup into the form: add or remove competitors, then save or run again. */
   function loadIntoForm(r: Run) {
@@ -222,8 +277,8 @@ export default function ScoutPage() {
     document.querySelector('[data-scout-scroll]')?.scrollTo({ top: 0, behavior: 'smooth' });
   }
   function clearForm() {
-    setEditing(null); setNotice(null); setError(null); setDomain(''); setScope('domain'); setProducts([]); setPicked([]);
-    setSuggestions(null); setSuggestedFor(''); setManual('');
+    setEditing(null); setNotice(null); setError(null); setDomain(''); setScope('domain'); setProducts([]); setProductDraft(''); setPicked([]);
+    setSuggestions(null); setSuggestedFor(''); setManual(''); setIndustry('other'); setMarket('us');
   }
   async function remove(r: Run) {
     setDeleting(r.id); setError(null);
@@ -236,7 +291,7 @@ export default function ScoutPage() {
     loadRuns();
   }
   function runSaved(r: Run) {
-    loadIntoForm(r); setEditing(null); setBusy(true);
+    clearForm(); setBusy(true);   // v7.522 — nothing to edit while it runs; the setup is on the row
     execute(r.id);
   }
 
@@ -434,52 +489,72 @@ export default function ScoutPage() {
 
                 <section className="orbit-card p-6">
                   <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-[15px] font-bold text-orbit-primary">Recent scouts</h2>
-                    <button type="button" onClick={loadRuns} className="text-xs font-semibold text-orbit-accent hover:underline">Refresh</button>
+                    <h2 className="text-[15px] font-bold text-orbit-primary">Recent Scout Reports</h2>
+                    <button type="button" onClick={() => loadRuns()} className="text-xs font-semibold text-orbit-accent hover:underline">Refresh</button>
                   </div>
-                  {!runs.length ? <p className="text-sm text-orbit-secondary">No runs yet.</p> : (
+                  <div className="relative" data-scout-search>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-orbit-tertiary"><Ico d={I_SEARCH} size={14} /></span>
+                    <input type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by domain or who ran it" aria-label="Search Scout reports"
+                      className="w-full rounded-lg border border-orbit-border bg-orbit-surface pl-9 pr-3 py-2 text-[13px] text-orbit-primary placeholder:text-orbit-tertiary focus:outline-none focus:border-orbit-accent" />
+                  </div>
+                  <p className="text-[11.5px] text-orbit-secondary mt-1.5 mb-1 px-0.5" data-scout-count>
+                    {listLoading && !runs.length ? 'Loading…'
+                      : query.trim() ? <>{total.toLocaleString()} report{total === 1 ? '' : 's'} match &ldquo;{query.trim()}&rdquo;{runs.length < total ? <> · showing {runs.length}</> : null}</>
+                      : total ? <>Showing the <b className="text-orbit-primary">{runs.length}</b> newest of <b className="text-orbit-primary">{total.toLocaleString()}</b> report{total === 1 ? '' : 's'}</> : null}
+                  </p>
+                  {!runs.length ? <p className="text-sm text-orbit-secondary py-2">{listLoading ? '' : query.trim() ? 'No reports match that search.' : 'No runs yet.'}</p> : (
                     <ul className="divide-y divide-orbit-border border-t border-orbit-border" data-scout-runs>
                       {runs.map(r => {
-                        const st = r.projectId ? { label: 'IN ORBIT', cls: 'bg-orbit-accent/10 text-orbit-accent border-orbit-accent/30' } : (STATUS[r.status] ?? STATUS.queued);
+                        const st = r.projectId ? { label: 'IN ORBIT', cls: 'bg-orbit-cyan/10 text-orbit-cyan border-orbit-cyan/30' } : (STATUS[r.status] ?? STATUS.queued);
+                        const tip = r.projectId ? STATUS_TIP.orbit : (STATUS_TIP[r.status] ?? '');
                         const hasPdf = r.status === 'ready' || r.status === 'no_opening';
                         const live = r.status === 'queued' || r.status === 'running' || (busy && active?.run.id === r.id);
                         const isDraft = r.status === 'draft';
-                        const act = 'text-xs font-semibold text-orbit-accent hover:underline disabled:opacity-50';
+                        const primary = 'inline-flex items-center gap-1.5 rounded-lg border-[1.5px] px-3 py-1.5 text-[12.5px] font-bold transition-colors disabled:opacity-50';
+                        const quiet = 'inline-flex items-center gap-1.5 text-xs font-semibold text-orbit-secondary hover:text-orbit-accent disabled:opacity-50';
                         return (
-                        <li key={r.id} className={`py-3 ${editing?.id === r.id ? 'bg-orbit-accent/5 -mx-2 px-2 rounded-lg' : ''}`}>
+                        <li key={r.id} className={`py-3.5 ${editing?.id === r.id ? 'bg-orbit-accent/5 -mx-2 px-2 rounded-lg' : ''}`} data-scout-row>
                           <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-semibold text-orbit-primary truncate">{r.domain}</span>
-                                <span className={`font-mono text-[9.5px] font-bold px-1.5 py-0.5 rounded border ${st.cls}`}>{st.label}</span>
-                              </div>
-                              <div className="text-[11.5px] text-orbit-secondary mt-0.5">
-                                {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{access.isAdmin && r.userName ? ` · ${r.userName}` : ''}
-                              </div>
-                              {r.headline && <div className="text-[11.5px] text-orbit-primary mt-0.5">{r.headline}</div>}
+                            <div className="min-w-0 flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-[15px] text-orbit-primary truncate">{r.domain}</span>
+                              <span title={tip} className={`font-mono text-[9.5px] font-bold px-1.5 py-0.5 rounded border cursor-help ${st.cls}`}>{st.label}</span>
                             </div>
-                            <span className="shrink-0 text-[11.5px] text-orbit-tertiary whitespace-nowrap">{isDraft ? 'saved ' : ''}{fmtDate(r.createdAt)}</span>
+                            <div className="shrink-0 text-right text-[11.5px] leading-snug text-orbit-secondary whitespace-nowrap" data-scout-when>
+                              {whenLabel(r)}{r.userName ? <><br />by <span className="font-semibold text-orbit-primary">{r.userName}</span></> : null}
+                            </div>
                           </div>
-                          {confirmDel === r.id ? (
+                          <div className="text-[11.5px] text-orbit-secondary mt-1">
+                            {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{isDraft ? ' · not run yet' : ''}
+                          </div>
+                          {live ? null : (<>
+                            {(hasPdf || isDraft || r.projectId) && (
+                              <div className="flex flex-wrap items-center gap-2 mt-2.5" data-scout-primary>
+                                {hasPdf && <button type="button" onClick={() => download(r)} disabled={downloading === r.id} className={`${primary} border-orbit-accent bg-orbit-accent text-[color:var(--on-fill-accent)] hover:bg-orbit-accent-light`}><Ico d={I_PDF} />{downloading === r.id ? 'Building PDF…' : 'Download PDF'}</button>}
+                                {isDraft && <button type="button" onClick={() => runSaved(r)} disabled={busy || running || capLeft === 0} className={`${primary} border-orbit-accent bg-orbit-accent text-[color:var(--on-fill-accent)] hover:bg-orbit-accent-light`}><Ico d={I_PLAY} size={13} fill />Run</button>}
+                                {r.projectId ? (access.orbit ? <Link href={`/projects/${r.projectId}`} className={`${primary} border-orbit-cyan text-orbit-cyan hover:bg-orbit-cyan/10`}><Ico d={I_ORBIT} />Open Orbit project →</Link> : null)
+                                  : hasPdf && access.orbit && access.canWrite ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className={`${primary} border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10`}><Ico d={I_ORBIT} />{converting === r.id ? 'Creating project…' : 'Convert to Orbit project'}</button> : null}
+                              </div>
+                            )}
+                            <div className="flex items-end justify-between gap-3 mt-1.5">
+                              <button type="button" onClick={() => loadIntoForm(r)} disabled={busy || running} className={`${quiet} py-1`}><Ico d={I_RERUN} size={13} />{isDraft ? 'Edit' : 'Edit & re-run'}</button>
+                              <button type="button" onClick={() => setConfirmDel(r.id)} aria-label={`Delete ${r.domain}`} data-scout-delete
+                                className="flex flex-col items-center gap-0.5 rounded-md px-1.5 py-1 text-[10.5px] font-semibold text-orbit-red hover:bg-orbit-red/10"><Ico d={I_TRASH} size={17} />Delete</button>
+                            </div>
+                          </>)}
+                          {confirmDel === r.id && (
                             <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-orbit-red/40 bg-orbit-red/10 px-2.5 py-1.5 text-xs text-orbit-red">
                               <span>Delete this {isDraft ? 'saved setup' : 'run and its report'}? This can&apos;t be undone.</span>
                               <button type="button" onClick={() => remove(r)} disabled={deleting === r.id} className="font-bold hover:underline disabled:opacity-50">{deleting === r.id ? 'Deleting…' : 'Yes, delete'}</button>
                               <button type="button" onClick={() => setConfirmDel(null)} className="font-semibold text-orbit-secondary hover:underline">Cancel</button>
                             </div>
-                          ) : !live && (
-                            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
-                              {hasPdf && <button type="button" onClick={() => download(r)} disabled={downloading === r.id} className={act}>{downloading === r.id ? 'Building…' : 'PDF ↓'}</button>}
-                              {isDraft && <button type="button" onClick={() => runSaved(r)} disabled={busy || running || capLeft === 0} className={act}>Run</button>}
-                              <button type="button" onClick={() => loadIntoForm(r)} disabled={busy || running} className={act}>{isDraft ? 'Edit' : 'Edit & re-run'}</button>
-                              {r.projectId ? (access.orbit ? <Link href={`/projects/${r.projectId}`} className={act}>Open project →</Link> : null)
-                                : hasPdf && access.orbit && access.canWrite ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className={act}>{converting === r.id ? 'Creating…' : 'Convert to project →'}</button> : null}
-                              <button type="button" onClick={() => setConfirmDel(r.id)} className="text-xs font-semibold text-orbit-red hover:underline ml-auto">Delete</button>
-                            </div>
                           )}
                         </li>); })}
                     </ul>
                   )}
-                  <p className="text-xs text-orbit-tertiary mt-3">{access.isAdmin ? 'Admins see every run.' : 'You see your own runs.'} SAVED is a setup that hasn't run yet — nothing was spent on it. Edit &amp; re-run loads a run's setup into the form; the original report is kept. NO CLEAR OPENING means no theme passed the evidence bar — the PDF still ships, leading with the field view. THIN DATA means too little came back to report honestly, so no PDF was made.</p>
+                  {runs.length > 0 && runs.length < total && (
+                    <div className="text-center pt-3"><button type="button" onClick={() => loadRuns(true)} disabled={listLoading} className="text-xs font-semibold text-orbit-accent hover:underline disabled:opacity-50" data-scout-more>{listLoading ? 'Loading…' : 'Show older reports'}</button></div>
+                  )}
+                  <p className="text-xs text-orbit-tertiary mt-3">{access.isAdmin ? 'Admins see every run.' : 'You see your own runs.'} Hover a status for what it means.</p>
                 </section>
               </div>
             </div>
