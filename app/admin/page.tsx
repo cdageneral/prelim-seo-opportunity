@@ -728,18 +728,28 @@ function AddUserTab({ projects, onDone }: { projects: Proj[]; onDone: () => void
   const [role, setRole]   = useState<Role>('editor');
   const [pw, setPw]       = useState('');
   const [grants, setGrants] = useState<string[]>([]);
+  // v7.524: product access at creation — Orbit, Scout or both. Defaults match an account
+  // with no saved row (Orbit on, Scout off, 5 Scout runs / day).
+  const [orbitOn, setOrbitOn] = useState(true);
+  const [scoutOn, setScoutOn] = useState(false);
+  const [cap, setCap]         = useState(5);
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const showGrants = role === 'editor' || role === 'viewer';
+  const isAdminRole = role === 'admin';
+  const noProduct = !isAdminRole && !orbitOn && !scoutOn;
+  // Project grants are Orbit access — a Scout-only account has no projects to open.
+  const showGrants = (role === 'editor' || role === 'viewer') && orbitOn;
   const toggle = (id: string) => setGrants(g => g.includes(id) ? g.filter(x => x !== id) : [...g, id]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (noProduct) { setError('Give the user at least one product — Orbit, Scout, or both.'); return; }
     setError(null); setBusy(true);
     const res = await fetch('/api/admin/users', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, role, password: pw || undefined, projectIds: showGrants ? grants : [] }),
+      body: JSON.stringify({ name, email, role, password: pw || undefined, projectIds: showGrants ? grants : [],
+        products: isAdminRole ? undefined : { orbit: orbitOn, scout: scoutOn, cap } }),
     });
     const data = await res.json().catch(() => ({}));
     setBusy(false);
@@ -781,6 +791,40 @@ function AddUserTab({ projects, onDone }: { projects: Proj[]; onDone: () => void
         </div>
       </div>
 
+      {/* v7.524: which products the account can open */}
+      <div className="mt-5" data-add-products>
+        <span className="block text-[11px] font-mono uppercase tracking-wider text-orbit-tertiary mb-2">Product access</span>
+        <div className="grid sm:grid-cols-2 gap-2">
+          {([
+            ['orbit', 'Orbit', 'Client projects — keyword, content, AI visibility and the assessment report.', orbitOn, setOrbitOn],
+            ['scout', 'Scout', 'Quick prospect snapshots with a client-ready PDF, outside of projects.', scoutOn, setScoutOn],
+          ] as [string, string, string, boolean, (v: boolean) => void][]).map(([k, title, desc, raw, set]) => {
+            const on = isAdminRole || raw;
+            return (
+              <button type="button" key={k} data-product={k} data-on={on ? '1' : '0'} disabled={isAdminRole} onClick={() => set(!raw)}
+                className={`text-left flex gap-3 items-start border rounded-xl px-3.5 py-3 transition-colors ${on ? 'border-orbit-accent bg-orbit-accent/[0.06]' : 'border-orbit-border hover:border-orbit-accent/40'} ${isAdminRole ? 'cursor-not-allowed' : ''}`}>
+                <span className={`w-8 h-5 mt-0.5 rounded-full relative flex-shrink-0 transition-colors ${on ? 'bg-orbit-accent' : 'bg-orbit-muted'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-[color:var(--on-fill-accent)] transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                </span>
+                <span><span className="text-sm font-semibold text-orbit-primary">{title}</span><span className="block text-[12px] text-orbit-tertiary mt-0.5">{desc}</span></span>
+              </button>
+            );
+          })}
+        </div>
+        {isAdminRole
+          ? <p className="text-[12px] text-orbit-tertiary mt-2">Admins always have both Orbit and Scout.</p>
+          : noProduct
+            ? <p className="text-[12px] text-orbit-red mt-2">Pick at least one product.</p>
+            : scoutOn && (
+              <label className="flex items-center gap-2 mt-2.5 text-[12.5px] text-orbit-secondary">
+                Scout runs per day
+                <input type="number" min={0} max={200} value={cap} data-add-cap
+                  onChange={e => setCap(Math.max(0, Math.min(200, Math.round(Number(e.target.value) || 0))))}
+                  className="w-16 bg-orbit-bg border border-orbit-border rounded-md px-2 py-1 text-sm outline-none focus:border-orbit-accent" />
+              </label>
+            )}
+      </div>
+
       <div className="mt-5">
         <PasswordField
           label="Temporary password"
@@ -813,7 +857,7 @@ function AddUserTab({ projects, onDone }: { projects: Proj[]; onDone: () => void
       {error && <div className="mt-4 text-[13px] text-orbit-red bg-orbit-red/10 border border-orbit-red/30 rounded-lg px-3 py-2">{error}</div>}
 
       <div className="flex gap-3 mt-6">
-        <button type="submit" disabled={busy} className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60">
+        <button type="submit" disabled={busy || noProduct} className="bg-orbit-accent hover:bg-orbit-accent-light text-white text-sm font-semibold px-5 py-2.5 rounded-lg disabled:opacity-60">
           {busy ? 'Creating…' : 'Create user'}
         </button>
         <button type="button" onClick={onDone} className="text-sm px-4 py-2.5 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary">Cancel</button>
