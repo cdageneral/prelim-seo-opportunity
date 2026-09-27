@@ -1,3 +1,26 @@
+# v7.525 — Admin: set Orbit / Scout / both when adding a user (2026-09-27)
+
+Wayne: "when i am adding a user i need to be able to add someone to Scout or Orbit or both". Product access could only
+be changed after the account existed (Users & Access toggles), so every new user started as Orbit-only.
+
+- **Add User → Product access:** two toggles, Orbit and Scout, under Role tier. Defaults are what an account with no
+  saved row already gets (Orbit on, Scout off), so nothing changes unless you flip them. Scout on shows "Scout runs per
+  day" (default 5, 0–200 — the same cap as the Users & Access column).
+- **Scout-only accounts** hide "Grant access to projects" (projects are Orbit) and are created with no project grants.
+- **At least one product:** both off shows "Pick at least one product." and disables Create user; the server refuses it
+  too (400, no account created).
+- **Admin role:** both toggles on and locked — "Admins always have both Orbit and Scout." (unchanged rule).
+- **Server:** POST /api/admin/users accepts optional `products { orbit, scout, cap? }` and writes the
+  user_product_access row in the same request, so the account never exists with the wrong access. The invite audit
+  entry records the products. Callers that omit `products` behave exactly as before.
+
+Verification: real-project `tsc` clean · retained suite 3688 PASS, FAIL set identical to the v7.523/v7.524 baseline
+(27) · new: route harness driving the REAL POST handler with stubbed stores (6 checks — Scout-only row, default cap,
+both-off 400 with no account, admin ignored, omitted = old behaviour, audit) and a jsdom harness driving the REAL admin
+page Add User form (9 checks); all fail on the v7.524 base. Theme: only existing orbit-* tokens and --on-fill-accent;
+no raw palette. II.9: the one new query is a single-row upsert into user_product_access (no JSONB). No client
+deliverable touched.
+
 # v7.524 — Scout: Admin + Dashboard buttons in the Scout header (2026-09-27)
 
 Wayne: "as a admin i can not see the dashboard or admin panel from Scout". The Scout header only carried the
