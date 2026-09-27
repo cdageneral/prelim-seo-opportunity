@@ -1,7 +1,8 @@
 /**
  * /api/admin/users  (v7.373)  — owner/admin only
  * GET  — list users with their role, status, grants, last login
- * POST — create/invite a user { name, email, role, projectIds[], password? }
+ * POST — create/invite a user { name, email, role, projectIds[], password?, products? }
+ *        v7.524: products = { orbit, scout, cap? } sets Orbit / Scout access at creation.
  *
  * All project names are returned alongside so the admin UI can label grants.
  */
@@ -21,6 +22,8 @@ import {
 import { hashPassword } from '@/lib/auth/passwords';
 import { getCurrentUser } from '@/lib/auth/session';
 import { clientIp, userAgent } from '@/lib/auth/audit';
+import { upsertProductRow } from '@/lib/scout/store';
+import { DEFAULT_DAILY_CAP } from '@/lib/scout/config';
 
 const CreateUser = z.object({
   name:       z.string().min(1).max(120),
@@ -28,6 +31,13 @@ const CreateUser = z.object({
   role:       z.enum(['admin', 'editor', 'viewer']), // owner is not assignable here
   projectIds: z.array(z.string().uuid()).optional().default([]),
   password:   z.string().min(8).optional(),
+  // v7.524: which products the new account may open (same rules as PATCH /api/admin/products).
+  // Omitted = the old behaviour (no row → Orbit on, Scout off). Ignored for admins, who always have both.
+  products:   z.object({
+    orbit: z.boolean(),
+    scout: z.boolean(),
+    cap:   z.number().int().min(0).max(200).optional(),
+  }).optional(),
 });
 
 async function projectList() {
@@ -55,7 +65,10 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'Invalid input' }, { status: 400 });
   }
-  const { name, email, role, projectIds, password } = parsed.data;
+  const { name, email, role, projectIds, password, products } = parsed.data;
+  if (products && role !== 'admin' && !products.orbit && !products.scout) {
+    return NextResponse.json({ error: 'Give the user at least one product — Orbit, Scout, or both.' }, { status: 400 });
+  }
 
   if (await getUserByEmail(email)) {
     return NextResponse.json({ error: 'A user with that email already exists.' }, { status: 409 });
@@ -69,16 +82,20 @@ export async function POST(req: NextRequest) {
     passwordHash: password ? hashPassword(password) : null,
   });
   if (projectIds.length) await setGrants(user.id, projectIds);
+  const productAccess = products && role !== 'admin'
+    ? { orbit: products.orbit, scout: products.scout, cap: products.cap ?? DEFAULT_DAILY_CAP }
+    : null;
+  if (productAccess) await upsertProductRow(user.id, productAccess);
 
   const actor = await getCurrentUser();
   await insertAudit({
     actorUserId: actor?.sub, actorEmail: actor?.email, actorName: actor?.name,
     action: 'user.invite',
-    meta: { targetUserId: user.id, targetEmail: user.email, role, grants: projectIds.length },
+    meta: { targetUserId: user.id, targetEmail: user.email, role, grants: projectIds.length, ...(productAccess ? { products: productAccess } : {}) },
     ip: clientIp(req), userAgent: userAgent(req),
   });
 
   return NextResponse.json({
-    user: { id: user.id, name: user.name, email: user.email, role: user.role, status: user.status, projectIds },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, status: user.status, projectIds, products: productAccess },
   }, { status: 201 });
 }
