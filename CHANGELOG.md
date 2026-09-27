@@ -1,3 +1,20 @@
+# v7.524 — Scout: Admin + Dashboard buttons in the Scout header (2026-09-27)
+
+Wayne: "as a admin i can not see the dashboard or admin panel from Scout". The Scout header only carried the
+Orbit · Projects / Scout switch, the theme toggle and Sign out — an admin on Scout had no way to reach /admin or the
+API usage Dashboard without going back through Projects.
+
+- **Admin** (→ /admin) now shows in the Scout header for owner/admin accounts (the access route's own `isAdmin`,
+  which is also true in the pre-enforcement setup window — same rule as the project dashboard's `showAdmin`).
+- **Dashboard** (→ /usage) shows for admins and for anyone with Orbit access — the same audience that sees it on the
+  project dashboard. A Scout-only account sees neither.
+- Same button styling, icons and order as the project dashboard header (Admin, Dashboard, Sign out).
+
+Verification: real-project `tsc` clean · retained suite 3673 PASS, FAIL set identical to the v7.523 baseline (27) ·
+new jsdom harness renders the REAL Scout page for owner / admin / editor / Scout-only (7 checks; 4 fail on the v7.523
+base). No data, query, PDF or client-deliverable surface touched (II.6a/II.9 n/a — nav links only). Theme: reuses the
+dashboard header's token classes (orbit-border / orbit-secondary / orbit-primary), already dual-theme verified.
+
 # v7.523 — Scout: live run progress card with real milestones; collapses to the report when done (2026-09-26)
 
 Wayne asked for a progress bar with an estimated time to complete and milestones on what the run is doing ("techy and
