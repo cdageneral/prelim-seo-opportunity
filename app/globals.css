@@ -57,6 +57,12 @@
      fill does not sit on the page surface, so it must NOT follow the theme.
      Same value in both blocks by design — do not 'fix' one of them. */
   --on-fill-accent: #FFFFFF;
+  /* v7.523 — Scout run card terminal strip. A terminal is dark in BOTH themes by design, so these are
+     pinned (declared once here; the light block inherits them) — same rule as --on-fill-accent. */
+  --scout-term: #15132b;
+  --scout-term-text: #dcd9ff;
+  --scout-term-dim: #9c98c6;
+  --scout-term-ok: #7cf29b;
   --c-001820: #001820;
   --c-001a24: #001a24;
   --c-005070: #005070;
@@ -1052,6 +1058,13 @@ body, header, aside, nav, .orbit-card, button, input, textarea, select {
 
 @keyframes oiqRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes oiqFill { from { width: 0; }                                to { width: var(--oiq-w, 0%); } }
+/* v7.523 — moving stripes on the Scout run progress bar */
+@keyframes scoutStripes { from { background-position: 0 0; } to { background-position: 40px 0; } }
+.scout-stripes { position: absolute; }
+.scout-stripes::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
+  background-image: repeating-linear-gradient(115deg, rgba(255,255,255,0.18) 0 10px, transparent 10px 20px);
+  background-size: 40px 100%; animation: scoutStripes 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .scout-stripes::after { animation: none; } }
 
 /* M1 — hero + card entrance, staggered by --oiq-i (index) */
 .oiq-rise { animation: oiqRise .42s cubic-bezier(.22,.61,.36,1) both; animation-delay: calc(var(--oiq-i, 0) * 70ms); }
