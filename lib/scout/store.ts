@@ -153,13 +153,26 @@ export async function getRun(id: string): Promise<RunRow | null> {
   return r ? toRun(r) : null;
 }
 
-export async function listRuns(opts: { userId: string | null; all: boolean; limit?: number }): Promise<RunRow[]> {
+/**
+ * v7.522 — the list is paged and searchable on the SERVER. The screen used to hold only the newest 50, so an
+ * older report could not be found at all. `q` matches the prospect domain or who ran it (case-insensitive,
+ * LIKE wildcards in the input are escaped so they match literally). `total` is the full count for the same
+ * scope + filter, read with raw SQL (never an aggregate through the query builder — the v7.373/v7.399 rule).
+ */
+export const LIST_PAGE = 50;
+export function likePattern(q: string): string {
+  return '%' + q.replace(/[\\%_]/g, m => '\\' + m) + '%';
+}
+export async function listRuns(opts: { userId: string | null; all: boolean; limit?: number; offset?: number; q?: string }): Promise<{ runs: RunRow[]; total: number }> {
   await ensureScoutTables();
-  const lim = Math.min(Math.max(opts.limit ?? 50, 1), 200);
-  const res = opts.all || !opts.userId
-    ? await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ${lim}`)
-    : await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE user_id = ${opts.userId} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ${lim}`);
-  return rowsOf(res).map(toRun);
+  const lim = Math.min(Math.max(opts.limit ?? LIST_PAGE, 1), 200);
+  const off = Math.max(0, Math.floor(opts.offset ?? 0));
+  const q = (opts.q ?? '').trim().slice(0, 120);
+  const scope = opts.all || !opts.userId ? sql`` : sql` AND user_id = ${opts.userId}`;
+  const match = q ? sql` AND (domain ILIKE ${likePattern(q)} OR coalesce(user_name, '') ILIKE ${likePattern(q)})` : sql``;
+  const res = await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE deleted_at IS NULL${scope}${match} ORDER BY created_at DESC LIMIT ${lim} OFFSET ${off}`);
+  const n = rowsOf(await db.execute(sql`SELECT count(*)::int AS n FROM scout_runs WHERE deleted_at IS NULL${scope}${match}`))[0];
+  return { runs: rowsOf(res).map(toRun), total: Number(n?.n ?? 0) };
 }
 
 export async function getRunResult(id: string): Promise<any | null> {
