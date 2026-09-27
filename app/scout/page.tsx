@@ -375,6 +375,21 @@ export default function ScoutPage() {
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle />
+            {/* v7.524: the same Admin + Dashboard buttons the project dashboard carries, so an
+                admin on Scout is never stranded. Admin = owner/admin (the access route's isAdmin);
+                Dashboard (/usage) = anyone with Orbit, matching the dashboard page. */}
+            {access?.isAdmin && (
+              <Link href="/admin" data-scout-nav="admin" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
+                <i className="ti ti-users-group" aria-hidden="true" />
+                Admin
+              </Link>
+            )}
+            {(access?.isAdmin || access?.orbit) && (
+              <Link href="/usage" data-scout-nav="usage" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
+                <i className="ti ti-gauge" aria-hidden="true" />
+                Dashboard
+              </Link>
+            )}
             {access?.user && <button onClick={signOut} title={`${access.user.name} · sign out`} className="text-sm px-3 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary transition-colors">Sign out</button>}
           </div>
         </div>
