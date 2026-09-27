@@ -56,6 +56,9 @@ export async function ensureScoutTables(): Promise<void> {
   // v7.515 — soft delete: a deleted run leaves the list and its stored report is cleared, but the
   // row stays so the API Usage ledger still attributes that run's real spend to its domain.
   await db.execute(sql`ALTER TABLE scout_runs ADD COLUMN IF NOT EXISTS deleted_at timestamp`);
+  // v7.523 — the run's own milestone log (step start/end times + the real counts each step produced).
+  // Small (six entries); read only by getRun for the live progress card, never by the list query.
+  await db.execute(sql`ALTER TABLE scout_runs ADD COLUMN IF NOT EXISTS progress jsonb`);
   ensured = true;
 }
 
@@ -99,7 +102,11 @@ export interface RunRow {
   status: string; step: number; stepsTotal: number; stepLabel: string | null;
   startedAt: string | null; finishedAt: string | null; error: string | null; headline: string | null;
   units: number | null; projectId: string | null; createdAt: string;
+  /** v7.523 — present on getRun only (the live card); the list query never reads it. */
+  milestones?: Milestone[];
 }
+/** v7.523 — one real step of a run: server timestamps, and the counts the step actually produced once it ended. */
+export interface Milestone { n: number; startedAt: string; endedAt?: string; detail?: string }
 const iso = (v: any): string | null => v ? new Date(v).toISOString() : null;
 function toRun(r: Record<string, any>): RunRow {
   return {
@@ -109,6 +116,7 @@ function toRun(r: Record<string, any>): RunRow {
     status: r.status, step: Number(r.step ?? 0), stepsTotal: Number(r.steps_total ?? 6), stepLabel: r.step_label ?? null,
     startedAt: iso(r.started_at), finishedAt: iso(r.finished_at), error: r.error ?? null, headline: r.headline ?? null,
     units: r.units == null ? null : Number(r.units), projectId: r.project_id ? String(r.project_id) : null, createdAt: iso(r.created_at) as string,
+    ...(r.progress !== undefined ? { milestones: Array.isArray(r.progress?.milestones) ? r.progress.milestones : [] } : {}),
   };
 }
 
@@ -149,7 +157,7 @@ const LIST_SQL = sql`id, user_id, user_name, domain, market, industry, scope, pr
 
 export async function getRun(id: string): Promise<RunRow | null> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`SELECT ${LIST_SQL} FROM scout_runs WHERE id = ${id} AND deleted_at IS NULL LIMIT 1`))[0];
+  const r = rowsOf(await db.execute(sql`SELECT ${LIST_SQL}, progress FROM scout_runs WHERE id = ${id} AND deleted_at IS NULL LIMIT 1`))[0];
   return r ? toRun(r) : null;
 }
 
@@ -190,23 +198,26 @@ export async function countRunsSince(userId: string, since: Date): Promise<numbe
 /** Atomically claim a queued (or saved draft) run so a double-click cannot execute (and bill) it twice. */
 export async function claimRun(id: string): Promise<boolean> {
   await ensureScoutTables();
-  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET status = 'running', started_at = now(), step = 0, step_label = 'Starting', created_at = now()
+  const r = rowsOf(await db.execute(sql`UPDATE scout_runs SET status = 'running', started_at = now(), step = 0, step_label = 'Starting', progress = NULL, created_at = now()
     WHERE id = ${id} AND status IN ('queued', 'draft') AND deleted_at IS NULL RETURNING id`));
   return r.length === 1;
 }
 
-export async function setProgress(id: string, step: number, label: string): Promise<void> {
-  await db.execute(sql`UPDATE scout_runs SET step = ${step}, step_label = ${label} WHERE id = ${id}`);
+export async function setProgress(id: string, step: number, label: string, milestones?: Milestone[]): Promise<void> {
+  if (milestones) await db.execute(sql`UPDATE scout_runs SET step = ${step}, step_label = ${label}, progress = ${JSON.stringify({ milestones })}::jsonb WHERE id = ${id}`);
+  else await db.execute(sql`UPDATE scout_runs SET step = ${step}, step_label = ${label} WHERE id = ${id}`);
 }
 
-export async function finishRun(id: string, f: { status: string; headline: string | null; units: number; result: unknown; error?: string | null }): Promise<void> {
+export async function finishRun(id: string, f: { status: string; headline: string | null; units: number; result: unknown; error?: string | null; milestones?: Milestone[] }): Promise<void> {
+  const prog = f.milestones ? sql`, progress = ${JSON.stringify({ milestones: f.milestones })}::jsonb` : sql``;
   await db.execute(sql`UPDATE scout_runs SET status = ${f.status}, headline = ${f.headline}, units = ${f.units},
-    result = ${JSON.stringify(f.result ?? null)}::jsonb, error = ${f.error ?? null}, finished_at = now(), step = steps_total, step_label = 'Done'
+    result = ${JSON.stringify(f.result ?? null)}::jsonb, error = ${f.error ?? null}, finished_at = now(), step = steps_total, step_label = 'Done'${prog}
     WHERE id = ${id}`);
 }
 
-export async function failRun(id: string, message: string, units: number): Promise<void> {
-  await db.execute(sql`UPDATE scout_runs SET status = 'failed', error = ${message.slice(0, 600)}, units = ${units}, finished_at = now() WHERE id = ${id}`);
+export async function failRun(id: string, message: string, units: number, milestones?: Milestone[]): Promise<void> {
+  const prog = milestones ? sql`, progress = ${JSON.stringify({ milestones })}::jsonb` : sql``;
+  await db.execute(sql`UPDATE scout_runs SET status = 'failed', error = ${message.slice(0, 600)}, units = ${units}, finished_at = now()${prog} WHERE id = ${id}`);
 }
 
 export async function linkProject(id: string, projectId: string): Promise<void> {

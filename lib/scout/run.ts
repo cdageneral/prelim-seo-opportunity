@@ -21,7 +21,7 @@ import {
 import { pullOrganic, pullOverview, pullQuestions, newMeter, getApiUnitsBalance, type DomainFacts, type QuestionRow } from './semrushScout';
 import { groupIntoThemes, proposeProductTerms, assignToProducts } from './themes';
 import { readAiForTheme, aiReadAvailable } from './aiRead';
-import { getRun, setProgress, finishRun, failRun } from './store';
+import { getRun, setProgress, finishRun, failRun, type Milestone } from './store';
 
 export const STEPS = [
   'Domain footprint and authority',
@@ -81,10 +81,28 @@ const kwLite = (k: ThemeStat['keywords'][number]): KeywordLite => {
   return { keyword: k.keyword, volume: k.volume, you: k.prospect?.position ?? null, best };
 };
 
+/**
+ * v7.523 — the run's milestone log. Each step records when it started and ended (server clock) and,
+ * when it ends, the counts it ACTUALLY produced — nothing is estimated here. The live card reads it.
+ */
+function milestoneLog(runId: string) {
+  const ms: Milestone[] = [];
+  const now = () => new Date().toISOString();
+  const close = (detail?: string) => { const cur = ms[ms.length - 1]; if (cur && !cur.endedAt) { cur.endedAt = now(); if (detail) cur.detail = detail; } };
+  return {
+    ms,
+    /** Close the running step with what it produced, then open step n. */
+    step: async (n: number, detail?: string) => { close(detail); ms.push({ n, startedAt: now() }); await setProgress(runId, n, STEPS[n - 1], ms.map(m => ({ ...m }))); },
+    close,
+  };
+}
+const n0 = (x: number) => Math.round(x).toLocaleString('en-US');
+
 export async function executeRun(runId: string): Promise<void> {
   const meter = newMeter();
   const notes: string[] = [];
   let aiCost = 0;
+  const log = milestoneLog(runId);
   try {
     const run = await getRun(runId);
     if (!run) throw new Error('Run not found.');
@@ -102,10 +120,12 @@ export async function executeRun(runId: string): Promise<void> {
     }
 
     // 1 ── footprint + authority
-    await setProgress(runId, 1, STEPS[0]);
+    await log.step(1);
     const facts = await mapLimit([prospect, ...comps], PULL_CONCURRENCY, d => pullOverview(d, db, meter));
+    const d1 = `${facts.filter(f => f.found).length} of ${facts.length} sites profiled · Authority Score read for ${facts.filter(f => typeof f.authorityScore === 'number').length}`;
     if (!facts[0].found) {
-      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, result: { version: SCOUT_VERSION, thin: `Semrush has no organic data for ${prospect} in the ${getMarket(db).label} database.` } });
+      log.close(d1);
+      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, milestones: log.ms, result: { version: SCOUT_VERSION, thin: `Semrush has no organic data for ${prospect} in the ${getMarket(db).label} database.` } });
       return;
     }
     const brandTokens = [prospect, ...comps].map(d => extractBrand(d)).filter(t => t.length >= 3);
@@ -113,30 +133,36 @@ export async function executeRun(runId: string): Promise<void> {
     // 2 + 3 ── pulls
     let universe: Universe;
     let productTerms: Record<string, string[]> | null = null;
+    let d3 = '';
     if (scope === 'domain') {
-      await setProgress(runId, 2, STEPS[1]);
+      await log.step(2, d1);
       const compPulls = await mapLimit(comps, PULL_CONCURRENCY, d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_DOMAIN, meter }));
-      await setProgress(runId, 3, STEPS[2]);
-      const myPull = await pullOrganic({ domain: prospect, database: db, maxPos: 20, limit: ROWS_PROSPECT_DOMAIN, aboveVolume: floorOf(compPulls), meter });
+      const floor = floorOf(compPulls);
+      await log.step(3, `${n0(compPulls.reduce((a, p) => a + p.rows.length, 0))} page-one rows from ${comps.length} competitor${comps.length === 1 ? '' : 's'} · ${floor > 0 ? `volume floor ${n0(floor)}/mo` : 'no volume floor'}`);
+      const myPull = await pullOrganic({ domain: prospect, database: db, maxPos: 20, limit: ROWS_PROSPECT_DOMAIN, aboveVolume: floor, meter });
       universe = buildUniverse({ prospect: myPull, competitors: compPulls, brandTokens });
+      d3 = `${n0(myPull.rows.length)} prospect rankings in the top 20 · ${n0(universe.keywords.length)} non-branded searches in play`;
     } else {
-      await setProgress(runId, 2, STEPS[1]);
+      await log.step(2, d1);
       productTerms = await proposeProductTerms({ industry: industry.label, products: run.products, max: MAX_TERMS_PER_PRODUCT });
       const slices: Array<{ product: string; term: string }> = [];
       for (const p of run.products) for (const t of productTerms[p] ?? []) slices.push({ product: p, term: t });
       const compBySlice: DomainPull[][] = [];
       for (const s of slices) compBySlice.push(await mapLimit(comps, PULL_CONCURRENCY, d => pullOrganic({ domain: d, database: db, maxPos: 10, limit: ROWS_PER_COMPETITOR_TERM, term: s.term, meter })));
-      await setProgress(runId, 3, STEPS[2]);
+      await log.step(3, `${slices.length} product search term${slices.length === 1 ? '' : 's'} · ${n0(compBySlice.reduce((a, ps) => a + ps.reduce((b, p) => b + p.rows.length, 0), 0))} page-one rows from ${comps.length} competitor${comps.length === 1 ? '' : 's'}`);
       const parts: Universe[] = [];
+      let myRows = 0;
       for (let i = 0; i < slices.length; i++) {
         const my = await pullOrganic({ domain: prospect, database: db, maxPos: 20, limit: ROWS_PROSPECT_TERM, term: slices[i].term, aboveVolume: floorOf(compBySlice[i]), meter });
+        myRows += my.rows.length;
         parts.push(buildUniverse({ prospect: my, competitors: compBySlice[i], brandTokens, slice: slices[i].term }));
       }
       universe = mergeUniverses(parts);
+      d3 = `${n0(myRows)} prospect rankings in the top 20 · ${n0(universe.keywords.length)} non-branded searches in play`;
     }
 
     // 4 ── themes
-    await setProgress(runId, 4, STEPS[3]);
+    await log.step(4, d3);
     const kwList = universe.keywords.map(k => k.keyword);
     const grouped = scope === 'domain'
       ? await groupIntoThemes({ domain: prospect, industry: industry.label, keywords: kwList })
@@ -144,8 +170,10 @@ export async function executeRun(runId: string): Promise<void> {
     const { themes } = buildThemes(universe, grouped.assignment, comps);
     const themed = themes.reduce((s, t) => s + t.count, 0);
 
+    const d4 = `${n0(kwList.length)} searches → ${themes.length} theme${themes.length === 1 ? '' : 's'}`;
     if (universe.keywords.length < 20 || themes.length < (scope === 'domain' ? 2 : 1)) {
-      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, result: {
+      log.close(d4);
+      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, milestones: log.ms, result: {
         version: SCOUT_VERSION,
         thin: `Only ${universe.keywords.length} non-branded searches cleared the pull for ${prospect} and the selected competitors — too few to chart or to name an opening honestly.`,
         usage: { semrushUnits: meter.units, semrushRows: meter.rows, semrushCalls: meter.calls, aiCostUSD: 0 },
@@ -154,7 +182,7 @@ export async function executeRun(runId: string): Promise<void> {
     }
 
     // 5 ── opening + AI read
-    await setProgress(runId, 5, STEPS[4]);
+    await log.step(5, d4);
     const authority: Record<string, number | null> = {}; for (const f of facts) authority[f.domain] = f.authorityScore;
     let opening: Opening | null = pickSearchOpening(themes, authority, prospect);
     let ai: ScoutResult['ai'] = null;
@@ -176,7 +204,8 @@ export async function executeRun(runId: string): Promise<void> {
     } else notes.push('AI answer data is not configured, so the AI page was left out.');
 
     // 6 ── detail for the opening
-    await setProgress(runId, 6, STEPS[5]);
+    const answersRead = ai ? ai.reads.reduce((a, r) => a + r.answers, 0) : 0;
+    await log.step(6, `${themes.length} theme${themes.length === 1 ? '' : 's'} scored · ${ai ? `${n0(answersRead)} AI answers read` : 'AI answers not read'} · ${opening ? 'opening found' : 'no theme cleared the bar'}`);
     let detail: ScoutResult['detail'] = null;
     if (opening) {
       const t = themes.find(x => x.name === opening!.theme)!;
@@ -210,10 +239,11 @@ export async function executeRun(runId: string): Promise<void> {
       usage: { semrushUnits: meter.units, semrushRows: meter.rows, semrushCalls: meter.calls, aiCostUSD: aiCost },
     };
     const headline = opening ? `${opening.theme} · ${opening.constraint === 'ai_citation' ? 'AI citation' : opening.constraint}` : null;   // constraint derived per case (v7.516)
-    await finishRun(runId, { status: opening ? 'ready' : 'no_opening', headline, units: meter.units, result });
+    log.close(detail ? `${detail.questions.length} buyer question${detail.questions.length === 1 ? '' : 's'} · report assembled` : 'field-view report assembled');
+    await finishRun(runId, { status: opening ? 'ready' : 'no_opening', headline, units: meter.units, milestones: log.ms, result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error('[scout.run] failed:', msg);
-    await failRun(runId, msg, meter.units).catch(() => {});
+    await failRun(runId, msg, meter.units, log.ms.length ? log.ms : undefined).catch(() => {});   // the open step stays open: the card marks it as where the run stopped
   }
 }
