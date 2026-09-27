@@ -1,3 +1,39 @@
+# v7.523 — Scout: live run progress card with real milestones; collapses to the report when done (2026-09-26)
+
+Wayne asked for a progress bar with an estimated time to complete and milestones on what the run is doing ("techy and
+cool") while a Scout report runs, and for the progress container to collapse when the run finishes so the report is the
+focus (mockup v12, approved 2026-09-26).
+
+- **Live card** above Recent Scout Reports: % complete, a striped 6-segment bar, est. time left (median of finished
+  runs, as before — reads "almost…" instead of going negative), elapsed, and milestone X / 6. A terminal strip shows
+  the current step as a command line (`xref rankings --prospect <domain> --top 20`).
+- **Six milestones = the six real run steps** (lib/scout/run.ts STEPS, same order), named: Recon: domain footprint &
+  authority signals · Harvesting competitor page-one positions · Cross-referencing the prospect's rankings · AI
+  clustering of search demand into themes · Scoring openings + probing ChatGPT & Google AI Overviews · Mining buyer
+  questions + final QA. Each finished milestone shows its server-timed duration and the counts that step actually
+  produced (e.g. "1,200 page-one rows from 3 competitors · volume floor 1,300/mo", "1,184 searches → 11 themes",
+  "1,940 AI answers read"). The step in progress says "working…" — never an animated guess.
+- **The bar never runs ahead of the server:** it sits on the real step and fills within it on the median pace, capped at
+  92% of the step; it never shows 100% while the run is live.
+- **On finish the card collapses** (animated) to a compact result — SCOUT COMPLETE · run time, the result line,
+  Download PDF and Convert to Orbit project — and the finished row is highlighted in the list. "Show run log" reopens
+  the milestones. A failed run keeps the log open with the step it stopped on marked. The running row in the list
+  gets its own slim bar + "Milestone X of 6 · ~Ns left".
+- **Engine:** a milestone log in executeRun records each step's start/end (server clock) and its real counts into a new
+  `scout_runs.progress` jsonb (ensured at runtime, reset when a run is claimed, read only by getRun — the list query
+  never reads it). Finish, thin-data and failure paths all store it.
+
+Verification: real-project `tsc` clean · retained suite 3666 PASS, FAIL set identical to the v7.522 baseline (27) ·
+new: engine harness driving the REAL executeRun with stubbed providers (13 checks — every milestone detail equals the
+stored result's own numbers; thin + failure paths), jsdom harness driving the real page through running → finished →
+log reopened (19 checks), 7 source gates; 9 of the new checks fail on the v7.522 base · 2 stale checks updated with
+dated notes (v513 IV.2 step counter, v522 run-card wording) · 1 flaky pre-existing check fixed (v512 `echo | grep -q`
+under pipefail → here-strings; it failed 2/30 on an untouched file) · rendered with the real Tailwind build in both
+themes, running and finished; measured contrast: milestone text ≥5.26:1 dark / 6.83:1 light, terminal 13.3:1, %
+13.9/15.9. Scout PDF and Assessment PDF untouched (II.6a).
+
+---
+
 # v7.522 — Scout: report rows redesigned, server-side search, form clears after a run (2026-09-26)
 
 Wayne, on the Scout screen: after a run starts, the left side should go back to blank; the list should read "Recent
