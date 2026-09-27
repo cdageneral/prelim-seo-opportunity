@@ -16,6 +16,10 @@
  * each row reads "Last run … by …" top-right, Download PDF / Convert to Orbit project are icon buttons, Edit & re-run
  * sits under them with Delete (trash + word) bottom-right; no insight line on the row; search + paging run on the
  * server so reports older than the newest 50 can be found (mockup v11, approved 2026-09-26).
+ * v7.523: while a run executes, a progress card (mockup v12) shows % + a 6-segment bar, est. time left (median of
+ * finished runs), elapsed, and six milestones — each one a REAL run step with its server start/end times and the
+ * counts it actually produced (lib/scout/run.ts milestoneLog). When the run finishes the card collapses to a compact
+ * result so the report is the focus; the run log can be reopened.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -38,6 +42,7 @@ interface Run {
   competitors: Array<{ domain: string; manual: boolean }>; status: string; step: number; stepsTotal: number;
   stepLabel: string | null; startedAt: string | null; finishedAt: string | null; error: string | null;
   headline: string | null; units: number | null; projectId: string | null; createdAt: string;
+  milestones?: Array<{ n: number; startedAt: string; endedAt?: string; detail?: string }>;   // v7.523, live card only
 }
 
 const STATUS: Record<string, { label: string; cls: string }> = {
@@ -73,6 +78,34 @@ const I_RERUN = '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>';
 const I_PLAY = '<path d="M8 5v14l11-7z"/>';
 const I_TRASH = '<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/>';
 const I_SEARCH = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>';
+const I_CHECK = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+const I_X = '<path d="M6 6l12 12M18 6L6 18"/>';
+
+/** v7.523 — display names for the six REAL run steps (lib/scout/run.ts STEPS, same order) and the terminal line. */
+const MILESTONES: Array<{ name: (ai: boolean) => string; cmd: (r: { domain: string; competitors: unknown[] }) => string }> = [
+  { name: () => 'Recon: domain footprint & authority signals', cmd: r => `recon --targets ${r.competitors.length + 1} --signals footprint,authority` },
+  { name: () => 'Harvesting competitor page-one positions', cmd: r => `harvest serp --top 10 --competitors ${r.competitors.length}` },
+  { name: () => "Cross-referencing the prospect's rankings", cmd: r => `xref rankings --prospect ${r.domain} --top 20` },
+  { name: () => 'AI clustering of search demand into themes', cmd: () => 'cluster --model ai --themes auto' },
+  { name: ai => ai ? 'Scoring openings + probing ChatGPT & Google AI Overviews' : 'Scoring openings across every theme', cmd: () => 'score openings && probe llm --engines chatgpt,google_aio' },
+  { name: () => 'Mining buyer questions + final QA', cmd: () => 'assemble report --qa strict' },
+];
+const isLive = (st: string) => st === 'queued' || st === 'running';
+/**
+ * v7.523 — % complete. The bar sits on the REAL step the server reports and fills within that step on the
+ * median pace of finished runs, capped at 92% of the step, so it can never run ahead of the server.
+ */
+function runPct(r: { status: string; step: number; stepsTotal: number; startedAt: string | null; milestones?: Run['milestones'] }, nowMs: number, skewMs: number, medianSec: number | null): number {
+  const total = r.stepsTotal || 6;
+  if (!isLive(r.status) && r.status !== 'draft') return 100;
+  if (r.step <= 0) return 1;
+  const cur = r.milestones?.find(m => m.n === r.step && !m.endedAt);
+  const t0 = cur ? new Date(cur.startedAt).getTime() : r.startedAt ? new Date(r.startedAt).getTime() : nowMs;
+  const inStep = Math.max(0, (nowMs - skewMs - t0) / 1000);
+  const within = Math.min(0.92, inStep / Math.max(1, (medianSec ?? 30) / total));
+  return Math.max(1, Math.min(99, Math.round(((r.step - 1 + within) / total) * 100)));
+}
+const secs = (a: string, b: string) => Math.max(0, (new Date(b).getTime() - new Date(a).getTime()) / 1000);
 const fmtSecs = (s: number) => s < 60 ? `${Math.max(0, Math.round(s))}s` : `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, '0')}s`;
 const fmtDate = (iso: string) => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const label = 'block font-mono text-[10px] uppercase tracking-wider text-orbit-tertiary mb-1.5';
@@ -113,6 +146,8 @@ export default function ScoutPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [logOpen, setLogOpen] = useState(false);            // v7.523 — the finished card's run log (collapsed by default)
+  const [justFinished, setJustFinished] = useState<string | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
   const awaitingClaim = useRef(false);   // a SAVED setup reads 'draft' until the execute request claims it
 
@@ -149,7 +184,7 @@ export default function ScoutPage() {
   }, []);
 
   useEffect(() => { loadAccess(); }, [loadAccess]);
-  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), busy ? 250 : 1000); return () => clearInterval(t); }, [busy]);   // v7.523 — smooth bar while a run is live
   useEffect(() => () => { if (poll.current) clearInterval(poll.current); }, []);
 
   const maxC = access?.limits.competitors ?? 4, maxP = access?.limits.products ?? 3;
@@ -206,10 +241,14 @@ export default function ScoutPage() {
       if (data.run.status !== 'queued' && data.run.status !== 'running' && !(data.run.status === 'draft' && awaitingClaim.current)) {
         if (poll.current) clearInterval(poll.current);
         poll.current = null; setBusy(false); loadRuns(); loadAccess();
+        // v7.523 — the card collapses to the result; a failed run keeps its log open so you can see where it stopped
+        setLogOpen(data.run.status === 'failed');
+        setJustFinished(data.run.id); setTimeout(() => setJustFinished(j => j === data.run.id ? null : j), 6000);
       }
     };
+    setLogOpen(false);
     await tick();
-    poll.current = setInterval(tick, 2500);
+    poll.current = setInterval(tick, 1500);
   }
 
   const setupBody = (draft: boolean) => JSON.stringify({ domain: domain.trim(), market, industry, scope, products, draft, competitors: picked.map(p => ({ domain: p.domain, manual: p.manual })) });
@@ -466,26 +505,100 @@ export default function ScoutPage() {
               </section>
 
               <div className="space-y-6">
-                {ar && (
-                  <section className="orbit-card p-6" aria-live="polite">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <h2 className="text-[15px] font-bold text-orbit-primary truncate">{running ? 'Running' : 'Last run'} · {ar.domain}</h2>
-                      <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded border ${(STATUS[ar.status] ?? STATUS.queued).cls}`}>{(STATUS[ar.status] ?? STATUS.queued).label}</span>
+                {ar && (() => {
+                  const ms = ar.milestones ?? [];
+                  const pct = runPct(ar, now, active?.skew ?? 0, active?.timing?.seconds ?? null);
+                  const doneOk = ar.status === 'ready' || ar.status === 'no_opening';
+                  const took = ar.startedAt && ar.finishedAt ? secs(ar.startedAt, ar.finishedAt) : null;
+                  const bodyOpen = running || logOpen;
+                  const term = running ? MILESTONES[Math.max(0, Math.min(5, ar.step - 1))].cmd(ar)
+                    : ar.status === 'ready' ? 'run complete · PDF ready' : ar.status === 'no_opening' ? 'run complete · field-view PDF ready'
+                    : ar.status === 'thin' ? 'run complete · too little data for a report' : 'run stopped · see the error above';
+                  return (
+                  <section className={`orbit-card overflow-hidden transition-shadow ${running ? 'border-orbit-accent/50 shadow-[0_0_0_3px_rgb(var(--orbit-accent)/0.08)]' : ''}`} aria-live="polite" data-scout-progress data-state={running ? 'running' : 'done'}>
+                    <div className="px-6 pt-5 pb-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className={`flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.14em] ${running ? 'text-orbit-accent-light' : ar.status === 'failed' ? 'text-orbit-red' : doneOk ? 'text-orbit-green' : 'text-orbit-amber'}`}>
+                            {running ? <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full rounded-full bg-orbit-green opacity-60 animate-ping" /><span className="relative inline-flex h-2 w-2 rounded-full bg-orbit-green" /></span>
+                              : <Ico d={ar.status === 'failed' ? I_X : I_CHECK} size={12} />}
+                            {running ? 'SCOUT RUN · LIVE' : ar.status === 'failed' ? 'SCOUT RUN · STOPPED' : `SCOUT COMPLETE${took !== null ? ` · ${fmtSecs(took)}` : ''}`}
+                          </div>
+                          <div className="text-[19px] font-extrabold text-orbit-primary truncate mt-1">{ar.domain}</div>
+                          <div className="text-[11.5px] text-orbit-secondary mt-0.5 truncate">
+                            {ar.scope === 'products' ? `${ar.products.length} product${ar.products.length === 1 ? '' : 's'}` : 'Full domain'} · vs {ar.competitors.map(c => c.domain).join(', ')}
+                          </div>
+                        </div>
+                        {running ? (
+                          <div className="shrink-0 text-right" data-scout-pct><span className="font-mono text-[30px] font-bold leading-none text-orbit-primary">{pct}<span className="text-[20px]">%</span></span>
+                            <span className="block font-mono text-[10px] font-semibold tracking-[0.1em] text-orbit-secondary mt-1">COMPLETE</span></div>
+                        ) : (
+                          <div className="shrink-0 flex items-center gap-2">
+                            <span className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded border ${(STATUS[ar.status] ?? STATUS.queued).cls}`}>{(STATUS[ar.status] ?? STATUS.queued).label}</span>
+                            <button type="button" onClick={() => setActive(null)} aria-label="Close" title="Close" className="text-orbit-tertiary hover:text-orbit-primary"><Ico d={I_X} size={14} /></button>
+                          </div>
+                        )}
+                      </div>
+
+                      {!running && (
+                        <div className="mt-3" data-scout-result>
+                          {ar.status === 'ready' && <p className="text-sm text-orbit-secondary">Opening found: <span className="text-orbit-primary font-semibold">{ar.headline}</span>. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
+                          {ar.status === 'no_opening' && <p className="text-sm text-orbit-secondary">No theme cleared the evidence bar, so the PDF leads with the field view instead of naming an opening. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
+                          {ar.status === 'thin' && <p className="text-sm text-orbit-secondary">Too little data came back to build a report honestly, so none was made. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
+                          {ar.status === 'failed' && <p className="text-sm text-orbit-red">{ar.error ?? 'The run failed.'}</p>}
+                          <div className="flex flex-wrap items-center gap-2 mt-3">
+                            {doneOk && <button type="button" onClick={() => download(ar)} disabled={downloading === ar.id} className="inline-flex items-center gap-1.5 rounded-lg bg-orbit-accent hover:bg-orbit-accent-light text-[color:var(--on-fill-accent)] text-sm font-bold px-4 py-2.5 disabled:opacity-50"><Ico d={I_PDF} />{downloading === ar.id ? 'Building PDF…' : 'Download PDF'}</button>}
+                            {doneOk && !ar.projectId && access.orbit && access.canWrite && <button type="button" onClick={() => convert(ar)} disabled={converting === ar.id} className="inline-flex items-center gap-1.5 rounded-lg border-[1.5px] border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10 text-sm font-bold px-4 py-2 disabled:opacity-50"><Ico d={I_ORBIT} />{converting === ar.id ? 'Creating project…' : 'Convert to Orbit project'}</button>}
+                            {ms.length > 0 && <button type="button" onClick={() => setLogOpen(o => !o)} className="ml-auto text-xs font-semibold text-orbit-secondary hover:text-orbit-accent" aria-expanded={logOpen} data-scout-log-toggle>{logOpen ? 'Hide run log ▴' : 'Show run log ▾'}</button>}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    {running && (<>
-                      <div className="h-2 rounded-full bg-orbit-border overflow-hidden"><div className="h-full bg-orbit-accent transition-all duration-700" style={{ width: `${Math.round((Math.max(0, ar.step - 0.5) / ar.stepsTotal) * 100)}%` }} /></div>
-                      <p className="text-sm text-orbit-primary mt-2.5 font-medium">Step {Math.max(1, ar.step)} of {ar.stepsTotal} · {ar.stepLabel ?? 'Starting'}</p>
-                      <p className="text-xs text-orbit-secondary mt-0.5">{fmtSecs(elapsed)} elapsed{eta !== null ? ` · about ${fmtSecs(eta)} left (median of ${active!.timing!.runs} finished run${active!.timing!.runs === 1 ? '' : 's'})` : ' · no timing history yet, so no ETA'}</p>
-                    </>)}
-                    {!running && ar.status === 'ready' && <p className="text-sm text-orbit-secondary">Opening found: <span className="text-orbit-primary font-semibold">{ar.headline}</span>. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
-                    {!running && ar.status === 'no_opening' && <p className="text-sm text-orbit-secondary">No theme cleared the evidence bar, so the PDF leads with the field view instead of naming an opening. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
-                    {!running && ar.status === 'thin' && <p className="text-sm text-orbit-secondary">Too little data came back to build a report honestly, so none was made. {ar.units !== null && `${ar.units.toLocaleString()} Semrush units used.`}</p>}
-                    {!running && ar.status === 'failed' && <p className="text-sm text-orbit-red">{ar.error ?? 'The run failed.'}</p>}
-                    {!running && (ar.status === 'ready' || ar.status === 'no_opening') && (
-                      <button type="button" onClick={() => download(ar)} disabled={downloading === ar.id} className="mt-3 rounded-lg bg-orbit-accent text-[color:var(--on-fill-accent)] text-sm font-bold px-4 py-2.5 disabled:opacity-50">{downloading === ar.id ? 'Building PDF…' : 'Download PDF'}</button>
-                    )}
+
+                    {/* v7.523 — collapsible body: open while running, folds away when the run finishes */}
+                    <div className={`grid transition-[grid-template-rows] duration-500 ease-out ${bodyOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`} data-scout-body data-open={bodyOpen ? '1' : '0'}>
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="px-6">
+                          <div className="relative h-3 rounded-full bg-orbit-accent/10 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+                            <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-orbit-accent to-orbit-cyan transition-[width] duration-500 scout-stripes" style={{ width: `${pct}%` }} />
+                            <div className="absolute inset-0 grid grid-cols-6 pointer-events-none">{[0, 1, 2, 3, 4, 5].map(i => <i key={i} className={i < 5 ? 'border-r-2 border-orbit-card' : ''} />)}</div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 mt-3">
+                            <div className="rounded-lg border border-orbit-border bg-orbit-surface px-2.5 py-2" data-scout-eta><b className="block font-mono text-[15px] text-orbit-primary">{!running ? (took !== null ? fmtSecs(took) : '—') : eta === null ? '—' : eta < 1 ? 'almost…' : `~${fmtSecs(eta)}`}</b><span className="text-[10.5px] text-orbit-secondary">{!running ? 'total run time' : eta === null ? 'no timing history yet' : `est. time left · median of ${active!.timing!.runs}`}</span></div>
+                            <div className="rounded-lg border border-orbit-border bg-orbit-surface px-2.5 py-2"><b className="block font-mono text-[15px] text-orbit-primary">{fmtSecs(running ? elapsed : took ?? 0)}</b><span className="text-[10.5px] text-orbit-secondary">elapsed</span></div>
+                            <div className="rounded-lg border border-orbit-border bg-orbit-surface px-2.5 py-2"><b className="block font-mono text-[15px] text-orbit-primary">{running ? Math.max(1, ar.step) : ms.filter(m => m.endedAt).length} / {ar.stepsTotal}</b><span className="text-[10.5px] text-orbit-secondary">milestone</span></div>
+                          </div>
+                        </div>
+                        <ul className="px-6 pt-2 pb-3" data-scout-milestones>
+                          {MILESTONES.map((m, i) => {
+                            const rec = ms.find(x => x.n === i + 1);
+                            const st = rec?.endedAt ? 'done' : rec && running ? 'now' : rec && ar.status === 'failed' ? 'stop' : running ? 'todo' : 'skip';
+                            const tm = st === 'done' ? `${secs(rec!.startedAt, rec!.endedAt!).toFixed(1)}s` : st === 'now' ? `${Math.max(0, (now - (active?.skew ?? 0) - new Date(rec!.startedAt).getTime()) / 1000).toFixed(1)}s` : '';
+                            return (
+                              <li key={i} className={`grid grid-cols-[26px_1fr_auto] gap-2.5 items-start py-2 ${i ? 'border-t border-dashed border-orbit-border' : ''}`} data-ms={st}>
+                                <span data-ms-icon className={`mt-0.5 flex h-[22px] w-[22px] items-center justify-center rounded-full font-mono text-[10.5px] font-bold ${
+                                  st === 'done' ? 'bg-orbit-green/15 border border-orbit-green/50 text-orbit-green' : st === 'now' ? 'border-2 border-orbit-accent-light border-t-transparent animate-spin' : st === 'stop' ? 'bg-orbit-red/15 border border-orbit-red/50 text-orbit-red' : 'border-[1.5px] border-dashed border-orbit-secondary text-orbit-secondary'}`}>
+                                  {st === 'done' ? <Ico d={I_CHECK} size={12} /> : st === 'stop' ? <Ico d={I_X} size={11} /> : st === 'now' ? null : i + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className={`text-[13px] ${st === 'todo' || st === 'skip' ? 'font-semibold text-orbit-secondary' : 'font-bold text-orbit-primary'}`} data-ms-name>{m.name(access.aiRead)}</div>
+                                  <div className={`font-mono text-[11px] mt-0.5 ${st === 'stop' ? 'text-orbit-red' : 'text-orbit-secondary'}`} data-ms-detail>
+                                    {st === 'done' ? (rec!.detail ?? 'done') : st === 'now' ? 'working…' : st === 'stop' ? 'stopped here' : st === 'skip' ? 'not needed' : 'queued'}
+                                  </div>
+                                </div>
+                                <span className={`font-mono text-[11px] font-semibold pt-0.5 whitespace-nowrap ${st === 'done' ? 'text-orbit-green' : 'text-orbit-accent-light'}`} data-ms-time>{tm}</span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                        <div className="px-6 py-2.5 font-mono text-[11px] leading-relaxed bg-[color:var(--scout-term)] text-[color:var(--scout-term-text)] border-t border-orbit-accent/35" data-scout-term>
+                          <span className="text-[color:var(--scout-term-ok)]">scout@orbitiq</span> <span className="text-[color:var(--scout-term-dim)]">~$</span> {term}{running && <span className="inline-block w-[7px] h-3 ml-1 align-[-2px] bg-[color:var(--scout-term-text)] animate-pulse" />}
+                        </div>
+                      </div>
+                    </div>
                   </section>
-                )}
+                  );
+                })()}
 
                 <section className="orbit-card p-6">
                   <div className="flex items-center justify-between mb-3">
@@ -513,7 +626,7 @@ export default function ScoutPage() {
                         const primary = 'inline-flex items-center gap-1.5 rounded-lg border-[1.5px] px-3 py-1.5 text-[12.5px] font-bold transition-colors disabled:opacity-50';
                         const quiet = 'inline-flex items-center gap-1.5 text-xs font-semibold text-orbit-secondary hover:text-orbit-accent disabled:opacity-50';
                         return (
-                        <li key={r.id} className={`py-3.5 ${editing?.id === r.id ? 'bg-orbit-accent/5 -mx-2 px-2 rounded-lg' : ''}`} data-scout-row>
+                        <li key={r.id} className={`py-3.5 transition-colors duration-700 ${editing?.id === r.id || justFinished === r.id ? 'bg-orbit-accent/5 -mx-2 px-2 rounded-lg' : ''}`} data-scout-row data-just-finished={justFinished === r.id ? '1' : undefined}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex flex-wrap items-center gap-2">
                               <span className="font-bold text-[15px] text-orbit-primary truncate">{r.domain}</span>
@@ -526,6 +639,18 @@ export default function ScoutPage() {
                           <div className="text-[11.5px] text-orbit-secondary mt-1">
                             {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{isDraft ? ' · not run yet' : ''}
                           </div>
+                          {live && (() => {
+                            const src = active?.run.id === r.id ? active.run : r;
+                            const rp = runPct(src, now, active?.run.id === r.id ? active.skew : 0, access.timing?.seconds ?? null);
+                            const el = src.startedAt ? Math.max(0, (now - (active?.run.id === r.id ? active.skew : 0) - new Date(src.startedAt).getTime()) / 1000) : 0;
+                            const left = access.timing ? access.timing.seconds - el : null;
+                            return (
+                              <div className="mt-2" data-scout-rowprog>
+                                <div className="h-[5px] rounded-full bg-orbit-accent/10 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-orbit-accent to-orbit-cyan transition-[width] duration-500" style={{ width: `${rp}%` }} /></div>
+                                <div className="font-mono text-[11px] text-orbit-secondary mt-1">Milestone {Math.max(1, src.step)} of {src.stepsTotal}{left === null ? '' : left < 1 ? ' · almost done' : ` · ~${fmtSecs(left)} left`}</div>
+                              </div>
+                            );
+                          })()}
                           {live ? null : (<>
                             {(hasPdf || isDraft || r.projectId) && (
                               <div className="flex flex-wrap items-center gap-2 mt-2.5" data-scout-primary>
