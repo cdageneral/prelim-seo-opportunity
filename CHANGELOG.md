@@ -1,3 +1,35 @@
+# v7.522 — Scout: report rows redesigned, server-side search, form clears after a run (2026-09-26)
+
+Wayne, on the Scout screen: after a run starts, the left side should go back to blank; the list should read "Recent
+Scout Reports"; each report row should put the last-run date and who ran it top-right, make Download PDF and Convert
+to Orbit project the prominent actions (with icons), keep Edit & re-run below them, move Delete to a trash can with the
+word under it at the bottom-right, drop the insight line from the row, and let him search older reports (mockup v11,
+approved 2026-09-26).
+
+- **Form resets when a run starts.** Domain, scope, products, competitors, industry and market all return to their
+  defaults the moment Run Scout (or a saved setup's Run) fires. The run card on the right and the list carry the run;
+  the new row appears in the list straight away.
+- **Rows.** Top-right reads "Last run <date, time>" / "by <name>" (a saved setup reads "Saved … by …", a live run
+  "Started …"). The name now shows for every user, not only admins. The headline/insight line is gone. Download PDF
+  (filled) and Convert to Orbit project (outlined) carry icons; a converted report shows Open Orbit project →. Edit &
+  re-run sits on its own line under them, with Delete (trash icon, word under it) bottom-right on that line — still
+  behind a "Yes, delete" confirmation. The five-line status legend is gone; each status chip explains itself on hover.
+- **Search and paging run on the server.** The list used to load only the newest 50 runs, so an older report could not
+  be found at all. `GET /api/scout/runs` now takes `?q=` (matches the prospect domain or who ran it, case-insensitive,
+  LIKE wildcards escaped) and `?offset=`, and returns `total` for the same scope + filter. The panel shows "Showing the
+  N newest of M reports", searches as you type (debounced), and a Show older reports link loads the next page. The count
+  is raw SQL (the v7.373/v7.399 rule); the list query still names its columns and never reads the `result` blob (II.9).
+
+Verification: real-project `tsc` clean · retained suite 3627 PASS, FAIL set identical to the v7.521 baseline (27) ·
+new v7.522 jsdom harness driving the real page (26 checks, 5 failing on the v7.521 base) + drizzle-rendered SQL test
+(6 checks) + 7 source gates · 3 stale Scout checks from v7.520/v7.521 updated with dated notes (unit ceiling 300/600
+rows, engine-not-vendor PDF provenance, dense demand-map table) · rows rendered with the real Tailwind build in light
+and dark; measured contrast: Convert 9.68/5.90, Delete 6.40/4.78, last-run line 6.83/5.26 (light/dark). Download PDF
+uses the app's standard filled button (4.32:1 on dark, same as Run Scout). No client-facing metric changed; the Scout
+PDF and Assessment PDF are untouched (II.6a).
+
+---
+
 # v7.521 — Scout: one product per theme (2026-09-23)
 
 Wayne, on the re-run navyfederal.org report: the "Savings accounts" theme on page 05 carried "best cd rates", "cd rates
