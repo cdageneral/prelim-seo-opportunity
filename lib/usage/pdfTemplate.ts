@@ -104,11 +104,24 @@ export function buildUsageHTML(input: UsageReportInput): string {
       <div class="d">Across ${esc(fmt(projects.length))} ${esc(noun(projects.length))}. A computed estimate at registry rates, not the invoice.</div></div>`);
   }
   if (hours) {
+    // v7.526 — the tile names both bases when both products are in view: projects by
+    // initiation, Scout runs by finish. Scout-only views speak only of runs.
+    const runCount = hours.runCount ?? 0;
+    const who = [
+      product !== 'scout' ? `${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}` : '',
+      product !== 'orbit' ? `${esc(fmt(runCount))} Scout ${runCount === 1 ? 'run' : 'runs'}` : '',
+    ].filter(Boolean).join(' and ');
+    const basis = product === 'scout' ? '<b>finished in this period</b>' : product === 'all' ? '<b>initiated (projects) or finished (runs) in this period</b>' : '<b>initiated in this period</b>';
+    const scopeTxt = product === 'scout'
+      ? `Of ${esc(fmt(hours.scope?.scout ?? 0))} hrs per run`
+      : product === 'all'
+      ? `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs per project and ${esc(fmt(hours.scope?.scout ?? 0))} per run`
+      : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope`;
     headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; internal</div>
       <div class="v">${esc(fmt(hours.grandHours))}</div>
       <div class="d">${(hours as any)?.dated
-        ? `Across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'} <b>initiated in this period</b>, at their current credited totals.`
-        : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope, across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}.`}</div></div>`);
+        ? `Across ${who} ${basis}, at their current credited totals.`
+        : `${scopeTxt}, across ${who}.`}</div></div>`);
   }
   headTiles.push(`<div class="tile"><div class="k">${scoutView ? 'Scout runs metered' : product === 'all' ? 'Projects and Scout runs metered' : 'Projects metered'}</div>
     <div class="v">${esc(fmt(projects.length))}</div>
@@ -180,6 +193,15 @@ export function buildUsageHTML(input: UsageReportInput): string {
       <b>missing from every hours figure in this report</b>. Pick a registered gate in Admin &rarr; Hours Saved,
       or add one in <code>lib/hours/gates.ts</code>.</p></div>`);
   }
+  // v7.526 — the sibling fault: a registered gate on the wrong product's row.
+  if (hours && (hours.misapplied?.length ?? 0) > 0) {
+    const m = hours.misapplied!;
+    alarms.push(`<div class="alarm bad">
+      <div class="at">Activity gated on the wrong product&rsquo;s evidence &mdash; its hours are never credited</div>
+      <p><b>${esc(m.join(', '))}</b> ${m.length === 1 ? 'names a gate' : 'name gates'} written for the other product
+      (a Scout gate on a project activity, or a project gate on a Scout activity), so ${m.length === 1 ? 'its' : 'their'} hours are
+      <b>missing from every hours figure in this report</b>. Pick a matching gate in Admin &rarr; Hours Saved.</p></div>`);
+  }
   const alarmPage = alarms.length > 0 ? `
     <h1 class="pg sm">Data-integrity alarms</h1>
     <div class="lede">Each item below means a real number is <b>missing</b> from the totals in this report. They are
@@ -199,7 +221,7 @@ export function buildUsageHTML(input: UsageReportInput): string {
 
   const rowHTML = (proj: RollupPayload['projects'][number]): string => {
     const byKey = new Map(proj.lines.map(l => [lineKey(l), l]));
-    const hp = proj.projectId ? hoursMap.get(proj.projectId) : undefined;
+    const hp = proj.projectId ? hoursMap.get(rowKey(proj)) : undefined;   // v7.526 — under the row's own product key
     const isScout = proj.product === 'scout';
     const sub = isScout && proj.scout ? [proj.scout.userName, proj.scout.createdAt ? fmtTime(proj.scout.createdAt) : null].filter(Boolean).join(' &middot; ') : '';
     return `<tr>
@@ -277,20 +299,24 @@ export function buildUsageHTML(input: UsageReportInput): string {
   const hoursPages = hours && hoursProjects.length > 0
     ? chunk(hoursProjects, HOURS_PER_PAGE).map((slice, i, all) => `
       <h1 class="pg sm">Hours saved &mdash; what was credited${all.length > 1 ? ` <span class="ofn">${i + 1} of ${all.length}</span>` : ''}</h1>
-      ${i === 0 && (hours as any)?.dated ? `<div class="figsub">These are the projects whose work BEGAN in this period. A project's hours are dated by its first analysis, not by when each hour was earned.</div>` : ''}
+      ${i === 0 && (hours as any)?.dated ? `<div class="figsub">${product === 'scout'
+          ? 'These are the Scout runs that FINISHED in this period.'
+          : product === 'all'
+          ? 'These are the projects whose work BEGAN in this period (dated by first analysis, not by when each hour was earned) and the Scout runs that FINISHED in it.'
+          : "These are the projects whose work BEGAN in this period. A project's hours are dated by its first analysis, not by when each hour was earned."}</div>` : ''}
       ${i === 0 ? `<div class="lede">The hours are a declared rate card, not a measurement &mdash; but <i>which</i> activities
-        are counted is measured. Each is credited only where the project actually holds that deliverable&rsquo;s stored data,
-        so a project with no backlink scan is never credited for a backlink profile. A struck line was withheld for exactly
-        that reason. <b>This figure is internal</b> (Const II.6c).</div>` : ''}
+        are counted is measured. Each is credited only where the project${product !== 'orbit' ? ' or Scout run' : ''} actually holds that deliverable&rsquo;s stored data,
+        so a project with no backlink scan is never credited for a backlink profile${product !== 'orbit' ? ', and a run whose AI answers were never read is not credited for the AI lines' : ''}. A struck line was withheld for exactly
+        that reason.${product !== 'orbit' ? ' A Scout run is scored on the smaller Scout rate card &mdash; a bounded subset of the Orbit delivery (v7.526).' : ''} <b>This figure is internal</b> (Const II.6c).</div>` : ''}
       ${slice.map(p => `
         <div class="hblock">
-          <div class="hhead"><b>${esc(p.projectName)}</b>
-            <span class="sub2">${esc(fmt(p.hours))} hrs credited from ${esc(fmt(p.creditedCount))} of ${esc(fmt(p.totalCount))} activities &middot; ${esc(fmt(p.ceilingHours))} hrs in full scope${p.proxyHours > 0 ? ` &middot; ${esc(fmt(p.proxyHours))} hrs on a proxy signal` : ''}</span>
+          <div class="hhead"><b>${esc(p.projectName)}</b>${(p.product ?? 'orbit') === 'scout' ? ' <span class="sub2">SCOUT RUN' + (p.scout?.status && p.scout.status !== 'ready' ? ' &middot; ' + esc(p.scout.status.replace('_', ' ')) : '') + '</span>' : ''}
+            <span class="sub2">${esc(fmt(p.hours))} hrs credited from ${esc(fmt(p.creditedCount))} of ${esc(fmt(p.totalCount))} activities &middot; ${esc(fmt(p.ceilingHours))} hrs in ${(p.product ?? 'orbit') === 'scout' ? 'the Scout run scope' : 'full scope'}${p.proxyHours > 0 ? ` &middot; ${esc(fmt(p.proxyHours))} hrs on a proxy signal` : ''}</span>
           </div>
           <div class="hlines">${p.lines.map(l => `
             <div class="hl ${l.credited ? '' : 'off'}">
               <span class="hm">${l.credited ? '&#10003;' : '&ndash;'}</span>
-              <span class="hn">${esc(l.label)}${l.proxy && l.credited ? ' <span class="tag">proxy</span>' : ''}${l.unregistered ? ' <span class="tag bad">no gate</span>' : ''}</span>
+              <span class="hn">${esc(l.label)}${l.proxy && l.credited ? ' <span class="tag">proxy</span>' : ''}${l.unregistered ? ' <span class="tag bad">no gate</span>' : ''}${l.misapplied ? ' <span class="tag bad">wrong product</span>' : ''}</span>
               <span class="hd"></span>
               <span class="hv">${esc(fmt(l.hours))}</span>
             </div>`).join('')}</div>

@@ -62,27 +62,44 @@ export interface CostPayload {
  * v7.447 — Hours Saved. Wayne's 24-activity delivery scope, credited per project
  * ONLY where the project carries the deliverable's own data (lib/hours/gates.ts).
  * INTERNAL (Const II.6c) — operator surfaces only.
+ * v7.526 — plus one row per SCOUT RUN (product 'scout', projectId = run id, the
+ * ledger's own convention), credited on the `scout` activity group against the
+ * run's stored result and dated by when the run finished.
  */
 export interface HoursLine {
-  key: string; label: string; hours: number; group: 'base' | 'local';
+  key: string; label: string; hours: number; group: 'base' | 'local' | 'scout';
   gateKey: string; gateLabel: string; reads: string;
   credited: boolean; unregistered: boolean; proxy: boolean;
+  /** v7.526 — gate registered for the other product: never credited */
+  misapplied?: boolean;
 }
 export interface HoursProject {
+  /** v7.526 — absent on a pre-v7.526 payload; absent = 'orbit'. */
+  product?: UsageProduct;
   projectId: string; projectName: string;
-  /** v7.484 — the project's FIRST analysis: the month its delivery began. */
+  /** v7.484 — the project's FIRST analysis: the month its delivery began. v7.526 — for a Scout row, when the run FINISHED. */
   initiatedAt?: string | null;
   hours: number; ceilingHours: number;
   creditedCount: number; totalCount: number; proxyHours: number;
   lines: HoursLine[];
+  /** v7.526 — set on Scout rows only */
+  scout?: { userName: string | null; status: string; scope: string; finishedAt: string | null; projectId: string | null } | null;
 }
 export interface HoursPayload {
   asOf: string; grandHours: number; projectCount: number;
+  /** v7.526 — which product's rows this payload holds, and the Scout-side counts. */
+  product?: ProductFilter;
+  runCount?: number;
+  projectHours?: number;
+  runHours?: number;
+  undatedRunsExcluded?: number;
+  misapplied?: string[];
   /** v7.484 — the window applied, and how many projects it could not date. */
   range?: { from: string | null; to: string | null };
   dated?: boolean;
   undatedExcluded?: number;
-  scope: { base: number; local: number; total: number };
+  /** total = the ORBIT scope (base + local); scout = one run's ceiling, reported beside it, never added in. */
+  scope: { base: number; local: number; scout?: number; total: number };
   activitiesUpdatedAt: string | null; usingSeed: boolean;
   unregistered: string[]; projects: HoursProject[];
 }
@@ -167,10 +184,17 @@ export function costByProject(cost: CostPayload | null): Map<string, number> {
   return m;
 }
 
-/** Per-project hours, keyed to the usage rollup's project ids. */
+/**
+ * Per-row hours, keyed by rowKey so a Scout run and a project never share a
+ * bucket (v7.526). The bare projectId key is kept for project rows only, for
+ * the pre-v7.526 callers that look a project up by id.
+ */
 export function hoursByProject(hours: HoursPayload | null): Map<string, HoursProject> {
   const m = new Map<string, HoursProject>();
-  (Array.isArray(hours?.projects) ? hours!.projects : []).forEach(p => m.set(p.projectId, p));
+  (Array.isArray(hours?.projects) ? hours!.projects : []).forEach(p => {
+    m.set(rowKey({ projectId: p.projectId, product: p.product ?? 'orbit' }), p);
+    if ((p.product ?? 'orbit') !== 'scout') m.set(p.projectId, p);
+  });
   return m;
 }
 
@@ -380,16 +404,20 @@ export function filterCostByProjects(cost: CostPayload | null, sel: Set<string> 
   };
 }
 
-/** The same narrowing for the hours payload. Hours are NOT date-scoped, but they ARE per project. */
+/** The same narrowing for the hours payload — per row, under the row's own product key (v7.526: Scout rows included). */
 export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<string> | null): HoursPayload | null {
   if (!hours || !sel) return hours;
-  // v7.514 — hours are always PROJECT rows, so they match the selection under the project rowKey.
-  const projects = (hours.projects ?? []).filter(p => sel.has(rowKey({ projectId: p.projectId, product: 'orbit' })));
+  const projects = (hours.projects ?? []).filter(p => sel.has(rowKey({ projectId: p.projectId, product: p.product ?? 'orbit' })));
+  const isRun = (p: HoursProject) => (p.product ?? 'orbit') === 'scout';
+  const sum = (ps: HoursProject[]) => ps.reduce((s, p) => s + (p.hours || 0), 0);
   return {
     ...hours,
     projects,
-    projectCount: projects.length,
-    grandHours:   projects.reduce((s, p) => s + (p.hours || 0), 0),
+    projectCount: projects.filter(p => !isRun(p)).length,
+    runCount:     projects.filter(isRun).length,
+    projectHours: sum(projects.filter(p => !isRun(p))),
+    runHours:     sum(projects.filter(isRun)),
+    grandHours:   sum(projects),
   };
 }
 
@@ -402,7 +430,7 @@ export function scopeStatement(
   range: UsageRange | null | undefined,
   selected: number | null,
   total: number,
-  hours?: { dated?: boolean; projectCount?: number; undatedExcluded?: number } | null,
+  hours?: { dated?: boolean; projectCount?: number; undatedExcluded?: number; runCount?: number; undatedRunsExcluded?: number } | null,
   product: ProductFilter = 'orbit',
 ): string {
   const parts: string[] = [];
@@ -414,21 +442,32 @@ export function scopeStatement(
     ? `across all ${total} ${rowNoun(product, total)}`
     : `across ${selected} of ${total} ${rowNoun(product, total)}`);
   let s = parts.join(' ') + '.';
-  if (product === 'scout') s += ' Scout has no Keywords or Hours Saved figures: a run reads a bounded sample and delivers its own PDF.';
-  if (product === 'orbit') s += ' Scout spend is shown separately under the Scout toggle.';
+  // v7.526 — Scout runs carry Hours Saved too (their own, smaller rate card); Keywords stays project-only.
+  if (product === 'scout') s += ' Scout has no Keywords figure: a run reads a bounded sample. Its Hours Saved are the Scout rate card, credited per run for the steps that run completed.';
+  if (product === 'orbit') s += ' Scout spend is shown separately under the Scout toggle, with the hours Scout runs saved.';
   if (rangeIsBounded(range)) {
     // v7.484 — hours ARE dated now, but on a different basis from spend, and
     // saying which basis is the whole point of this sentence.
+    // v7.526 — a Scout run is dated by when it FINISHED: one bounded event.
     const n = hours?.projectCount;
-    s += ` Hours Saved is dated differently: it counts the ${typeof n === 'number' ? n + ' ' : ''}`
-       + `${n === 1 ? 'project' : 'projects'} whose work BEGAN in this period, at each project's current credited total`
-       + ' — so a project that gains a deliverable later raises the figure shown for the month it started.';
-    if ((hours?.undatedExcluded ?? 0) > 0) {
-      s += ` ${hours!.undatedExcluded} project${hours!.undatedExcluded === 1 ? ' has' : 's have'} never been analysed,`
-         + ' so nothing records when their work began and they are excluded from any dated view.';
+    const r = hours?.runCount;
+    if (product !== 'scout') {
+      s += ` Hours Saved is dated differently: it counts the ${typeof n === 'number' ? n + ' ' : ''}`
+         + `${n === 1 ? 'project' : 'projects'} whose work BEGAN in this period, at each project's current credited total`
+         + ' — so a project that gains a deliverable later raises the figure shown for the month it started.';
+      if ((hours?.undatedExcluded ?? 0) > 0) {
+        s += ` ${hours!.undatedExcluded} project${hours!.undatedExcluded === 1 ? ' has' : 's have'} never been analysed,`
+           + ' so nothing records when their work began and they are excluded from any dated view.';
+      }
     }
-    s += ' Keywords is a live figure and is NOT limited to this date range.'
-       + ' Manual baselines are excluded from a dated view, because a baseline records spend from before the ledger began.';
+    if (product !== 'orbit') {
+      s += ` Scout hours count the ${typeof r === 'number' ? r + ' ' : ''}${r === 1 ? 'run' : 'runs'} that FINISHED in this period.`;
+      if ((hours?.undatedRunsExcluded ?? 0) > 0) {
+        s += ` ${hours!.undatedRunsExcluded} run${hours!.undatedRunsExcluded === 1 ? ' has' : 's have'} no finish time recorded and ${hours!.undatedRunsExcluded === 1 ? 'is' : 'are'} excluded from any dated view.`;
+      }
+    }
+    if (product !== 'scout') s += ' Keywords is a live figure and is NOT limited to this date range.';
+    s += ' Manual baselines are excluded from a dated view, because a baseline records spend from before the ledger began.';
   }
   return s;
 }
