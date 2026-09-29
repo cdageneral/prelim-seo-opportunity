@@ -1,5 +1,5 @@
 /**
- * /api/admin/hours — v7.447 — the editable Hours Saved activity list.
+ * /api/admin/hours — v7.447 · v7.526 — the editable Hours Saved activity list.
  *
  * GET → { activities, gates, updatedAt, scope }  (gates = the picker catalog)
  * PUT → body { activities }  full-set replace
@@ -12,12 +12,17 @@
  * A gate key that is not in the registry is accepted and stored (so a typo is
  * visible rather than silently rewritten) but is never credited — the route
  * reports it back, and Admin shows it in red.
+ *
+ * v7.526 — a third group, `scout`, holds the activities credited to Scout runs.
+ * A Scout gate on an Orbit row (or the reverse) is stored too, never credited,
+ * and reported back as `misapplied` — same treatment as a typo.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { loadActivities, saveActivities } from '@/lib/hours/store';
-import { gateCatalog, getGate } from '@/lib/hours/gates';
+import { gateCatalog } from '@/lib/hours/gates';
+import { auditActivities } from '@/lib/hours/compute';
 import { scopeCeiling, type HoursActivity } from '@/lib/hours/activities';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +36,7 @@ const PutSchema = z.object({
     label:     z.string().min(1).max(200),
     hours:     z.number().int().min(0).max(100000),
     gateKey:   z.string().min(1).max(80),
-    group:     z.enum(['base', 'local']),
+    group:     z.enum(['base', 'local', 'scout']),
     sortOrder: z.number().int().min(0).max(100000),
     active:    z.boolean(),
   }).strict()).min(1).max(200),
@@ -44,7 +49,7 @@ function payload(activities: HoursActivity[], updatedAt: string | null, seeded: 
     scope: scopeCeiling(activities),
     updatedAt,
     usingSeed: seeded,
-    unregistered: activities.filter(a => !getGate(a.gateKey)).map(a => a.key),
+    ...auditActivities(activities),   // { unregistered, misapplied } — over ACTIVE rows, the same audit the dashboard alarms on
   };
 }
 
