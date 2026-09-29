@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/hours/gates.ts — v7.447
+// lib/hours/gates.ts — v7.447 · v7.526 Scout gates
 //
 // The FAIL-CLOSED registry of evidence gates behind "Hours Saved".
 //
@@ -38,6 +38,14 @@
 //   • roadmap      — the GEO Roadmap is the scoped workstream selection placed
 //     into Y1/Y2/Y3; the selection is stored, the year placement is derived.
 // Both are editable in Admin, so the judgement is visible, not buried in code.
+//
+// v7.526 — SCOUT GATES. A Scout run is not a project: its evidence is the run's
+// own stored result (scout_runs.result, measured in SQL by
+// lib/hours/scoutEvidence.ts), so its gates read a ScoutGateContext and carry
+// `product: 'scout'`. A gate is evaluated ONLY against the product it was
+// written for: a Scout gate on an Orbit activity (or the reverse) is a
+// mis-application and fails closed, reported as `misapplied` so Admin can show
+// it in red rather than silently withholding hours.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -77,17 +85,46 @@ export interface GateContext {
   localRivalPackMembers:  number;  // _localScan pack members that are not the client
 }
 
-export interface Gate {
+/**
+ * v7.526 — measured evidence for ONE Scout run. Every field is a real count or
+ * flag read out of scout_runs (status) and scout_runs.result (counts measured in
+ * SQL, jsonb never crossing the wire) — never an estimate.
+ */
+export interface ScoutGateContext {
+  status:          string;   // scout_runs.status — 'ready' | 'no_opening' | 'thin' | 'failed' (drafts/queued/running/deleted are never loaded)
+  sitesProfiled:   number;   // result.facts[] with found = true (prospect + competitors Semrush could see)
+  authorityRead:   number;   // result.facts[] carrying a numeric authorityScore (backlinks_overview)
+  universe:        number;   // result.counts.universe — non-branded searches that cleared the floor
+  themes:          number;   // result.themes[] length
+  fieldRows:       number;   // result.field[] length — page-one share per domain was computed
+  aiReads:         number;   // result.ai.reads[] length — themes with recorded AI answers read
+  aiQuadrants:     number;   // result.ai.quadrants[] length — search-vs-AI quadrant per theme
+  hasOpening:      boolean;  // result.opening is an object (status 'ready')
+  leaderPages:     number;   // result.detail.leaderPages[] length
+  pagesByDomain:   number;   // result.detail.pagesByDomain[] length
+  questions:       number;   // result.detail.questions[] length (Semrush phrase_questions)
+}
+
+export type GateProduct = 'orbit' | 'scout';
+
+interface GateBase {
   key:   string;
   label: string;
   /** Exactly what is read, in plain words — rendered in Admin and in the drill-down. */
   reads: string;
-  test:  (c: GateContext) => boolean;
   /** proxy = the app stores no artifact for this deliverable; this is the nearest real evidence. */
   proxy?: boolean;
 }
+export interface OrbitGate extends GateBase { product: 'orbit'; test: (c: GateContext) => boolean }
+export interface ScoutGate extends GateBase { product: 'scout'; test: (c: ScoutGateContext) => boolean }
+export type Gate = OrbitGate | ScoutGate;
 
-export const GATES: Gate[] = [
+/** v7.526 — a Scout run has a printable report exactly when its status is one of these (app/api/scout/runs/[id]/pdf). */
+const SCOUT_PRINTABLE = new Set(['ready', 'no_opening']);
+/** A run that finished on its own terms — set up, executed, and stored — as opposed to one that failed. */
+const SCOUT_FINISHED  = new Set(['ready', 'no_opening', 'thin']);
+
+const ORBIT_GATES: OrbitGate[] = ([
   { key: 'always', label: 'Always credited',
     reads: 'No condition — credited for every project that exists.',
     test: () => true },
@@ -184,21 +221,96 @@ export const GATES: Gate[] = [
   { key: 'local_competition', label: 'Local competitors captured',
     reads: 'a _localScan keyword carries a pack member that is not the client — a real local rival was seen.',
     test: c => c.localRivalPackMembers > 0 },
-];
+] as Array<Omit<OrbitGate, 'product'>>).map(g => ({ ...g, product: 'orbit' as const }));
+
+// ── Scout (v7.526) ────────────────────────────────────────────────────────────
+// Each gate answers one question about ONE run's stored result. The mapping
+// from Orbit activity to Scout evidence follows the run pipeline
+// (lib/scout/run.ts): step 1 profiles the sites, steps 2–3 pull the universe,
+// step 4 groups themes, step 5 picks the opening and reads AI answers, step 6
+// assembles the opening detail; the PDF is printable for 'ready' and
+// 'no_opening'. A 'thin' run stops early and keeps only what it measured.
+const SCOUT_GATES: ScoutGate[] = ([
+  { key: 'scout_run_finished', label: 'Scout run finished',
+    reads: "scout_runs.status is 'ready', 'no_opening' or 'thin' — the run was set up, executed and stored. A failed, draft, queued, running or deleted run is never credited.",
+    test: c => SCOUT_FINISHED.has(c.status) },
+
+  { key: 'scout_sites_profiled', label: 'Scout · sites profiled',
+    reads: 'result.facts[] carries at least one domain Semrush could see (found = true): organic traffic and keyword counts were read for the field (step 1).',
+    test: c => c.sitesProfiled > 0 },
+
+  { key: 'scout_themes', label: 'Scout · themes built',
+    reads: 'result.themes[] is non-empty — the non-branded universe was pulled and grouped into themes (steps 2–4).',
+    test: c => c.themes > 0 },
+
+  { key: 'scout_field_share', label: 'Scout · page-one share computed',
+    reads: 'result.field[] is non-empty — page-one keywords and volume were measured for the prospect and every competitor.',
+    test: c => c.fieldRows > 0 },
+
+  { key: 'scout_authority', label: 'Scout · Authority Score read',
+    reads: 'result.facts[] carries at least one numeric authorityScore from backlinks_overview. A null score (unread) never counts.',
+    test: c => c.authorityRead > 0 },
+
+  { key: 'scout_ai_reads', label: 'Scout · AI answers read',
+    reads: 'result.ai.reads[] is non-empty — recorded AI answers were read for at least one theme (step 5). Absent when AI data is not configured or nothing matched.',
+    test: c => c.aiReads > 0 },
+
+  { key: 'scout_ai_quadrants', label: 'Scout · search-vs-AI quadrants',
+    reads: 'result.ai.quadrants[] is non-empty — each AI-read theme was placed on the search × AI grid, the citation-gap basis.',
+    test: c => c.aiQuadrants > 0 },
+
+  { key: 'scout_opening', label: 'Scout · opening found',
+    reads: "result.opening is stored — a theme cleared the picker's bar with a named constraint (status 'ready').",
+    test: c => c.hasOpening },
+
+  { key: 'scout_opening_detail', label: 'Scout · opening detail assembled',
+    reads: "result.detail carries the leader's ranking pages or the pages-by-domain comparison for the opening theme (step 6) — the content-gap view.",
+    test: c => c.leaderPages > 0 || c.pagesByDomain > 0 },
+
+  { key: 'scout_report', label: 'Scout · report printable',
+    reads: "scout_runs.status is 'ready' or 'no_opening' — the client PDF can be rendered from the stored result (a 'thin' run has no report).",
+    test: c => SCOUT_PRINTABLE.has(c.status) },
+] as Array<Omit<ScoutGate, 'product'>>).map(g => ({
+  ...g, product: 'scout' as const,
+  // EVERY Scout gate additionally requires the run to have finished on its own
+  // terms. A failed run never writes a result, but a re-run that fails could
+  // leave an earlier result beside status 'failed' — and a failed run is never
+  // credited for anything, whatever the row still carries.
+  test: (c: ScoutGateContext) => SCOUT_FINISHED.has(c.status) && g.test(c),
+}));
+
+export const GATES: Gate[] = [...ORBIT_GATES, ...SCOUT_GATES];
 
 const BY_KEY = new Map(GATES.map(g => [g.key, g]));
 
 export function getGate(key: string): Gate | undefined { return BY_KEY.get(key); }
 
-/** Fail-closed evaluation: an unknown key is NEVER credited. */
-export function evaluateGate(key: string, ctx: GateContext): { credited: boolean; known: boolean } {
-  const g = BY_KEY.get(key);
-  if (!g) return { credited: false, known: false };
-  try { return { credited: !!g.test(ctx), known: true }; }
-  catch { return { credited: false, known: true }; }
+export interface GateVerdict {
+  credited: boolean;
+  /** the key is in the registry */
+  known: boolean;
+  /** v7.526 — the key is registered but for the OTHER product: never credited, and reported */
+  misapplied: boolean;
 }
 
-/** Admin picker list — key, label, what it reads, and whether it is a proxy. */
+/**
+ * Fail-closed evaluation: an unknown key is NEVER credited, and neither is a
+ * gate applied to the wrong product's evidence. `product` names which evidence
+ * `ctx` is — the caller knows, the gate checks.
+ */
+export function evaluateGate(key: string, ctx: GateContext, product?: 'orbit'): GateVerdict;
+export function evaluateGate(key: string, ctx: ScoutGateContext, product: 'scout'): GateVerdict;
+export function evaluateGate(key: string, ctx: GateContext | ScoutGateContext, product: GateProduct = 'orbit'): GateVerdict {
+  const g = BY_KEY.get(key);
+  if (!g) return { credited: false, known: false, misapplied: false };
+  if (g.product !== product) return { credited: false, known: true, misapplied: true };
+  try {
+    const credited = g.product === 'scout' ? !!g.test(ctx as ScoutGateContext) : !!g.test(ctx as GateContext);
+    return { credited, known: true, misapplied: false };
+  } catch { return { credited: false, known: true, misapplied: false }; }
+}
+
+/** Admin picker list — key, label, what it reads, whether it is a proxy, and (v7.526) which product's evidence it reads. */
 export function gateCatalog() {
-  return GATES.map(g => ({ key: g.key, label: g.label, reads: g.reads, proxy: !!g.proxy }));
+  return GATES.map(g => ({ key: g.key, label: g.label, reads: g.reads, proxy: !!g.proxy, product: g.product }));
 }

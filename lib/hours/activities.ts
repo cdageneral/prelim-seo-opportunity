@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/hours/activities.ts — v7.447
+// lib/hours/activities.ts — v7.447 · v7.526 Scout scope
 //
 // Wayne's delivery scope: the manual effort each activity takes, and the stored
 // evidence that proves this project actually carries it.
@@ -14,17 +14,33 @@
 // real local data; they are gated individually rather than by a project-level
 // flag, so a project that found locations but never fetched reviews is credited
 // for the former and not the latter.
+//
+// v7.526 — `group: 'scout'` activities are credited to SCOUT RUNS, never to
+// projects (Wayne, 2026-09-29: "for the hours saved we should add in the hours
+// saved for the scout reports as well"). A Scout report is a bounded subset of
+// the Orbit delivery — at most 600 prospect rows, 300 per competitor, four
+// themes AI-read — so each Scout line carries its own, smaller figure rather
+// than the Orbit figure; the eleven figures below are the ones Wayne approved
+// (Orbit hours × the share of that activity a Scout run actually performs).
+// Orbit activities that Scout never performs (prompt fan-out, audiences, LOB
+// plan, roadmap, calendar, journeys, SERP features, anchors, every Local line)
+// have no Scout row at all, so they can never be credited to a run.
 // ─────────────────────────────────────────────────────────────────────────────
+
+export type HoursGroup = 'base' | 'local' | 'scout';
 
 export interface HoursActivity {
   key:       string;
   label:     string;
   hours:     number;
   gateKey:   string;
-  group:     'base' | 'local';
+  group:     HoursGroup;
   sortOrder: number;
   active:    boolean;
 }
+
+/** v7.526 — which product a group's hours belong to. `base` + `local` are Orbit projects; `scout` is a Scout run. */
+export function groupProduct(group: HoursGroup): 'orbit' | 'scout' { return group === 'scout' ? 'scout' : 'orbit'; }
 
 export const ACTIVITY_SEED: HoursActivity[] = [
   { key: 'organic_baselining',   label: 'Organic baselining',                    hours: 20,  gateKey: 'organic_footprint',   group: 'base',  sortOrder: 10,  active: true },
@@ -51,12 +67,40 @@ export const ACTIVITY_SEED: HoursActivity[] = [
   { key: 'local_reviews',        label: 'Local review ratings',                  hours: 8,   gateKey: 'local_reviews',       group: 'local', sortOrder: 220, active: true },
   { key: 'local_opportunities',  label: 'Local opportunities per location',      hours: 16,  gateKey: 'local_opportunities', group: 'local', sortOrder: 230, active: true },
   { key: 'local_competition',    label: 'Local competition',                     hours: 8,   gateKey: 'local_competition',   group: 'local', sortOrder: 240, active: true },
+  // ── Scout (v7.526) — credited per Scout RUN on the run's own stored result, never to a project ──
+  { key: 'scout_scoping',        label: 'Scout · Project scoping',               hours: 6,   gateKey: 'scout_run_finished',  group: 'scout', sortOrder: 300, active: true },
+  { key: 'scout_baselining',     label: 'Scout · Organic baselining',            hours: 6,   gateKey: 'scout_sites_profiled', group: 'scout', sortOrder: 310, active: true },
+  { key: 'scout_keyword_themes', label: 'Scout · Keyword research & themeing',   hours: 15,  gateKey: 'scout_themes',        group: 'scout', sortOrder: 320, active: true },
+  { key: 'scout_sov',            label: 'Scout · SOV & rank distribution',       hours: 4,   gateKey: 'scout_field_share',   group: 'scout', sortOrder: 330, active: true },
+  { key: 'scout_backlink',       label: 'Scout · Backlink profile',              hours: 1,   gateKey: 'scout_authority',     group: 'scout', sortOrder: 340, active: true },
+  { key: 'scout_llm_baseline',   label: 'Scout · LLM Visibility Baseline',       hours: 5,   gateKey: 'scout_ai_reads',      group: 'scout', sortOrder: 350, active: true },
+  { key: 'scout_citation_gap',   label: 'Scout · Citation Gap (AI)',             hours: 5,   gateKey: 'scout_ai_quadrants',  group: 'scout', sortOrder: 360, active: true },
+  { key: 'scout_content_gap',    label: 'Scout · Content gap',                   hours: 6,   gateKey: 'scout_opening_detail', group: 'scout', sortOrder: 370, active: true },
+  { key: 'scout_opportunity',    label: 'Scout · Opportunity insights',          hours: 6,   gateKey: 'scout_opening',       group: 'scout', sortOrder: 380, active: true },
+  { key: 'scout_exec_summary',   label: 'Scout · Executive summary',             hours: 8,   gateKey: 'scout_report',        group: 'scout', sortOrder: 390, active: true },
+  { key: 'scout_assessment',     label: 'Scout · SEO & GEO snapshot report',     hours: 15,  gateKey: 'scout_report',        group: 'scout', sortOrder: 400, active: true },
 ];
 
-/** The full scope if every activity were credited — the ceiling, never a project's figure. */
+/**
+ * v7.526 — the Scout rows on their own, for the ONE-TIME additive seed in
+ * lib/hours/store.ts. A production table seeded in v7.447 already holds the 24
+ * Orbit rows and is never re-seeded (an upsert-on-read would revert Wayne's
+ * edits every deploy), so the Scout rows are added exactly once under this seed
+ * id, with ON CONFLICT DO NOTHING, and never re-added after Wayne removes one.
+ */
+export const SCOUT_SEED_ID = 'scout_v7526';
+export const SCOUT_ACTIVITY_SEED: HoursActivity[] = ACTIVITY_SEED.filter(a => a.group === 'scout');
+
+/**
+ * The full scope if every activity were credited — the ceiling, never a project's figure.
+ * `total` is the ORBIT ceiling (base + local), unchanged since v7.447 so every "of N in
+ * scope" sentence keeps its meaning; `scout` is a Scout RUN's ceiling and is reported
+ * beside it, never added into it — a project and a run are different deliverables.
+ */
 export function scopeCeiling(list: HoursActivity[] = ACTIVITY_SEED) {
   const act = list.filter(a => a.active);
   const base  = act.filter(a => a.group === 'base').reduce((s, a) => s + a.hours, 0);
   const local = act.filter(a => a.group === 'local').reduce((s, a) => s + a.hours, 0);
-  return { base, local, total: base + local };
+  const scout = act.filter(a => a.group === 'scout').reduce((s, a) => s + a.hours, 0);
+  return { base, local, scout, total: base + local };
 }
