@@ -968,22 +968,28 @@ function shortUA(ua: string | null): string {
 }
 
 
-// ─── Hours Saved (v7.447) ─────────────────────────────────────────────────────
+// ─── Hours Saved (v7.447 · v7.526) ────────────────────────────────────────────
 // Wayne's delivery scope: what each activity costs a team in manual hours, and
 // which stored dataset proves this project actually carries it. The HOURS are
 // his business input and live here so they change without a release; the GATE
 // list is code, because whether a deliverable exists is measured, not declared.
+// v7.526 — a third group, Scout, is credited to Scout RUNS on the run's own
+// stored result. A Scout row must use a Scout gate (and a Core/Local row a
+// project gate); a mismatch is stored but never credited, and shown in red.
 
+type HGroup = 'base' | 'local' | 'scout';
 interface HActivity {
   key: string; label: string; hours: number; gateKey: string;
-  group: 'base' | 'local'; sortOrder: number; active: boolean;
+  group: HGroup; sortOrder: number; active: boolean;
 }
-interface HGate { key: string; label: string; reads: string; proxy: boolean }
+interface HGate { key: string; label: string; reads: string; proxy: boolean; product?: 'orbit' | 'scout' }
+const groupProduct = (g: HGroup): 'orbit' | 'scout' => (g === 'scout' ? 'scout' : 'orbit');
+const GROUP_LABEL: Record<HGroup, string> = { base: 'Core', local: 'Local', scout: 'Scout' };
 
 function HoursTab() {
   const [rows, setRows]       = useState<HActivity[]>([]);
   const [gates, setGates]     = useState<HGate[]>([]);
-  const [scope, setScope]     = useState<{ base: number; local: number; total: number } | null>(null);
+  const [scope, setScope]     = useState<{ base: number; local: number; scout?: number; total: number } | null>(null);
   const [updatedAt, setUpd]   = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
@@ -1034,6 +1040,7 @@ function HoursTab() {
   const liveScope = {
     base:  active.filter(r => r.group === 'base').reduce((s, r) => s + (Number(r.hours) || 0), 0),
     local: active.filter(r => r.group === 'local').reduce((s, r) => s + (Number(r.hours) || 0), 0),
+    scout: active.filter(r => r.group === 'scout').reduce((s, r) => s + (Number(r.hours) || 0), 0),   // v7.526
   };
 
   if (loading) return <div className="orbit-card p-8 text-center text-orbit-secondary text-sm">Loading activities…</div>;
@@ -1048,6 +1055,9 @@ function HoursTab() {
             app measures is the <strong className="text-orbit-primary">gate</strong>: the stored dataset that proves a
             project actually carries that deliverable. An activity is only credited to a project when its gate passes, so
             a project with no backlink scan is never credited for a backlink profile.
+            <strong className="text-orbit-primary"> Scout</strong> rows are credited to each Scout <em>run</em> on the run&rsquo;s own
+            stored result, never to a project — a Scout report is a bounded subset of the Orbit delivery, so its figures are
+            smaller (v7.526).
           </p>
         </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
@@ -1068,6 +1078,8 @@ function HoursTab() {
         <span>Local scope <strong className="text-orbit-primary tabular-nums">{liveScope.local.toLocaleString()}</strong> hrs</span>
         <span>Full scope <strong className="text-orbit-primary tabular-nums">{(liveScope.base + liveScope.local).toLocaleString()}</strong> hrs</span>
         <span className="text-orbit-tertiary">No project is expected to reach the full scope.</span>
+        <span className="border-l border-orbit-border pl-6">Scout run scope <strong className="text-orbit-primary tabular-nums">{liveScope.scout.toLocaleString()}</strong> hrs</span>
+        <span className="text-orbit-tertiary">per run, credited only for the steps that run completed.</span>
       </div>
 
       <div className="orbit-card overflow-x-auto">
@@ -1085,6 +1097,9 @@ function HoursTab() {
           <tbody>
             {rows.map((r, i) => {
               const g = gateBy.get(r.gateKey);
+              // v7.526 — a registered gate for the OTHER product is a mis-application: stored, never credited, red.
+              const misapplied = !!g && !!g.product && g.product !== groupProduct(r.group);
+              const gateOk = !!g && !misapplied;
               return (
                 <tr key={r.key} className="border-b border-orbit-border/40 align-top">
                   <td className="py-2 px-3">
@@ -1098,20 +1113,31 @@ function HoursTab() {
                       className="w-20 bg-transparent border border-orbit-border rounded px-2 py-1 text-right tabular-nums text-orbit-primary focus:border-orbit-accent outline-none" />
                   </td>
                   <td className="py-2 px-3">
-                    <select value={r.group} onChange={e => edit(i, { group: e.target.value as 'base' | 'local' })}
+                    <select value={r.group} onChange={e => edit(i, { group: e.target.value as HGroup })}
                       className="w-full bg-orbit-bg border border-orbit-border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none">
-                      <option value="base">Core</option>
-                      <option value="local">Local</option>
+                      <option value="base">{GROUP_LABEL.base}</option>
+                      <option value="local">{GROUP_LABEL.local}</option>
+                      <option value="scout">{GROUP_LABEL.scout}</option>
                     </select>
                   </td>
                   <td className="py-2 px-3">
                     <select value={r.gateKey} onChange={e => edit(i, { gateKey: e.target.value })}
-                      className={`w-full bg-orbit-bg border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none ${g ? 'border-orbit-border' : 'border-orbit-red'}`}>
+                      className={`w-full bg-orbit-bg border rounded px-2 py-1 text-orbit-primary focus:border-orbit-accent outline-none ${gateOk ? 'border-orbit-border' : 'border-orbit-red'}`}>
                       {!g && <option value={r.gateKey}>{r.gateKey} — NOT REGISTERED</option>}
-                      {gates.map(gg => <option key={gg.key} value={gg.key}>{gg.label}</option>)}
+                      {/* v7.526 — this row's product's gates first, the other product's after, labelled. */}
+                      <optgroup label={groupProduct(r.group) === 'scout' ? 'Scout run gates' : 'Project gates'}>
+                        {gates.filter(gg => (gg.product ?? 'orbit') === groupProduct(r.group)).map(gg => <option key={gg.key} value={gg.key}>{gg.label}</option>)}
+                      </optgroup>
+                      <optgroup label={groupProduct(r.group) === 'scout' ? 'Project gates — never credited on a Scout row' : 'Scout run gates — never credited on a project row'}>
+                        {gates.filter(gg => (gg.product ?? 'orbit') !== groupProduct(r.group)).map(gg => <option key={gg.key} value={gg.key}>{gg.label}</option>)}
+                      </optgroup>
                     </select>
-                    <span className={`block text-[10px] mt-1 leading-snug ${g ? 'text-orbit-tertiary' : 'text-orbit-red'}`}>
-                      {g ? g.reads : 'No gate by this name is registered — these hours are never credited to any project.'}
+                    <span className={`block text-[10px] mt-1 leading-snug ${gateOk ? 'text-orbit-tertiary' : 'text-orbit-red'}`}>
+                      {!g
+                        ? 'No gate by this name is registered — these hours are never credited to any project.'
+                        : misapplied
+                        ? `This gate reads ${g.product === 'scout' ? 'a Scout run' : 'a project'}'s data, but this is a ${GROUP_LABEL[r.group]} activity — its hours are never credited. Pick a ${groupProduct(r.group) === 'scout' ? 'Scout run' : 'project'} gate.`
+                        : g.reads}
                     </span>
                   </td>
                   <td className="py-2 px-3 text-center">
