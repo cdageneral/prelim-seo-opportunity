@@ -35,14 +35,28 @@
  * A project with no analysis has no initiation date and is EXCLUDED from any
  * dated view, counted in `undatedExcluded` rather than silently dropped.
  *
+ * v7.526 — SCOUT RUNS are credited too (Wayne, 2026-09-29). The same optional
+ * ?product=orbit|scout|all the spend routes take (v7.514) selects which rows
+ * come back; the default is `orbit`, which is byte-for-byte the pre-v7.526
+ * answer. A Scout row carries `product: 'scout'`, its run id as `projectId`
+ * (the ledger's own convention — see app/api/usage/route.ts) and is dated by
+ * the moment the run FINISHED. Runs are scored on the `scout` activity group
+ * against the run's own stored result (lib/hours/scoutEvidence.ts); projects on
+ * `base` + `local` against theirs. `projectCount` still counts projects only;
+ * `runCount` counts runs; `grandHours` is the sum of whatever rows the product
+ * filter admitted. `scope.total` remains the Orbit ceiling; `scope.scout` is a
+ * run's ceiling, reported beside it and never added into it.
+ *
  * Database reads only: no metered API, nothing written to the usage ledger.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { loadEvidence } from '@/lib/hours/evidence';
+import { loadScoutEvidence } from '@/lib/hours/scoutEvidence';
 import { loadActivities } from '@/lib/hours/store';
-import { computeHoursSaved } from '@/lib/hours/compute';
+import { computeHoursSaved, auditActivities } from '@/lib/hours/compute';
 import { scopeCeiling } from '@/lib/hours/activities';
+import { parseProductFilter } from '@/lib/usage/rollupView';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -61,59 +75,93 @@ export async function GET(req: NextRequest) {
   const from = bound(req.nextUrl.searchParams.get('from'));
   const to   = bound(req.nextUrl.searchParams.get('to'));
   const dated = !!from || !!to;
+  // v7.526 — which product's rows. Absent → orbit, the historical answer.
+  const product = parseProductFilter(req.nextUrl.searchParams.get('product') ?? 'orbit');
+  const wantOrbit = product !== 'scout';
+  const wantScout = product !== 'orbit';
   try {
-    const [{ activities, updatedAt, seeded }, evidence] = await Promise.all([
+    const [{ activities, updatedAt, seeded }, evidence, scoutEvidence] = await Promise.all([
       loadActivities(),
-      loadEvidence(),
+      wantOrbit ? loadEvidence() : Promise.resolve([]),
+      wantScout ? loadScoutEvidence() : Promise.resolve([]),
     ]);
 
-    const all = evidence.map(e => {
+    const allProjects = evidence.map(e => {
       const r = computeHoursSaved(activities, e.ctx);
       return {
+        product: 'orbit' as const,
         projectId: e.projectId, projectName: e.projectName,
         initiatedAt: e.initiatedAt,
         hours: r.hours, ceilingHours: r.ceilingHours,
         creditedCount: r.creditedCount, totalCount: r.totalCount,
         proxyHours: r.proxyHours,
         lines: r.lines,
+        scout: null,
+      };
+    });
+
+    // v7.526 — one row per Scout run, keyed the way the ledger keys it (projectId
+    // = run id, product 'scout'), scored on the Scout activities only.
+    const allRuns = scoutEvidence.map(e => {
+      const r = computeHoursSaved(activities, e.ctx, 'scout');
+      return {
+        product: 'scout' as const,
+        projectId: e.runId, projectName: e.domain,
+        initiatedAt: e.finishedAt,      // a run is dated by when it FINISHED (see header)
+        hours: r.hours, ceilingHours: r.ceilingHours,
+        creditedCount: r.creditedCount, totalCount: r.totalCount,
+        proxyHours: r.proxyHours,
+        lines: r.lines,
+        scout: { userName: e.userName, status: e.status, scope: e.scope, finishedAt: e.finishedAt, projectId: e.projectId },
       };
     });
 
     // v7.484 — select by INITIATION month. Half-open [from, to), matching the
     // spend routes exactly, so month windows partition rather than overlap.
+    // v7.526 — a run's `initiatedAt` is its finish instant; same predicate.
     const inWindow = (iso: string | null): boolean => {
       if (!iso) return false;                    // undatable: never guessed into a window
       if (from && iso <  from) return false;
       if (to   && iso >= to)   return false;
       return true;
     };
-    const projects = dated ? all.filter(p => inWindow(p.initiatedAt)) : all;
+    const projects = dated ? allProjects.filter(p => inWindow(p.initiatedAt)) : allProjects;
+    const runs     = dated ? allRuns.filter(p => inWindow(p.initiatedAt)) : allRuns;
     // Said out loud rather than absorbed: these projects hold real hours that no
     // dated view can show, because nothing records when their work began (I.5).
-    const undatedExcluded = dated ? all.filter(p => !p.initiatedAt).length : 0;
+    const undatedExcluded     = dated ? allProjects.filter(p => !p.initiatedAt).length : 0;
+    const undatedRunsExcluded = dated ? allRuns.filter(p => !p.initiatedAt).length : 0;
 
-    const grandHours = projects.reduce((s, p) => s + p.hours, 0);
-    const ceiling    = scopeCeiling(activities);
+    const projectHours = projects.reduce((s, p) => s + p.hours, 0);
+    const runHours     = runs.reduce((s, p) => s + p.hours, 0);
+    const grandHours   = projectHours + runHours;
+    const ceiling      = scopeCeiling(activities);
     // A registry hole is the same class of failure as an unpriced API source:
     // it silently subtracts hours. Surface it rather than absorb it.
-    // Registry holes are a SYSTEM fault, so they are detected across every
-    // project — narrowing the window must never make a live alarm disappear.
-    const unregistered = Array.from(new Set(
-      all.flatMap(p => p.lines.filter(l => l.unregistered).map(l => l.key)),
-    ));
+    // Registry holes are a SYSTEM fault, so they are detected on the RATE CARD
+    // itself, not on the rows a window or product filter happened to admit —
+    // narrowing either must never make a live alarm disappear (v7.484), and a
+    // mis-set Scout row must show on the Orbit view too (v7.526).
+    const { unregistered, misapplied } = auditActivities(activities);
 
     return NextResponse.json({
       asOf: new Date().toISOString(),
+      product,
       range: { from, to },
       dated,
       undatedExcluded,
+      undatedRunsExcluded,
       grandHours,
+      projectHours,
+      runHours,
       projectCount: projects.length,
-      scope: ceiling,                  // { base, local, total } — the full scope
+      runCount: runs.length,
+      scope: ceiling,                  // { base, local, scout, total } — total = the ORBIT scope (base + local)
       activitiesUpdatedAt: updatedAt,
       usingSeed: seeded,               // true = the stored list was empty/unreadable
       unregistered,
-      projects,
+      misapplied,
+      projects: [...projects, ...runs],
     }, { headers: NO_STORE });
   } catch (e: any) {
     // Additive panel: never take the usage dashboard down with it.
