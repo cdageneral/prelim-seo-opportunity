@@ -11,6 +11,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import ThemeToggle from '@/components/ThemeToggle';
+import GlobalNavLinks from '@/components/GlobalNavLinks';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 interface AdminUser {
@@ -146,15 +147,10 @@ function Shell({ me, onSignOut, children }: { me: Me | null; onSignOut: () => vo
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle />
-            <Link href="/dashboard" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
-              <i className="ti ti-layout-grid" /> Projects
-            </Link>
-            {/* v7.461: the Dashboard button now lives on Admin too — it was on
-                the projects header only, so getting to the usage dashboard from
-                here meant a round trip through Projects. */}
-            <Link href="/usage" className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors">
-              <i className="ti ti-gauge" /> Dashboard
-            </Link>
+            {/* v7.461: the Dashboard button lives on Admin too. v7.528: the shared
+                button set — Projects · Scout · Dashboard — so Scout is reachable
+                from here as well (Wayne, 2026-09-29). Sign out stays below. */}
+            <GlobalNavLinks current="admin" />
             {me ? (
               <button onClick={onSignOut} title={`${me.name} · sign out`}
                 className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary transition-colors">
