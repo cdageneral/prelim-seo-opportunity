@@ -102,10 +102,15 @@ export default function UsageRollup() {
       const pq = `${q ? q + '&' : '?'}product=${product}`;
       // v7.526 — Hours Saved takes the product too: Scout runs carry their own
       // (smaller) rate card, credited per run on the run's stored result.
+      // v7.528 — hours are ALWAYS asked for both products (Wayne, 2026-09-29:
+      // "i need separate hours saved for orbit and for scout"): the two cards
+      // show Orbit hours and Scout hours side by side whatever the spend toggle
+      // says; the toggle still decides which ROWS the table lists.
+      const hq = `${q ? q + '&' : '?'}product=all`;
       const [res, costRes, hoursRes] = await Promise.all([
         fetch(`/api/usage${pq}`, { cache: 'no-store' }),
         fetch(`/api/usage/cost${pq}`, { cache: 'no-store' }),
-        fetch(`/api/usage/hours${pq}`, { cache: 'no-store' }),
+        fetch(`/api/usage/hours${hq}`, { cache: 'no-store' }),
       ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
@@ -177,19 +182,26 @@ export default function UsageRollup() {
   const allProjectCount = (data?.projects ?? []).length;
   const view       = data ? filterRollupByProjects(data, projectSel) : null;
   const viewCost   = filterCostByProjects(cost, projectSel);
-  const viewHours  = filterHoursByProjects(hours, projectSel);
+  // v7.528 — the row selection narrows only the rows the current view lists; the
+  // other product's hours stay whole, so its card never reads 0 because the
+  // picker (which cannot list it) did not tick it.
+  const viewHours  = filterHoursByProjects(hours, projectSel, product);
+  // v7.528 — the hours the current view's ROWS account for (the table total).
+  const viewRowHours = viewHours ? (product === 'orbit' ? (viewHours.projectHours ?? viewHours.grandHours) : product === 'scout' ? (viewHours.runHours ?? 0) : viewHours.grandHours) : 0;
   const dated      = rangeIsBounded(range);
   const projFiltered = selectionIsFiltered(projectSel, allProjectCount);
   const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount, viewHours, product);
   const scoutView  = product === 'scout';   // v7.514 — hides the project-only Keywords column (v7.526: Hours Saved shows on every view)
-  // v7.526 — how the Hours card and column name their basis, per product.
-  const hoursCount = (h: HoursPayload) => {
-    const parts: string[] = [];
-    if (product !== 'scout') parts.push(`${h.projectCount} ${h.projectCount === 1 ? 'project' : 'projects'}`);
-    if (product !== 'orbit') parts.push(`${h.runCount ?? 0} Scout ${(h.runCount ?? 0) === 1 ? 'run' : 'runs'}`);
-    return parts.join(' · ');
-  };
-  const hoursDatedNote = product === 'scout' ? 'runs finished in this period' : product === 'all' ? 'projects initiated · runs finished in period' : 'projects initiated in this period';
+  // v7.528 — two cards, one per product, on every view. Each names its own
+  // count and its own dating basis (projects: initiated; runs: finished).
+  const hoursCards: Array<{ key: 'orbit' | 'scout'; label: string; hours: number; count: string; datedNote: string; inView: boolean }> = viewHours ? [
+    { key: 'orbit', label: 'Hours Saved · Orbit', hours: viewHours.projectHours ?? viewHours.grandHours,
+      count: `${viewHours.projectCount} ${viewHours.projectCount === 1 ? 'project' : 'projects'}`,
+      datedNote: 'projects initiated in this period', inView: product !== 'scout' },
+    { key: 'scout', label: 'Hours Saved · Scout', hours: viewHours.runHours ?? 0,
+      count: `${viewHours.runCount ?? 0} Scout ${(viewHours.runCount ?? 0) === 1 ? 'run' : 'runs'}`,
+      datedNote: 'runs finished in this period', inView: product !== 'orbit' },
+  ] : [];
 
   // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
   useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
@@ -458,27 +470,30 @@ export default function UsageRollup() {
                 same kind of number at a glance (Wayne, 2026-08-14).
                 The tint is capped at 8%: at 10% `text-orbit-secondary` measures
                 4.50:1 on the dark card and drops below AA — see the theme gate. */}
-            {viewHours && (
-              <div className="orbit-card p-4 border border-orbit-green/30 bg-orbit-green/[0.08]">
+            {/* v7.528 — one card per product, both always shown (Wayne: "separate
+                hours saved for orbit and for scout"). The card outside the current
+                spend view says so in its sub-label rather than disappearing. */}
+            {hoursCards.map(c => (
+              <div key={c.key} data-hours-card={c.key} className="orbit-card p-4 border border-orbit-green/30 bg-orbit-green/[0.08]">
                 <div className="flex items-center gap-2 mb-1.5">
-                  <i className="ti ti-clock-hour-4 text-orbit-green" aria-hidden="true" />
-                  <span className="text-orbit-green text-xs font-semibold">Hours Saved</span>
+                  <i className={`ti ${c.key === 'scout' ? 'ti-radar-2' : 'ti-clock-hour-4'} text-orbit-green`} aria-hidden="true" />
+                  <span className="text-orbit-green text-xs font-semibold">{c.label}</span>
                   {/* Const II.6c — this figure never leaves the internal dashboard.
                       Saying so on the card is the cheapest guard against it being
                       screenshotted into a client deck. */}
                   <span className="ml-auto text-[10px] text-orbit-green/80 font-medium">admin only</span>
                 </div>
-                <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(viewHours.grandHours)}</div>
+                <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(c.hours)}</div>
                 <div className="text-[11px] text-orbit-secondary mt-0.5">
-                  hours · {hoursCount(viewHours)}
+                  hours · {c.count}{!c.inView ? ' · not in this view' : ''}
                 </div>
                 {/* v7.484 — hours ARE dated, but by PROJECT INITIATION, not by
                     when each hour was earned. Naming the basis on the card is
                     cheaper than being asked why the number moved.
                     v7.526 — a Scout run is dated by when it finished. */}
-                {dated && <div className="text-[10px] text-orbit-amber mt-1">{hoursDatedNote}</div>}
+                {dated && <div className="text-[10px] text-orbit-amber mt-1">{c.datedNote}</div>}
               </div>
-            )}
+            ))}
             {grand.map(l => (
               <div key={lineKey(l)} className="orbit-card p-4">
                 <div className="flex items-center gap-2 mb-1.5">
@@ -744,7 +759,7 @@ export default function UsageRollup() {
                           </span>}
                     </td>}
                     <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
-                      {viewHours ? fmt(viewHours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
+                      {viewHours ? fmt(viewRowHours) : <span className="text-orbit-tertiary font-normal">—</span>}
                     </td>
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
