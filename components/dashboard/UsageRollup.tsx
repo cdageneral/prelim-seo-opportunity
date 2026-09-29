@@ -100,12 +100,12 @@ export default function UsageRollup() {
       // sentence says which is which; the per-project keyword count stays live.
       const q = rangeQuery(range);
       const pq = `${q ? q + '&' : '?'}product=${product}`;
-      // Hours Saved is a PROJECT deliverable metric — a Scout run has none, so the
-      // Scout view does not ask for it (and never shows an empty hours column).
+      // v7.526 — Hours Saved takes the product too: Scout runs carry their own
+      // (smaller) rate card, credited per run on the run's stored result.
       const [res, costRes, hoursRes] = await Promise.all([
         fetch(`/api/usage${pq}`, { cache: 'no-store' }),
         fetch(`/api/usage/cost${pq}`, { cache: 'no-store' }),
-        product === 'scout' ? Promise.resolve(null) : fetch(`/api/usage/hours${q}`, { cache: 'no-store' }),
+        fetch(`/api/usage/hours${pq}`, { cache: 'no-store' }),
       ]);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
@@ -181,7 +181,15 @@ export default function UsageRollup() {
   const dated      = rangeIsBounded(range);
   const projFiltered = selectionIsFiltered(projectSel, allProjectCount);
   const scopeLine  = scopeStatement(range, projectSel ? projectSel.size : null, allProjectCount, viewHours, product);
-  const scoutView  = product === 'scout';   // v7.514 — hides the two project-only columns
+  const scoutView  = product === 'scout';   // v7.514 — hides the project-only Keywords column (v7.526: Hours Saved shows on every view)
+  // v7.526 — how the Hours card and column name their basis, per product.
+  const hoursCount = (h: HoursPayload) => {
+    const parts: string[] = [];
+    if (product !== 'scout') parts.push(`${h.projectCount} ${h.projectCount === 1 ? 'project' : 'projects'}`);
+    if (product !== 'orbit') parts.push(`${h.runCount ?? 0} Scout ${(h.runCount ?? 0) === 1 ? 'run' : 'runs'}`);
+    return parts.join(' · ');
+  };
+  const hoursDatedNote = product === 'scout' ? 'runs finished in this period' : product === 'all' ? 'projects initiated · runs finished in period' : 'projects initiated in this period';
 
   // Stop the elapsed-seconds ticker if the panel unmounts mid-render.
   useEffect(() => () => { if (pdfTimer.current) clearInterval(pdfTimer.current); }, []);
@@ -462,12 +470,13 @@ export default function UsageRollup() {
                 </div>
                 <div className="text-2xl font-bold text-orbit-primary tabular-nums leading-tight">{fmt(viewHours.grandHours)}</div>
                 <div className="text-[11px] text-orbit-secondary mt-0.5">
-                  hours · {viewHours.projectCount} {viewHours.projectCount === 1 ? 'project' : 'projects'}
+                  hours · {hoursCount(viewHours)}
                 </div>
                 {/* v7.484 — hours ARE dated, but by PROJECT INITIATION, not by
                     when each hour was earned. Naming the basis on the card is
-                    cheaper than being asked why the number moved. */}
-                {dated && <div className="text-[10px] text-orbit-amber mt-1">projects initiated in this period</div>}
+                    cheaper than being asked why the number moved.
+                    v7.526 — a Scout run is dated by when it finished. */}
+                {dated && <div className="text-[10px] text-orbit-amber mt-1">{hoursDatedNote}</div>}
               </div>
             )}
             {grand.map(l => (
@@ -541,6 +550,21 @@ export default function UsageRollup() {
           {/* v7.447 — an activity with no registered gate silently SUBTRACTS hours,
               exactly like an unpriced API source silently subtracts dollars. Same
               fail-closed discipline, same loud alarm. */}
+          {/* v7.526 — the sibling fault: a registered gate on the WRONG product's row. */}
+          {hours && (hours.misapplied?.length ?? 0) > 0 && (
+            <div className="orbit-card p-4 mb-4 border border-orbit-red/40 bg-orbit-red/10">
+              <h3 className="text-orbit-red text-sm font-semibold mb-2 flex items-center gap-2">
+                <i className="ti ti-alert-triangle" aria-hidden="true" />
+                Activity gated on the wrong product&rsquo;s evidence — its hours are never credited
+              </h3>
+              <p className="text-orbit-secondary text-xs leading-relaxed">
+                <strong className="text-orbit-primary">{hours.misapplied!.join(', ')}</strong>{' '}
+                {hours.misapplied!.length === 1 ? 'names a gate' : 'name gates'} written for the other product (a Scout gate on a project
+                activity, or a project gate on a Scout activity), so {hours.misapplied!.length === 1 ? 'its' : 'their'} hours are
+                <strong className="text-orbit-primary"> missing from every figure below</strong>. Pick a matching gate in Admin → Hours Saved.
+              </p>
+            </div>
+          )}
           {hours && (hours.unregistered?.length ?? 0) > 0 && (
             <div className="orbit-card p-4 mb-4 border border-orbit-red/40 bg-orbit-red/10">
               <h3 className="text-orbit-red text-sm font-semibold mb-2 flex items-center gap-2">
@@ -579,13 +603,18 @@ export default function UsageRollup() {
                         {!kwDone ? `counting · ${kwPending} left` : dated ? 'live · not dated' : 'all keywords'}
                       </span>
                     </th>}
-                    {/* v7.447: hours credited on real evidence, expandable per project. */}
-                    {!scoutView && <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
+                    {/* v7.447: hours credited on real evidence, expandable per project.
+                        v7.526: shown on every view — a Scout row is credited per run against the Scout scope. */}
+                    <th className="py-2 px-3 font-medium text-right whitespace-nowrap">
                       Hours Saved
                       <span className="block text-[10px] text-orbit-tertiary font-normal">
-                        {dated ? 'initiated in period' : `of ${fmt(hours?.scope?.total ?? 0)} in scope`}
+                        {dated
+                          ? (scoutView ? 'finished in period' : product === 'all' ? 'initiated / finished in period' : 'initiated in period')
+                          : scoutView ? `of ${fmt(hours?.scope?.scout ?? 0)} per run`
+                          : product === 'all' ? `of ${fmt(hours?.scope?.total ?? 0)} · ${fmt(hours?.scope?.scout ?? 0)} per run`
+                          : `of ${fmt(hours?.scope?.total ?? 0)} in scope`}
                       </span>
-                    </th>}
+                    </th>
                     {grand.map(l => (
                       <th key={lineKey(l)} className="py-2 px-3 font-medium text-right whitespace-nowrap">
                         {PROVIDER_LABEL[l.provider] ?? l.provider}
@@ -618,8 +647,9 @@ export default function UsageRollup() {
                       : proj.projectId
                       ? <Link href={`/projects/${proj.projectId}`} className="text-orbit-primary hover:text-orbit-accent font-medium transition-colors">{proj.projectName}</Link>
                       : <span className="text-orbit-tertiary italic">{proj.projectName}</span>;
-                    const hp = proj.projectId && !isScout ? hoursMap.get(proj.projectId) : undefined;
-                    const open = !!proj.projectId && !isScout && hoursOpen === proj.projectId;
+                    // v7.526 — looked up under the row's own product key, so a run and a project never collide.
+                    const hp = proj.projectId ? hoursMap.get(rowKey(proj)) : undefined;
+                    const open = !!proj.projectId && hoursOpen === rowKey(proj);
                     return (
                       <Fragment key={rowKey(proj)}>
                       <tr className="border-b border-orbit-border/40">
@@ -634,12 +664,14 @@ export default function UsageRollup() {
                             return fmt(v);
                           })()}
                         </td>}
-                        {!scoutView && <td className="py-2 px-3 text-right tabular-nums">
+                        <td className="py-2 px-3 text-right tabular-nums">
                           {!hp
-                            ? <span className="text-orbit-tertiary" title={proj.projectId ? 'No analysis with data for this project yet' : 'Calls made outside a project have no delivery scope'}>—</span>
+                            ? <span className="text-orbit-tertiary" title={isScout
+                                ? (proj.projectId ? 'This run has not finished, or was deleted — nothing to credit' : 'Calls made before a run have no delivery scope')
+                                : (proj.projectId ? 'No analysis with data for this project yet' : 'Calls made outside a project have no delivery scope')}>—</span>
                             : (
                               <button
-                                onClick={() => setHoursOpen(open ? null : proj.projectId!)}
+                                onClick={() => setHoursOpen(open ? null : rowKey(proj))}
                                 className="inline-flex items-center gap-1 text-orbit-primary hover:text-orbit-accent transition-colors tabular-nums"
                                 title={`${hp.creditedCount} of ${hp.totalCount} activities evidenced — click for the breakdown`}
                               >
@@ -647,7 +679,7 @@ export default function UsageRollup() {
                                 <i className={`ti ti-chevron-${open ? 'up' : 'down'} text-[10px]`} aria-hidden="true" />
                               </button>
                             )}
-                        </td>}
+                        </td>
                         {columns.map(col => {
                           const l = byKey.get(col);
                           return (
@@ -666,11 +698,14 @@ export default function UsageRollup() {
                           rather than asserted (Const I.5). */}
                       {open && hp && (
                         <tr className="border-b border-orbit-border/40">
-                          <td colSpan={columns.length + (scoutView ? 2 : 4)} className="py-3 px-3 bg-orbit-muted/20">
+                          <td colSpan={columns.length + (scoutView ? 3 : 4)} className="py-3 px-3 bg-orbit-muted/20">
                             <div className="text-[11px] text-orbit-secondary mb-2">
                               <strong className="text-orbit-primary">{fmt(hp.hours)} hrs</strong> credited from{' '}
-                              <strong className="text-orbit-primary">{hp.creditedCount}</strong> of {hp.totalCount} activities
-                              ({fmt(hp.ceilingHours)} hrs in full scope)
+                              <strong className="text-orbit-primary">{hp.creditedCount}</strong> of {hp.totalCount} {isScout ? 'Scout' : ''} activities
+                              ({fmt(hp.ceilingHours)} hrs in {isScout ? 'the Scout run scope' : 'full scope'})
+                              {isScout && hp.scout?.status && hp.scout.status !== 'ready' && (
+                                <> · run status <span className="text-orbit-amber">{hp.scout.status.replace('_', ' ')}</span></>
+                              )}
                               {hp.proxyHours > 0 && (
                                 <> · <span className="text-orbit-amber">{fmt(hp.proxyHours)} hrs</span> credited on a proxy signal</>
                               )}
@@ -682,13 +717,14 @@ export default function UsageRollup() {
                                   <span className={l.credited ? 'text-orbit-primary' : 'text-orbit-tertiary'}>{l.label}</span>
                                   {l.proxy && l.credited && <span className="text-orbit-amber text-[10px]">proxy</span>}
                                   {l.unregistered && <span className="text-orbit-red text-[10px]">no gate</span>}
+                                  {l.misapplied && <span className="text-orbit-red text-[10px]">wrong product</span>}
                                   <span className="flex-1 border-b border-dotted border-orbit-border/60" />
                                   <span className={`tabular-nums ${l.credited ? 'text-orbit-primary' : 'text-orbit-tertiary line-through'}`}>{fmt(l.hours)}</span>
                                 </div>
                               ))}
                             </div>
                             <p className="text-[10px] text-orbit-tertiary mt-2">
-                              A struck-through line means this project has no stored data for that activity, so its hours are not claimed.
+                              A struck-through line means this {isScout ? 'run' : 'project'} has no stored data for that activity, so its hours are not claimed.
                               Hover any line to see exactly which field is read.
                             </p>
                           </td>
@@ -707,9 +743,9 @@ export default function UsageRollup() {
                             {fmt(kwTotal)}{kwDone ? '' : '…'}
                           </span>}
                     </td>}
-                    {!scoutView && <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
+                    <td className="py-2 px-3 text-right tabular-nums text-orbit-primary">
                       {viewHours ? fmt(viewHours.grandHours) : <span className="text-orbit-tertiary font-normal">—</span>}
-                    </td>}
+                    </td>
                     {grand.map(l => (
                       <td key={lineKey(l)} className="py-2 px-3 text-right tabular-nums text-orbit-primary">{fmt(l.total)}</td>
                     ))}
@@ -721,20 +757,23 @@ export default function UsageRollup() {
             </div>
           </div>
 
-          {!scoutView && <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
-            <strong className="text-orbit-secondary">Hours Saved</strong> is the manual effort this project would have taken
+          <p className="text-orbit-tertiary text-[11px] mt-4 leading-relaxed">
+            <strong className="text-orbit-secondary">Hours Saved</strong> is the manual effort {scoutView ? 'a Scout report' : 'this project'} would have taken
             a team to deliver by hand, at the rates set in Admin &rarr; Hours Saved
             {hours?.activitiesUpdatedAt ? ` (last edited ${fmtTime(hours.activitiesUpdatedAt)})` : ''}. The hours are a
             declared rate card, not a measurement — but <em>which</em> activities are counted is measured: each one is
-            credited only where this project actually holds that deliverable&rsquo;s stored data, so a project with no
-            backlink scan is never credited for a backlink profile. Click any figure for the credited-and-withheld
-            breakdown. Full scope is {fmt(hours?.scope?.total ?? 0)} hrs ({fmt(hours?.scope?.base ?? 0)} core +{' '}
-            {fmt(hours?.scope?.local ?? 0)} local); no project is expected to reach it.
+            credited only where {scoutView ? 'the run' : 'this project'} actually holds that deliverable&rsquo;s stored data, so a project with no
+            backlink scan is never credited for a backlink profile{scoutView || product === 'all' ? ', and a Scout run whose AI answers were never read is not credited for the AI lines' : ''}. Click any figure for the credited-and-withheld
+            breakdown.
+            {!scoutView && <> Full scope is {fmt(hours?.scope?.total ?? 0)} hrs ({fmt(hours?.scope?.base ?? 0)} core +{' '}
+            {fmt(hours?.scope?.local ?? 0)} local); no project is expected to reach it.</>}
+            {product !== 'orbit' && <> A Scout run&rsquo;s scope is {fmt(hours?.scope?.scout ?? 0)} hrs — a bounded subset of the Orbit delivery, so each
+            Scout line carries a smaller figure than its Orbit counterpart (v7.526).</>}{' '}
             <strong className="text-orbit-secondary">This figure is internal.</strong> It is deliberately absent from the
             client-facing Assessment PDF and every delivery export (Wayne, 2026-08-14; Const II.6c) — it describes what the
             platform saved <em>us</em>, not what the client received.
             {hours?.usingSeed && <> <span className="text-orbit-amber">The stored activity list was empty, so the built-in defaults are in use.</span></>}
-          </p>}
+          </p>
 
           {!scoutView && <p className="text-orbit-tertiary text-[11px] mt-2 leading-relaxed">
             <strong className="text-orbit-secondary">Keywords</strong> is each project's Keyword Landscape
