@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// lib/hours/evidence.ts — v7.447
+// lib/hours/evidence.ts — v7.447 · v7.527 CASE-guarded array lengths
 //
 // Measures every project's Hours Saved evidence in ONE query, and returns only
 // integers.
@@ -17,6 +17,13 @@
 // object where an array was expected, or a pre-v-whatever snapshot that never
 // carried the field must read as ZERO, never raise, and never be mistaken for
 // presence. A gate that cannot be measured must fail closed (Const I.5).
+//
+// v7.527 — every jsonb_array_length sits inside a CASE WHEN jsonb_typeof(...)
+// arm, never behind an AND. Postgres does not guarantee the evaluation order
+// of AND operands, so `jsonb_typeof(x)='array' AND jsonb_array_length(x)>0`
+// can still evaluate the length first and raise "cannot get array length of a
+// scalar" on a JSON null — which took the whole Orbit Hours Saved figure down
+// (500) on 2026-09-29. CASE arms ARE evaluated in order, so the guard holds.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from '@/db';
@@ -109,8 +116,8 @@ export async function loadEvidence(): Promise<ProjectEvidence[]> {
 
       COALESCE(CASE WHEN jsonb_typeof(l.s->'_audienceSegments')='array'
                THEN (SELECT count(*) FROM jsonb_array_elements(l.s->'_audienceSegments') g
-                      WHERE (jsonb_typeof(g->'preLLMPrompts')='array' AND jsonb_array_length(g->'preLLMPrompts')>0)
-                         OR (jsonb_typeof(g->'productPrompts')='array' AND jsonb_array_length(g->'productPrompts')>0)) END, 0) AS "segmentsWithPrompts",
+                      WHERE (CASE WHEN jsonb_typeof(g->'preLLMPrompts')='array' THEN jsonb_array_length(g->'preLLMPrompts') ELSE 0 END) > 0
+                         OR (CASE WHEN jsonb_typeof(g->'productPrompts')='array' THEN jsonb_array_length(g->'productPrompts') ELSE 0 END) > 0) END, 0) AS "segmentsWithPrompts",
 
       COALESCE(CASE WHEN jsonb_typeof(l.pf->'results')='array'
                THEN (SELECT count(*) FROM jsonb_array_elements(l.pf->'results') r
@@ -131,8 +138,7 @@ export async function loadEvidence(): Promise<ProjectEvidence[]> {
       COALESCE(CASE WHEN jsonb_typeof(l.sp->'keywords')='array'
                THEN (SELECT count(*) FROM jsonb_array_elements(l.sp->'keywords') k
                       WHERE (k->>'hasAIO')::boolean IS TRUE
-                        AND jsonb_typeof(k->'aioSources')='array'
-                        AND jsonb_array_length(k->'aioSources') > 0) END, 0) AS "aioCitationRows",
+                        AND (CASE WHEN jsonb_typeof(k->'aioSources')='array' THEN jsonb_array_length(k->'aioSources') ELSE 0 END) > 0) END, 0) AS "aioCitationRows",
 
       COALESCE((p.profound_data->>'citeTotal')::numeric, 0) AS "profoundCiteTotal",
 
@@ -158,7 +164,7 @@ export async function loadEvidence(): Promise<ProjectEvidence[]> {
 
       COALESCE(CASE WHEN jsonb_typeof(p.authority_snapshot->'domains')='array'
                THEN (SELECT count(*) FROM jsonb_array_elements(p.authority_snapshot->'domains') d
-                      WHERE jsonb_typeof(d->'anchors')='array' AND jsonb_array_length(d->'anchors')>0) END, 0) AS "authorityWithAnchors",
+                      WHERE (CASE WHEN jsonb_typeof(d->'anchors')='array' THEN jsonb_array_length(d->'anchors') ELSE 0 END) > 0) END, 0) AS "authorityWithAnchors",
 
       (SELECT count(*) FROM reports rp
         WHERE rp.analysis_id = l.analysis_id AND rp.type = 'PDF' AND rp.file_url IS NOT NULL) AS "assessmentReports",
