@@ -104,24 +104,22 @@ export function buildUsageHTML(input: UsageReportInput): string {
       <div class="d">Across ${esc(fmt(projects.length))} ${esc(noun(projects.length))}. A computed estimate at registry rates, not the invoice.</div></div>`);
   }
   if (hours) {
-    // v7.526 — the tile names both bases when both products are in view: projects by
-    // initiation, Scout runs by finish. Scout-only views speak only of runs.
+    // v7.528 — one tile per product on every view (Wayne: "separate hours saved
+    // for orbit and for scout"), each naming its own count and dating basis.
     const runCount = hours.runCount ?? 0;
-    const who = [
-      product !== 'scout' ? `${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}` : '',
-      product !== 'orbit' ? `${esc(fmt(runCount))} Scout ${runCount === 1 ? 'run' : 'runs'}` : '',
-    ].filter(Boolean).join(' and ');
-    const basis = product === 'scout' ? '<b>finished in this period</b>' : product === 'all' ? '<b>initiated (projects) or finished (runs) in this period</b>' : '<b>initiated in this period</b>';
-    const scopeTxt = product === 'scout'
-      ? `Of ${esc(fmt(hours.scope?.scout ?? 0))} hrs per run`
-      : product === 'all'
-      ? `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs per project and ${esc(fmt(hours.scope?.scout ?? 0))} per run`
-      : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope`;
-    headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; internal</div>
-      <div class="v">${esc(fmt(hours.grandHours))}</div>
-      <div class="d">${(hours as any)?.dated
-        ? `Across ${who} ${basis}, at their current credited totals.`
-        : `${scopeTxt}, across ${who}.`}</div></div>`);
+    const projHours = hours.projectHours ?? (product === 'scout' ? 0 : hours.grandHours);
+    const runHours = hours.runHours ?? 0;
+    const datedH = !!(hours as any)?.dated;
+    headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; Orbit &middot; internal</div>
+      <div class="v">${esc(fmt(projHours))}</div>
+      <div class="d">${datedH
+        ? `Across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'} <b>initiated in this period</b>, at their current credited totals.`
+        : `Of ${esc(fmt(hours.scope?.total ?? 0))} hrs in full scope, across ${esc(fmt(hours.projectCount))} ${hours.projectCount === 1 ? 'project' : 'projects'}.`}${product === 'scout' ? ' Not in this view&rsquo;s table.' : ''}</div></div>`);
+    headTiles.push(`<div class="tile good"><div class="k">Hours saved &middot; Scout &middot; internal</div>
+      <div class="v">${esc(fmt(runHours))}</div>
+      <div class="d">${datedH
+        ? `Across ${esc(fmt(runCount))} Scout ${runCount === 1 ? 'run' : 'runs'} <b>finished in this period</b>.`
+        : `Of ${esc(fmt(hours.scope?.scout ?? 0))} hrs per run, across ${esc(fmt(runCount))} Scout ${runCount === 1 ? 'run' : 'runs'}.`}${product === 'orbit' ? ' Not in this view&rsquo;s table.' : ''}</div></div>`);
   }
   headTiles.push(`<div class="tile"><div class="k">${scoutView ? 'Scout runs metered' : product === 'all' ? 'Projects and Scout runs metered' : 'Projects metered'}</div>
     <div class="v">${esc(fmt(projects.length))}</div>
@@ -240,7 +238,7 @@ export function buildUsageHTML(input: UsageReportInput): string {
   const totalRow = `<tr class="tot">
     <td class="l">All ${esc(noun(2))}</td>
     ${scoutView ? '' : `<td class="n">${kw.loaded === 0 ? '<span class="dash">&mdash;</span>' : esc(fmt(kw.total)) + (kwComplete ? '' : '&hellip;')}</td>`}
-    ${hours ? `<td class="n">${esc(fmt(hours.grandHours))}</td>` : ''}
+    ${hours ? `<td class="n">${esc(fmt(product === 'orbit' ? (hours.projectHours ?? hours.grandHours) : product === 'scout' ? (hours.runHours ?? 0) : hours.grandHours))}</td>` : ''}
     ${grand.map(l => `<td class="n">${esc(fmt(l.total))}</td>`).join('')}
     ${cost ? `<td class="n money">${esc(fmtUSD(cost.grandTotalUSD))}</td>` : ''}
     <td class="r"></td>
@@ -295,7 +293,9 @@ export function buildUsageHTML(input: UsageReportInput): string {
     ${(rc?.sources ?? []).length > 0 ? `<br><b>Rate sources:</b> ${(rc?.sources ?? []).map(s => esc(s)).join(' &middot; ')}` : ''}</div>` : null;
 
   // ── Hours Saved appendix ──────────────────────────────────────────────────
-  const hoursProjects = (hours?.projects ?? []).filter(p => (p.lines?.length ?? 0) > 0);
+  // v7.528 — the payload carries BOTH products' rows (the two tiles need them); the
+  // appendix lists only the rows the view's table lists, so it reconciles with it.
+  const hoursProjects = (hours?.projects ?? []).filter(p => (p.lines?.length ?? 0) > 0 && (product === 'all' || (p.product ?? 'orbit') === product));
   const hoursPages = hours && hoursProjects.length > 0
     ? chunk(hoursProjects, HOURS_PER_PAGE).map((slice, i, all) => `
       <h1 class="pg sm">Hours saved &mdash; what was credited${all.length > 1 ? ` <span class="ofn">${i + 1} of ${all.length}</span>` : ''}</h1>

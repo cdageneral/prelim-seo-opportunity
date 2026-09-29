@@ -404,10 +404,19 @@ export function filterCostByProjects(cost: CostPayload | null, sel: Set<string> 
   };
 }
 
-/** The same narrowing for the hours payload — per row, under the row's own product key (v7.526: Scout rows included). */
-export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<string> | null): HoursPayload | null {
+/**
+ * The same narrowing for the hours payload — per row, under the row's own product key (v7.526: Scout rows included).
+ * v7.528 — `view` names which product's rows the picker could list: rows of the OTHER product are kept whole,
+ * because a selection made on a list that never showed them is not a decision about them (their card would
+ * otherwise read 0 the moment one project was unticked). Omitted or 'all' = the v7.526 behaviour.
+ */
+export function filterHoursByProjects(hours: HoursPayload | null, sel: Set<string> | null, view: ProductFilter = 'all'): HoursPayload | null {
   if (!hours || !sel) return hours;
-  const projects = (hours.projects ?? []).filter(p => sel.has(rowKey({ projectId: p.projectId, product: p.product ?? 'orbit' })));
+  const projects = (hours.projects ?? []).filter(p => {
+    const prod = p.product ?? 'orbit';
+    if (view !== 'all' && prod !== view) return true;   // outside the view: untouched
+    return sel.has(rowKey({ projectId: p.projectId, product: prod }));
+  });
   const isRun = (p: HoursProject) => (p.product ?? 'orbit') === 'scout';
   const sum = (ps: HoursProject[]) => ps.reduce((s, p) => s + (p.hours || 0), 0);
   return {
@@ -443,15 +452,17 @@ export function scopeStatement(
     : `across ${selected} of ${total} ${rowNoun(product, total)}`);
   let s = parts.join(' ') + '.';
   // v7.526 — Scout runs carry Hours Saved too (their own, smaller rate card); Keywords stays project-only.
-  if (product === 'scout') s += ' Scout has no Keywords figure: a run reads a bounded sample. Its Hours Saved are the Scout rate card, credited per run for the steps that run completed.';
-  if (product === 'orbit') s += ' Scout spend is shown separately under the Scout toggle, with the hours Scout runs saved.';
+  // v7.528 — both Hours Saved cards (Orbit, Scout) show on every view, so the sentence says so.
+  if (product === 'scout') s += ' Scout has no Keywords figure: a run reads a bounded sample. Its Hours Saved are the Scout rate card, credited per run for the steps that run completed; Orbit hours are shown beside them.';
+  if (product === 'orbit') s += ' Scout spend is shown separately under the Scout toggle; Scout hours saved are shown here beside Orbit hours.';
   if (rangeIsBounded(range)) {
     // v7.484 — hours ARE dated now, but on a different basis from spend, and
     // saying which basis is the whole point of this sentence.
     // v7.526 — a Scout run is dated by when it FINISHED: one bounded event.
     const n = hours?.projectCount;
     const r = hours?.runCount;
-    if (product !== 'scout') {
+    // v7.528 — both cards are on every view, so both bases are always named.
+    {
       s += ` Hours Saved is dated differently: it counts the ${typeof n === 'number' ? n + ' ' : ''}`
          + `${n === 1 ? 'project' : 'projects'} whose work BEGAN in this period, at each project's current credited total`
          + ' — so a project that gains a deliverable later raises the figure shown for the month it started.';
@@ -460,7 +471,7 @@ export function scopeStatement(
            + ' so nothing records when their work began and they are excluded from any dated view.';
       }
     }
-    if (product !== 'orbit') {
+    {
       s += ` Scout hours count the ${typeof r === 'number' ? r + ' ' : ''}${r === 1 ? 'run' : 'runs'} that FINISHED in this period.`;
       if ((hours?.undatedRunsExcluded ?? 0) > 0) {
         s += ` ${hours!.undatedRunsExcluded} run${hours!.undatedRunsExcluded === 1 ? ' has' : 's have'} no finish time recorded and ${hours!.undatedRunsExcluded === 1 ? 'is' : 'are'} excluded from any dated view.`;
