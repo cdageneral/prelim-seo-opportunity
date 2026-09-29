@@ -1,3 +1,27 @@
+# v7.528 — Separate Orbit and Scout Hours Saved cards; one shared top nav (2026-09-29)
+
+Wayne: "i need separate hours saved for orbit and for scout. Also i need the global nav to have both admin and
+dashboard visible between the two."
+
+- **Two Hours Saved cards, on every view of the API Usage dashboard:** *Hours Saved · Orbit* (projects, dated by
+  initiation) and *Hours Saved · Scout* (runs, dated by finish). The spend toggle still decides which rows the table
+  lists; the card for the product outside the current view stays put and says "not in this view". The table's total
+  row sums only the rows it lists. The hours request now always asks for both products (`?product=all`).
+- **Row selection is per view:** unticking a project in the Orbit view narrows the Orbit card only — the Scout card
+  never reads 0 because the picker (which cannot list runs) did not tick them. Same the other way round.
+- **Usage PDF:** the same two tiles; the hours appendix lists only the rows the view's table lists.
+- **Global nav:** a shared button set — Projects · Scout · Admin · Dashboard · Sign out — with the same visibility
+  rules the project dashboard and the Scout page already apply (Projects with Orbit access, Scout with Scout access,
+  Admin for owner/admin, Dashboard for admins and anyone with Orbit). The usage Dashboard page carried only Projects;
+  it now shows Projects · Scout · Admin · Sign out. Admin now shows Scout beside Projects and Dashboard. Each page
+  omits its own button. New `components/GlobalNavLinks.tsx`; the project dashboard and Scout headers are unchanged.
+
+Verification: real-project `tsc` clean · retained suite re-run in full, FAIL set identical to the baseline (27) · new
+jsdom harness renders the shared nav for six account shapes (order, self-link omitted, sign-out only where asked,
+nothing on a failed probe) + the per-view hours filter (4 checks) + 4 source gates. The v7.526 render harness and the
+v7.483/v7.484 "hours route receives the window" checks were re-pointed with dated notes (hours now fetched as
+product=all; two cards). II.6c unchanged: the nav component and the client Scout PDF name no internal metric.
+
 # v7.527 — Orbit Hours Saved was 500ing: array-length guards made order-safe (2026-09-29)
 
 Caught by the v7.526 live check: `/api/usage/hours?product=orbit` answered 500 `cannot get array length of a
