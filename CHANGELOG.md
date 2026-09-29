@@ -1,3 +1,21 @@
+# v7.527 — Orbit Hours Saved was 500ing: array-length guards made order-safe (2026-09-29)
+
+Caught by the v7.526 live check: `/api/usage/hours?product=orbit` answered 500 `cannot get array length of a
+scalar`, so the Orbit view of the API Usage dashboard showed no Hours Saved card and a dash in every project's Hours
+column (the Scout view, on its own query, was fine). The query is `lib/hours/evidence.ts`, unchanged since v7.484 —
+three of its guards were written `jsonb_typeof(x)='array' AND jsonb_array_length(x) > 0`, and Postgres does not
+guarantee the order AND operands are evaluated in, so a JSON `null` where an array was expected (an `aioSources`,
+`anchors`, `preLLMPrompts` or `productPrompts` field) could reach `jsonb_array_length` first and raise.
+
+- Every `jsonb_array_length` in `lib/hours` now sits inside a `CASE WHEN jsonb_typeof(...)='array' ... ELSE 0 END`
+  arm. CASE arms are evaluated in order, so the guard actually guards; a null or scalar reads as 0 (Const I.5),
+  exactly what the v7.447 header always promised.
+- No figure changes: a row that could never have passed the length test still counts 0; rows that did still count.
+
+Verification: real-project `tsc` clean · retained suite re-run in full, FAIL set identical to the baseline (27) ·
+two new source gates: no `AND jsonb_array_length` in any lib/hours query line, and every `jsonb_array_length` sits in
+a CASE arm. Live: `/api/usage/hours?product=orbit` answers 200 and the Orbit Hours Saved card and column render.
+
 # v7.526 — Hours Saved credited to Scout reports (2026-09-29)
 
 Wayne: "for the hours saved we should add in the hours saved for the scout reports as well." Hours Saved only ever
