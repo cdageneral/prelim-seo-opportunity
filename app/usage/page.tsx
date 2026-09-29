@@ -1,5 +1,5 @@
 /**
- * /usage — cross-project API Usage Dashboard (v7.225)
+ * /usage — cross-project API Usage Dashboard (v7.225 · v7.528 shared nav)
  *
  * The global "Dashboard" button (top nav) opens this. Shows credit usage across
  * ALL projects plus a per-project breakdown, without entering any project.
@@ -7,6 +7,7 @@
 
 import Link from 'next/link';
 import ThemeToggle from '@/components/ThemeToggle';
+import GlobalNavLinks from '@/components/GlobalNavLinks';
 import UsageRollup from '@/components/dashboard/UsageRollup';
 
 export const dynamic = 'force-dynamic';
@@ -20,13 +21,9 @@ export default function UsageDashboardPage() {
           <Link href="/dashboard" className="text-xl font-bold gradient-text">OrbitIQ</Link>
           <div className="flex items-center gap-3">
             <ThemeToggle />
-            <Link
-              href="/dashboard"
-              className="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg border border-orbit-border text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/40 transition-colors"
-            >
-              <i className="ti ti-layout-grid" aria-hidden="true" />
-              Projects
-            </Link>
+            {/* v7.528 — the shared button set (Projects · Scout · Admin · Sign out);
+                this page carried only Projects before. Dashboard is this page. */}
+            <GlobalNavLinks current="usage" signOut />
           </div>
         </div>
       </nav>
