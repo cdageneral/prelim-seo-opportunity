@@ -1,3 +1,54 @@
+# v7.526 — Hours Saved credited to Scout reports (2026-09-29)
+
+Wayne: "for the hours saved we should add in the hours saved for the scout reports as well." Hours Saved only ever
+scored projects; the Scout view of the API Usage dashboard hid the card and column entirely (v7.514). A Scout report
+replaces real manual work — a smaller slice of it than an Orbit project, so it gets its own, smaller rate card rather
+than the Orbit figures.
+
+- **Eleven Scout activities, 77 hrs per fully-completed run** (Wayne approved these, 2026-09-29, as the share of each
+  Orbit activity a Scout run actually performs): Project scoping 6 · Organic baselining 6 · Keyword research &
+  themeing 15 · SOV & rank distribution 4 · Backlink profile 1 · LLM Visibility Baseline 5 · Citation Gap (AI) 5 ·
+  Content gap 6 · Opportunity insights 6 · Executive summary 8 · SEO & GEO snapshot report 15. Orbit activities Scout
+  never performs (prompt fan-out, audiences, LOB plan, roadmap, calendar, journeys, SERP features, anchors, every
+  Local line) have no Scout row and can never be credited to a run.
+- **Credited per run, on the run's own stored result, never to a project.** A new `scout` group in the rate card, ten
+  Scout gates (`lib/hours/gates.ts`) reading `scout_runs.status` and counts measured in SQL from `scout_runs.result`
+  (`lib/hours/scoutEvidence.ts` — jsonb_typeof-guarded, the blob never crosses the wire, II.9). A `ready` run with AI
+  answers read earns 77; `no_opening` (printable, no opening) 65; a `thin` run only what it measured (scoping, and
+  baselining/authority where step 1 completed); `failed`, draft, queued, running and soft-deleted runs earn nothing,
+  whatever the row still carries. A run whose AI answers were not read is withheld exactly the two AI lines.
+- **Dated by when the run finished.** A run is one bounded event, so `finished_at` is its month (projects keep the
+  v7.484 first-analysis basis). The scope sentence, card, column sub-label and PDF tile name both bases when both
+  products are in view.
+- **API Usage dashboard:** `/api/usage/hours` takes the same `?product=orbit|scout|all` as the spend routes (absent =
+  Orbit, byte-for-byte the previous answer). The Scout view now asks for hours and shows the Hours Saved column per
+  run (Keywords stays project-only); Orbit + Scout shows both, each row under its own product key (`rowKey`), so a run
+  and a project can never share a bucket or a breakdown. The card counts "N projects · M Scout runs". Same on the
+  internal usage PDF (tile, table, appendix marks SCOUT RUN rows).
+- **Admin → Hours Saved:** Group gains **Scout**; the gate picker groups project gates and Scout-run gates and labels
+  the other product's as never credited; a mismatch (a Scout gate on a project row or the reverse) is stored, never
+  credited, shown in red, and raised as a dashboard/PDF alarm beside the existing "no gate" one. Scope strip adds
+  "Scout run scope 77 hrs".
+- **One-time additive seed.** The production rate card was seeded in v7.447 and is never re-seeded, so the Scout rows
+  are added exactly once under seed id `scout_v7526` (`hours_seeds` table, ON CONFLICT DO NOTHING): edited rows are
+  untouched, and a Scout row Wayne removes stays removed.
+- **Fail-closed audit at the rate-card level:** unregistered and mis-applied gates are detected on the active list
+  itself, independent of which rows a window or product filter admits — narrowing a view can never hide the alarm.
+- Const II.6c unchanged: Hours Saved stays internal (dashboard + Admin only). `lib/hours` reads the `scout_runs`
+  table directly and never imports `lib/scout`; no Scout module or client PDF template imports `lib/hours`.
+
+Verification: real-project `tsc` clean · retained suite A/B — base 3688 PASS / 27 FAIL, with the change every prior
+check still passes and the FAIL set is identical (the pre-existing 27) · new: 51 logic checks (seed figures, ceiling
+unchanged at 831 with Scout 77 beside it, the v7.447 empty-project-earns-6 invariant intact, run scoring for
+ready/no_opening/thin/failed/running, one-field-off withholds exactly one line, mis-application fails closed and is
+reported, rowKey-keyed maps and filters, scope sentences, PDF tile/table/appendix/alarm) + 9 source gates (SQL guards,
+status set, finished_at dating, II.6c direction, one-shot seed, ?product= on the route, Admin enum, rowKey lookups,
+client Scout PDF names no internal metric) + a jsdom harness driving the REAL dashboard through Orbit → Scout →
+Orbit + Scout with a project and a run sharing the same id (24 checks, both themes). The v7.514 "skips hours for
+Scout" source check was re-pointed with a dated note (false by design now). II.6a: the only downstream surface of
+Hours Saved is the internal usage PDF, updated in this release. II.9: the one new query names its columns and
+returns counts only. Theme: the new alarm reuses the v7.447 alarm's exact token classes; no raw palette.
+
 # v7.525 — Admin: set Orbit / Scout / both when adding a user (2026-09-27)
 
 Wayne: "when i am adding a user i need to be able to add someone to Scout or Orbit or both". Product access could only
