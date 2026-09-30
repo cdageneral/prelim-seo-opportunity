@@ -11,11 +11,21 @@
  * relationship-first close with a single ask — a 30-minute call — and no rep
  * name, booking link, QR code or contact email (iQuanti has none to print).
  * A section whose data is missing is dropped, never padded (Const I.5).
+ *
+ * v7.529 (Wayne, 2026-09-29): the 30-minute-call ask now names the person who
+ * generated the report — their name and email, read live from app_users at print
+ * time (ScoutContact) — so the prospect knows who to contact. No contact (user
+ * suspended or removed) → the pre-v7.529 wording prints unchanged. The iQuanti
+ * logo sits in the footer of every content page.
  */
 
 import type { ScoutResult, ThemeLite, KeywordLite } from './run';
 import { OPEN_BELOW_SHARE, HELD_FROM_SHARE, DEMAND_FLOOR_MONTHLY, AI_NAMED_FROM, AUTHORITY_TOLERANCE, NEAR_WIN_MIN, PAGES_GAP_MULTIPLE } from './config';
 import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.519: named CTR model for the est.-traffic disclosure (Const I.5a)
+import { IQUANTI_LOGO_DATA_URI } from './iquantiLogo';   // v7.529
+
+/** v7.529 — who generated the report; the prospect contacts this person to set up the call. */
+export interface ScoutContact { name: string; email: string }
 
 const esc = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const n0 = (n: number) => Math.round(n).toLocaleString('en-US');
@@ -71,7 +81,7 @@ export function withKnownAuthority(r: ScoutResult): ScoutResult {
   return { ...r, facts: r.facts.map(f => ({ ...f, authorityScore: null })), field: r.field.map(f => ({ ...f, authority: null })), opening };
 }
 
-export function buildScoutHtml(r0: ScoutResult): string {
+export function buildScoutHtml(r0: ScoutResult, contact: ScoutContact | null = null): string {
   const r = withKnownAuthority(r0);
   const me = r.input.domain;
   const comps = r.input.competitors.map(c => c.domain);
@@ -85,7 +95,7 @@ export function buildScoutHtml(r0: ScoutResult): string {
   const authOf = (d: string) => r.facts.find(f => f.domain === d)?.authorityScore ?? null;
 
   let pageNo = 0;
-  const foot = () => `<div class="ft"><span>iQ.IMPACT SNAPSHOT · ${esc(me)}</span><span>${String(pageNo).padStart(2, '0')}</span></div>`;
+  const foot = () => `<div class="ft"><span>iQ.IMPACT SNAPSHOT · ${esc(me)}</span><img class="ftlogo" src="${IQUANTI_LOGO_DATA_URI}" alt="iQuanti"><span>${String(pageNo).padStart(2, '0')}</span></div>`;
   const page = (kicker: string, inner: string) => { pageNo++; return `<section class="pg"><div class="k">${String(pageNo).padStart(2, '0')} · ${esc(kicker)}</div>${inner}${foot()}</section>`; };
   const bar = (label: string, frac: number, right: string, mine: boolean, lw = '1.7in', rw = '1.1in') =>
     `<div class="sb" style="grid-template-columns:${lw} 1fr ${rw}"><span${mine ? ' class="me"' : ''}>${esc(label)}</span><div class="trk"><i style="width:${Math.max(0, Math.min(100, frac * 100)).toFixed(1)}%;background:${mine ? 'var(--indigo)' : 'var(--grey)'}"></i></div><span class="n">${right}</span></div>`;
@@ -322,7 +332,9 @@ export function buildScoutHtml(r0: ScoutResult): string {
     <div class="two" style="grid-template-columns:1fr 1.05fr;gap:18px"><div class="letter"><p>We put this together because ${theme ? `${esc(theme)} stood out` : `a few things stood out`} when we looked at your category, and we thought you'd want to see it whether or not we ever work together.</p><p>You may already be on it. If so, we'd like to hear how it's going. If it's new, we're happy to walk through what's behind the numbers and answer questions. Either way the report is yours to keep.</p>
       <div class="sig"><span class="av">iQ</span><div><b>The iQuanti team</b><span>Search &amp; AI visibility</span></div></div></div>
       <div><div class="fig" style="margin-top:0">What we'd be curious about</div>${asks.map((a, i) => `<div class="ask" data-n="${i + 1}"><b>${esc(a[0])}</b><span>${esc(a[1])}</span></div>`).join('')}</div></div>
-    <div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Just reply to whoever sent you this report and we'll find a time that works.</span></div>
+    ${contact
+      ? `<div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Reach out to ${esc(contact.name)} and we'll find a time that works.</span><div class="who"><b>${esc(contact.name)}</b><a href="mailto:${esc(contact.email)}">${esc(contact.email)}</a></div></div>`
+      : `<div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Just reply to whoever sent you this report and we'll find a time that works.</span></div>`}
     <p class="method"><b>Sources &amp; method.</b> Rankings, search volumes, Authority Score, ranking URLs, question searches and traffic estimates: Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}; traffic is a Semrush estimate and is labelled where shown. AI answers: recorded ChatGPT and Google AI Overview answers, read the same day. This snapshot reads each competitor's highest-volume page-one searches${r.floorVolume > 0 ? `, so every figure covers searches above ${n0(r.floorVolume)} a month and is exact within that set` : ''}; branded searches are excluded. ${r.input.scope === 'products' ? 'Searches were assigned to the named products' : 'Themes were grouped'} by Claude from the keyword list — it sorts, it does not supply numbers. Every sentence in this report is filled from the measured figures; none of it is written by an AI.${r.notes.length ? ' ' + esc(r.notes.join(' ')) : ''}</p>`);
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>iQ.Impact Snapshot — ${esc(me)}</title>
@@ -337,7 +349,7 @@ const CSS = `
 body{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:12px;line-height:1.45}
 svg text{font-family:Inter,system-ui,sans-serif}
 .pg{width:8.5in;height:11in;padding:46px 54px 32px;position:relative;display:flex;flex-direction:column;overflow:hidden;page-break-after:always;background:#fff}
-.ft{margin-top:auto;padding-top:10px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;font-size:8.5px;color:var(--muted);letter-spacing:.08em}
+.ft{margin-top:auto;padding-top:10px;border-top:1px solid var(--grid);display:flex;justify-content:space-between;align-items:center;font-size:8.5px;color:var(--muted);letter-spacing:.08em}.ftlogo{height:13px;width:auto;display:block}
 .k{font-size:9px;font-weight:800;letter-spacing:.16em;color:var(--indigo)}
 h3{font:600 30px/1.12 Fraunces,Georgia,serif;letter-spacing:-.02em;margin:9px 0 9px;max-width:6.6in}h3 u,h1 u{text-decoration:none;color:var(--indigo)}
 .lede{color:var(--ink2);font-size:12.5px;margin:0 0 14px;max-width:6.2in}
@@ -368,6 +380,6 @@ table.lt td,table.lt th{padding:2.5px 6px!important;font-size:9px}table.lt{margi
 .letter{background:var(--paper);border-radius:12px;padding:22px 24px;font:400 13.5px/1.62 Fraunces,Georgia,serif;color:#2b2a30}.letter p{margin:0 0 10px}
 .sig{display:flex;gap:11px;align-items:center;margin-top:14px;font-family:Inter,system-ui,sans-serif}.av{width:40px;height:40px;border-radius:50%;background:var(--indigo);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px}.sig b{font-size:12.5px;display:block}.sig div span{font-size:10.5px;color:var(--ink2)}
 .ask{border-bottom:1px solid var(--grid);padding:11px 0 11px 36px;position:relative}.ask:last-child{border:0}.ask:before{content:attr(data-n);position:absolute;left:0;top:9px;font:800 24px/1 Inter,system-ui,sans-serif;color:#c9c6f2;letter-spacing:-.04em}.ask b{display:block;font:600 14px/1.3 Fraunces,Georgia,serif;margin-bottom:3px}.ask span{font-size:10.5px;color:var(--ink2)}
-.soft{border:1.5px solid var(--indigo);border-radius:12px;padding:20px 24px;margin-top:22px}.soft b{display:block;font:600 19px Fraunces,Georgia,serif;margin-bottom:5px}.soft span{font-size:12px;color:var(--ink2)}
+.soft{border:1.5px solid var(--indigo);border-radius:12px;padding:20px 24px;margin-top:22px}.soft b{display:block;font:600 19px Fraunces,Georgia,serif;margin-bottom:5px}.soft span{font-size:12px;color:var(--ink2)}.soft .who{margin-top:14px;padding-top:12px;border-top:1px solid var(--grid);display:flex;gap:16px;align-items:baseline}.soft .who b{display:inline;font:700 13.5px Inter,system-ui,sans-serif;margin:0;color:var(--ink)}.soft .who a{color:var(--indigo);font-weight:600;font-size:12.5px;text-decoration:none}
 .method{font-size:8.5px;color:var(--muted);margin-top:14px;line-height:1.55}
 `;

@@ -183,6 +183,21 @@ export async function listRuns(opts: { userId: string | null; all: boolean; limi
   return { runs: rowsOf(res).map(toRun), total: Number(n?.n ?? 0) };
 }
 
+/**
+ * v7.529 — who to contact about a report: the user who generated the run, read LIVE from app_users
+ * at print time (a changed name/email prints the current one). Only an ACTIVE user is printed — a
+ * suspended/pending or removed account returns null and the PDF keeps the generic wording, so a
+ * prospect is never pointed at someone who can no longer answer. Named columns, no blob (Const II.9).
+ */
+export async function getRunContact(id: string): Promise<{ name: string; email: string } | null> {
+  await ensureScoutTables();
+  const r = rowsOf(await db.execute(sql`SELECT u.name AS u_name, u.email AS u_email, u.status AS u_status
+    FROM scout_runs r JOIN app_users u ON u.id = r.user_id WHERE r.id = ${id} AND r.deleted_at IS NULL LIMIT 1`))[0];
+  if (!r || String(r.u_status) !== 'active') return null;
+  const name = String(r.u_name ?? '').trim(), email = String(r.u_email ?? '').trim();
+  return name && email ? { name, email } : null;
+}
+
 export async function getRunResult(id: string): Promise<any | null> {
   await ensureScoutTables();
   const r = rowsOf(await db.execute(sql`SELECT result FROM scout_runs WHERE id = ${id} AND deleted_at IS NULL LIMIT 1`))[0];

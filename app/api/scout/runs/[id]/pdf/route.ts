@@ -9,7 +9,7 @@ export const maxDuration = 60;
 
 import { NextResponse } from 'next/server';
 import { requireScout } from '@/lib/scout/access';
-import { getRun, getRunResult } from '@/lib/scout/store';
+import { getRun, getRunResult, getRunContact } from '@/lib/scout/store';
 import { buildScoutHtml } from '@/lib/scout/pdfTemplate';
 import { renderScoutPdf } from '@/lib/scout/renderPdf';
 
@@ -23,7 +23,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const result = await getRunResult(params.id);
   if (!result?.themes) return NextResponse.json({ error: 'Stored result is missing.' }, { status: 409 });
 
-  const html = buildScoutHtml(result);
+  // v7.529: the 30-minute-call ask names the user who generated the run (active accounts only)
+  const html = buildScoutHtml(result, await getRunContact(params.id));
   if (new URL(req.url).searchParams.get('format') === 'html') return new NextResponse(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
   let pdf: Buffer;
   try { pdf = await renderScoutPdf(html); } catch (e) {

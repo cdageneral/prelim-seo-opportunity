@@ -1,3 +1,29 @@
+# v7.529 — Scout PDF: iQuanti logo in the footer; the 30-minute-call ask names who ran the report (2026-09-29)
+
+Wayne: "for the scout report thats generated. Can we add the iquanti logo somewhere in the footer and also when we
+talk about setting up a 30 min call can we pull the user that generated the report their name and email into that
+report so the user can contact that person."
+
+- **Logo:** the iQuanti wordmark Wayne supplied (696×131 transparent PNG) sits centered in the footer of every content
+  page, between "iQ.IMPACT SNAPSHOT · domain" and the page number. Embedded as a data URI (`lib/scout/iquantiLogo.ts`)
+  so the lambda Chromium never has to fetch it. The dark cover keeps its text-only footer — the grey wordmark does not
+  read on it.
+- **Contact on the close:** the 30-minute-call box now reads "Reach out to <name> and we'll find a time that works,"
+  followed by the name and a clickable email. The contact is the user who generated the run, read LIVE from
+  `app_users` when the PDF is printed (new `getRunContact`), so a changed name or email prints the current one, and
+  re-downloading an older report shows its creator. Only an ACTIVE account is printed; a suspended, pending or removed
+  user falls back to the previous wording ("reply to whoever sent you this report"), byte-identical to v7.528.
+  This reverses the v7.513 "no rep name / no email" choice at Wayne's request.
+- **Unchanged:** every figure, page and sentence elsewhere in the report; the Scout screen.
+
+Verification: real-project `tsc` clean · retained suite re-run in full, 3,803 PASS, FAIL set identical to the
+v7.528 baseline (27) · new v529 harness (15 checks on the real template: contact printed once on the close page only,
+mailto link, HTML-escaped, no-contact output identical to the legacy call, logo on every content page and not the
+cover, embedded PNG is 696×131) + 4 source gates (route passes the contact; active-only named-column read, no blob,
+II.9; Scout never writes app_users; II.6c). The v513 "no contact artifacts" check was amended with a dated note to
+strip data: URIs before scanning (the logo's base64 contains "qr" by chance); its rule is unchanged. Rendered to PDF
+in Chromium: 7 Letter pages, no page overflows, footer at the same position on every page.
+
 # v7.528 — Separate Orbit and Scout Hours Saved cards; one shared top nav (2026-09-29)
 
 Wayne: "i need separate hours saved for orbit and for scout. Also i need the global nav to have both admin and
