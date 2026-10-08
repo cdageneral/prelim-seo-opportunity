@@ -24,6 +24,8 @@ export const OTHER_CATEGORY = 'Other';
  * `_categoryBreakdown.filerVersion[kw] = FILER_VERSION`, so a rule change can re-file the
  * competitor keywords an older rule set filed (refile mode) and the loop knows when it is done.
  */
+/** v7.538: stamp for CLIENT keywords re-filed with the client's own name and brand buckets in view. */
+export const CLIENT_FILER_VERSION = 538;
 /** v7.537: stamp for publisher projects (third-party brands filed by topic). */
 export const PUBLISHER_FILER_VERSION = 537;
 export const FILER_VERSION = 536;   // v7.536: stricter relevance rules + stronger model (re-files every 532-filed keyword)
@@ -36,10 +38,14 @@ function domainRoot(domain: string): string {
 }
 
 /** Own brands the filer may keep: client domain root + project brand terms (partners). */
-export function ownBrandList(clientDomain: string, brandTerms: string[] = []): string[] {
+export function ownBrandList(clientDomain: string, brandTerms: string[] = [], clientName: string = ''): string[] {
   const out: string[] = [];
   const root = domainRoot(clientDomain);
   if (root.length >= 3) out.push(root);
+  // v7.538: the client's own name as written ("Lloyds Bank", "NYP") — the domain root alone
+  // ("lloydsbank") let the filer read "lloyds" / "loyds" as someone else's brand.
+  const nm = String(clientName ?? '').toLowerCase().replace(/\(.*?\)/g, ' ').replace(/[^a-z0-9&' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (nm.length >= 3 && !out.includes(nm)) out.push(nm);
   for (const t of brandTerms ?? []) {
     const v = String(t ?? '').toLowerCase().trim();
     if (v.length >= 3 && !out.includes(v)) out.push(v);
@@ -165,6 +171,7 @@ Rules:
   for are not about the product itself (e.g. "bwi airport", "lollapalooza 2025", "tsa precheck", "passport",
   "travel insurance") — answer 0 unless a category is literally about that subject.
 ${brandRule}
+- Misspellings, abbreviations and partial forms of ${domain}'s OWN brand (${own}) are the client's own brand searches, not another company: file them in the category named for the client's brand if one is listed, otherwise answer 0.
 - Navigation searches for another company's site — a web address, login, sign-in, activation, bill pay or account page that is not ${domain}'s or a listed partner's — answer 0.
 - Answer every keyword exactly once.
 

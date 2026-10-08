@@ -1,3 +1,19 @@
+# v7.538 — The client's own brand typos and short forms are no longer filed as "other companies" (2026-10-08)
+
+Found while checking publisher candidates after v7.537: the filer sent the CLIENT's own brand searches to "Other" —
+Lloyds Bank "lloyds", "lloyd", "loyds"; Quicken Loans "my ql", "quickten"; NYP "nyp"; Aflac "afpac"; Citi partner
+typos "cosct", "cocto.com". It only knew the domain root ("lloydsbank") and every brand-typed category was excluded as a
+target, so a client brand search had nowhere to go.
+
+- The filer's own-brand list now includes the client name as written ("lloyds bank", "nyp", "quicken loans").
+- New prompt rule: misspellings, abbreviations and partial forms of the client's own brand are the client's own brand
+  searches — file them in the client's brand category ("Lloydsbank Brand Searches") when one exists, otherwise 0.
+- The client's own brand bucket (a brand-typed category named for the client) is now a filing target; every other
+  brand-typed category still is not.
+- Client keywords an earlier rule sent to "Other" are re-filed once (stamp CLIENT_FILER_VERSION 538; publisher projects
+  537), on every project.
+- Verified: project tsc clean; retained suite 3,869 PASS / 30 FAIL — the identical pre-existing failure set (zero new), incl. 4 new v538 checks.
+
 # v7.537 — Competitor short names ("amex") caught; Publisher mode for comparison sites (2026-10-08)
 
 Wayne: "here is a competitor brand term in the mix" ("amex pre approval", americanexpress.com footprint on Citi
