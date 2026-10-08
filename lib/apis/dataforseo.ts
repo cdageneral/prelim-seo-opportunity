@@ -97,6 +97,8 @@ export interface ScanFailureReport {
   failures: Array<DfsFailure & { count: number }>;
   /** Keywords never attempted because the wall-clock budget ran out. */
   skippedForTime: number;
+  /** v7.544: every keyword that was attempted and still failed after retries, with its reason. */
+  failedKeywords?: Array<DfsFailure & { keyword: string }>;
 }
 
 function tallyFailure(report: ScanFailureReport | undefined, f: DfsFailure | undefined): void {
@@ -258,9 +260,11 @@ export async function dfsBatchKeywordScan(
     };
     let result: any = null;
     let failure: DfsFailure | undefined;
+    let attempted = false;
     for (let attempt = 0; attempt <= RETRY_WAIT_MS.length; attempt++) {
       const left = deadline - Date.now();
       if (left < MIN_CALL_MS) break;
+      attempted = true;
       const call = await dfsPost<any>(ORGANIC_ENDPOINT, task, 'google_organic', 'searches', Math.min(PER_CALL_MS, left));
       result = call.result;
       failure = call.failure;
@@ -268,7 +272,17 @@ export async function dfsBatchKeywordScan(
       if (deadline - Date.now() < RETRY_WAIT_MS[attempt] + MIN_CALL_MS) break;
       await sleep(RETRY_WAIT_MS[attempt]);
     }
-    if (!result) { tallyFailure(report, failure ?? { kind: 'timeout', code: null, message: 'scan time budget used up before this keyword could be tried' }); return null; }
+    if (!result) {
+      if (!attempted || !failure) {                       // never tried — out of time, not a keyword failure
+        if (report) report.skippedForTime++;
+        return null;
+      }
+      tallyFailure(report, failure);
+      // v7.544: name the keyword, so a keyword DataForSEO cannot answer is visible in the logs
+      console.error(`DataForSEO google_organic gave up on "${keyword}": ${failure.kind} ${failure.code ?? ''} ${failure.message}`);
+      if (report) (report.failedKeywords ??= []).push({ ...failure, keyword });
+      return null;
+    }
 
     const items: any[] = Array.isArray(result.items) ? result.items : [];
     const itemTypes: string[] = Array.isArray(result.item_types) ? result.item_types.slice() : [];

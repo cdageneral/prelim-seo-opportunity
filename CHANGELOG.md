@@ -1,3 +1,20 @@
+# v7.544 — A keyword DataForSEO keeps failing on no longer blocks the SERP scan (2026-10-08)
+
+After v7.540 the Citi scan advanced (+10, +12, +21, +13, +3, +1) and then stopped on every Resume. Each batch takes
+the 25 highest-volume unscanned keywords, so keywords DataForSEO answers with `status 50000` even after retries
+stayed at the front of the queue and, batch by batch, became the whole batch.
+
+- **Set aside, not dropped.** A keyword that still fails after the v7.540 retries is recorded in
+  `serpApiSnapshot.setAside` with DataForSEO's own code and message. It stays unscanned and stays in the "remaining"
+  count, but moves to the back of the queue, so Resume continues with the next keywords. Set-aside keywords are
+  retried automatically once everything else is scanned; a keyword that later succeeds is removed from the list.
+- **Empty batches still advance.** When a whole batch fails, the set-aside list is written on its own key
+  (`jsonb_set`, no keyword data touched), so the next Resume starts on new keywords.
+- **Logs name the keyword** DataForSEO gave up on, so a keyword-specific failure is visible.
+- **Banner** says how many keywords are set aside, that Resume moves on, and how many keywords were not reached in time.
+- Downstream (II.6a): no metric, panel or PDF changed. II.9: one targeted UPDATE, no new reads.
+- Verified: project tsc clean; retained suite 2,652 PASS / 68 FAIL, the identical pre-existing FAIL set, incl. 5 new v7544 checks.
+
 # v7.543 — Cluster hero laid out as a column; page-inventory lines span the card (2026-10-08)
 
 v7.542's 300px cap stopped the number column growing, but at laptop width the volume column still clipped the

@@ -21,7 +21,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { batchKeywordScan, buildSnapshotFromKeywordData, activeProviderLabel, providerBalanceUrl, serpProvider } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import type { KeywordSerpData } from '@/lib/apis/serp';
@@ -138,6 +138,11 @@ export async function POST(
   const serpSnap: any = analysis.serpApiSnapshot ?? { keywords: [] };
   const existing: KeywordSerpData[] = serpSnap.keywords ?? [];
   const scannedSet = new Set(existing.map(k => k.keyword?.toLowerCase()));
+  // v7.544: keywords the provider kept failing on after retries. They are still
+  // unscanned (counted in "remaining") but go to the BACK of the queue, so one
+  // keyword the provider cannot answer no longer blocks every batch behind it.
+  const setAside: SetAsideEntry[] = Array.isArray(serpSnap.setAside) ? serpSnap.setAside : [];
+  const setAsideLow = new Set(setAside.map(e => (e.keyword ?? '').toLowerCase()));
 
   // v7.121: AIO filter — candidate pool is the uploaded keywords carrying an
   // "AI Overview" flag in their Semrush SERP-features cell (deduped, blocked
@@ -175,7 +180,9 @@ export async function POST(
   } else {
     const unscanned = candidates
       .filter(p => !scannedSet.has(p.keyword.toLowerCase()))
-      .sort((a, b) => b.searchVolume - a.searchVolume);
+      .sort((a, b) => b.searchVolume - a.searchVolume)
+      // v7.544: set-aside keywords last — retried once everything else is scanned
+      .sort((a, b) => Number(setAsideLow.has(a.keyword.toLowerCase())) - Number(setAsideLow.has(b.keyword.toLowerCase())));
     unscannedCount = unscanned.length;
 
     // v7.132: dryRun — report remaining without scanning (0 credits, no save).
@@ -212,11 +219,22 @@ export async function POST(
   // v7.408: name the ACTIVE provider. This message used to hardcode SerpAPI and
   // send the operator to serpapi.com — under SERP_PROVIDER=dataforseo that is
   // the wrong vendor, the wrong dashboard, and a wasted debugging session.
+  // v7.544: update the set-aside list — add keywords that failed after retries,
+  // drop any that now succeeded. Written on its own key so an empty batch still
+  // advances the queue on the next Resume.
+  const nextSetAside = updateSetAside(setAside, scanReport, results.map(r => r.keyword));
+  const setAsideChanged = JSON.stringify(nextSetAside) !== JSON.stringify(setAside);
+
   if (results.length === 0) {
+    if (setAsideChanged) {
+      await db.update(analyses)
+        .set({ serpApiSnapshot: sql`jsonb_set(coalesce(${analyses.serpApiSnapshot}, '{"keywords":[]}'::jsonb), '{setAside}', ${JSON.stringify(nextSetAside)}::jsonb)` as any })
+        .where(eq(analyses.id, analysis.id));
+    }
     const label = activeProviderLabel();
     const where = (() => { try { return providerBalanceUrl(serpProvider()); } catch { return 'your SERP provider'; } })();
     return NextResponse.json(
-      { error: describeEmptyBatch(label, where, scanReport, batchKeywords.length), failures: scanReport.failures },
+      { error: describeEmptyBatch(label, where, scanReport, batchKeywords.length, nextSetAside.length, unscannedCount), failures: scanReport.failures, setAside: nextSetAside.length },
       { status: 502 }
     );
   }
@@ -227,7 +245,8 @@ export async function POST(
   // reflects total coverage, not just the latest batch.
   const freshLow = new Set(results.map(r => r.keyword.toLowerCase()));
   const mergedKeywords = [...existing.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...results];
-  const newSnap = buildSnapshotFromKeywordData(domain, mergedKeywords);
+  const newSnap: any = buildSnapshotFromKeywordData(domain, mergedKeywords);
+  if (nextSetAside.length) newSnap.setAside = nextSetAside;   // v7.544
 
   await db.update(analyses)
     .set({ serpApiSnapshot: newSnap as any })
@@ -242,7 +261,24 @@ export async function POST(
     poolTotal:    candidates.length,
     remaining:    scanFilter === 'rescan' ? 0 : Math.max(unscannedCount - results.length, 0),
     filter:       scanFilter,
+    setAside:     nextSetAside.length,   // v7.544
   });
+}
+
+/** v7.544: a keyword the provider still failed on after retries, with the provider's own reason. */
+interface SetAsideEntry { keyword: string; kind: string; code: number | null; message: string; at: string; attempts: number }
+
+function updateSetAside(prev: SetAsideEntry[], r: ScanFailureReport, succeeded: string[]): SetAsideEntry[] {
+  const ok = new Set(succeeded.map(k => k.toLowerCase()));
+  const byLow = new Map<string, SetAsideEntry>();
+  for (const e of prev) if (e?.keyword && !ok.has(e.keyword.toLowerCase())) byLow.set(e.keyword.toLowerCase(), e);
+  const now = new Date().toISOString();
+  for (const f of r.failedKeywords ?? []) {
+    const lo = f.keyword.toLowerCase();
+    const old = byLow.get(lo);
+    byLow.set(lo, { keyword: f.keyword, kind: f.kind, code: f.code, message: f.message, at: now, attempts: (old?.attempts ?? 0) + 1 });
+  }
+  return Array.from(byLow.values());
 }
 
 /**
@@ -251,7 +287,7 @@ export async function POST(
  * credits") sent Wayne to a DataForSEO balance of $1,537 while the real cause
  * was DataForSEO's own status 50000 Internal Server Error (Const I.1).
  */
-function describeEmptyBatch(label: string, where: string, r: ScanFailureReport, total: number): string {
+function describeEmptyBatch(label: string, where: string, r: ScanFailureReport, total: number, setAsideTotal = 0, unscannedTotal = 0): string {
   const fs = [...r.failures].sort((a, b) => b.count - a.count);
   if (fs.length === 0) {
     // No reason captured (SerpAPI path, or provider not configured) — state only what is known.
@@ -266,5 +302,13 @@ function describeEmptyBatch(label: string, where: string, r: ScanFailureReport, 
   const hint = serverSide
     ? `This is an error on ${label}'s side, not your balance — retried automatically and still failing. Wait a few minutes and Resume.`
     : `Check the account at ${where}.`;
-  return `${label} returned no results for this batch — ${parts.join('; ')}. ${hint} Nothing was saved.`;
+  // v7.544: keywords never attempted because the batch ran out of time
+  if (r.skippedForTime > 0) parts.push(`${r.skippedForTime} of ${total} not reached in time`);
+  // v7.544: the failed keywords are set aside, so Resume moves on instead of repeating them
+  const queue = setAsideTotal > 0 && setAsideTotal < unscannedTotal
+    ? ` ${setAsideTotal.toLocaleString()} keyword${setAsideTotal === 1 ? '' : 's'} ${label} keeps failing on ${setAsideTotal === 1 ? 'is' : 'are'} now set aside — Resume moves on to the next keywords and retries the set-aside ones at the end.`
+    : setAsideTotal > 0
+      ? ` Only set-aside keywords are left (${setAsideTotal.toLocaleString()}) and ${label} is still failing on them.`
+      : '';
+  return `${label} returned no results for this batch — ${parts.join('; ')}.${queue} ${serverSide ? (setAsideTotal > 0 && setAsideTotal < unscannedTotal ? 'This is an error on ' + label + "'s side, not your balance." : hint) : hint} No keyword data was saved from this batch.`;
 }
