@@ -37,7 +37,7 @@ import { eq } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { normAddress, distanceKm, PROFILE_MATCH_KM } from '@/lib/local/listingIntegrity';
-import { buildKwPool, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, isBrandedKeyword, brandCategoriesWithClientMembers, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 // v7.336 (QC audit B3): server-side snapshot hydration — same helper the v7.335 PDF route uses.
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import {
@@ -856,11 +856,12 @@ export async function POST(
         const compTokens = buildCompetitorBrandTokens(snap, clientDomain, manualCompetitorDomains);
         const exclTokens = buildExcludedBrandTokens(snap);
         const isOwnBrand = (name: string) => isBrandedKeyword(name, clientDomain, [], brandTermsList);
+        const clientBrandCats = brandCategoriesWithClientMembers(snap, clientDomain, brandTermsList);   // v7.530
         const guardedCategories = ((snap?._categoryBreakdown?.categories ?? []) as Array<{ name?: string; type?: string; monthlyDemand?: number }>)
           .filter(c => {
             const name = String(c?.name ?? '');
             if (!name) return false;
-            if (c?.type === 'brand' && !isOwnBrand(name)) return false;
+            if (c?.type === 'brand' && !isOwnBrand(name) && !clientBrandCats.has(name)) return false;   // v7.530: mirrors categoryGuard
             if ((textHasCompetitorBrand(name, compTokens) || textHasCompetitorBrand(name, exclTokens)) && !isOwnBrand(name)) return false;
             return true;
           });
