@@ -20,6 +20,7 @@ import {
   detectIntentSignal as _detectIntentSignal,
   buildTopicsFromTaxonomy as _buildTopicsFromTaxonomy,
   buildCanonicalClusterTopics as _buildCanonicalClusterTopics,
+  pageRootTopics, pageInventory,   // v7.541: URL-rooted clusters (Const III.5 v0.39)
   type IntentType as _IntentType, type JourneyStage, type KwItem as _KwItem,
   type IntentCluster, type ThemeCluster, type Topic as _Topic,
 } from '@/lib/clusters/canonical';
@@ -542,6 +543,14 @@ function topicMetrics(t: Topic, st: TopicStat): TopicRow['m'] {
   return { cov, best, status };
 }
 
+// v7.541: page-line helpers — display the path of a real URL, link it absolutely.
+const pathOnly = (u: string): string => {
+  const s = String(u ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '');
+  const i = s.indexOf('/');
+  return i < 0 ? '/' : (s.slice(i) || '/');
+};
+const absPageUrl = (u: string): string => /^https?:\/\//i.test(u) ? u : `https://${u}`;
+
 const TH_BASE: React.CSSProperties = {
   textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.06em',
   textTransform: 'uppercase', color: 'var(--c-6a6a90)', borderBottom: '1px solid var(--c-23233a)',
@@ -829,6 +838,27 @@ function TopicTable({
                         {t.pageUrl && (
                           <i className="ti ti-link" style={{ fontSize: 11, color: 'var(--c-6c63ff)', flexShrink: 0 }} aria-hidden="true" title={t.pageUrl} />
                         )}
+                        {/* v7.541: the page this cluster is rooted on — a real URL (existing),
+                            a PROPOSED path (net-new), or an honest "URL not on file". */}
+                        {t.pageKind === 'existing' && t.pageUrl && (
+                          <a href={absPageUrl(t.pageUrl)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                             style={{ fontSize: 10, color: 'var(--c-8ab89a)', textDecoration: 'none', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                             title={t.pageUrl}>{pathOnly(t.pageUrl)}</a>
+                        )}
+                        {t.pageKind === 'existing' && !t.pageUrl && (
+                          <span style={{ fontSize: 10, color: 'var(--c-8a8aa8)', fontStyle: 'italic' }}>existing · URL not on file</span>
+                        )}
+                        {t.pageKind === 'net-new' && t.proposedPath && (
+                          <span style={{ fontSize: 10, color: 'var(--c-f59e0b)', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Proposed path (a recommendation, not data): ${t.proposedPath}`}>
+                            proposed {t.proposedPath}
+                          </span>
+                        )}
+                        {(t.mergedTopics?.length ?? 0) > 0 && (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: 'var(--c-9b96ff)', background: 'var(--ca-155-150-255-0_10)', border: '1px solid var(--ca-155-150-255-0_30)', borderRadius: 20, padding: '1px 6px', whiteSpace: 'nowrap' }}
+                                title={`${t.mergedTopics!.length} more topic${t.mergedTopics!.length === 1 ? '' : 's'} already rank on this same page — one cluster, one URL`}>
+                            +{t.mergedTopics!.length} topic{t.mergedTopics!.length === 1 ? '' : 's'} on this page
+                          </span>
+                        )}
                       </div>
                       {/* Grouped: parent is in the header → sub-label is just the intent
                           for product rows, and nothing for core rows (whose big label
@@ -867,6 +897,29 @@ function TopicTable({
                             <span style={{ fontSize: 10, color: 'var(--c-404060)', padding: '2px 4px' }}>+{t.keywords.length - topKws.length} more</span>
                           )}
                         </div>
+                        {/* v7.541: which taxonomy topics this page carries, and any OTHER client URL
+                            that also ranks inside it (consolidation signal) — real rows only. */}
+                        {(t.mergedTopics?.length ?? 0) > 0 && (
+                          <div style={{ marginTop: 8, fontSize: 10, color: 'var(--c-8a8aa8)', lineHeight: 1.6 }}>
+                            <span style={{ fontWeight: 700, color: 'var(--c-9b96ff)' }}>Topics on this page:</span>{' '}
+                            <span style={{ color: 'var(--c-c8c8e8)' }}>{t.product}</span>
+                            {t.mergedTopics!.map(mt => (
+                              <span key={mt.id}> · <span style={{ color: 'var(--c-c8c8e8)' }}>{mt.name}</span>
+                                <span style={{ color: 'var(--c-6a6a90)' }}> ({mt.parentName} · {mt.kwCount} kw · {fmtVol(mt.totalVolume)}/mo{mt.bestPosition !== null ? ` · best #${mt.bestPosition}` : ''})</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {(t.otherUrls?.length ?? 0) > 0 && (
+                          <div style={{ marginTop: 4, fontSize: 10, color: 'var(--c-8a8aa8)', lineHeight: 1.6 }}>
+                            <span style={{ fontWeight: 700, color: 'var(--c-f59e0b)' }}>Also ranking here:</span>{' '}
+                            {t.otherUrls!.slice(0, 6).map((o, i) => (
+                              <span key={o.url}>{i > 0 ? ' · ' : ''}<span style={{ color: 'var(--c-c8c8e8)' }}>{pathOnly(o.url)}</span>
+                                <span style={{ color: 'var(--c-6a6a90)' }}> ({o.kwCount} kw · best #{o.bestPosition})</span></span>
+                            ))}
+                            {t.otherUrls!.length > 6 && <span style={{ color: 'var(--c-6a6a90)' }}> · +{t.otherUrls!.length - 6} more</span>}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -951,11 +1004,15 @@ function ClustersTab({
   // v7.239: build topics from the SHARED taxonomy tree (keywordPaths) when available, so the
   // Cluster panel's structure is identical to the Keyword panel's by construction (Const II.7);
   // fall back to the intent-based flatten only on pre-taxonomy analyses (honest gap, I.5).
+  // v7.541: then root every node on a unique PAGE (one cluster per existing URL, one per
+  // net-new page) — the SAME pass buildCanonicalClusterTopics applies, so this panel's count
+  // is the Content Plan's / Journey's / Exec's count by construction (Const II.7, III.5 v0.39).
   const flatten = (cl: ThemeCluster[]): Topic[] =>
-    (keywordPaths && keywordPaths.size > 0) ? buildTopicsFromTaxonomy(cl, keywordPaths) : flattenTopics(cl);
+    pageRootTopics((keywordPaths && keywordPaths.size > 0) ? buildTopicsFromTaxonomy(cl, keywordPaths) : flattenTopics(cl));
   const topics: Topic[] = flatten(scopedClusters);
   const topicStats: TopicStat[] = topics.map(classifyTopic);
   const catCount = new Set(scopedClusters.map(c => `${c.type}:${c.name}`)).size;
+  const inv = pageInventory(topics);   // v7.541: real URL inventory vs cluster roots (disclosed on the hero)
 
   const leadingStats  = topicStats.filter(s => !s.isDemand &&  s.isLeading);
   const trailingStats = topicStats.filter(s => !s.isDemand && !s.isLeading);
@@ -972,7 +1029,8 @@ function ClustersTab({
     url: st.topic.pageUrl ?? '',
     priority: '',
     stage: st.stage,
-    label: st.isClientFootprint ? 'Existing' : 'Net-new',
+    label: st.topic.pageKind === 'net-new' ? 'Net-new' : 'Existing',   // v7.541: the page-rooted kind
+    proposedPath: st.topic.proposedPath ?? '',
   });
   // Bare Topic (scope tabs are derived from flatten(), not stats) → same mapping; the
   // Existing/Net-new label comes from whether the client ranks (footprint) here.
@@ -983,7 +1041,8 @@ function ClustersTab({
     url: t.pageUrl ?? '',
     priority: '',
     stage: t.stage,
-    label: t.keywords.some((k) => k.position !== null) ? 'Existing' : 'Net-new',
+    label: t.pageKind ? (t.pageKind === 'net-new' ? 'Net-new' : 'Existing') : (t.keywords.some((k) => k.position !== null) ? 'Existing' : 'Net-new'),   // v7.541
+    proposedPath: t.proposedPath ?? '',
   });
   const dlStats = (arr: TopicStat[], segment: string) => exportSegmentXLSX(arr.map(statRow), { clientName: cn, segment });
   const dlTopics = (arr: Topic[], segment: string) => exportSegmentXLSX(arr.map(topicRow), { clientName: cn, segment });
@@ -1199,7 +1258,21 @@ function ClustersTab({
                 <div style={{ fontSize: 60, fontWeight: 700, lineHeight: 1, letterSpacing: -3, color: 'var(--c-e8e8ff)' }}>
                   {topics.length}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--c-484868)', marginTop: 4 }}>topics across {catCount} categories</div>
+                <div style={{ fontSize: 11, color: 'var(--c-484868)', marginTop: 4 }}>pages across {catCount} categories</div>
+                {/* v7.541: a cluster IS a page — split by existing URL vs net-new build, and
+                    reconcile to the real ranking-URL inventory so "existing" can never
+                    exceed the number of pages the client actually has (Const III.5 v0.39). */}
+                <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', marginTop: 6, lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--c-4ade80)', fontWeight: 700 }}>{inv.existing.toLocaleString()}</span> existing pages
+                  {inv.existingUrlUnknown > 0 && <span style={{ color: 'var(--c-6a6a90)' }}> ({inv.existingUrlUnknown} URL not on file)</span>}
+                  {' · '}
+                  <span style={{ color: 'var(--c-f59e0b)', fontWeight: 700 }}>{inv.netNew.toLocaleString()}</span> net-new pages
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 2 }} title={inv.unrootedUrls.slice(0, 20).map(u => `${u.url} · ${u.kwCount} kw · rooted on ${u.rootedOn.join(', ') || '—'}`).join('\n')}>
+                  {inv.rankingUrls.toLocaleString()} ranking URLs on file · {inv.rootedUrls.toLocaleString()} are cluster pages
+                  {inv.unrootedUrls.length > 0 && <> · {inv.unrootedUrls.length} rank only for keywords rooted on another page</>}
+                  {inv.mergedNodes > 0 && <> · {inv.mergedNodes} topics share a page</>}
+                </div>
               </div>
               <div style={{ width: 1, height: 64, background: 'var(--c-1e1e34)', flexShrink: 0 }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1841,9 +1914,9 @@ export default function ThemeClustersPanel({
   // the header reconciles with the "Total clusters" card by construction (Const II.7;
   // QC audit A1: header said 360 while the cards/funnel/chips/Exec all said 531).
   const topicCnt   = useMemo(
-    () => (keywordPathsMap.size > 0
+    () => pageRootTopics(keywordPathsMap.size > 0
       ? buildTopicsFromTaxonomy(allClusters, keywordPathsMap)
-      : flattenTopics(allClusters)).length,
+      : flattenTopics(allClusters)).length,   // v7.541: page-rooted, same pass as ClustersTab
     [allClusters, keywordPathsMap],
   );
   const catCnt     = allClusters.length;

@@ -394,6 +394,14 @@ function Drawer({ topic, onClose, onMovePriority }: { topic: ContentTopic | null
                     Existing page — no URL in the dataset yet{t.bestPosition != null ? ` (ranks #${t.bestPosition})` : ''}. Run the Page&nbsp;Map scan to link the live URL.
                   </p>
                 </>
+              ) : t.proposedPath ? (
+                <>
+                  {/* v7.541: a net-new page is its own unique URL — the path is a PROPOSAL built from
+                      the stored taxonomy labels, labelled as such (never presented as data). */}
+                  {lbl('Proposed page')}
+                  <p style={{ fontSize: 12.5, fontWeight: 600, color: COL.txt, margin: '7px 0 0', lineHeight: 1.45, wordBreak: 'break-all', fontFamily: 'monospace' }}>{t.proposedPath}</p>
+                  <p style={{ fontSize: 10.5, color: COL.mut2, margin: '4px 0 0', lineHeight: 1.5 }}>Proposed path from the category tree — a recommendation, not a live URL. Unique across every existing and planned page.</p>
+                </>
               ) : null}
 
               {lbl('Suggested article title')}
@@ -531,6 +539,7 @@ export function ContentExplorer({ plan, mode, selectable, selectedIds, onToggleS
     priority: t.priority,
     stage: t.stage,
     label: t.state === 'existing' ? 'Existing' : 'Net-new',
+    proposedPath: t.proposedPath ?? '',   // v7.541
   });
   const dl = (arr: ContentTopic[], segment: string) => exportSegmentXLSX(arr.map(ctRow), { clientName: cn, segment });
 

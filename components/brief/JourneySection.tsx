@@ -121,6 +121,8 @@ interface CanonicalJourneyTopic {
   parentType:  'procedure' | 'brand' | 'location' | 'demand' | 'problem';
   product:     string;
   pageUrl?:    string;
+  pageKind?:   'existing' | 'net-new';   // v7.541: page-rooted kind (one cluster per unique URL)
+  proposedPath?: string;                 // v7.541: net-new PROPOSED path
   stage:       JourneyStage;
   totalVolume: number;
   keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }>;
@@ -142,7 +144,8 @@ function nodesFromCanonical(topics: CanonicalJourneyTopic[]): JourneyNode[] {
     const gaps = t.keywords.filter(k => k.isGap);
     const clientVol = clientRanked.reduce((s, k) => s + k.searchVolume, 0);
     const compVol = gaps.reduce((s, k) => s + k.searchVolume, 0);
-    const state: NodeState = (clientRanked.length > 0 || !!t.pageUrl) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+    // v7.541: the ONE shared predicate (page-rooted kind when present, rank rule otherwise).
+    const state: NodeState = canonTopicState(t);
     const sorted = t.keywords.slice().sort((a, b) => b.searchVolume - a.searchVolume);
     const keywords: NodeKw[] = sorted.map(k => ({
       keyword: k.keyword, volume: k.searchVolume, rank: k.position,
@@ -1751,6 +1754,7 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
     priority: '',
     stage: r.t.stage,
     label: r.action === 'optimize' ? 'Existing' : 'Net-new',
+    proposedPath: r.t.proposedPath ?? '',   // v7.541
   });
   const dlRows = (arr: Array<{ t: CanonicalJourneyTopic; action: 'optimize' | 'build' }>, segment: string) =>
     exportSegmentXLSX(arr.map(rowOf), { clientName: cn, segment });

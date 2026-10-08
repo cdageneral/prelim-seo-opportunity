@@ -1,3 +1,42 @@
+# v7.541 — A cluster is a page; a page is one unique URL (197 "existing" vs 58 real pages) (2026-10-08)
+
+Wayne's team counted 197 "existing" themes for a site with 58 ranking URLs. Both numbers were real: a taxonomy
+node counted as "existing" the moment the client ranked for ANY of its keywords, so one page ranking across four
+nodes was reported as four existing pages — and the Journey PDF tile labelled that count "Existing pages".
+Wayne: *"everything needs to be rooted in unique urls … existing and new that are mapped to a cluster and the
+categories are unique."* Constitution III.5 revised (v0.39).
+
+- **The page is the unit.** `pageRootTopics` (lib/clusters/canonical.ts) runs inside `buildCanonicalClusterTopics`
+  AND the Cluster panel's own flatten — one pass, so every surface counts the same clusters (II.7).
+  - A node's page = the client URL holding the most client-ranked volume among its keywords (real position + real
+    URL rows only; gap, demand and SERP-feature rows never vote).
+  - Every node whose primary page is the same URL merges into ONE cluster rooted on that URL. The node with the most
+    volume on the page is the cluster's identity and category; the others are listed as "topics on this page";
+    keywords are the exact union (each still in one node, I.3). Google already ranks that page for all of them.
+  - Ranks with no URL on file → existing, "URL not on file" (I.5) — never net-new, never an invented URL.
+  - Everything else → net-new, with a PROPOSED path from the stored labels (umbrella/theme/node), unique against
+    every real client URL and every other proposal, labelled a proposal everywhere it appears.
+  - A client URL that ranks only for keywords rooted on another page is named on the hero as unrooted — a
+    consolidation candidate, never a cluster of its own.
+- **Cluster panel.** Hero: "N pages across K categories · E existing pages (U URL not on file) · B net-new pages ·
+  R ranking URLs on file · X are cluster pages · Y rank only for keywords rooted on another page · M topics share a
+  page". Rows: real URL link / "proposed /path" / "existing · URL not on file"; a "+N topics on this page" badge;
+  the drawer lists the absorbed topics (own best rank) and any other client URL ranking inside the cluster.
+- **One predicate.** `topicIsExistingPage` feeds `canonTopicState` (journey, PDF), `buildContentPlanFromTopics`
+  (scope.existing = distinct existing pages), `nodesFromCanonical`. A stored content-plan selection or manual priority
+  keyed by an absorbed node id still finds its page (`mergedIds`).
+- **Exports.** Topic XLSX + delivery package carry "Proposed Path (net-new)" and "Other Topics On This Page".
+- `normContentUrl` moved verbatim from lib/productInsights.ts to lib/utils/pageUrl.ts (re-exported; importers untouched).
+- Files: lib/clusters/canonical.ts, lib/utils/pageUrl.ts (new), lib/productInsights.ts, lib/journey/contentPlan.ts,
+  lib/journey/segments.ts, lib/export/topicExport.ts, lib/export/deliveryPackage.ts,
+  components/brief/ThemeClustersPanel.tsx, components/brief/ContentPlanSection.tsx, components/brief/JourneySection.tsx.
+- Downstream (II.6a): Exec Summary "existing pages to optimise", Content Map/Plan optimise-vs-build split, Journey
+  existing/build tiles, Assessment PDF journey coverage and Journey-map PDF "Existing pages" all now count distinct
+  pages (they read the shared plan/state). Pre-v7.541 "existing" counts on those surfaces were node counts.
+- Verified: project tsc clean; retained suite A/B zero delta (49 pre-existing FAILs identical); 38 new invariant
+  checks (no two clusters share a URL, no path collides, keyword count conserved, absorbed nodes never render,
+  selection/override by absorbed id, determinism, idempotence) + 24 dual-theme jsdom render checks on the real panel.
+
 # v7.540 — SERP scan says why DataForSEO failed instead of blaming credits; retries server errors (2026-10-08)
 
 Found on Citi (citi.com) the morning of 2026-10-08: the SERP Features scan paused with "DataForSEO returned no results —

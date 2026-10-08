@@ -1,3 +1,4 @@
+import { topicIsExistingPage, type PageKind } from '@/lib/clusters/canonical';   // v7.541: one existing-page predicate
 /**
  * lib/journey/segments.ts — v7.376
  *
@@ -91,14 +92,16 @@ export function buildCanonTopicSegmentMap(
 // gap volume; else 'missing'. Typed structurally so the panel's
 // CanonicalJourneyTopic and the canonical Topic both fit.
 export type CanonNodeState = 'existing' | 'missing' | 'competitor';
+// v7.541: 'existing' now reads the page-rooted kind (`pageKind`, set by pageRootTopics —
+// one cluster per unique URL, Const III.5 v0.39) through the ONE shared predicate
+// `topicIsExistingPage`; a raw node without pageKind keeps the pre-v7.541 rank rule.
 export function canonTopicState(t: {
   pageUrl?: string;
+  pageKind?: PageKind;
   keywords: Array<{ keyword: string; searchVolume: number; position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }>;
 }): CanonNodeState {
-  const fp = t.keywords.filter(k => k.origin !== 'demand');
-  const clientRanked = fp.filter(k => !k.isGap && k.position !== null);
   const compVol = t.keywords.filter(k => k.isGap).reduce((s, k) => s + k.searchVolume, 0);
-  return (clientRanked.length > 0 || !!t.pageUrl) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
+  return topicIsExistingPage(t) ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
 }
 
 // ── v7.376: journey lane rule (same predicate the Journey panel applies) ───────

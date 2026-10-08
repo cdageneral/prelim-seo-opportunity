@@ -18,6 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Topic } from '@/lib/clusters/canonical';
+import { normContentUrl } from '@/lib/utils/pageUrl';   // v7.541: one URL identity (moved from here)
 import { normSovDomain } from '@/lib/sov/model';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import { qualifySeed } from '@/lib/category/seedQualify';   // v7.444
@@ -1064,16 +1065,10 @@ export interface ContentFootprint {
   journey:        JourneyRequirement | null;
 }
 
-/** One URL identity: strip protocol/www/hash/trailing slash, lowercase. Query kept
- *  (Semrush landing URLs rarely carry one; when they do it distinguishes real pages). */
-export const normContentUrl = (u: string): string => {
-  let s = String(u ?? '').trim().toLowerCase();
-  if (!s) return '';
-  s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
-  s = s.split('#')[0];
-  while (s.endsWith('/')) s = s.slice(0, -1);
-  return s;
-};
+// v7.541: `normContentUrl` MOVED VERBATIM to lib/utils/pageUrl.ts so the URL-rooted
+// cluster builder (lib/clusters/canonical.ts) and this card share ONE URL identity
+// (Const II.7). Re-exported here so every existing importer is untouched.
+export { normContentUrl } from '@/lib/utils/pageUrl';
 
 interface CfAcc { urls: Set<string>; rankedKw: Set<string>; urlKw: Set<string> }
 const newAcc = (): CfAcc => ({ urls: new Set(), rankedKw: new Set(), urlKw: new Set() });

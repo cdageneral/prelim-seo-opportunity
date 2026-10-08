@@ -162,6 +162,11 @@ export function buildDeliveryManifest(input: DeliveryInput): DeliveryManifest {
       umbrella: t.umbrella,
       parentType: t.parentType,
       pageUrl: t.pageUrl ?? null,
+      // v7.541: URL-rooted cluster facts (Const III.5 v0.39) — the page kind, the net-new
+      // PROPOSED path (a recommendation, labelled so), and the taxonomy topics this page carries.
+      pageKind:     t.pageKind ?? null,
+      proposedPath: t.proposedPath ?? null,
+      topicsOnPage: (t.mergedTopics ?? []).map(mt => mt.name),
       lane,
       intentStage: t.stage,
       intentStageLabel: JOURNEY_LABELS[t.stage] ?? t.stage,
@@ -398,7 +403,9 @@ function tables(m: DeliveryManifest) {
           'Best Position': t.bestPosition ?? '', 'Total Monthly Volume': t.totalMonthlyVolume,
           'Client Monthly Volume': t.clientMonthlyVolume ?? '', 'Capture %': t.clientCapturePct ?? '',
           'Keyword Count': t.keywordCount, Segment: t.segment ?? '', Competitor: t.competitor ?? '',
-          'Existing URL': t.pageUrl ?? '', 'In Content Plan': t.inContentPlan ? 'Yes' : '',
+          'Existing URL': t.pageUrl ?? '', 'Proposed Path (net-new)': t.proposedPath ?? '',
+          'Other Topics On This Page': (t.topicsOnPage ?? []).join(' | '),
+          'In Content Plan': t.inContentPlan ? 'Yes' : '',
           'In Delivery Scope': t.inDeliveryScope ? 'Yes' : '',
         });
         for (const k of t.keywords) {
@@ -423,6 +430,7 @@ function tables(m: DeliveryManifest) {
     Umbrella: t.umbrella, Theme: t.theme, Topic: t.topic, Priority: t.priorityLabel ?? '',
     State: t.state, Action: t.action, 'Total Monthly Volume': t.totalMonthlyVolume,
     'Best Position': t.bestPosition ?? '', Segment: t.segment ?? '', 'Existing URL': t.pageUrl ?? '',
+    'Proposed Path (net-new)': t.proposedPath ?? '',
   }));
   const insightRows = m.insights.map((i: any) => ({ ID: i.id, Tone: i.tone, Finding: i.finding, Evidence: i.evidence }));
   return { topicRows, kwRows, segRows, journeyRows, planRows, insightRows };

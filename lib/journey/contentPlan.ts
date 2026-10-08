@@ -24,6 +24,7 @@ import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
 import type { JourneyGraph, GraphNode, GraphEdge, SupportType, NodeState } from './graph';
 import { SUPPORT_LABEL, buildJourneyGraph } from './graph';
 import { filterUniverseExcludedBrands } from '@/lib/utils/kwVolume';
+import { topicIsExistingPage, type PageKind } from '@/lib/clusters/canonical';   // v7.541: one existing-page predicate
 
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';   // v7.357: P3 = Backlog (4th tier, Wayne 2026-07-07)
 
@@ -56,6 +57,11 @@ export interface ContentTopic {
   // ranked keywords; null when the client ranks for none (net-new / competitor / missing).
   // Exact rollup of real source rows (Const I.1) — never modeled.
   bestPosition: number | null;
+  // v7.541: net-new pages carry a PROPOSED unique path (a recommendation, never data);
+  // every cluster lists the taxonomy-node ids it carries so a stored selection / manual
+  // priority keyed by an absorbed node still finds its page.
+  proposedPath?: string | null;
+  mergedIds?:    string[];
   // content-plan signals
   distance:     number;          // 1 (at decision) … 4 (just aware)
   distanceLabel: string;
@@ -112,7 +118,8 @@ export function scopeOf(topics: ContentTopic[]): ContentPlan['scope'] {
 // one source of truth; I.3 no double-count). Source order is preserved.
 export function filterPlanByIds(plan: ContentPlan, ids: Iterable<string>): ContentPlan {
   const set = ids instanceof Set ? ids : new Set(ids);
-  const topics = plan.topics.filter((t) => set.has(t.id));
+  // v7.541: a page cluster matches when its own id OR any absorbed node id was selected.
+  const topics = plan.topics.filter((t) => set.has(t.id) || (t.mergedIds ?? []).some((m) => set.has(m)));
   return { topics, scope: scopeOf(topics) };
 }
 
@@ -433,6 +440,9 @@ export interface CanonicalTopicInput {
   parentType:  'procedure' | 'brand' | 'location' | 'demand' | 'problem';
   product:     string;
   pageUrl?:    string;
+  pageKind?:   PageKind;          // v7.541: page-rooted kind (existing URL | net-new page)
+  proposedPath?: string;          // v7.541: net-new PROPOSED path (labelled a proposal)
+  mergedIds?:  string[];          // v7.541: every taxonomy-node id this page carries
   stage:       GraphNode['stage'];
   totalVolume: number;
   keywords: Array<{
@@ -472,7 +482,9 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: 
     const gaps = t.keywords.filter(k => k.isGap);
     const clientVol = clientRanked.reduce((s, k) => s + k.searchVolume, 0);
     const compVol = gaps.reduce((s, k) => s + k.searchVolume, 0);
-    const hasClient = clientRanked.length > 0 || !!t.pageUrl;
+    // v7.541: existing ⇔ the cluster is rooted on an existing page (one per unique URL —
+    // Const III.5 v0.39); the shared predicate keeps the pre-v7.541 rank rule for raw nodes.
+    const hasClient = topicIsExistingPage(t);
     const state: NodeState = hasClient ? 'existing' : (compVol > 0 ? 'competitor' : 'missing');
     const action: 'optimize' | 'build' = state === 'existing' ? 'optimize' : 'build';
     const url = t.pageUrl ?? null;
@@ -490,7 +502,8 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: 
     const distance = sc.distance;
     const quickWin = sc.quickWin;
     // v7.358: a stored manual move (by ContentTopic.id) wins over the auto tier.
-    const ov = overrides[t.id];
+    // v7.541: an override stored against an absorbed node id still applies to its page.
+    const ov = overrides[t.id] ?? (t.mergedIds ?? []).map((m) => overrides[m]).find((v) => v !== undefined);
     const priority = ov ?? sc.priority;
     const manual = !!ov;
     const refresh = state === 'existing' && clientCovPct < 60;
@@ -506,6 +519,8 @@ export function buildContentPlanFromTopics(topics: CanonicalTopicInput[], opts: 
       stage: t.stage, state, action, url,
       totalVol: t.totalVolume, clientVol, clientCovPct, kwCount: t.keywords.length, competitor,
       bestPosition,
+      proposedPath: t.proposedPath ?? null,            // v7.541
+      mergedIds:    t.mergedIds ?? [t.id],              // v7.541
       distance, distanceLabel: DISTANCE_LABEL[distance], promptCount: 0, priority, manual, quickWin, refresh,
       brief: {
         // Const III.8 — anchor on the highest-volume real target keyword, not the

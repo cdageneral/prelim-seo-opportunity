@@ -11,6 +11,7 @@ export interface ExportTopicRow {
   priority?:   string;          // '' when the panel has no P0/P1/P2
   stage?:      string;
   label:       string;          // 'Existing' | 'Net-new'
+  proposedPath?: string;        // v7.541: net-new page's PROPOSED path (a recommendation, labelled so); '' otherwise
 }
 
 // Excel forbids : \ / ? * [ ] in sheet names, and caps them at 31 chars.
@@ -42,19 +43,20 @@ export async function exportSegmentXLSX(
     'Priority':             r.priority ?? '',
     'Journey Stage':        r.stage ?? '',
     'Type':                 r.label ?? '',
+    'Proposed Path (net-new)': r.proposedPath ?? '',   // v7.541
   });
 
   // Empty segment → still emit a header-only sheet so the download isn't broken.
   const EMPTY = {
     'Topic': '', 'Keywords': '', 'Keyword Count': '', 'Total Monthly Volume': '',
-    'Existing URL': '', 'Priority': '', 'Journey Stage': '', 'Type': '',
+    'Existing URL': '', 'Priority': '', 'Journey Stage': '', 'Type': '', 'Proposed Path (net-new)': '',
   };
   const data = rows.length ? rows.map(toRecord) : [EMPTY];
 
   const ws = XLSX.utils.json_to_sheet(data);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(opts.segment));
-  ws['!cols'] = [40, 60, 13, 20, 46, 10, 16, 12].map((wch) => ({ wch }));
+  ws['!cols'] = [40, 60, 13, 20, 46, 10, 16, 12, 40].map((wch) => ({ wch }));
 
   const name = `${slug(opts.clientName) || 'client'}-${slug(opts.segment) || 'segment'}.xlsx`;
   XLSX.writeFile(wb, name);

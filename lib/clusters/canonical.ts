@@ -18,6 +18,7 @@ const isBranded = isBrandedKeyword;
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226 (Const III.1a)
 import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTree';   // v7.239 (Const II.7)
 import { buildJourneyClassifier } from '@/lib/journey/classifier';   // v7.203/v7.376: single-source product/pre-product split
+import { normContentUrl, pathOfNormUrl, proposePagePath, uniquePath } from '@/lib/utils/pageUrl';   // v7.541: URL-rooted clusters
 
 export type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
 export type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retention';
@@ -529,7 +530,42 @@ export interface Topic {
   contentIcon:   string;
   keywords:      KwItem[];
   totalVolume:   number;
+  // ── v7.541: URL-rooted cluster fields (Const III.5 revised v0.39) ──────────────────
+  // Set by pageRootTopics(). A cluster IS a page: either an existing client URL (optimise)
+  // or a net-new page (build). Absent on a Topic that has not been page-rooted (the raw
+  // taxonomy-node unit), so every reader falls back to the pre-v7.541 rank-based rule.
+  pageKind?:     PageKind;
+  // existing: true when pageUrl is a REAL ranking URL from the data; false when the client
+  // ranks for keywords here but no URL is on file (honest gap, I.5 — never invented).
+  urlKnown?:     boolean;
+  // net-new: the proposed unique path for the page to build. A PROPOSAL, never data —
+  // labelled "proposed" on every surface. Unique across all clusters (existing paths too).
+  proposedPath?: string;
+  // every taxonomy-node id this page cluster carries (primary first). Lets stored
+  // selections / priority overrides keyed by an absorbed node id still find their page.
+  mergedIds?:    string[];
+  // taxonomy nodes ABSORBED into this page cluster because the same client URL is their
+  // primary ranking page — the primary node is the Topic itself; these are the others.
+  mergedTopics?: MergedNodeRef[];
+  // other client URLs that rank for this cluster's keywords (not the root) — a
+  // cannibalisation / consolidation signal, from real rank+URL rows only.
+  otherUrls?:    OtherUrlRef[];
+  // best (lowest) real client position across this cluster's ranked keywords; null = none.
+  bestPosition?: number | null;
 }
+
+export type PageKind = 'existing' | 'net-new';
+export interface MergedNodeRef {
+  id:           string;
+  name:         string;   // node label (Topic.product)
+  parentName:   string;
+  umbrella:     string;
+  totalVolume:  number;
+  kwCount:      number;
+  bestPosition: number | null;
+  urlVolume:    number;   // client-ranked volume this node holds ON the root URL
+}
+export interface OtherUrlRef { url: string; kwCount: number; volume: number; bestPosition: number }
 
 // ─── Sub-product splitter (v7.190) — domain-agnostic ──────────────────────────
 // Wayne: a broad theme ("Credit Cards") is really many PRODUCTS — balance transfer,
@@ -1166,9 +1202,13 @@ export function buildCanonicalClusterTopics(
       }
     }
   }
-  const topics = _kp.size > 0
+  const nodeTopics = _kp.size > 0
     ? buildTopicsFromTaxonomy([...base, ...jb.clusters], _kp)
     : flattenTopics([...base, ...jb.clusters]);
+  // v7.541: root every cluster on a unique page (Const III.5 revised v0.39). The taxonomy
+  // nodes above are the page ARCHITECTURE; this pass maps them onto the client's REAL page
+  // inventory — one cluster per existing ranking URL, one per net-new page to build.
+  const topics = pageRootTopics(nodeTopics);
 
   _canonTopicsCache.set(sig, topics);
   if (_canonTopicsCache.size > 4) {              // small LRU — keep a few analyses / threshold variants
@@ -1176,6 +1216,212 @@ export function buildCanonicalClusterTopics(
     if (oldest !== undefined) _canonTopicsCache.delete(oldest);
   }
   return topics;
+}
+
+// ─── v7.541: URL-rooted clusters (Const III.5 revised v0.39, Wayne 2026-10-08) ─────────
+// "Everything needs to be rooted in unique URLs. Existing URLs would be optimized and a set
+//  of keywords assigned to that url make up that cluster. A new page build is also a unique
+//  url that represents a cluster. Make sure existing and new that are mapped to a cluster
+//  and the categories are unique."
+//
+// Before this pass a "cluster" was a taxonomy node, and a node counted as "existing" the
+// moment the client ranked for ANY of its keywords — so one ranking page that held keywords
+// in four nodes was reported as four "existing pages" (the 197-vs-58 mismatch). This pass
+// makes the PAGE the unit:
+//
+//   1. Per node, the PRIMARY ranking page = the client URL holding the most client-ranked
+//      volume among that node's keywords (real position + real URL rows only; gap, demand
+//      and feature-placement rows never vote). Tie → more keywords → shorter URL → first.
+//   2. Every node with the same primary URL merges into ONE cluster rooted on that URL:
+//      the node with the most volume on the URL is the cluster's identity (id, labels,
+//      category); the others are recorded in `mergedTopics`; keywords are the exact union
+//      (a keyword still lives in exactly one node, so nothing is double-counted — I.3).
+//      Google already ranks that one page for all of them, so the Same Page Test (III.10)
+//      is passed by evidence, not by inference.
+//   3. A node the client ranks for with NO URL on file stays its own cluster, pageKind
+//      'existing', urlKnown=false — an honest gap (I.5), never promoted to net-new and never
+//      given an invented URL.
+//   4. Every other node is a net-new page: one cluster, one PROPOSED path built from its
+//      stored taxonomy labels, made unique against every existing path and every other
+//      proposal. The path is a proposal (labelled so), not data.
+//
+// Uniqueness invariants (asserted in the retained suite): no two clusters share a root URL;
+// no two share a proposed path; no cluster id repeats; keyword count is conserved.
+// Pure, deterministic, order-stable (clusters keep the order of their primary node).
+
+const clientRankedWithUrl = (k: KwItem): boolean =>
+  k.position !== null && !k.isGap && k.origin !== 'demand' && !!k.url && normContentUrl(k.url) !== '';
+const clientRanked = (k: KwItem): boolean =>
+  k.position !== null && !k.isGap && k.origin !== 'demand';
+
+interface UrlVote { norm: string; raw: string; vol: number; kw: number; best: number }
+
+function urlVotes(t: Topic): UrlVote[] {
+  const m = new Map<string, UrlVote>();
+  for (const k of t.keywords) {
+    if (!clientRankedWithUrl(k)) continue;
+    const norm = normContentUrl(k.url as string);
+    const v = m.get(norm) ?? (m.set(norm, { norm, raw: k.url as string, vol: 0, kw: 0, best: Infinity }).get(norm)!);
+    v.vol += k.searchVolume; v.kw += 1; v.best = Math.min(v.best, k.position as number);
+  }
+  return Array.from(m.values()).sort((a, b) =>
+    b.vol - a.vol || b.kw - a.kw || a.norm.length - b.norm.length || (a.norm < b.norm ? -1 : 1));
+}
+
+const bestPosOf = (kws: KwItem[]): number | null => {
+  let best: number | null = null;
+  for (const k of kws) if (clientRanked(k)) best = best === null ? (k.position as number) : Math.min(best, k.position as number);
+  return best;
+};
+
+export function pageRootTopics(topics: Topic[]): Topic[] {
+  // 1. primary URL per node
+  const primaryOf = new Map<Topic, UrlVote | null>();
+  for (const t of topics) { const v = urlVotes(t); primaryOf.set(t, v.length ? v[0] : null); }
+
+  // 2. group nodes by primary URL (insertion order = first node seen, keeps output stable)
+  const groups = new Map<string, Topic[]>();
+  for (const t of topics) {
+    const p = primaryOf.get(t);
+    if (!p) continue;
+    (groups.get(p.norm) ?? groups.set(p.norm, []).get(p.norm)!).push(t);
+  }
+
+  // every path a REAL client page already owns — cluster roots AND unrooted ranking URLs —
+  // so a proposed path can never collide with a page that exists.
+  const taken = new Set<string>();
+  for (const t of topics) for (const k of t.keywords) if (clientRankedWithUrl(k)) taken.add(pathOfNormUrl(normContentUrl(k.url as string)));
+
+  const out: Topic[] = [];
+  const emitted = new Set<Topic>();
+  const nodeRef = (t: Topic, urlVolume: number): MergedNodeRef => ({
+    id: t.id, name: t.product, parentName: t.parentName, umbrella: t.umbrella,
+    totalVolume: t.totalVolume, kwCount: t.keywords.length, bestPosition: bestPosOf(t.keywords), urlVolume,
+  });
+
+  for (const t of topics) {
+    if (emitted.has(t)) continue;
+    const p = primaryOf.get(t);
+
+    if (p) {
+      const members = groups.get(p.norm)!;
+      // identity node = most client-ranked volume ON the root URL (tie → node total → order)
+      const volOn = (n: Topic) => { const v = primaryOf.get(n)!; return v.vol; };
+      let head = members[0];
+      for (const n of members) if (volOn(n) > volOn(head) || (volOn(n) === volOn(head) && n.totalVolume > head.totalVolume)) head = n;
+      const others = members.filter(n => n !== head);
+      const keywords: KwItem[] = [];
+      const seenKw = new Set<string>();
+      for (const n of [head, ...others]) for (const k of n.keywords) {
+        const key = k.keyword.toLowerCase().trim();
+        if (seenKw.has(key)) continue;                 // nodes are disjoint; defensive only
+        seenKw.add(key); keywords.push(k);
+      }
+      // dominant intent BY VOLUME across the merged set (same rule the node builder uses)
+      const volByIntent = new Map<IntentType, number>();
+      for (const n of members) volByIntent.set(n.intent, (volByIntent.get(n.intent) ?? 0) + n.totalVolume);
+      let intent: IntentType = head.intent, dv = -1;
+      for (const [it, v] of Array.from(volByIntent.entries())) if (v > dv) { dv = v; intent = it; }
+      const meta  = INTENT_META[intent];
+      const stage: JourneyStage = head.parentType === 'problem' ? 'awareness' : meta.stage;
+      // other client URLs ranking inside this cluster (not the root) — real rows only
+      const otherMap = new Map<string, OtherUrlRef>();
+      for (const k of keywords) {
+        if (!clientRankedWithUrl(k)) continue;
+        const norm = normContentUrl(k.url as string);
+        if (norm === p.norm) continue;
+        const o = otherMap.get(norm) ?? (otherMap.set(norm, { url: norm, kwCount: 0, volume: 0, bestPosition: Infinity }).get(norm)!);
+        o.kwCount += 1; o.volume += k.searchVolume; o.bestPosition = Math.min(o.bestPosition, k.position as number);
+      }
+      const otherUrls = Array.from(otherMap.values()).sort((a, b) => b.volume - a.volume || a.url.localeCompare(b.url));
+      out.push({
+        ...head,
+        intent, stage, contentType: meta.contentType, contentIcon: meta.contentIcon,
+        keywords,
+        totalVolume:  keywords.reduce((s, k) => s + k.searchVolume, 0),
+        pageUrl:      p.raw,
+        pageKind:     'existing',
+        urlKnown:     true,
+        proposedPath: undefined,
+        mergedIds:    [head.id, ...others.map(n => n.id)],
+        mergedTopics: others.map(n => nodeRef(n, volOn(n))),
+        otherUrls,
+        bestPosition: bestPosOf(keywords),
+      });
+      for (const n of members) emitted.add(n);
+      continue;
+    }
+
+    emitted.add(t);
+    if (t.keywords.some(clientRanked)) {
+      // ranks, but no URL on file for any ranked keyword — existing, URL unknown (I.5)
+      out.push({
+        ...t, pageUrl: undefined, pageKind: 'existing', urlKnown: false, proposedPath: undefined,
+        mergedIds: [t.id], mergedTopics: [], otherUrls: [], bestPosition: bestPosOf(t.keywords),
+      });
+      continue;
+    }
+    // net-new page: one unique proposed path from the stored labels
+    const labels = t.parentType === 'problem'
+      ? ['guides', t.product]
+      : [t.umbrella, t.parentName, t.product];
+    const proposedPath = uniquePath(proposePagePath(labels), taken);
+    out.push({
+      ...t, pageUrl: undefined, pageKind: 'net-new', urlKnown: false, proposedPath,
+      mergedIds: [t.id], mergedTopics: [], otherUrls: [], bestPosition: null,
+    });
+  }
+  return out;
+}
+
+// ─── v7.541: page inventory — the reconciliation line the panel + report show ─────────
+// Counts real client ranking URLs across the topics' keywords and says how many of them are
+// cluster roots. A URL that ranks only for keywords whose node is rooted on ANOTHER page is
+// "unrooted" — disclosed by name (it is a consolidation candidate), never silently dropped
+// and never given a cluster of its own (that would split a node across two pages).
+export interface PageInventory {
+  rankingUrls:        number;   // distinct client URLs holding a real rank in the pool
+  rootedUrls:         number;   // of those, URLs that are a cluster root
+  unrootedUrls:       Array<{ url: string; kwCount: number; volume: number; rootedOn: string[] }>;
+  existing:           number;   // clusters with pageKind 'existing'
+  existingUrlKnown:   number;
+  existingUrlUnknown: number;
+  netNew:             number;   // clusters with pageKind 'net-new'
+  mergedNodes:        number;   // taxonomy nodes absorbed into another node's page
+}
+export function pageInventory(topics: Topic[]): PageInventory {
+  const roots = new Map<string, string>();            // norm url → cluster label
+  const urlAcc = new Map<string, { kwCount: number; volume: number; rootedOn: Set<string> }>();
+  let existing = 0, known = 0, unknown = 0, netNew = 0, merged = 0;
+  for (const t of topics) {
+    if (t.pageKind === 'existing') { existing++; if (t.urlKnown && t.pageUrl) { known++; roots.set(normContentUrl(t.pageUrl), t.product); } else unknown++; }
+    else if (t.pageKind === 'net-new') netNew++;
+    merged += t.mergedTopics?.length ?? 0;
+    for (const k of t.keywords) {
+      if (!clientRankedWithUrl(k)) continue;
+      const norm = normContentUrl(k.url as string);
+      const a = urlAcc.get(norm) ?? (urlAcc.set(norm, { kwCount: 0, volume: 0, rootedOn: new Set() }).get(norm)!);
+      a.kwCount += 1; a.volume += k.searchVolume;
+      if (t.pageKind === 'existing' && t.urlKnown && t.pageUrl && normContentUrl(t.pageUrl) !== norm) a.rootedOn.add(t.product);
+    }
+  }
+  const unrooted: PageInventory['unrootedUrls'] = [];
+  for (const [url, a] of Array.from(urlAcc.entries())) {
+    if (roots.has(url)) continue;
+    unrooted.push({ url, kwCount: a.kwCount, volume: a.volume, rootedOn: Array.from(a.rootedOn).sort() });
+  }
+  unrooted.sort((a, b) => b.volume - a.volume || a.url.localeCompare(b.url));
+  return {
+    rankingUrls: urlAcc.size, rootedUrls: Array.from(urlAcc.keys()).filter(u => roots.has(u)).length,
+    unrootedUrls: unrooted, existing, existingUrlKnown: known, existingUrlUnknown: unknown, netNew, mergedNodes: merged,
+  };
+}
+
+// v7.541: the ONE existing-vs-build predicate for a page-rooted topic. Readers that still see
+// a raw node (no pageKind) fall back to the pre-v7.541 rule so nothing silently changes shape.
+export function topicIsExistingPage(t: { pageKind?: PageKind; pageUrl?: string; keywords: Array<{ position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }> }): boolean {
+  if (t.pageKind) return t.pageKind === 'existing';
+  return t.keywords.some(k => k.origin !== 'demand' && !k.isGap && k.position !== null) || !!t.pageUrl;
 }
 
 // A topic is "missing demand" (a third lens) when it is a seed demand category OR
