@@ -1,4 +1,5 @@
 'use client';
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 
 import { useMemo, useState, useEffect } from 'react';
 import {
@@ -312,7 +313,7 @@ function Row({ t, onOpen, selectable, selected, saving, onToggle, removable, onR
       <div><div style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, textAlign: 'right', color: col }}>{fmtVol(t.totalVol)}</div><div style={{ fontSize: 9, color: COL.mut2, textAlign: 'right', fontFamily: 'monospace' }}>/mo</div></div>
       <div className="ovHide" style={{ textAlign: 'right' }}>
         {t.competitor
-          ? <span style={{ fontSize: 9, fontWeight: 700, color: COL.purple, background: 'var(--ca-167-139-250-0_12)', borderRadius: 5, padding: '2px 7px' }}>{t.competitor.replace(/^www\./, '').split('.')[0]}</span>
+          ? <span style={{ fontSize: 9, fontWeight: 700, color: COL.purple, background: 'var(--ca-167-139-250-0_12)', borderRadius: 5, padding: '2px 7px' }}>{brandLabelOf(t.competitor)}</span>
           : <span style={{ fontSize: 9, fontWeight: 700, color: COL.green, background: 'var(--ca-52-211-153-0_1)', borderRadius: 5, padding: '2px 7px' }}>open</span>}
       </div>
     </div>

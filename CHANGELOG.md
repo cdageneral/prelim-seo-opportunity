@@ -1,3 +1,28 @@
+# v7.533 — A subdomain no longer becomes a competitor "brand" (creditcards.chase.com dropped every credit-card keyword) (2026-10-08)
+
+Wayne: "i uploaded [competitor footprints] and the overall keyword footprint actually dropped. Why? it should have
+stayed neutral or increased".
+
+- **Root cause.** Every brand guard derived a domain's brand by stripping the TLD and taking the FIRST label. The
+  americanexpress.com + creditcards.chase.com uploads on Citi (Cards) made the competitor brand "creditcards", so
+  every keyword containing "credit cards" (plus fuzzy/half-token matches such as "credi…") was excluded as a competitor
+  brand term, in the client lane too. Citi (Cards) went from 2,942 keywords before the upload to 1,655 after.
+- **Fix.** New `lib/utils/brandRoot.ts` — ONE definition: the registrable label left of the public suffix
+  ("creditcards.chase.com" → chase, "business.comcast.com" → comcast, "shop.audionova.com" → audionova,
+  "hsbc.co.uk" → hsbc, a typo'd "keybank.con" → keybank). Every copy now reads it: kwVolume `extractBrand`,
+  journey classifier, contentPlan `brandTermsOf`, semrush `extractBrandToken`, ContentMap, local detect/seeds,
+  insights decision/claimGate, llmProbe, and the competitor labels on Content Map / Content Plan / Insights.
+- **Measured on live data (same buildKwPool, old vs new root), annual volume:**
+  Citi (Cards) 1,655 → 3,175 keywords (195.3M → 302.0M) — vs 2,942 before the upload, so the upload now ADDS 233
+  (plus 116 awaiting categorization); First Citizens Bank – Small Business 789 → 3,043 ("business.bankofamerica.com"
+  read as brand "business"); Spectrum – Small Business Internet 121 → 506 ("business.comcast.com", "business.att.com");
+  Citi Wealth 2,774 → 6,269 ("investor.vanguard.com" → "investor"); Citi Global Wealth at Work 1,516 → 1,914;
+  Wealth Enhancement Group 1,116 → 1,183; Synchrony 674 → 676; AudioNova 419 → 408 (client root was "shop", so
+  "hearingtracker" competitor terms are now correctly excluded).
+- Constitution v0.33 (III.1).
+- Verified: project tsc clean; retained suite 3,840 PASS / 30 FAIL — the identical pre-existing failure set (zero new); 5 new v533 checks incl. a repo-wide
+  guard that no first-label `split('.')[0]` brand copy remains.
+
 # v7.532 — Phone numbers, other companies' sites and brands never filed; foreign script in no set; delete keeps your page (2026-10-07)
 
 Wayne, on Citi (Cards) after v7.531: "so why is this still in the list?" (go.amex/confirmcard, www.starz.com/activate,

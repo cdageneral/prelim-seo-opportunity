@@ -1,4 +1,5 @@
 'use client';
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 
 /**
  * components/brief/InsightsSection.tsx — the Insights panel.
@@ -134,7 +135,7 @@ function fmtStanding(r: StandingRow, v: number | null): string {
   if (r.unit === 'volume') return `${fmtVol(v)}/mo`;
   return v.toLocaleString();
 }
-function rootOf(domain: string): string { return String(domain ?? '').split('.')[0] ?? ''; }
+function rootOf(domain: string): string { return brandLabelOf(String(domain ?? '')); }   // v7.533
 
 export default function InsightsSection({ projectId, clientName, pollMs }: Props) {
   const [insights, setInsights] = useState<InsightsBlob | null>(null);

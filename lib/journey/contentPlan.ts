@@ -1,3 +1,4 @@
+import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * Content-plan logic (v7.176)
  *
@@ -153,10 +154,7 @@ export function topicIsBrandRelated(parentType: string, text: string, brandTerms
 // set and their priorities reconcile (Const II.7, no cross-panel drift). Client brand
 // only — competitor brands are never bumped.
 export function brandTermsOf(clientDomain: string, snapshot: any): string[] {
-  const root = String(clientDomain || '')
-    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  const root = brandRootOf(String(clientDomain || ''));   // v7.533: registrable label
   const stored: string[] = Array.isArray(snapshot && snapshot._brandTerms) ? snapshot._brandTerms : [];
   const out: string[] = [];
   if (root) out.push(root);

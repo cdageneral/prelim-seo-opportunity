@@ -1,3 +1,4 @@
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/local/detect.ts — v7.177 (Local Search panel)
  *
@@ -212,9 +213,7 @@ const CAT_NOISE: Record<string, boolean> = (function () {
 
 /** domain → distinctive brand root ("sonobello.com" → "sonobello"). */
 function brandRoot(domain: string): string {
-  return String(domain ?? '')
-    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
-    .replace(/\/.*$/, '').toLowerCase().trim().split('.')[0] || '';
+  return brandLabelOf(String(domain ?? '')) || '';   // v7.533: registrable label, not the first label
 }
 
 // Geographic stopwords (cities + states + abbreviations) — EXCLUDED from the

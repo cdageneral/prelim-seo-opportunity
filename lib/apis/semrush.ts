@@ -1,3 +1,4 @@
+import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * Semrush API Client
  * Docs: https://developer.semrush.com/api/v3/
@@ -700,13 +701,7 @@ export async function getKeywordGap(
 // ─── Brand token helper (mirrors KeywordsPanel logic) ─────────────────────────
 // Extracts the root brand name from a domain.
 function extractBrandToken(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '')
-    .replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
+  return brandRootOf(domain ?? '');   // v7.533: registrable label, not the first label
 }
 
 // Returns true if the keyword contains any competitor brand token.

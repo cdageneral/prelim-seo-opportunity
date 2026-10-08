@@ -1,0 +1,18 @@
+const { JSDOM } = require("/home/claude/prelim-seo-opportunity/node_modules/jsdom");
+const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "http://localhost/" });
+global.window = dom.window; global.document = dom.window.document;
+global.navigator = dom.window.navigator; global.HTMLElement = dom.window.HTMLElement;
+global.HTMLInputElement = dom.window.HTMLInputElement; global.HTMLButtonElement = dom.window.HTMLButtonElement;
+global.HTMLSelectElement = dom.window.HTMLSelectElement; global.HTMLAnchorElement = dom.window.HTMLAnchorElement;
+global.MouseEvent = dom.window.MouseEvent; global.Event = dom.window.Event;
+global.Node = dom.window.Node; global.Element = dom.window.Element;
+global.Blob = dom.window.Blob; global.URL = dom.window.URL;
+global.getComputedStyle = dom.window.getComputedStyle;
+global.IS_REACT_ACT_ENVIRONMENT = true;
+global.requestAnimationFrame = function (cb) { return setTimeout(cb, 0); };
+global.self = dom.window;
+dom.window.requestIdleCallback = function (cb) { return setTimeout(function () { cb({ didTimeout: false, timeRemaining: function () { return 50; } }); }, 0); };
+dom.window.cancelIdleCallback = function (id) { clearTimeout(id); };
+global.requestIdleCallback = dom.window.requestIdleCallback;
+global.cancelIdleCallback = dom.window.cancelIdleCallback;
+require("/home/claude/prelim-seo-opportunity/.runs/v486.7BtG/r526.cjs");

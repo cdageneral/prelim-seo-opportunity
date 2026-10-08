@@ -1,3 +1,4 @@
+import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/utils/kwVolume.ts  — v7.76
  *
@@ -109,13 +110,9 @@ function editDistance(a: string, b: string): number {
 }
 
 export function extractBrand(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '')
-    .replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
+  // v7.533: the REGISTRABLE label ("creditcards.chase.com" → "chase"), never the first
+  // label — see lib/utils/brandRoot.ts.
+  return brandRootOf(domain ?? '');
 }
 
 /**

@@ -1,3 +1,4 @@
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/insightsPanel/claimGate.ts — v7.496 · the STANDING-CLAIM gate.
  *
@@ -61,7 +62,7 @@ function clientPatterns(decision: DecisionInputs, clientName: string): RegExp[] 
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const name = String(clientName ?? '').trim();
   if (name.length >= 3) pats.push(new RegExp('\\b' + esc(name) + '\\b', 'i'));
-  const root = String(decision.clientDomain ?? '').split('.')[0] ?? '';
+  const root = brandLabelOf(String(decision.clientDomain ?? ''));   // v7.533: registrable label (a www./subdomain client read as "www")
   if (root.length >= 4) pats.push(new RegExp(esc(root), 'i'));
   if (decision.clientDomain) pats.push(new RegExp(esc(decision.clientDomain), 'i'));
   pats.push(/\b(the brand|the client|you|your)\b/i);

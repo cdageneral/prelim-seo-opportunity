@@ -1,4 +1,5 @@
 'use client';
+import { brandRootOf, brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 
 import { useMemo, useState, useEffect, useRef, Fragment } from 'react';
 import { planFromSnapshot, buildContentPlanFromTopics, brandTermsOf, type Priority } from '@/lib/journey/contentPlan';   // v7.337: briefTitleFromKeywords import dropped with dead buildArticleTopics; v7.356: brandTermsOf; v7.358: Priority
@@ -171,10 +172,7 @@ function editDistance(a: string, b: string): number {
 }
 
 function extractBrand(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  return brandRootOf(domain ?? '');   // v7.533: registrable label, not the first label
 }
 
 // v7.205: short brand tokens (2–3 chars, e.g. "td") matched on a word boundary;
@@ -923,7 +921,7 @@ function ArticleBriefCard({ gap, segIdx }: { gap: ContentGap; segIdx: number }) 
         {gap.topCompetitor && (
           <div>
             <p style={{ fontSize: 9, color: 'var(--c-3a3a5a)', marginBottom: 2, textTransform: 'uppercase' as const, letterSpacing: '0.08em' }}>Top Competitor</p>
-            <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)' }}>{gap.topCompetitor.replace(/^www\./, '').split('.')[0]}</p>
+            <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)' }}>{brandLabelOf(gap.topCompetitor)}</p>
           </div>
         )}
         <div>
@@ -999,7 +997,7 @@ function ArticleDrawer({ topic, onClose }: { topic: ArticleTopic; onClose: () =>
           {topic.keywords.slice(0, 6).map((k: KwItem, i: number) => {
             const rank = (k.position != null && k.position > 0)
               ? { t: `#${k.position}`, c: 'var(--c-34d399)', bg: 'var(--ca-52-211-153-0_1)' }
-              : k.competitor ? { t: `comp ${k.competitor.replace(/^www\./, '').split('.')[0]}`, c: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_1)' }
+              : k.competitor ? { t: `comp ${brandLabelOf(k.competitor)}`, c: 'var(--c-a78bfa)', bg: 'var(--ca-167-139-250-0_1)' }
               : { t: 'not ranking', c: 'var(--c-f87171)', bg: 'var(--ca-239-68-68-0_1)' };
             return (
               <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '7px 10px', background: 'var(--c-0a0a16)', border: '1px solid var(--c-151528)', borderRadius: 6, marginBottom: 5 }}>
@@ -1064,7 +1062,7 @@ function ArticleDrawer({ topic, onClose }: { topic: ArticleTopic; onClose: () =>
         <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Annual Vol</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c0c0e0)', margin: 0 }}>{fmtVol(topic.annualVolume)}</p></div>
         <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Coverage</p><p style={{ fontSize: 13, fontWeight: 700, color: topic.clientCovPct > 50 ? 'var(--c-34d399)' : 'var(--c-f87171)', margin: 0 }}>{topic.clientCovPct}%</p></div>
         <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Format</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-c0c0e0)', margin: 0 }}>{topic.format}</p></div>
-        {topic.topCompetitor && <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Top competitor</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)', margin: 0 }}>{topic.topCompetitor.replace(/^www\./, '').split('.')[0]}</p></div>}
+        {topic.topCompetitor && <div><p style={{ fontSize: 9, color: 'var(--c-4a4a6a)', textTransform: 'uppercase' as const, letterSpacing: '0.08em', margin: '0 0 3px' }}>Top competitor</p><p style={{ fontSize: 13, fontWeight: 700, color: 'var(--c-f87171)', margin: 0 }}>{brandLabelOf(topic.topCompetitor)}</p></div>}
       </div>
     </div>
   );

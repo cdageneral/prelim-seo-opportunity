@@ -1,3 +1,4 @@
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/local/seeds.ts — v7.183 (Local Search panel)
  *
@@ -42,8 +43,7 @@ function clean(s: string): string {
 
 /** brandRoot: "sonobello.com" → "sonobello". */
 function brandRoot(domain: string): string {
-  return String(domain ?? '').replace(/^https?:\/\//i, '').replace(/^www\./i, '')
-    .replace(/\/.*$/, '').toLowerCase().trim().split('.')[0] || '';
+  return brandLabelOf(String(domain ?? '')) || '';   // v7.533: registrable label, not the first label
 }
 
 /** Max real volume among client-ranked pool keywords that contain `token`. */

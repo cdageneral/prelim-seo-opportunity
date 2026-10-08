@@ -1,3 +1,4 @@
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/insightsPanel/decision.ts — v7.496 · the Insights panel's DECISION INPUTS.
  *   v7.497: the serialised lists are BOUNDED (BRANDS_SHOWN / PLAYS_SHOWN, `playsBasis`)
@@ -488,7 +489,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
   // local pack rows (by business name) for the play's local block
   const localScan = (rawSnap?._localScan ?? null) as LocalScan | null;
   const solv = localScan?.keywords?.length ? buildShareOfLocalVoice(localScan.keywords) : [];
-  const brandRoot = (d: string) => normSovDomain(d).split('.')[0] ?? '';
+  const brandRoot = (d: string) => brandLabelOf(normSovDomain(d));   // v7.533: registrable label
   const squash = (s: string) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const plays: CompetitorPlay[] = [];
   const brandKwPos = new Map<string, Array<{ kw: string; pos: number; vol: number }>>();

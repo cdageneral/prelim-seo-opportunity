@@ -1,3 +1,4 @@
+import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * LLM Probe v2 — category-driven brand visibility + sentiment
  *
@@ -243,7 +244,7 @@ function detectMention(
   domain:     string
 ): { mentioned: boolean; excerpt: string | null } {
   const nameLower   = clientName.toLowerCase();
-  const domainToken = domain.toLowerCase().replace(/^www\./, '').split('.')[0];
+  const domainToken = brandLabelOf(domain);   // v7.533: registrable label
   const lower       = response.toLowerCase();
 
   const mentioned = lower.includes(nameLower) || lower.includes(domainToken);

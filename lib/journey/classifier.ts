@@ -1,3 +1,4 @@
+import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
 /**
  * lib/journey/classifier.ts — v7.376
  *
@@ -32,10 +33,7 @@ export function editDistance(a: string, b: string): number {
 }
 
 export function extractBrand(domain: string): string {
-  return domain
-    .replace(/^https?:\/\//i, '').replace(/^www\./i, '')
-    .replace(/\.(com|net|org|io|co|ca|us|uk|au|gov|edu|biz|info)(\.[a-z]{2})?$/i, '')
-    .split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  return brandRootOf(domain ?? '');   // v7.533: registrable label, not the first label
 }
 
 // v7.205: short brand tokens (2–3 chars, e.g. "td") matched on a word boundary;
