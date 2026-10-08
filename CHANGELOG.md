@@ -1,3 +1,38 @@
+# v7.531 — Every keyword must sit in an existing category; Branded means the client only (2026-10-07)
+
+Wayne: "i am adding competitors keyword footprints and still finding a lot of keywords that are not following the
+boundaries of the existing keyword category selection. I thought we had it that there could not be any new categories
+created which would mean all keywords would have to map and match the intent of the keyword categories?" — and,
+on the Branded card: "yes to the branded fix".
+
+- **Uncategorized = out.** The Step-2 selection only removed keywords whose STORED category was hidden, so a keyword
+  with no stored category passed every boundary. Competitor CSVs uploaded after the last categorization are never
+  categorized until a re-analysis, so they all leaked in (Citi (Cards): 2,139 competitor keywords, 115M annual vol,
+  e.g. "credit score", "what is apr"; Aflac: 15,321). Now, once a project has a category tree, a footprint keyword
+  (upload, crawl or competitor gap) counts only when it is filed into that tree. Demand-lane topics keep their own
+  filing (expansion into the seed category, "Pre-Product Journey"). Projects without a tree are unchanged.
+- **Filed into EXISTING categories only.** New route `categorize-pending` + `lib/category/pendingCategorization.ts`:
+  Claude Haiku picks one of the project's selected product categories (numbered list) by search intent, or 0 = no
+  fit → "Other". It cannot answer with anything else; an off-list or missing answer stays pending (never guessed).
+  Membership is merged into the displayed analysis in SQL (jsonb `||`), never a full snapshot rewrite (II.9). Real
+  token cost lands in the API Usage ledger.
+- **Auto-run + visible.** After a competitor upload the Competitors modal files the new keywords straight away. Keyword
+  Selection Step 3 and the Keyword list strip show "N keywords awaiting categorization" with a Categorize now button,
+  live progress and an ETA from the measured time per call.
+- **Re-analysis never adds an umbrella or theme.** The anchored discovery prompt no longer allows "a genuinely new
+  product" node; a keyword that fits no established umbrella > theme goes to "Other".
+- **Branded = client brand only.** The pool marked a keyword branded when it fuzzy-matched ANY competitor domain, so
+  generic terms counted as Branded and were missing from Non-branded / Share of Voice (Quicken 3,367 branded → 388;
+  "mortgage calculator", "laser lipo", "wide leg jeans"). The card label now reads "Client brand terms".
+
+Measured on all live projects (old vs new pool): Quicken non-branded landscape 372.9M → 517.1M; 19 projects hold
+competitor keywords that were never categorized and show them as "awaiting categorization" until filed.
+
+Verification: real-project `tsc` clean · retained suite (v7.529 lineage) re-run in full: FAIL set identical to the
+v7.529 baseline (27) · new v531 block, 11 checks, all PASS (3 fail on v7.530 — they catch the bugs) · jsdom render of
+the pending bar in both themes (count, run → summary, auto-run only on an upload key, never on mount). Constitution
+v0.31 amends III.1 and III.1e.
+
 # v7.530 — The client's own branded terms are never dropped by the brand guard (2026-10-07)
 
 Wayne, on Citi (Cards): "orbit says there are only 876 keywords however another session calculated there are 1649
