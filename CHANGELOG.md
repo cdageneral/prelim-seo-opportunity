@@ -1,3 +1,34 @@
+# v7.530 — The client's own branded terms are never dropped by the brand guard (2026-10-07)
+
+Wayne, on Citi (Cards): "orbit says there are only 876 keywords however another session calculated there are 1649
+unique keywords" — then: "we need the clients branded terms always - we only drop the branded terms of competitors."
+
+- **Root cause:** two brand-exclusion rules in `buildKwPool` (v7.196 brand-category members, v7.199 AI-flagged
+  `brandKeywords`) dropped a keyword with NO check for the client's own brand. The taxonomy filed Citi's own terms
+  ("citi double cash card", "citi strata elite") under a generic "Brand Searches" category, and the AI list held
+  "citi travel" / "citi mastercard" — so 256 Citi keywords were removed. The other 517 were co-brand partner terms
+  (Best Buy, Home Depot, Costco, AAdvantage …) in "Co-Branded & Retail Cards", plus real competitor terms.
+  Reconciled exactly on the live data: 1,649 − (727 + 46) = 876, 78.9M annual.
+- **Fix:** a keyword that is the client's brand — strict test: the full domain root or a project brand term — is
+  never dropped by those two rules. The strict test (v7.439) is now one exported function,
+  `buildClientBrandStrictTest`, shared by the pool and every category read site.
+- **Category guards** (`categoryGuard`, Google Ranks, local-scan): a brand-typed category that holds client keywords
+  (`brandCategoriesWithClientMembers`) is no longer dropped as a competitor category. Competitor-named categories are
+  still dropped by the token / blocklist tests; non-client members of a kept bucket are still dropped one by one.
+- **Partners:** a co-brand partner counts as the client once it is a project brand term. Citi's partners were added
+  to its brand terms at Wayne's request.
+- **Unchanged:** competitor and third-party brand terms are still excluded exactly as before.
+
+Measured on all 35 live projects (old vs new pool): no keyword removed anywhere, no category newly dropped, no
+competitor term added. Client brand terms restored on 11 projects, e.g. Citi (Cards) 876 → 1,132 (→ ~1,539 with
+partner terms), Geico +35 ("geico" 2.24M/mo), Lloyds +39 ("lloyds bank"), Synchrony +49, Amex (Card Shop) +12,
+OneMain +31, Aflac +45, BankRate +9.
+
+Verification: real-project `tsc` clean (no delta vs base) · retained suite (latest on disk, v7.488 lineage) re-run in
+full against base and change: identical PASS/FAIL set on every prior check (71 pre-existing FAILs, same on base) ·
+new v530 block, 10 checks, all PASS on v7.530 and 5 FAIL on v7.529 (they catch the bug). Constitution v0.30
+amends III.1 / III.1a.
+
 # v7.529 — Scout PDF: iQuanti logo in the footer; the 30-minute-call ask names who ran the report (2026-09-29)
 
 Wayne: "for the scout report thats generated. Can we add the iquanti logo somewhere in the footer and also when we
