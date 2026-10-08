@@ -24,10 +24,10 @@ competitor term added. Client brand terms restored on 11 projects, e.g. Citi (Ca
 partner terms), Geico +35 ("geico" 2.24M/mo), Lloyds +39 ("lloyds bank"), Synchrony +49, Amex (Card Shop) +12,
 OneMain +31, Aflac +45, BankRate +9.
 
-Verification: real-project `tsc` clean (no delta vs base) · retained suite (latest on disk, v7.488 lineage) re-run in
-full against base and change: identical PASS/FAIL set on every prior check (71 pre-existing FAILs, same on base) ·
-new v530 block, 10 checks, all PASS on v7.530 and 5 FAIL on v7.529 (they catch the bug). Constitution v0.30
-amends III.1 / III.1a.
+Verification: real-project `tsc` clean (no delta vs base) · retained suite (v7.529 lineage, carried in the package)
+re-run in full against base and change: 3,803 PASS / 27 FAIL on both, identical FAIL set · new v530 block, 10 checks,
+all PASS on v7.530 (3,813 PASS total) and 5 FAIL on v7.529 (they catch the bug). Live check: Citi (Cards) All
+Keywords reads 1,539 / 170.3M after the partner brand terms were saved. Constitution v0.30 amends III.1.
 
 # v7.529 — Scout PDF: iQuanti logo in the footer; the 30-minute-call ask names who ran the report (2026-09-29)
 
