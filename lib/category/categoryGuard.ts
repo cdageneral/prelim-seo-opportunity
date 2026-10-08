@@ -24,6 +24,7 @@
 
 import {
   isBrandedKeyword,
+  brandCategoriesWithClientMembers,
   buildCompetitorBrandTokens,
   buildExcludedBrandTokens,
   textHasCompetitorBrand,
@@ -68,6 +69,7 @@ export function buildCategoryGuard(
   // effectiveBrandTerms, v7.206) — so guard and pool agree on what counts as the
   // client's own brand (Const II.7). Signature unchanged; callers compile as-is.
   const brandTerms: string[] = Array.isArray(snap?._brandTerms) ? snap._brandTerms : [];
+  const clientBrandCats = brandCategoriesWithClientMembers(snap, clientDomain, brandTerms);   // v7.530
 
   // Mirrors ThemeClustersPanel's three `continue` guards at the render loop. The client's
   // own brand category is kept because `isBrandedKeyword(name, clientDomain, [], brandTerms)`
@@ -117,7 +119,11 @@ export function buildCategoryGuard(
     if (!name) return false;
     if (isOutOfScopeCategory(name)) return true;   // v7.477: Step-3 selection (see above)
     const isClientBrand = isBrandedKeyword(name, clientDomain, [], brandTerms);   // v7.335: + brand vocabulary (QC audit B7)
-    if (type === 'brand' && !isClientBrand) return true;
+    // v7.530 (Const III.1 v0.30): a brand bucket that holds the client's OWN keywords
+    // (e.g. a generic "Brand Searches", or "Co-Branded & Retail Cards" once the partners
+    // are project brand terms) is not a competitor category — keep it. Competitor-named
+    // categories are still dropped by the token / blocklist tests below.
+    if (type === 'brand' && !isClientBrand && !clientBrandCats.has(name)) return true;
     if (textHasCompetitorBrand(name, compBrandTokens) && !isClientBrand) return true;
     if (textHasCompetitorBrand(name, excludedBrandTokens) && !isClientBrand) return true;
     return false;
