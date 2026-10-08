@@ -474,6 +474,7 @@ const LLM_MENTIONS_ENDPOINT = '/ai_optimization/llm_mentions/search_mentions/liv
 // v7.503 — Keywords Data · Google Ads. `locations` is a free GET; `search_volume/live`
 // is one billed task per LOCATION (up to 1,000 keywords in the same task).
 const GADS_LOCATIONS_ENDPOINT = '/keywords_data/google_ads/locations';
+const LLM_MENTIONS_LOCATIONS_ENDPOINT = '/ai_optimization/llm_mentions/locations_and_languages';
 const GADS_SEARCH_VOLUME_ENDPOINT = '/keywords_data/google_ads/search_volume/live';
 
 export interface LlmMentionSource {
@@ -509,7 +510,9 @@ export interface LlmMentionsResult {
  */
 export async function dfsSearchLlmMentions(
   keyword: string,
-  opts: { limit?: number; platform?: 'chat_gpt' | 'google' } = {},
+  // v7.545: locationCode/languageCode are optional; omitted = DataForSEO's own default
+  // (location 2840 United States, language en) — exactly the pre-v7.545 request.
+  opts: { limit?: number; platform?: 'chat_gpt' | 'google'; locationCode?: number; languageCode?: string } = {},
 ): Promise<LlmMentionsResult | null> {
   const kw = keyword.trim();
   if (!kw || !dataForSeoEnabled()) return null;
@@ -518,6 +521,8 @@ export async function dfsSearchLlmMentions(
     limit:  Math.min(Math.max(opts.limit ?? 100, 1), 1000),
   };
   if (opts.platform) task.platform = opts.platform;
+  if (typeof opts.locationCode === 'number') task.location_code = opts.locationCode;
+  if (opts.languageCode) task.language_code = opts.languageCode;
 
   const { result, costUSD } = await dfsPost<any>(LLM_MENTIONS_ENDPOINT, task, 'llm_mentions_search', 'llm_mentions');
   if (!result) return null;
@@ -558,6 +563,56 @@ export async function dfsSearchLlmMentions(
   return { rows, totalCount: Number.isFinite(totalCount) ? totalCount : rows.length, costUSD };
 }
 
+
+// ─── v7.545: which countries/languages the recorded-AI-answer index covers ──────
+// Free endpoint (docs.dataforseo.com/v3/ai_optimization/llm_mentions/locations_and_languages,
+// read 2026-10-08: "Your account will not be charged"). Each location lists its
+// languages and, per language, the platforms recorded there (google, chat_gpt).
+// Returns null on ANY failure so a caller can tell "could not read the list" from
+// "this market is not covered" — the two are reported differently (Const I.5).
+
+export interface DfsLlmLanguage { code: string; name: string; platforms: string[]; responses: number | null }
+export interface DfsLlmLocation { locationCode: number; locationName: string; languages: DfsLlmLanguage[] }
+
+export async function dfsLlmMentionsLocations(): Promise<DfsLlmLocation[] | null> {
+  const auth = authHeader();
+  if (!auth) return null;
+  try {
+    const res = await fetch(`${DFS_BASE}${LLM_MENTIONS_LOCATIONS_ENDPOINT}`, {
+      method: 'GET',
+      headers: { 'Authorization': auth },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) { console.error(`DataForSEO llm_mentions locations HTTP ${res.status}`); return null; }
+    const body: any = await res.json();
+    if (Number(body?.status_code) !== 20000) {
+      console.error(`DataForSEO llm_mentions locations status ${body?.status_code}: ${body?.status_message}`);
+      return null;
+    }
+    const t0 = Array.isArray(body?.tasks) ? body.tasks[0] : null;
+    if (Number(t0?.status_code) !== 20000) {
+      console.error(`DataForSEO llm_mentions locations task ${t0?.status_code}: ${t0?.status_message}`);
+      return null;
+    }
+    const rows: any[] = Array.isArray(t0?.result) ? t0.result : [];
+    return rows.map(r => ({
+      locationCode: Number(r?.location_code),
+      locationName: String(r?.location_name ?? ''),
+      languages: (Array.isArray(r?.available_languages) ? r.available_languages : []).map((l: any) => {
+        const n = Number(l?.responses_count);
+        return {
+          code: String(l?.language_code ?? ''),
+          name: String(l?.language_name ?? ''),
+          platforms: (Array.isArray(l?.available_platforms) ? l.available_platforms : []).map((x: any) => String(x)),
+          responses: Number.isFinite(n) ? n : null,
+        };
+      }).filter((l: DfsLlmLanguage) => !!l.code),
+    })).filter(r => Number.isFinite(r.locationCode) && r.locationName);
+  } catch (err) {
+    console.error('DataForSEO llm_mentions locations fetch failed:', err);
+    return null;
+  }
+}
 
 // ─── v7.503: Google Ads search volume for ONE location (per-office local demand) ──
 // Google Ads does not return volume for coordinates — "if you specify coordinates the

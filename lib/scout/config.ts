@@ -13,7 +13,7 @@
  * floor the pull reached, and every figure is exact ABOVE that floor.
  */
 
-export const SCOUT_VERSION = 'v7.521';
+export const SCOUT_VERSION = 'v7.545';   // v7.545: result.ai.market (per-market AI read)
 
 /**
  * Max competitors and products per run. v7.515 (Wayne, 2026-09-21): competitors 3 → 4.

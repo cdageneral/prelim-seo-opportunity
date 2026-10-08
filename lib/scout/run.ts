@@ -8,7 +8,7 @@
  * records why; it never takes the run down and never gets filled with a guess.
  */
 
-import { getMarket } from '@/lib/utils/markets';
+import { getScoutMarket } from './markets';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import {
   MAX_TERMS_PER_PRODUCT, ROWS_PER_COMPETITOR_DOMAIN, ROWS_PROSPECT_DOMAIN, ROWS_PER_COMPETITOR_TERM,
@@ -20,7 +20,7 @@ import {
 } from './opportunity';
 import { pullOrganic, pullOverview, pullQuestions, newMeter, getApiUnitsBalance, type DomainFacts, type QuestionRow } from './semrushScout';
 import { groupIntoThemes, proposeProductTerms, assignToProducts } from './themes';
-import { readAiForTheme, aiReadAvailable } from './aiRead';
+import { readAiForTheme, aiReadAvailable, planAiMarket, AI_PLATFORM_LABEL, type AiPlatform } from './aiRead';
 import { getRun, setProgress, finishRun, failRun, type Milestone } from './store';
 
 export const STEPS = [
@@ -54,7 +54,9 @@ export interface ScoutResult {
     pagesByDomain: Array<{ domain: string; isProspect: boolean; pages: number }>;
     questions: QuestionRow[]; questionSeed: string | null;
   };
-  ai: null | { reads: AiThemeRead[]; quadrants: Array<{ theme: string; quadrant: Quadrant }>; costUSD: number };
+  // v7.545: `market` = where and in what language the answers were read, and which engines. Absent on
+  // pre-v7.545 runs (those read ChatGPT + Google AI Overviews at DataForSEO's US/English default).
+  ai: null | { reads: AiThemeRead[]; quadrants: Array<{ theme: string; quadrant: Quadrant }>; costUSD: number; market?: { label: string; language: string; platforms: AiPlatform[] } };
   notes: string[];
   usage: { semrushUnits: number; semrushRows: number; semrushCalls: number; aiCostUSD: number };
 }
@@ -106,7 +108,8 @@ export async function executeRun(runId: string): Promise<void> {
   try {
     const run = await getRun(runId);
     if (!run) throw new Error('Run not found.');
-    const db = getMarket(run.market).code;
+    const mkt = getScoutMarket(run.market);
+    const db = mkt.code;
     const prospect = run.domain;
     const comps = run.competitors.map(c => c.domain);
     const industry = getIndustry(run.industry);
@@ -125,7 +128,7 @@ export async function executeRun(runId: string): Promise<void> {
     const d1 = `${facts.filter(f => f.found).length} of ${facts.length} sites profiled · Authority Score read for ${facts.filter(f => typeof f.authorityScore === 'number').length}`;
     if (!facts[0].found) {
       log.close(d1);
-      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, milestones: log.ms, result: { version: SCOUT_VERSION, thin: `Semrush has no organic data for ${prospect} in the ${getMarket(db).label} database.` } });
+      await finishRun(runId, { status: 'thin', headline: null, units: meter.units, milestones: log.ms, result: { version: SCOUT_VERSION, thin: `Semrush has no organic data for ${prospect} in the ${mkt.label} database.` } });
       return;
     }
     const brandTokens = [prospect, ...comps].map(d => extractBrand(d)).filter(t => t.length >= 3);
@@ -187,20 +190,29 @@ export async function executeRun(runId: string): Promise<void> {
     let opening: Opening | null = pickSearchOpening(themes, authority, prospect);
     let ai: ScoutResult['ai'] = null;
     if (aiReadAvailable()) {
-      const order = [...themes];
-      if (opening) { const i = order.findIndex(t => t.name === opening!.theme); if (i > 0) order.unshift(order.splice(i, 1)[0]); }
-      const picked = order.slice(0, AI_THEMES_MAX);
-      const reads: AiThemeRead[] = [];
-      for (const t of picked) {
-        try {
-          const r = await readAiForTheme(t.name, t.name.toLowerCase(), [prospect, ...comps]);
-          if (r) { aiCost += r.costUSD; if (r.read.answers > 0) reads.push(r.read); }
-        } catch (e) { notes.push(`AI answers for "${t.name}" could not be read (${(e as Error).message.slice(0, 80)}).`); }
+      const plan = await planAiMarket(mkt);
+      notes.push(...plan.notes);
+      if (plan.platforms.length) {
+        const order = [...themes];
+        if (opening) { const i = order.findIndex(t => t.name === opening!.theme); if (i > 0) order.unshift(order.splice(i, 1)[0]); }
+        const picked = order.slice(0, AI_THEMES_MAX);
+        const reads: AiThemeRead[] = [];
+        const answered = new Set<AiPlatform>();   // engines that returned a response for at least one theme
+        for (const t of picked) {
+          try {
+            const r = await readAiForTheme(t.name, t.name.toLowerCase(), [prospect, ...comps], plan);
+            if (r) { aiCost += r.costUSD; for (const k of Object.keys(r.read.byPlatform)) answered.add(k as AiPlatform); if (r.read.answers > 0) reads.push(r.read); }
+          } catch (e) { notes.push(`AI answers for "${t.name}" could not be read (${(e as Error).message.slice(0, 80)}).`); }
+        }
+        // v7.545: the report names only engines that answered — a planned engine whose every request came back empty is said so
+        const readPf = plan.platforms.filter(p => answered.has(p));
+        if (readPf.length) for (const p of plan.platforms) if (!answered.has(p)) notes.push(`No ${AI_PLATFORM_LABEL[p]} answers came back for these themes (no match, or the requests failed).`);
+        if (reads.length) {
+          if (!opening) opening = pickAiOpening(themes, reads, prospect, authority);
+          ai = { reads, costUSD: aiCost, quadrants: reads.map(r => ({ theme: r.theme, quadrant: quadrantOf(themes.find(t => t.name === r.theme)!, r, prospect) })),
+            market: { label: mkt.label, language: 'English', platforms: readPf } };
+        } else notes.push('No recorded AI answers came back for these themes (no match, or the requests failed), so the AI page was left out.');
       }
-      if (reads.length) {
-        if (!opening) opening = pickAiOpening(themes, reads, prospect, authority);
-        ai = { reads, costUSD: aiCost, quadrants: reads.map(r => ({ theme: r.theme, quadrant: quadrantOf(themes.find(t => t.name === r.theme)!, r, prospect) })) };
-      } else notes.push('No recorded AI answers matched these themes, so the AI page was left out.');
     } else notes.push('AI answer data is not configured, so the AI page was left out.');
 
     // 6 ── detail for the opening
@@ -229,7 +241,7 @@ export async function executeRun(runId: string): Promise<void> {
     });
 
     const result: ScoutResult = {
-      version: SCOUT_VERSION, generatedAt: new Date().toISOString(), database: db, marketLabel: getMarket(db).label,
+      version: SCOUT_VERSION, generatedAt: new Date().toISOString(), database: db, marketLabel: mkt.label,
       input: { domain: prospect, industry: industry.key, industryLabel: industry.label, regulated: industry.regulated, scope, products: run.products, competitors: run.competitors },
       floorVolume: universe.floorVolume,
       counts: { universe: universe.keywords.length, themed, brandedDropped: universe.brandedDropped, belowFloorDropped: universe.belowFloorDropped, notGrouped: universe.keywords.length - themed },

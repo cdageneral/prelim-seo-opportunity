@@ -1,3 +1,35 @@
+# v7.545 — Scout markets = every Semrush country database; the AI read follows the market (2026-10-08)
+
+Wayne: "the market drop down should mirror the same countries available from SemRush … then the keywords and data
+would be market related." Semrush pulls already used the selected market; the dropdown offered 4 countries, and the
+AI-answer read sent no location at all, so DataForSEO defaulted to the United States — a UK/CA/AU report put US AI
+answers beside that country's search data.
+
+- **121 markets.** New `lib/scout/markets.ts` = every country `database` the Semrush API accepts (read from the API
+  schema 2026-10-08; the 17 `mobile-*` and 7 `*-ext` variants are not countries). Dropdown: "Most used" (US, Canada,
+  UK, Australia) then "All Semrush markets" A–Z. Scout-only — Orbit project markets (`lib/utils/markets.ts`) unchanged.
+  An unknown market code is refused instead of silently read as US.
+- **AI read per market.** Once per run Scout reads DataForSEO's free LLM-mentions coverage list and reads only the
+  engines that record English-language answers for the market (themes are matched in English), passing that
+  location + language on every request. ChatGPT is US/English only per DataForSEO; Google AI Overviews where recorded.
+  Anything not covered is skipped and the reason goes into the report's method note — never another country's answers.
+  If the coverage list can't be read, US runs read as before and other markets read nothing.
+- **PDF wording** names only the engines that actually answered and the market ("recorded English-language Google AI
+  Overview answers in the United Kingdom", "up to 50 per engine"). Pre-v7.545 non-US reports now say their AI answers
+  came from the United States index. US reports read as before.
+- **Screen:** non-US market note (Semrush database, AI coverage, English-only themes/PDF); run rows name a non-US
+  market; live milestone promises ChatGPT only for US runs; "Convert to Orbit project" offered only for Orbit-supported
+  markets (US/CA/UK/AU) and refused server-side otherwise (an Orbit project elsewhere would silently scan US data).
+- Product Insights' LLM-mentions requests are unchanged (no location sent = the previous request).
+- Downstream (II.6a): Scout PDF page 04 + method line only; Orbit panels untouched. II.9: no queries touched. I.5b: the
+  coverage list is free (no ledger row); LLM-mentions cost unit unchanged.
+- Verified: project tsc + `next build` clean; retained suite 2,856 PASS / 49 FAIL — the identical pre-existing FAIL set
+  — incl. 93 new v7545 checks (markets vs Semrush list, coverage planner, request bodies, PDF wording old/new, 121-option
+  dropdown + note + Convert gating rendered in jsdom in both themes). Independent review: 2 mislabel risks fixed.
+- Files: lib/scout/markets.ts (new), lib/scout/aiRead.ts, lib/scout/run.ts, lib/scout/input.ts, lib/scout/pdfTemplate.ts,
+  lib/scout/config.ts, lib/apis/dataforseo.ts, app/scout/page.tsx, app/api/scout/access/route.ts,
+  app/api/scout/suggest/route.ts, app/api/scout/runs/[id]/convert/route.ts, package.json, CHANGELOG.md.
+
 # v7.544 — A keyword DataForSEO keeps failing on no longer blocks the SERP scan (2026-10-08)
 
 After v7.540 the Citi scan advanced (+10, +12, +21, +13, +3, +1) and then stopped on every Resume. Each batch takes

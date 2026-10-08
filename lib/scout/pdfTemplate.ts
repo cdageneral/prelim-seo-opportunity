@@ -20,7 +20,7 @@
  */
 
 import type { ScoutResult, ThemeLite, KeywordLite } from './run';
-import { OPEN_BELOW_SHARE, HELD_FROM_SHARE, DEMAND_FLOOR_MONTHLY, AI_NAMED_FROM, AUTHORITY_TOLERANCE, NEAR_WIN_MIN, PAGES_GAP_MULTIPLE } from './config';
+import { OPEN_BELOW_SHARE, HELD_FROM_SHARE, DEMAND_FLOOR_MONTHLY, AI_NAMED_FROM, AUTHORITY_TOLERANCE, NEAR_WIN_MIN, PAGES_GAP_MULTIPLE, AI_ROWS_PER_PLATFORM } from './config';
 import { CTR_SOURCE_LABEL } from '@/lib/sov/model';   // v7.519: named CTR model for the est.-traffic disclosure (Const I.5a)
 import { IQUANTI_LOGO_DATA_URI } from './iquantiLogo';   // v7.529
 
@@ -38,6 +38,23 @@ export function vol(n: number): string {
 const pct = (x: number) => (x * 100 >= 10 || x === 0 ? Math.round(x * 100) : Math.round(x * 1000) / 10) + '%';
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const short = (d: string) => d.replace(/^www\./, '');
+/**
+ * v7.545 — which engines the AI read covered, and where. New runs store ai.market (the run's market,
+ * English-language answers; ChatGPT only where recorded = US). Pre-v7.545 runs have no ai.market: they
+ * read both engines at DataForSEO's default (United States, English), so a non-US report of that era
+ * says its AI answers are United States answers rather than implying they were local.
+ */
+export function aiBasis(r: Pick<ScoutResult, 'ai' | 'database'>): { names: string; adj: string; lang: string; where: string; perTheme: string } {
+  const pf = r.ai?.market?.platforms ?? ['chat_gpt', 'google'];
+  const names = pf.map(p => p === 'chat_gpt' ? 'ChatGPT' : 'Google AI Overviews').join(' and ');
+  const adj = pf.map(p => p === 'chat_gpt' ? 'ChatGPT' : 'Google AI Overview').join(' and ');
+  const m = r.ai?.market;
+  const the = (l: string) => /^(United |Netherlands|Philippines|Bahamas|Dominican Republic)/.test(l) ? `the ${l}` : l;
+  const lang = m ? `${m.language}-language ` : '';
+  const where = m ? ` in ${the(m.label)}` : r.database !== 'us' ? ' from the United States index (this report predates per-market AI reads)' : '';
+  const perTheme = `up to ${AI_ROWS_PER_PLATFORM} per engine${pf.length > 1 ? `, so ${AI_ROWS_PER_PLATFORM * pf.length} at most per theme` : ''}`;
+  return { names, adj, lang, where, perTheme };
+}
 const path = (u: string) => { const p = String(u ?? '').replace(/^https?:\/\/[^/]+/i, ''); return p.length > 58 ? p.slice(0, 55) + '…' : (p || '/'); };
 
 // ─── squarified treemap ──────────────────────────────────────────────────────
@@ -280,14 +297,15 @@ export function buildScoutHtml(r0: ScoutResult, contact: ScoutContact | null = n
     const sMax = Math.max(1, ...leadRead.topSources.map(s => s.count));
     const srcBars = leadRead.topSources.slice(0, 6).map(s => bar(s.domain, s.count / sMax, `${n0(s.count)} answers`, s.domain === me, '2.2in', '.9in')).join('');
     const totalAns = r.ai.reads.reduce((s, a) => s + a.answers, 0);
-    p4 = page('SEARCH MEETS AI', `<h3>${h4}</h3><p class="lede">We read ${n0(totalAns)} recorded answers from ChatGPT and Google AI Overviews to buyer questions about your top themes, and logged every time one of these sites was named or cited.</p>
+    const ab = aiBasis(r);
+    p4 = page('SEARCH MEETS AI', `<h3>${h4}</h3><p class="lede">We read ${n0(totalAns)} recorded ${ab.lang}answers from ${ab.names}${esc(ab.where)} to buyer questions about your top themes, and logged every time one of these sites was named or cited.</p>
       <div class="quad"><span></span><span class="ax">AI NAMES YOU</span><span class="ax">AI DOESN'T</span>
         <span class="ax ay">ON PAGE ONE</span><div class="q a"><div class="qt">VISIBLE IN BOTH</div>${q('both')}</div><div class="q b"><div class="qt">GOOGLE YES, AI NO</div>${q('google_only')}<p>You rank, but AI draws on other sources. A citation problem.</p></div>
         <span class="ax ay">NOT ON PAGE ONE</span><div class="q c"><div class="qt">AI YES, GOOGLE NO</div>${q('ai_only')}<p>The brand is known. The pages aren't ranking.</p></div><div class="q d"><div class="qt">INVISIBLE IN BOTH</div>${q('neither')}<p>No pages to rank, nothing for AI to cite.</p></div></div>
       <div class="fig">Share of recorded answers naming each site <span>named in the answer text, or cited as a source</span></div>${heat}
       ${srcBars ? `<div class="fig">Sources AI cited most · ${esc(leadRead.theme)} <span>answers citing the domain</span></div>${srcBars}` : ''}
-      <div class="call"><b>Directional, not a score.</b> These are recorded ChatGPT and Google AI Overview answers to questions containing each theme, up to 50 per engine. AI output changes from day to day; a full assessment tracks a fixed prompt set over time.</div>
-      <div class="basis">Source: recorded ChatGPT and Google AI Overview answers, read ${esc(dateStr)}. "AI names you" = named or cited in at least ${pct(AI_NAMED_FROM)} of the AI answers read (up to 50 per engine, so 100 at most per theme). "On page one" = the theme is held or contested on page 03.</div>`);
+      <div class="call"><b>Directional, not a score.</b> These are recorded ${ab.lang}${ab.adj} answers${esc(ab.where)} to questions containing each theme, ${ab.perTheme}. AI output changes from day to day; a full assessment tracks a fixed prompt set over time.</div>
+      <div class="basis">Source: recorded ${ab.lang}${ab.adj} answers${esc(ab.where)}, read ${esc(dateStr)}. "AI names you" = named or cited in at least ${pct(AI_NAMED_FROM)} of the AI answers read (${ab.perTheme}). "On page one" = the theme is held or contested on page 03.</div>`);
   }
 
   // ── 05 inside the opening ──
@@ -335,7 +353,7 @@ export function buildScoutHtml(r0: ScoutResult, contact: ScoutContact | null = n
     ${contact
       ? `<div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Reach out to ${esc(contact.name)} and we'll find a time that works.</span><div class="who"><b>${esc(contact.name)}</b><a href="mailto:${esc(contact.email)}">${esc(contact.email)}</a></div></div>`
       : `<div class="soft"><b>Let's set up a 30-minute call to talk it through.</b><span>We'll go over what this report found, and you can tell us where things stand and what you're working on. Just reply to whoever sent you this report and we'll find a time that works.</span></div>`}
-    <p class="method"><b>Sources &amp; method.</b> Rankings, search volumes, Authority Score, ranking URLs, question searches and traffic estimates: Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}; traffic is a Semrush estimate and is labelled where shown. AI answers: recorded ChatGPT and Google AI Overview answers, read the same day. This snapshot reads each competitor's highest-volume page-one searches${r.floorVolume > 0 ? `, so every figure covers searches above ${n0(r.floorVolume)} a month and is exact within that set` : ''}; branded searches are excluded. ${r.input.scope === 'products' ? 'Searches were assigned to the named products' : 'Themes were grouped'} by Claude from the keyword list — it sorts, it does not supply numbers. Every sentence in this report is filled from the measured figures; none of it is written by an AI.${r.notes.length ? ' ' + esc(r.notes.join(' ')) : ''}</p>`);
+    <p class="method"><b>Sources &amp; method.</b> Rankings, search volumes, Authority Score, ranking URLs, question searches and traffic estimates: Semrush, ${esc(r.marketLabel)} database, ${esc(dateStr)}; traffic is a Semrush estimate and is labelled where shown.${r.ai ? ` AI answers: recorded ${aiBasis(r).lang}${aiBasis(r).adj} answers${esc(aiBasis(r).where)}, read the same day.` : ''} This snapshot reads each competitor's highest-volume page-one searches${r.floorVolume > 0 ? `, so every figure covers searches above ${n0(r.floorVolume)} a month and is exact within that set` : ''}; branded searches are excluded. ${r.input.scope === 'products' ? 'Searches were assigned to the named products' : 'Themes were grouped'} by Claude from the keyword list — it sorts, it does not supply numbers. Every sentence in this report is filled from the measured figures; none of it is written by an AI.${r.notes.length ? ' ' + esc(r.notes.join(' ')) : ''}</p>`);
 
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>iQ.Impact Snapshot — ${esc(me)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

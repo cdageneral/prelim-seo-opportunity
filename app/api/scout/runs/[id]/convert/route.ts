@@ -17,6 +17,8 @@ import { getIndustry } from '@/lib/scout/config';
 import { authEnforced, seesAllProjects } from '@/lib/auth/config';
 import { grantProjectToUsers } from '@/lib/auth/store';
 import { recordEvent } from '@/lib/auth/audit';
+import { MARKETS } from '@/lib/utils/markets';
+import { getScoutMarket } from '@/lib/scout/markets';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const g = await requireScout();
@@ -26,6 +28,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 });
   if (!g.isAdmin && g.user && run.userId !== g.user.sub) return NextResponse.json({ error: 'Not your run' }, { status: 403 });
   if (run.projectId) return NextResponse.json({ projectId: run.projectId, existing: true });
+  // v7.545 — Scout reads 121 Semrush markets; Orbit projects support MARKETS only. A project in any
+  // other market would silently fall back to US data, so it is refused instead.
+  if (!MARKETS.some(m => m.code === run.market)) {
+    return NextResponse.json({ error: `Orbit projects support ${MARKETS.map(m => m.label).join(', ')}. This Scout run is for ${getScoutMarket(run.market).label}, so it can't be converted yet.` }, { status: 409 });
+  }
 
   const [project] = await db.insert(projects).values({
     clientName: run.domain, websiteUrl: `https://${run.domain}`, industry: getIndustry(run.industry).label,

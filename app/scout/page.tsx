@@ -33,7 +33,7 @@ interface Access {
   timing: { seconds: number; runs: number } | null; aiRead: boolean;
   limits: { competitors: number; products: number };
   industries: Array<{ key: string; label: string }>;
-  markets: Array<{ code: string; label: string }>;
+  markets: Array<{ code: string; label: string; top?: boolean; orbit?: boolean }>;   // v7.545: all Semrush country databases
 }
 interface Suggestion { domain: string; commonKeywords: number; organicKeywords: number; publisher: boolean }
 interface Picked { domain: string; manual: boolean; note?: string; publisher?: boolean }
@@ -82,12 +82,13 @@ const I_CHECK = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
 const I_X = '<path d="M6 6l12 12M18 6L6 18"/>';
 
 /** v7.523 — display names for the six REAL run steps (lib/scout/run.ts STEPS, same order) and the terminal line. */
-const MILESTONES: Array<{ name: (ai: boolean) => string; cmd: (r: { domain: string; competitors: unknown[] }) => string }> = [
+const MILESTONES: Array<{ name: (ai: boolean, market?: string) => string; cmd: (r: { domain: string; competitors: unknown[] }) => string }> = [
   { name: () => 'Recon: domain footprint & authority signals', cmd: r => `recon --targets ${r.competitors.length + 1} --signals footprint,authority` },
   { name: () => 'Harvesting competitor page-one positions', cmd: r => `harvest serp --top 10 --competitors ${r.competitors.length}` },
   { name: () => "Cross-referencing the prospect's rankings", cmd: r => `xref rankings --prospect ${r.domain} --top 20` },
   { name: () => 'AI clustering of search demand into themes', cmd: () => 'cluster --model ai --themes auto' },
-  { name: ai => ai ? 'Scoring openings + probing ChatGPT & Google AI Overviews' : 'Scoring openings across every theme', cmd: () => 'score openings && probe llm --engines chatgpt,google_aio' },
+  // v7.545 — ChatGPT is read for US runs only; other markets read whatever AI answers are recorded there in English
+  { name: (ai, market) => !ai ? 'Scoring openings across every theme' : !market || market === 'us' ? 'Scoring openings + probing ChatGPT & Google AI Overviews' : 'Scoring openings + probing AI answers recorded for this market', cmd: () => 'score openings && probe llm --engines chatgpt,google_aio' },
   { name: () => 'Mining buyer questions + final QA', cmd: () => 'assemble report --qa strict' },
 ];
 const isLive = (st: string) => st === 'queued' || st === 'running';
@@ -345,6 +346,8 @@ export default function ScoutPage() {
     } catch (e) { setError(e instanceof Error ? e.message : 'PDF failed'); }
     setDownloading(null);
   }
+  // v7.545 — Convert only where an Orbit project can run (pre-v7.545 access payloads carry no flag → us/ca/uk/au).
+  const orbitMarket = (code: string) => { const m = access?.markets.find(x => x.code === code); return m ? (m.orbit ?? true) : false; };
   async function convert(r: Run) {
     setConverting(r.id); setError(null);
     const res = await fetch(`/api/scout/runs/${r.id}/convert`, { method: 'POST' });
@@ -454,8 +457,15 @@ export default function ScoutPage() {
                   <div><label className={label}>Industry</label>
                     <select className={input} value={industry} disabled={running} onChange={e => setIndustry(e.target.value)}>{access.industries.map(i => <option key={i.key} value={i.key}>{i.label}</option>)}</select></div>
                   <div><label className={label}>Market</label>
-                    <select className={input} value={market} disabled={running} onChange={e => { setMarket(e.target.value); setSuggestions(null); }}>{access.markets.map(m => <option key={m.code} value={m.code}>{m.label}</option>)}</select></div>
+                    <select className={input} value={market} disabled={running} onChange={e => { setMarket(e.target.value); setSuggestions(null); }}>
+                      <optgroup label="Most used">{access.markets.filter(m => m.top).map(m => <option key={m.code} value={m.code}>{m.label}</option>)}</optgroup>
+                      <optgroup label="All Semrush markets">{access.markets.filter(m => !m.top).map(m => <option key={m.code} value={m.code}>{m.label}</option>)}</optgroup>
+                    </select></div>
                 </div>
+                {market !== 'us' && (() => { const ml = access.markets.find(m => m.code === market)?.label ?? market; return (
+                  <p data-scout-market-note className="text-xs text-orbit-tertiary mt-1.5">
+                    Rankings and volumes come from Semrush&apos;s {ml} database. AI answers: ChatGPT is recorded for the US only, and Google AI Overviews are read only where English-language answers are recorded for {ml} — themes are matched in English and the PDF is written in English.{access.markets.find(m => m.code === market)?.orbit ? '' : ' Orbit projects don\u2019t support this market yet, so this run can\u2019t be converted.'}
+                  </p>); })()}
 
                 <div className="flex items-end justify-between mt-5 mb-1.5">
                   <label className={`${label} mb-0`}>Competitors <span className="normal-case tracking-normal text-orbit-tertiary">— up to {maxC}</span></label>
@@ -563,7 +573,7 @@ export default function ScoutPage() {
                           {ar.status === 'failed' && <p className="text-sm text-orbit-red">{ar.error ?? 'The run failed.'}</p>}
                           <div className="flex flex-wrap items-center gap-2 mt-3">
                             {doneOk && <button type="button" onClick={() => download(ar)} disabled={downloading === ar.id} className="inline-flex items-center gap-1.5 rounded-lg bg-orbit-accent hover:bg-orbit-accent-light text-[color:var(--on-fill-accent)] text-sm font-bold px-4 py-2.5 disabled:opacity-50"><Ico d={I_PDF} />{downloading === ar.id ? 'Building PDF…' : 'Download PDF'}</button>}
-                            {doneOk && !ar.projectId && access.orbit && access.canWrite && <button type="button" onClick={() => convert(ar)} disabled={converting === ar.id} className="inline-flex items-center gap-1.5 rounded-lg border-[1.5px] border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10 text-sm font-bold px-4 py-2 disabled:opacity-50"><Ico d={I_ORBIT} />{converting === ar.id ? 'Creating project…' : 'Convert to Orbit project'}</button>}
+                            {doneOk && !ar.projectId && access.orbit && access.canWrite && orbitMarket(ar.market) && <button type="button" onClick={() => convert(ar)} disabled={converting === ar.id} className="inline-flex items-center gap-1.5 rounded-lg border-[1.5px] border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10 text-sm font-bold px-4 py-2 disabled:opacity-50"><Ico d={I_ORBIT} />{converting === ar.id ? 'Creating project…' : 'Convert to Orbit project'}</button>}
                             {ms.length > 0 && <button type="button" onClick={() => setLogOpen(o => !o)} className="ml-auto text-xs font-semibold text-orbit-secondary hover:text-orbit-accent" aria-expanded={logOpen} data-scout-log-toggle>{logOpen ? 'Hide run log ▴' : 'Show run log ▾'}</button>}
                           </div>
                         </div>
@@ -596,7 +606,7 @@ export default function ScoutPage() {
                                   {st === 'done' ? <Ico d={I_CHECK} size={12} /> : st === 'stop' ? <Ico d={I_X} size={11} /> : st === 'now' ? null : i + 1}
                                 </span>
                                 <div className="min-w-0">
-                                  <div className={`text-[13px] ${st === 'todo' || st === 'skip' ? 'font-semibold text-orbit-secondary' : 'font-bold text-orbit-primary'}`} data-ms-name>{m.name(access.aiRead)}</div>
+                                  <div className={`text-[13px] ${st === 'todo' || st === 'skip' ? 'font-semibold text-orbit-secondary' : 'font-bold text-orbit-primary'}`} data-ms-name>{m.name(access.aiRead, ar?.market)}</div>
                                   <div className={`font-mono text-[11px] mt-0.5 ${st === 'stop' ? 'text-orbit-red' : 'text-orbit-secondary'}`} data-ms-detail>
                                     {st === 'done' ? (rec!.detail ?? 'done') : st === 'now' ? 'working…' : st === 'stop' ? 'stopped here' : st === 'skip' ? 'not needed' : 'queued'}
                                   </div>
@@ -652,7 +662,7 @@ export default function ScoutPage() {
                             </div>
                           </div>
                           <div className="text-[11.5px] text-orbit-secondary mt-1">
-                            {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{isDraft ? ' · not run yet' : ''}
+                            {r.scope === 'products' ? `${r.products.length} product${r.products.length === 1 ? '' : 's'}` : 'Full domain'} · {r.competitors.length} competitor{r.competitors.length === 1 ? '' : 's'}{r.market && r.market !== 'us' ? ` · ${access.markets.find(m => m.code === r.market)?.label ?? r.market}` : ''}{isDraft ? ' · not run yet' : ''}
                           </div>
                           {live && (() => {
                             const src = active?.run.id === r.id ? active.run : r;
@@ -672,7 +682,7 @@ export default function ScoutPage() {
                                 {hasPdf && <button type="button" onClick={() => download(r)} disabled={downloading === r.id} className={`${primary} border-orbit-accent bg-orbit-accent text-[color:var(--on-fill-accent)] hover:bg-orbit-accent-light`}><Ico d={I_PDF} />{downloading === r.id ? 'Building PDF…' : 'Download PDF'}</button>}
                                 {isDraft && <button type="button" onClick={() => runSaved(r)} disabled={busy || running || capLeft === 0} className={`${primary} border-orbit-accent bg-orbit-accent text-[color:var(--on-fill-accent)] hover:bg-orbit-accent-light`}><Ico d={I_PLAY} size={13} fill />Run</button>}
                                 {r.projectId ? (access.orbit ? <Link href={`/projects/${r.projectId}`} className={`${primary} border-orbit-cyan text-orbit-cyan hover:bg-orbit-cyan/10`}><Ico d={I_ORBIT} />Open Orbit project →</Link> : null)
-                                  : hasPdf && access.orbit && access.canWrite ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className={`${primary} border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10`}><Ico d={I_ORBIT} />{converting === r.id ? 'Creating project…' : 'Convert to Orbit project'}</button> : null}
+                                  : hasPdf && access.orbit && access.canWrite && orbitMarket(r.market) ? <button type="button" onClick={() => convert(r)} disabled={converting === r.id} className={`${primary} border-orbit-accent-light text-orbit-accent-light hover:bg-orbit-accent/10`}><Ico d={I_ORBIT} />{converting === r.id ? 'Creating project…' : 'Convert to Orbit project'}</button> : null}
                               </div>
                             )}
                             <div className="flex items-end justify-between gap-3 mt-1.5">

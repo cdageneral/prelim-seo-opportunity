@@ -9,7 +9,7 @@
 
 import { z } from 'zod';
 import { MAX_COMPETITORS, MAX_PRODUCTS, normDomain, isValidDomain, getIndustry } from './config';
-import { getMarket } from '@/lib/utils/markets';
+import { getScoutMarket, isScoutMarket } from './markets';
 import type { RunInput } from './store';
 
 export const RunBody = z.object({
@@ -31,6 +31,8 @@ export function parseRunInput(json: unknown): ParsedInput {
     if (issue?.path[0] === 'competitors' && issue.code === 'too_small') return { ok: false, error: 'Pick at least one competitor.' };
     return { ok: false, error: issue?.message ?? 'Invalid input' };
   }
+  // v7.545: 121 Semrush markets; an unknown code is refused, never silently read as US.
+  if (p.data.market && !isScoutMarket(p.data.market)) return { ok: false, error: `"${p.data.market}" is not a Semrush market.` };
   const domain = normDomain(p.data.domain);
   if (!isValidDomain(domain)) return { ok: false, error: `"${p.data.domain}" is not a domain.` };
   const seen = new Set<string>([domain]);
@@ -46,6 +48,6 @@ export function parseRunInput(json: unknown): ParsedInput {
   if (p.data.scope === 'products' && !products.length) return { ok: false, error: 'Add at least one product, or switch to Full domain.' };
   return {
     ok: true, draft: p.data.draft,
-    input: { domain, market: getMarket(p.data.market).code, industry: getIndustry(p.data.industry).key, scope: p.data.scope, products, competitors },
+    input: { domain, market: getScoutMarket(p.data.market).code, industry: getIndustry(p.data.industry).key, scope: p.data.scope, products, competitors },
   };
 }

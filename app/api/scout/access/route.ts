@@ -12,6 +12,7 @@ import { resolveAccess, usedToday } from '@/lib/scout/access';
 import { medianRunSeconds } from '@/lib/scout/store';
 import { INDUSTRIES, MAX_COMPETITORS, MAX_PRODUCTS } from '@/lib/scout/config';
 import { MARKETS } from '@/lib/utils/markets';
+import { SCOUT_MARKETS, SCOUT_TOP_MARKETS } from '@/lib/scout/markets';
 import { aiReadAvailable } from '@/lib/scout/aiRead';
 
 export async function GET() {
@@ -26,6 +27,8 @@ export async function GET() {
     // v7.515 — 4 competitors; the screen prices the real count with lib/scout/config unitCeiling().
     limits: { competitors: MAX_COMPETITORS, products: MAX_PRODUCTS },
     industries: INDUSTRIES.map(i => ({ key: i.key, label: i.label })),
-    markets: MARKETS.map(m => ({ code: m.code, label: m.label })),
+    // v7.545 — every Semrush country database. `top` = listed first; `orbit` = an Orbit project can be
+    // created in this market (Convert is offered only then — Orbit's SERP scans support MARKETS only).
+    markets: SCOUT_MARKETS.map(m => ({ code: m.code, label: m.label, top: (SCOUT_TOP_MARKETS as readonly string[]).includes(m.code), orbit: MARKETS.some(o => o.code === m.code) })),
   });
 }
