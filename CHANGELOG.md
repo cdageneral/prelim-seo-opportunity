@@ -1,3 +1,28 @@
+# v7.534 — Branded no longer swallows generic terms ("credit card" was Branded on Citi via "dillard" → "lard" ≈ "card") (2026-10-08)
+
+Wayne, on the Citi (Cards) cards (Branded 1,152 · Non-branded 333): "what happened to the non branded card. The numbers
+look lower and this should be all client non branded".
+
+- **What the card is.** Non-branded = client keywords that are not Branded (1,485 client = 1,152 + 333) — that part
+  was right. The Branded side was inflated.
+- **Root cause.** The brand test split every brand term of 4+ letters into half-tokens and fuzzy-matched them per word.
+  Citi's partner term "dillard" produced "lard", one letter from "card", so every "credit card" keyword was Branded;
+  "wayfair" produced "fair" ("credit cards for fair credit"); the 4-letter client root "citi" fuzzy-matched "city".
+  303 of Citi's 1,152 Branded keywords (21.5M annual) were generic. The same mechanism mis-labeled Sono Bello
+  ("bello" ≈ "belly": 165 Branded were all belly/body terms), Lloyds ("sbank" ≈ "bank": "bank account"), and on the
+  competitor side dropped generic gap terms (HSBC UK: natwest's "west" ≈ "best" removed every "best savings …" keyword).
+- **Fix (lib/utils/kwVolume.ts `isBrandedKeyword`).** Brand TERMS match as written (normalized substring; phrases
+  on word boundaries) — never half-split or fuzzy. Fuzzy misspelling tolerance only for tokens of 6+ letters
+  ("sonobelo" still matches "sonobello"; "city" no longer matches "citi"). Short roots (td) unchanged.
+  The two hand-kept copies (journey classifier, Content Map) now call the shared function.
+- **Measured on live data (all keywords / Branded / Non-branded):** Citi (Cards) 3,218 / 1,152 / 333 → 3,218 / 847 / 638;
+  Sono Bello – SEO & GEO 9,166 / 165 / 5,445 → 9,527 / 0 / 5,610; Sonobello 280 → 250 Branded; Lloyds Bank 174 → 142
+  Branded, 1,601 → 1,613 all; BankRate 1,283 → 1,247 Branded; HSBC UK 965 → 1,563 all; Test (keybank.con) 4 → 727
+  Branded (root now "keybank"); NYDJ 4 → 3; other projects +1 to +7 keywords from competitor gap terms no longer
+  fuzzy-dropped.
+- Constitution v0.34 (III.1).
+- Verified: project tsc clean; retained suite 3,849 PASS / 30 FAIL — the identical pre-existing failure set (zero new), incl. 9 new v534 checks.
+
 # v7.533 — A subdomain no longer becomes a competitor "brand" (creditcards.chase.com dropped every credit-card keyword) (2026-10-08)
 
 Wayne: "i uploaded [competitor footprints] and the overall keyword footprint actually dropped. Why? it should have

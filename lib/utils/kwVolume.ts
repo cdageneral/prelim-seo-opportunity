@@ -251,9 +251,17 @@ export function isBrandedKeyword(
     }
   }
 
+  // v7.534: explicit brand TERMS are exact vocabulary — matched as written (normalized
+  // substring), never split into half-tokens or fuzzy-matched. Before, "dillard" yielded the
+  // half-token "lard", which fuzzy-matched "card", so 303 generic Citi keywords ("credit
+  // card", "secured credit card") were labeled Branded (Wayne, 2026-10-08).
+  const domainRoots = new Set([clientDomain, ...competitorDomains].map(extractBrand).filter(b => b.length >= 4));
+  for (const t of brandWordRoots) {
+    if (t.length >= 4 && !domainRoots.has(t) && kwNorm.includes(t)) return true;
+  }
   const roots = Array.from(new Set([
     ...[clientDomain, ...competitorDomains].map(extractBrand),
-    ...brandWordRoots,
+    ...brandWordRoots.filter(t => t.length <= 3),   // short terms keep the word-boundary rule below
   ])).filter(b => b.length >= 2);
   if (roots.length === 0) return false;
   const longRoots  = roots.filter(b => b.length >= 4);
@@ -301,6 +309,9 @@ export function isBrandedKeyword(
 
     for (const word of kwWords) {
       for (const token of allTokens) {
+        // v7.534: a 4–5 letter token is too short to fuzzy-match safely ("citi" ~ "city",
+        // "lard" ~ "card"); misspellings are only tolerated for tokens of 6+ letters.
+        if (token.length < 6) continue;
         const minLen    = Math.min(word.length, token.length);
         const threshold = Math.max(1, Math.floor(minLen / 4));
         if (Math.abs(word.length - token.length) > threshold + 1) continue;
