@@ -1236,7 +1236,7 @@ function ClustersTab({
               onClick={() => setFilter('all')}
               style={{
                 position:     'relative',
-                display: 'flex', alignItems: 'center', gap: 28,
+                display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 10,   // v7.543: column (row on top, inventory lines below)
                 padding: '20px 24px',
                 background:   allActive ? 'var(--ca-155-150-255-0_10)' : 'var(--ca-155-150-255-0_04)',
                 border:       `1px solid ${allActive ? 'var(--ca-155-150-255-0_45)' : 'var(--ca-155-150-255-0_18)'}`,
@@ -1251,9 +1251,12 @@ function ClustersTab({
               onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_18)'; }}
             >
               <SegmentDownloadButton onDownload={() => dlStats(topicStats, 'All clusters')} title="Download as Excel" size={14} style={{ position: 'absolute', top: 12, right: 14 }} />
-              {/* v7.542: bounded width — the v7.541 inventory line is long and, unbounded, it widened this
-                  column and pushed the volume column out of the hero (seen live on Citi (Cards)). */}
-              <div style={{ textAlign: 'center', flexShrink: 0, maxWidth: 300 }}>
+              {/* v7.543: the hero is a column — the number | volume row on top, the v7.541 page-inventory
+                  lines underneath spanning the full card. v7.541 put the lines inside the number column
+                  (it grew past the card); v7.542 capped that column (the volume column still clipped at
+                  laptop width). Seen live on Citi (Cards) both times. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 28, width: '100%', minWidth: 0 }}>
+              <div style={{ textAlign: 'center', flexShrink: 0 }}>
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 4 }}>
                   Total clusters
                 </div>
@@ -1261,23 +1264,9 @@ function ClustersTab({
                   {topics.length}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--c-484868)', marginTop: 4 }}>pages across {catCount} categories</div>
-                {/* v7.541: a cluster IS a page — split by existing URL vs net-new build, and
-                    reconcile to the real ranking-URL inventory so "existing" can never
-                    exceed the number of pages the client actually has (Const III.5 v0.39). */}
-                <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', marginTop: 6, lineHeight: 1.5 }}>
-                  <span style={{ color: 'var(--c-4ade80)', fontWeight: 700 }}>{inv.existing.toLocaleString()}</span> existing pages
-                  {inv.existingUrlUnknown > 0 && <span style={{ color: 'var(--c-6a6a90)' }}> ({inv.existingUrlUnknown} URL not on file)</span>}
-                  {' · '}
-                  <span style={{ color: 'var(--c-f59e0b)', fontWeight: 700 }}>{inv.netNew.toLocaleString()}</span> net-new pages
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 2 }} title={inv.unrootedUrls.slice(0, 20).map(u => `${u.url} · ${u.kwCount} kw · rooted on ${u.rootedOn.join(', ') || '—'}`).join('\n')}>
-                  {inv.rankingUrls.toLocaleString()} ranking URLs on file · {inv.rootedUrls.toLocaleString()} are cluster pages
-                  {inv.unrootedUrls.length > 0 && <> · {inv.unrootedUrls.length} rank only for keywords rooted on another page</>}
-                  {inv.mergedNodes > 0 && <> · {inv.mergedNodes} topics share a page</>}
-                </div>
               </div>
               <div style={{ width: 1, height: 64, background: 'var(--c-1e1e34)', flexShrink: 0 }} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}>
                 <div>
                   <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 3 }}>
                     Total annual search volume
@@ -1299,6 +1288,23 @@ function ClustersTab({
                     </span>
                     <span style={{ fontSize: 11, color: 'var(--c-383858)' }}>searches / mo</span>
                   </div>
+                </div>
+              </div>
+              </div>
+              {/* v7.541: a cluster IS a page — split by existing URL vs net-new build, and
+                  reconcile to the real ranking-URL inventory so "existing" can never
+                  exceed the number of pages the client actually has (Const III.5 v0.39). */}
+              <div style={{ width: '100%', borderTop: '1px solid var(--c-1e1e34)', paddingTop: 8, marginTop: 2 }}>
+                <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', lineHeight: 1.5 }}>
+                  <span style={{ color: 'var(--c-4ade80)', fontWeight: 700 }}>{inv.existing.toLocaleString()}</span> existing pages
+                  {inv.existingUrlUnknown > 0 && <span style={{ color: 'var(--c-6a6a90)' }}> ({inv.existingUrlUnknown} URL not on file)</span>}
+                  {' · '}
+                  <span style={{ color: 'var(--c-f59e0b)', fontWeight: 700 }}>{inv.netNew.toLocaleString()}</span> net-new pages
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 2, lineHeight: 1.5 }} title={inv.unrootedUrls.slice(0, 20).map(u => `${u.url} · ${u.kwCount} kw · rooted on ${u.rootedOn.join(', ') || '—'}`).join('\n')}>
+                  {inv.rankingUrls.toLocaleString()} ranking URLs on file · {inv.rootedUrls.toLocaleString()} are cluster pages
+                  {inv.unrootedUrls.length > 0 && <> · {inv.unrootedUrls.length} rank only for keywords rooted on another page</>}
+                  {inv.mergedNodes > 0 && <> · {inv.mergedNodes} topics share a page</>}
                 </div>
               </div>
             </button>

@@ -1,3 +1,10 @@
+# v7.543 — Cluster hero laid out as a column; page-inventory lines span the card (2026-10-08)
+
+v7.542's 300px cap stopped the number column growing, but at laptop width the volume column still clipped the
+hero's right edge (seen live on Citi (Cards)). The hero is now a column: the number | volume row on top, exactly as
+before v7.541, and the two v7.541 page-inventory lines underneath, full width, under a hairline. Layout only.
+- Files: components/brief/ThemeClustersPanel.tsx, package.json, CHANGELOG.md.
+
 # v7.542 — Cluster hero: the v7.541 inventory line no longer widens the card (2026-10-08)
 
 Seen live on Citi (Cards) right after v7.541: the new "N ranking URLs on file · …" line had no width bound, so the
