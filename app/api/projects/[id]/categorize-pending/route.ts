@@ -37,7 +37,6 @@ import { eq, sql } from 'drizzle-orm';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest } from '@/lib/utils/kwVolume';
-import { normalizeBrandCategoryTypes } from '@/lib/category/brandCategoryType';   // v7.535
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';
@@ -50,7 +49,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const maxDuration = 300;
 
-const MODEL       = 'claude-haiku-4-5-20251001';
+const MODEL       = 'claude-sonnet-4-6';   // v7.536: Haiku forced fits ("bwi airport" → Using a Credit Card); Sonnet answers 0 when nothing fits
 const BATCH       = 50;     // keywords per Claude call
 const PARALLEL    = 6;      // calls in flight per POST
 const DEFAULT_LIM = 600;    // keywords per POST (12 calls)
@@ -132,15 +131,7 @@ async function loadContext(projectId: string) {
     (name: string, type?: string) => type === 'brand' || guard.isCompetitorBrandCategory(name, type),
   );
 
-  // v7.535: mis-typed brand categories (a product category the model typed "brand").
-  const retypeDomains = Array.from(new Set([
-    ...competitorDomains,
-    ...dbKws.map(k => String(k.domain ?? '')),
-    ...(Array.isArray(raw?.competitors) ? raw.competitors.map((c: any) => String(c?.domain ?? '')) : []),
-  ].filter(Boolean)));
-  const retype = normalizeBrandCategoryTypes(raw?._categoryBreakdown?.categories ?? [], clientDomain, retypeDomains, brandTerms);
-
-  return { analysisId: loaded.head.id, raw, clientDomain, brandTerms, pending, refile, candidates, retype, hasTree: hasStoredCategoryTree(raw) } as const;
+  return { analysisId: loaded.head.id, raw, clientDomain, brandTerms, pending, refile, candidates, hasTree: hasStoredCategoryTree(raw) } as const;
 }
 
 const annual = (rows: Array<{ searchVolume: number }>) => rows.reduce((n, r) => n + (r.searchVolume ?? 0), 0) * 12;
@@ -153,7 +144,6 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     pending:             ctx.hasTree ? ctx.pending.length : 0,
     pendingAnnualVolume: ctx.hasTree ? annual(ctx.pending) : 0,
     refile:              ctx.hasTree ? ctx.refile.length : 0,
-    retype:              ctx.retype.retyped,
     candidates:          ctx.candidates.length,
     batchSize:           BATCH,
   });
@@ -165,23 +155,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
   const limit = Math.max(BATCH, Math.min(MAX_LIM, Number(body?.limit) || DEFAULT_LIM));
-  const mode: 'pending' | 'refile' | 'retype' = body?.mode === 'refile' ? 'refile' : body?.mode === 'retype' ? 'retype' : 'pending';
+  const mode: 'pending' | 'refile' = body?.mode === 'refile' ? 'refile' : 'pending';
 
   const t0 = Date.now();
   const ctx = await loadContext(projectId);
   if ('error' in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
-
-  // v7.535 mode 'retype': store the corrected category types (labels only — the categories
-  // array is small, written in place with jsonb_set; no keyword membership changes).
-  if (mode === 'retype') {
-    if (ctx.retype.retyped.length > 0) {
-      await db.execute(sql`
-        UPDATE analyses
-           SET semrush_snapshot = jsonb_set(semrush_snapshot, '{_categoryBreakdown,categories}', ${JSON.stringify(ctx.retype.categories)}::jsonb, false)
-         WHERE id = ${ctx.analysisId}`);
-    }
-    return NextResponse.json({ retyped: ctx.retype.retyped, ms: Date.now() - t0 });
-  }
   if (!ctx.hasTree) return NextResponse.json({ error: 'This project has no category tree yet — run an analysis first.' }, { status: 400 });
   if (ctx.candidates.length === 0) {
     return NextResponse.json({ error: 'No selected categories to file into — select at least one category in Keyword Selection.' }, { status: 400 });

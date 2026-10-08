@@ -24,7 +24,7 @@ export const OTHER_CATEGORY = 'Other';
  * `_categoryBreakdown.filerVersion[kw] = FILER_VERSION`, so a rule change can re-file the
  * competitor keywords an older rule set filed (refile mode) and the loop knows when it is done.
  */
-export const FILER_VERSION = 532;
+export const FILER_VERSION = 536;   // v7.536: stricter relevance rules + stronger model (re-files every 532-filed keyword)
 
 /** Lowercase domain root ("www.citi.com" → "citi"). */
 function domainRoot(domain: string): string {
@@ -146,7 +146,12 @@ ${kws}
 Rules:
 - For each keyword choose the ONE category whose search intent the keyword matches — what the searcher is trying to find or do, not a shared word.
 - You may ONLY answer with a category number from the list above. Never invent, rename or combine categories.
-- If no category matches the keyword's intent closely, answer 0.
+- If no category matches the keyword's intent closely, answer 0. When unsure, answer 0.
+- Test every pick: would a page in that category of ${domain}'s site directly answer this exact search? Sharing a
+  context is NOT enough. Searches about travel, airports, passports, TSA/airport-security programs, lounges, insurance,
+  concerts, festivals, events, sports, places, retailers' own services, or anything a card can merely be used to pay
+  for are not about the product itself (e.g. "bwi airport", "lollapalooza 2025", "tsa precheck", "passport",
+  "travel insurance") — answer 0 unless a category is literally about that subject.
 - The ONLY brands that belong in these categories are ${domain}'s own brand and its partner brands: ${own}.
   If a keyword names any OTHER company, bank, card issuer, retailer, store, airline, service or website (e.g. "kohls payment", "walmart credit account", "credit one platinum visa", "starz activate"), answer 0 — even when it is about a credit card or a product in the list.
 - Navigation searches for another company's site — a web address, login, sign-in, activation, bill pay or account page that is not ${domain}'s or a listed partner's — answer 0.

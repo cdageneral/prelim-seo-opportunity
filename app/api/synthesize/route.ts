@@ -9,8 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db }      from '@/db';
-import { analyses, personas, opportunities, projects, competitors as competitorsTable } from '@/db/schema';
-import { normalizeBrandCategoryTypes } from '@/lib/category/brandCategoryType';   // v7.535
+import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
 import { generatePersonaImages } from '@/lib/apis/personaImage';
@@ -226,24 +225,6 @@ export async function POST(req: NextRequest) {
       idPrefix: `${domain.replace(/[^a-z0-9]+/gi, '-')}-${analysisId.slice(0, 8)}`,
     }).catch((e) => ({ segments: synthesis.personas, status: `failed: ${String((e as any)?.message ?? e)}` }));
     const personasWithImages = personaImg.segments;
-
-    // v7.535: a product category the model typed "brand" is re-typed "procedure" before it is
-    // stored, so no brand guard ever removes the client's product keywords with it.
-    try {
-      const compRows = await db.select({ domain: competitorsTable.domain }).from(competitorsTable).where(eq(competitorsTable.projectId, project.id));
-      const compDomains = [
-        ...compRows.map(c => c.domain),
-        ...(Array.isArray(semrush?.competitors) ? semrush.competitors.map((c: any) => String(c?.domain ?? '')) : []),
-      ].filter(Boolean);
-      const cbx: any = synthesis.categoryBreakdown;
-      if (cbx && Array.isArray(cbx.categories)) {
-        const fixed = normalizeBrandCategoryTypes(cbx.categories, domain, compDomains, Array.isArray(project.brandTerms) ? project.brandTerms : []);
-        if (fixed.retyped.length > 0) {
-          console.log(`[OrbitIQ] v7.535 re-typed ${fixed.retyped.length} mis-typed brand categories: ${fixed.retyped.join(' | ')}`);
-          (synthesis as any).categoryBreakdown = { ...cbx, categories: fixed.categories };
-        }
-      }
-    } catch (e) { console.error('[OrbitIQ] v7.535 category re-type skipped:', e); }
 
     const hm = synthesis.heroMetrics;
     await db.update(analyses)

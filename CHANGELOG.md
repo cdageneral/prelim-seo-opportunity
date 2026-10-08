@@ -1,3 +1,24 @@
+# v7.536 — Filer stops forcing fits ("bwi airport", "lollapalooza 2025" were filed as "Using a Credit Card"); category re-typing withdrawn (2026-10-08)
+
+Wayne: "again here are keywords that dont have anything to do with the categories" (lollapalooza 2025, bwi airport —
+creditcards.chase.com footprint, Citi (Cards)).
+
+- **Root cause.** The v7.532 filer (Claude Haiku) used broad categories as catch-alls: on Citi (Cards) "travel
+  insurance", "tsa precheck", "passport", "clear", "priority pass", "bwi airport", "lollapalooza 2025" were all filed
+  under "Using a Credit Card".
+- **Fix.** The filing prompt now requires a page-would-answer test — would a page in that category of the client's
+  site directly answer this exact search? — names the off-topic classes (travel, airports, passports, airport
+  security programs, lounges, insurance, events, places, retailers' own services, anything a card merely pays for)
+  and says "when unsure, answer 0". Model raised to claude-sonnet-4-6 (registered rate; real cost in API Usage).
+  FILER_VERSION 532 → 536 so every keyword the old rules filed is re-filed (refile mode).
+- **Withdrawn from v7.535.** Re-typing product-named "brand" categories was removed before it was ever run: those
+  categories hold third-party brand searches ("nbt bank cd rates", "wells fargo mortgage log in", "mr cooper
+  mortgagee clause"), so re-typing them would have re-admitted other companies' brands. The v7.535 client fix stands —
+  a client keyword in any brand-typed category is re-filed one by one by the brand-aware filer (product category or
+  "Other"), never dropped.
+- Constitution v0.36 (III.1, III.1e).
+- Verified: project tsc clean; retained suite 3,859 PASS / 30 FAIL — the identical pre-existing failure set (zero new), incl. 3 new v536 checks; the two v535 re-typing checks updated with a dated note (removed by design).
+
 # v7.535 — The client's terms are never dropped because of the category they were filed in; mis-typed "brand" categories corrected (2026-10-08)
 
 Wayne: "just want to confirm that the clients upload of terms always maintain the rooted position and in case of a
