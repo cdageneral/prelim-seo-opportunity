@@ -1,3 +1,10 @@
+# v7.542 — Cluster hero: the v7.541 inventory line no longer widens the card (2026-10-08)
+
+Seen live on Citi (Cards) right after v7.541: the new "N ranking URLs on file · …" line had no width bound, so the
+hero's left column grew to the line's length and pushed the annual/monthly volume column out over the Trailing card.
+The column is now capped at 300px and the line wraps. Layout only — no number or basis changed.
+- Files: components/brief/ThemeClustersPanel.tsx, package.json, CHANGELOG.md.
+
 # v7.541 — A cluster is a page; a page is one unique URL (197 "existing" vs 58 real pages) (2026-10-08)
 
 Wayne's team counted 197 "existing" themes for a site with 58 ranking URLs. Both numbers were real: a taxonomy

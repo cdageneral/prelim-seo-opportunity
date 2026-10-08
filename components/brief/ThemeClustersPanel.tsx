@@ -1251,7 +1251,9 @@ function ClustersTab({
               onMouseLeave={e => { if (!allActive) (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--ca-155-150-255-0_18)'; }}
             >
               <SegmentDownloadButton onDownload={() => dlStats(topicStats, 'All clusters')} title="Download as Excel" size={14} style={{ position: 'absolute', top: 12, right: 14 }} />
-              <div style={{ textAlign: 'center', flexShrink: 0 }}>
+              {/* v7.542: bounded width — the v7.541 inventory line is long and, unbounded, it widened this
+                  column and pushed the volume column out of the hero (seen live on Citi (Cards)). */}
+              <div style={{ textAlign: 'center', flexShrink: 0, maxWidth: 300 }}>
                 <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--c-585878)', marginBottom: 4 }}>
                   Total clusters
                 </div>
