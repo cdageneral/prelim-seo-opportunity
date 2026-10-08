@@ -41,6 +41,9 @@ export interface KwPoolItem {
   /** Raw Semrush "Position Type" cell, kept so a surface can state the basis verbatim. */
   positionBasisRaw?: string;
   inDemand?:    boolean;     // appears in the deep-journey demand universe
+  /** v7.535: a CLIENT keyword the analysis filed into a non-client brand category — held as
+   *  awaiting categorization until categorize-pending re-files it (never dropped). */
+  misfiledBrandCat?: boolean;
   demandSeeds?: string[];    // seed phrase(s) that surfaced it in the demand universe
   // v7.251: real client ranking/landing URL for this keyword, when known — from the
   // Semrush footprint (topKeywords[].url) or the uploaded CSV ("URL" column). Real data
@@ -397,6 +400,8 @@ interface CompetitorBrandGuards {
   isCompetitorBranded:   (kwRaw: string) => boolean;   // v7.195 string-branded to a competitor
   isAutoCompetitorBrand: (kwRaw: string) => boolean;   // v7.201 auto-discovered brand tokens
   brandCatExcludedKw:    Set<string>;                  // v7.196/199 brand-category members + AI-flagged
+  aiBrandKw:             Set<string>;                  // v7.535: the AI-flagged brand list alone
+  competitorBrandCats:   Set<string>;                  // v7.535: non-client brand categories
   drop:                  (kwLow: string, kwRaw: string) => boolean;   // the §5 composition
 }
 
@@ -470,16 +475,17 @@ function buildCompetitorBrandGuards(
       if (competitorBrandCats.has(catName) && !isClientBrandedStrict(kwLow)) brandCatExcludedKw.add(kwLow);
     }
   }
+  const aiBrandKw = new Set<string>();
   for (const k of (cb?.brandKeywords ?? []) as string[]) {
     const kl = String(k ?? '').toLowerCase().trim();
-    if (kl && !isClientBrandedStrict(kl)) brandCatExcludedKw.add(kl);
+    if (kl && !isClientBrandedStrict(kl)) { brandCatExcludedKw.add(kl); aiBrandKw.add(kl); }
   }
 
   // The unified §5 competitor-brand test (identical composition to pre-v7.337 buildKwPool).
   const drop = (kwLow: string, kwRaw: string): boolean =>
     brandCatExcludedKw.has(kwLow) || isCompetitorBranded(kwRaw) || isAutoCompetitorBrand(kwRaw) || isExcludedBrand(kwRaw);
 
-  return { effectiveBrandTerms, isExcludedBrand, isCompetitorBranded, isAutoCompetitorBrand, brandCatExcludedKw, drop };
+  return { effectiveBrandTerms, isExcludedBrand, isCompetitorBranded, isAutoCompetitorBrand, brandCatExcludedKw, aiBrandKw, competitorBrandCats, drop };
 }
 
 /**
@@ -578,6 +584,23 @@ export function buildKwPool({
   const isExcludedBrand       = guards.isExcludedBrand;
   const isAutoCompetitorBrand = guards.isAutoCompetitorBrand;
   const brandCatExcludedKw    = guards.brandCatExcludedKw;
+  // v7.535 (Wayne 2026-10-08: the client's uploaded terms always keep their place; only a
+  // competitor's overlap drops). A CLIENT keyword is removed by what it says — a competitor
+  // brand token, the blocklist, or the AI-flagged brand list — never merely because the
+  // analysis filed it into a brand-type category. Citi (Cards) lost generic client terms such
+  // as "what is a credit utilization ratio" that way (filed under "Co-Branded & Retail
+  // Cards"). Such a keyword is held as awaiting categorization (misfiledBrandCat) and the
+  // categorize-pending route re-files it into a product category or "Other".
+  const aiBrandKw             = guards.aiBrandKw;
+  const competitorBrandCats   = guards.competitorBrandCats;
+  const clientKwCat: Record<string, string> = (snap as any)?._categoryBreakdown?.keywordCategories ?? {};
+  const isClientBrandStrictPool = buildClientBrandStrictTest(clientDomain, guards.effectiveBrandTerms);
+  const misfiled = (kwLow: string): boolean => {
+    const c = clientKwCat[kwLow];
+    // The client's own brand terms stay in their brand bucket (v7.530) — only generic or
+    // third-party terms filed there are re-filed.
+    return typeof c === 'string' && competitorBrandCats.has(c) && !isClientBrandStrictPool(kwLow);
+  };
   const dropCompetitorBrand   = guards.drop;
 
   const pool: KwPoolItem[] = [];
@@ -606,7 +629,7 @@ export function buildKwPool({
   for (const k of (snap?.topKeywords ?? [])) {
     const kwLow = (k.keyword ?? '').toLowerCase().trim();
     if (!kwLow || blockedSet.has(kwLow) || seen.has(kwLow)) continue;
-    if (brandCatExcludedKw.has(kwLow)) continue;   // v7.199: AI/category brand term — never include
+    if (aiBrandKw.has(kwLow)) continue;   // v7.199 AI-flagged brand term (v7.535: client lane no longer drops on brand-category membership)
     if (isAutoCompetitorBrand(k.keyword)) continue;   // v7.201: auto-discovered competitor brand (e.g. "schwab 529")
     if (isExcludedBrand(k.keyword)) continue;   // v7.208: user blocklist (even client-ranked competitor-brand terms)
     if (clientVolMin > 0 && (k.searchVolume ?? 0) < clientVolMin) continue;
@@ -627,6 +650,7 @@ export function buildKwPool({
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, [], effectiveBrandTerms),   // v7.531: client brand only (III.1)
       competitor:   null,
       origin:       'footprint',
+      ...(misfiled(kwLow) ? { misfiledBrandCat: true } : {}),   // v7.535
       url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL
     });
   }
@@ -663,7 +687,7 @@ export function buildKwPool({
       }
       continue;
     }
-    if (brandCatExcludedKw.has(kwLow)) continue;    // v7.199: AI/category brand term — never include
+    if (aiBrandKw.has(kwLow)) continue;    // v7.199 AI-flagged brand term (v7.535: client lane no longer drops on brand-category membership)
     if (isAutoCompetitorBrand(k.keyword)) continue; // v7.201: auto-discovered competitor brand
     if (isExcludedBrand(k.keyword)) continue;       // v7.208: user blocklist (even on client uploads)
     seen.add(kwLow);
@@ -682,6 +706,7 @@ export function buildKwPool({
       isBranded:    isBrandedKeyword(k.keyword, clientDomain, [], effectiveBrandTerms),   // v7.531: client brand only (III.1)
       competitor:   null,
       origin:       'footprint',
+      ...(misfiled(kwLow) ? { misfiledBrandCat: true } : {}),   // v7.535
       url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL from the uploaded CSV
     });
   }
@@ -835,6 +860,7 @@ export function buildKwPool({
       const kp: Record<string, any> = snap?._categoryBreakdown?.keywordPaths ?? {};
       const kc: Record<string, any> = snap?._categoryBreakdown?.keywordCategories ?? {};
       out = out.filter(p => {
+        if (p.misfiledBrandCat) return true;   // v7.535: its stored brand category is wrong — it waits for re-filing instead
         const kwLow = p.keyword.toLowerCase().trim();
         const path  = kp[kwLow];
         if (Array.isArray(path) && path.length > 0) {
@@ -860,6 +886,10 @@ export function buildKwPool({
   // is a different-language market, not this client's audience. Accented Latin
   // ("préstamo") is kept. Applies to every lane, client footprint included.
   out = out.filter(p => !isForeignScriptKeyword(p.keyword));
+
+  // v7.535: a client keyword sitting in a non-client brand category is not filed into the
+  // client's tree yet — it waits (counted by categorize-pending) like any unfiled keyword.
+  if (!includePending) out = out.filter(p => !p.misfiledBrandCat);
 
   // ── v7.531: UNCATEGORIZED = OUT (Const III.1e v0.31) ───────────────────────
   // Wayne (2026-10-07): "there could not be any new categories created which would mean

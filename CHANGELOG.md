@@ -1,3 +1,28 @@
+# v7.535 — The client's terms are never dropped because of the category they were filed in; mis-typed "brand" categories corrected (2026-10-08)
+
+Wayne: "just want to confirm that the clients upload of terms always maintain the rooted position and in case of a
+duplicate with a competitors the competitor overlap would drop not the clients" — then "yes" to the fix below.
+
+- **Confirmed (live data, 33 projects):** of 21,725 client/competitor overlaps, 20,800 kept the client row, 0 the
+  competitor row; 20,787 carry exactly the uploaded position (13 are SERP-feature placements shown as features).
+- **The leak it found.** A client keyword was dropped whenever the analysis had filed it into a non-client
+  brand-typed category, even with no other brand in it (Citi (Cards): "what is a credit utilization ratio",
+  "credit card o percent interest" under "Co-Branded & Retail Cards"). Worse, the model types whole PRODUCT categories
+  "brand": Sono Bello's "Body Contouring & Skin Tightening" (4,947 keywords) and "Education & Resources" (1,820);
+  BankRate's "Mortgages", "Personal Loans", "Savings Accounts", "Checking Accounts"; Citi Bank's "Certificates of
+  Deposit" — all removed from every panel.
+- **Fix 1 — client lane decides by the keyword's own words** (lib/utils/kwVolume.ts): a client keyword is removed only
+  for a competitor brand token, the blocklist, or the AI-flagged brand list — never for brand-category membership.
+  A generic/third-party client keyword sitting in a real brand bucket is flagged `misfiledBrandCat`, held as
+  "awaiting categorization" (counted, out of totals) and re-filed by categorize-pending into a product category or
+  "Other". The client's own brand terms stay in their brand bucket. Competitor lanes unchanged.
+- **Fix 2 — mis-typed brand categories** (new lib/category/brandCategoryType.ts): a category stays "brand" only if its
+  name is a brand bucket ("brand" in the name, the client/partner brand, or a competitor's full root); otherwise it is
+  re-typed "procedure". Applied at write time in /api/synthesize for every future analysis, and to stored analyses via
+  categorize-pending POST {mode:'retype'} (labels only, categories array written in place).
+- Constitution v0.35 (III.1).
+- Verified: project tsc clean; retained suite 3,856 PASS / 30 FAIL — the identical pre-existing failure set (zero new), incl. 7 new v535 checks.
+
 # v7.534 — Branded no longer swallows generic terms ("credit card" was Branded on Citi via "dillard" → "lard" ≈ "card") (2026-10-08)
 
 Wayne, on the Citi (Cards) cards (Branded 1,152 · Non-branded 333): "what happened to the non branded card. The numbers
