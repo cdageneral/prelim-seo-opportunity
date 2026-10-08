@@ -70,6 +70,12 @@ export interface KwPoolOptions {
   // see them. Pre-v7.326 snapshots have no `umbrellaScope` → nothing is adjacent → unchanged.
   scopeOverrides?:    Record<string, UmbrellaScope>;
   includeAdjacent?:   boolean;
+  // v7.531: when the snapshot carries a stored category tree, a keyword with NO stored
+  // membership (e.g. a competitor CSV uploaded after the last categorization) is held
+  // OUT of the pool until it is filed into an existing category (Const III.1e v0.31).
+  // `includePending: true` keeps them — only the categorize-pending route and the
+  // "awaiting categorization" counters use it.
+  includePending?:    boolean;
 }
 
 export interface VolumeMetrics {
@@ -317,6 +323,22 @@ export function isBrandedKeyword(
 // blocklist (filterUniverseExcludedBrands), so an auto-discovered competitor-brand
 // keyword could appear in demand-mode Journey while excluded everywhere else.
 // The client's own brand (domain root + `_brandTerms` vocabulary) is never dropped.
+/** v7.531: true when the snapshot carries a stored category tree (categories + membership). */
+export function hasStoredCategoryTree(snap: any): boolean {
+  const cb = snap?._categoryBreakdown;
+  return !!cb && Array.isArray(cb.categories) && cb.categories.length > 0
+    && !!cb.keywordCategories && Object.keys(cb.keywordCategories).length > 0;
+}
+
+/** v7.531: does this keyword carry stored category membership? */
+export function hasStoredMembership(snap: any, keyword: string): boolean {
+  const k = String(keyword ?? '').toLowerCase().trim();
+  const cb = snap?._categoryBreakdown ?? {};
+  const p = cb.keywordPaths?.[k];
+  const c = cb.keywordCategories?.[k];
+  return (Array.isArray(p) && p.length > 0) || (typeof c === 'string' && c !== '');
+}
+
 /**
  * v7.439 strict client-brand test, exported in v7.530 so the keyword pool and every
  * category read site share ONE definition (Const II.7). True when the keyword contains
@@ -502,6 +524,7 @@ export function buildKwPool({
   includeDemand                  = false,
   scopeOverrides                 = {},
   includeAdjacent                = false,
+  includePending                 = false,
 }: KwPoolOptions): KwPoolItem[] {
   const blockedSet = new Set<string>(
     uploaded
@@ -585,7 +608,7 @@ export function buildKwPool({
       featurePlacement: twinVerified ? (featureLabelOf(twinType) ?? undefined) : undefined,
       positionBasisRaw: twinVerified ? String(twinType) : undefined,
       isGap:        false,
-      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
+      isBranded:    isBrandedKeyword(k.keyword, clientDomain, [], effectiveBrandTerms),   // v7.531: client brand only (III.1)
       competitor:   null,
       origin:       'footprint',
       url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL
@@ -640,7 +663,7 @@ export function buildKwPool({
       featurePlacement: featureLabelOf(k.positionType ?? k.position_type ?? null) ?? undefined,
       positionBasisRaw: (k.positionType ?? k.position_type ?? null) || undefined,
       isGap:        false,
-      isBranded:    isBrandedKeyword(k.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
+      isBranded:    isBrandedKeyword(k.keyword, clientDomain, [], effectiveBrandTerms),   // v7.531: client brand only (III.1)
       competitor:   null,
       origin:       'footprint',
       url:          (typeof k.url === 'string' && k.url.trim()) ? k.url.trim() : undefined,   // v7.251: real ranking URL from the uploaded CSV
@@ -738,7 +761,7 @@ export function buildKwPool({
         searchVolume: t.searchVolume ?? 0,
         position:     null,
         isGap:        false,   // NOT a competitor gap — it is "missing demand"
-        isBranded:    isBrandedKeyword(t.keyword, clientDomain, competitorDomains, effectiveBrandTerms),
+        isBranded:    isBrandedKeyword(t.keyword, clientDomain, [], effectiveBrandTerms),   // v7.531: client brand only (III.1)
         competitor:   null,
         origin:       'demand',
         inDemand:     true,
@@ -812,6 +835,28 @@ export function buildKwPool({
         return true;
       });
     }
+  }
+
+  // ── v7.531: UNCATEGORIZED = OUT (Const III.1e v0.31) ───────────────────────
+  // Wayne (2026-10-07): "there could not be any new categories created which would mean
+  // all keywords would have to map and match the intent of the keyword categories." The
+  // selection above only removes keywords whose STORED category is hidden, so a keyword
+  // with no stored category at all (2,139 competitor terms on Citi (Cards), 15,321 on
+  // Aflac) passed straight through every boundary. Once a category tree exists, only
+  // keywords filed into it are in the pool; the rest wait for categorization
+  // (categorize-pending route) and are counted, never silently dropped (Const I.5).
+  // Projects with no stored tree are unchanged.
+  if (!includePending && hasStoredCategoryTree(snap)) {
+    const kp: Record<string, any> = snap?._categoryBreakdown?.keywordPaths ?? {};
+    const kc: Record<string, any> = snap?._categoryBreakdown?.keywordCategories ?? {};
+    out = out.filter(p => {
+      // Demand-lane topics are filed by their own builds (product expansion into the seed
+      // category, pre-product under "Pre-Product Journey") and seed-gated by the Step-2
+      // selection (v7.476) — this rule governs FOOTPRINT keywords (uploads, crawl, gaps).
+      if (p.origin === 'demand') return true;
+      const k = p.keyword.toLowerCase().trim();
+      return (Array.isArray(kp[k]) && kp[k].length > 0) || (typeof kc[k] === 'string' && kc[k] !== '');
+    });
   }
 
   return out;
