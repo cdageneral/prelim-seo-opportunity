@@ -1,3 +1,20 @@
+# v7.537 — Competitor short names ("amex") caught; Publisher mode for comparison sites (2026-10-08)
+
+Wayne: "here is a competitor brand term in the mix" ("amex pre approval", americanexpress.com footprint on Citi
+(Cards)); and, on BankRate's brand keywords going to "Other": "Publisher mode + re-sort affected".
+
+- **Competitor aliases.** Competitor brands were derived from the domain only, so "americanexpress" never matched
+  "amex". New `BRAND_ALIASES` in lib/utils/brandRoot.ts (amex, bofa, capone, chase, nfcu, quicken, …; 4+ letters,
+  unambiguous) feed the competitor-brand tokens — a competitor keyword using the short name is excluded like the full
+  name; the client's own aliases are never competitor tokens. The filing prompt now lists the project's competitor
+  brands with their short names and says names, abbreviations and nicknames all mean "Other".
+- **Publisher mode.** New Industry option "Publisher / Comparison site" (Edit Project / New Project). For such a
+  project the filer files searches naming banks, card issuers and other companies by topic instead of sending them to
+  "Other" (logins, account pages, phone numbers and web addresses still go to "Other"); its keywords carry their own
+  rule version (537), and client keywords the standard rule had sent to "Other" are re-filed.
+- Constitution v0.37 (III.1).
+- Verified: project tsc clean; retained suite 3,865 PASS / 30 FAIL — the identical pre-existing failure set (zero new), incl. 6 new v537 checks.
+
 # v7.536 — Filer stops forcing fits ("bwi airport", "lollapalooza 2025" were filed as "Using a Credit Card"); category re-typing withdrawn (2026-10-08)
 
 Wayne: "again here are keywords that dont have anything to do with the categories" (lollapalooza 2025, bwi airport —

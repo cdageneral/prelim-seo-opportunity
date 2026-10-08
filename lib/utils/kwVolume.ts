@@ -1,4 +1,4 @@
-import { brandRootOf } from '@/lib/utils/brandRoot';   // v7.533
+import { brandRootOf, brandTokensOf } from '@/lib/utils/brandRoot';   // v7.533 / v7.537 aliases
 /**
  * lib/utils/kwVolume.ts  — v7.76
  *
@@ -147,9 +147,10 @@ export function buildCompetitorBrandTokens(
   const all = Array.from(new Set(
     [...configCompetitorDomains, ...uploadedGapDomains, ...autoCompDomains].filter(Boolean),
   ));
-  const tokens = new Set<string>(all.map(extractBrand).filter(b => b.length >= 4));
+  // v7.537: + each competitor's known aliases (americanexpress.com → "amex").
+  const tokens = new Set<string>(all.flatMap(d => brandTokensOf(d)).filter(b => b.length >= 4));
   // Never strip the client's own brand — drop its token(s) from the competitor set.
-  for (const ct of [clientDomain].map(extractBrand).filter(b => b.length >= 4)) tokens.delete(ct);
+  for (const ct of brandTokensOf(clientDomain).filter(b => b.length >= 4)) tokens.delete(ct);
   return tokens;
 }
 

@@ -59,3 +59,31 @@ export function brandLabelOf(domain: string): string {
 export function brandRootOf(domain: string): string {
   return brandLabelOf(domain).replace(/[^a-z0-9]/g, '');
 }
+
+/**
+ * v7.537: well-known short names a brand is searched by, keyed by brand root. A competitor
+ * uploaded as americanexpress.com is also searched as "amex" ("amex pre approval" reached
+ * Citi (Cards) as a non-branded competitor keyword — Wayne, 2026-10-08). Only unambiguous
+ * aliases of 4+ letters (normalized), so a generic word is never caught; extend as found.
+ */
+export const BRAND_ALIASES: Record<string, string[]> = {
+  americanexpress: ['amex'],
+  bankofamerica:   ['bofa'],
+  capitalone:      ['capone', 'capitalone'],
+  wellsfargo:      ['wellsfargo'],
+  jpmorganchase:   ['chase'],
+  usbank:          ['usbank'],
+  pnc:             ['pncbank'],
+  discover:        ['discovercard'],
+  synchrony:       ['synchronybank'],
+  navyfederal:     ['navyfed', 'nfcu'],
+  quickenloans:    ['quicken'],
+  rocketmortgage:  ['rocketmortgage'],
+};
+
+/** Brand root plus its known aliases (normalized tokens). */
+export function brandTokensOf(domain: string): string[] {
+  const r = brandRootOf(domain);
+  if (!r) return [];
+  return Array.from(new Set([r, ...(BRAND_ALIASES[r] ?? [])]));
+}

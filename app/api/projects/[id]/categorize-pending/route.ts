@@ -37,12 +37,14 @@ import { eq, sql } from 'drizzle-orm';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest } from '@/lib/utils/kwVolume';
+import { isPublisherIndustry } from '@/lib/category/publisher';   // v7.537
+import { brandLabelOf, BRAND_ALIASES, brandRootOf } from '@/lib/utils/brandRoot';   // v7.537
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';
 import {
   buildCandidates, buildCategorizePrompt, parseAssignments, membershipFor,
-  deterministicOther, ownBrandList, FILER_VERSION, OTHER_CATEGORY,
+  deterministicOther, ownBrandList, FILER_VERSION, PUBLISHER_FILER_VERSION, OTHER_CATEGORY,
 } from '@/lib/category/pendingCategorization';
 
 export const dynamic = 'force-dynamic';
@@ -71,6 +73,7 @@ async function loadContext(projectId: string) {
       excludedBrands:    projects.excludedBrands,
       scopeOverrides:    projects.scopeOverrides,
       hiddenCategories:  projects.hiddenCategories,
+      industry:          projects.industry,   // v7.537: publisher mode
     })
     .from(projects)
     .where(eq(projects.id, projectId))
@@ -112,11 +115,16 @@ async function loadContext(projectId: string) {
   const typeOf = new Map<string, string>();
   for (const c of (cbRaw.categories ?? [])) if (c?.name) typeOf.set(String(c.name).toLowerCase(), String(c.type ?? ''));
   const stamp: Record<string, number> = cbRaw.filerVersion ?? {};
+  // v7.537: a publisher project files third-party brands by topic, under its own rule version.
+  const publisher = isPublisherIndustry(project.industry);
+  const ver = publisher ? PUBLISHER_FILER_VERSION : FILER_VERSION;
   const refile = pool
     .filter(p => {
-      if (p.origin === 'demand' || !p.isGap) return false;
+      if (p.origin === 'demand') return false;
       const k = p.keyword.toLowerCase().trim();
-      if (!hasStoredMembership(raw, k) || stamp[k] === FILER_VERSION) return false;
+      if (!hasStoredMembership(raw, k) || stamp[k] === ver) return false;
+      // v7.537: publisher — client keywords the brand rule sent to "Other" are re-filed too.
+      if (!p.isGap) return publisher && typeof stamp[k] === 'number' && String(cbRaw.keywordCategories?.[k] ?? '') === OTHER_CATEGORY;
       if (isClientBrand(k)) return false;
       const cur = String(cbRaw.keywordCategories?.[k] ?? '').toLowerCase();
       return typeOf.get(cur) !== 'brand';
@@ -131,7 +139,11 @@ async function loadContext(projectId: string) {
     (name: string, type?: string) => type === 'brand' || guard.isCompetitorBrandCategory(name, type),
   );
 
-  return { analysisId: loaded.head.id, raw, clientDomain, brandTerms, pending, refile, candidates, hasTree: hasStoredCategoryTree(raw) } as const;
+  // Competitor brand names (label + known aliases) the filer must never file into a category.
+  const allCompDomains = Array.from(new Set([...competitorDomains, ...dbKws.map(k => String(k.domain ?? '')).filter(Boolean)]));
+  const competitorBrands = Array.from(new Set(allCompDomains.flatMap(d => [brandLabelOf(d), ...(BRAND_ALIASES[brandRootOf(d)] ?? [])]).filter(Boolean)));
+
+  return { analysisId: loaded.head.id, raw, clientDomain, brandTerms, pending, refile, candidates, publisher, ver, competitorBrands, hasTree: hasStoredCategoryTree(raw) } as const;
 }
 
 const annual = (rows: Array<{ searchVolume: number }>) => rows.reduce((n, r) => n + (r.searchVolume ?? 0), 0) * 12;
@@ -144,6 +156,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     pending:             ctx.hasTree ? ctx.pending.length : 0,
     pendingAnnualVolume: ctx.hasTree ? annual(ctx.pending) : 0,
     refile:              ctx.hasTree ? ctx.refile.length : 0,
+    publisher:           ctx.publisher,
     candidates:          ctx.candidates.length,
     batchSize:           BATCH,
   });
@@ -191,7 +204,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const res = await client.messages.create({
           model: MODEL, max_tokens: 2048,
-          messages: [{ role: 'user', content: buildCategorizePrompt(ctx.clientDomain, kws, ctx.candidates, ownBrands) }],
+          messages: [{ role: 'user', content: buildCategorizePrompt(ctx.clientDomain, kws, ctx.candidates, ownBrands, { publisher: ctx.publisher, competitorBrands: ctx.competitorBrands }) }],
         });
         const text = res.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('');
         return { kws, ...parseAssignments(text, kws.length, ctx.candidates) };
@@ -212,7 +225,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (Object.keys(cats).length > 0) {
     const stamps: Record<string, number> = {};
-    for (const k of Object.keys(cats)) stamps[k] = FILER_VERSION;
+    for (const k of Object.keys(cats)) stamps[k] = ctx.ver;
     await db.execute(sql`
       UPDATE analyses
          SET semrush_snapshot = jsonb_set(

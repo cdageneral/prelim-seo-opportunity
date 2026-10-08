@@ -24,6 +24,8 @@ export const OTHER_CATEGORY = 'Other';
  * `_categoryBreakdown.filerVersion[kw] = FILER_VERSION`, so a rule change can re-file the
  * competitor keywords an older rule set filed (refile mode) and the loop knows when it is done.
  */
+/** v7.537: stamp for publisher projects (third-party brands filed by topic). */
+export const PUBLISHER_FILER_VERSION = 537;
 export const FILER_VERSION = 536;   // v7.536: stricter relevance rules + stronger model (re-files every 532-filed keyword)
 
 /** Lowercase domain root ("www.citi.com" → "citi"). */
@@ -131,8 +133,18 @@ export function buildCandidates(
 }
 
 /** Prompt for ONE batch. Keywords are numbered 1..k; categories 1..n; 0 = no fit. */
-export function buildCategorizePrompt(domain: string, keywords: string[], candidates: CandidateCategory[], ownBrands: string[] = []): string {
+export function buildCategorizePrompt(
+  domain: string, keywords: string[], candidates: CandidateCategory[], ownBrands: string[] = [],
+  opts: { publisher?: boolean; competitorBrands?: string[] } = {},
+): string {
   const own  = ownBrands.length ? ownBrands.join(', ') : domainRoot(domain);
+  const comps = (opts.competitorBrands ?? []).filter(Boolean);
+  // v7.537: a publisher writes about other companies — their names are its topics.
+  const brandRule = opts.publisher
+    ? `- ${domain} is a PUBLISHER / comparison site: searches that name banks, card issuers or other companies ARE its subject — file them by topic like any other search.`
+    : `- The ONLY brands that belong in these categories are ${domain}'s own brand and its partner brands: ${own}.
+  If a keyword names any OTHER company, bank, card issuer, retailer, store, airline, service or website — by full name, abbreviation or nickname (e.g. "amex pre approval", "bofa chat", "kohls payment", "walmart credit account", "credit one platinum visa", "starz activate") — answer 0, even when it is about a credit card or a product in the list.${comps.length ? `
+  Competitor brands for this site (any of these, or their short names, means answer 0): ${comps.join(', ')}.` : ''}`;
   const cats = candidates.map(c => `${c.n}. ${c.path.join(' > ')}`).join('\n');
   const kws  = keywords.map((k, i) => `${i + 1}. ${k}`).join('\n');
   return `You are filing search keywords into an EXISTING website taxonomy for ${domain}.
@@ -152,8 +164,7 @@ Rules:
   concerts, festivals, events, sports, places, retailers' own services, or anything a card can merely be used to pay
   for are not about the product itself (e.g. "bwi airport", "lollapalooza 2025", "tsa precheck", "passport",
   "travel insurance") — answer 0 unless a category is literally about that subject.
-- The ONLY brands that belong in these categories are ${domain}'s own brand and its partner brands: ${own}.
-  If a keyword names any OTHER company, bank, card issuer, retailer, store, airline, service or website (e.g. "kohls payment", "walmart credit account", "credit one platinum visa", "starz activate"), answer 0 — even when it is about a credit card or a product in the list.
+${brandRule}
 - Navigation searches for another company's site — a web address, login, sign-in, activation, bill pay or account page that is not ${domain}'s or a listed partner's — answer 0.
 - Answer every keyword exactly once.
 

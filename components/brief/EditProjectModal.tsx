@@ -21,7 +21,9 @@ import { MARKETS } from '@/lib/utils/markets';
 const INDUSTRIES = [
   'SaaS / Software', 'E-commerce', 'Healthcare', 'Finance / Fintech',
   'Professional Services', 'Real Estate', 'Education', 'Marketing / Agency',
-  'Manufacturing', 'Retail', 'Hospitality', 'Non-profit', 'Other',
+  'Manufacturing', 'Retail', 'Hospitality', 'Non-profit',
+  'Publisher / Comparison site',   // v7.537: other companies' brands are this site's topics
+  'Other',
 ];
 
 interface Props {
