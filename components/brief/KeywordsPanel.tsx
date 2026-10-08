@@ -5,6 +5,7 @@ import { buildKwPool, isBrandedKeyword, extractBrand, hasLocalPackData, serpCell
 import { buildScopeResolver } from '@/lib/category/scopeModel';   // v7.326: scope gate (adjacent-vertical staging)
 import { keywordProvenance, keywordSource, KEYWORD_SOURCE_LABEL, type KeywordSource } from '@/lib/utils/keywordProvenance';   // v7.252: read-only count provenance
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226: shared competitor-brand category guard (Const III.1a) — same enforcement as ThemeClustersPanel
+import PendingCategorizationBar from './PendingCategorizationBar';   // v7.531
 import { buildCategoryModel, type CategoryModel, type KeywordMeta } from '@/lib/category/categoryModel';   // v7.227: one canonical category model (same source as Cluster/Journey/Content)
 import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';   // v7.337 (QC audit B12): ONE shared path-tree builder (also consumed by lib/local/serviceLines)
 import { normSovDomain } from '@/lib/sov/model';   // v7.419: ONE domain normalizer (same as SoV) for the per-category brand ladder
@@ -1403,7 +1404,7 @@ export default function KeywordsPanel({
             id: 'branded', label: 'Branded', count: kwSummary.brandedCount, vol: kwSummary.brandedVol,
             accent: 'var(--c-c882ff)', activeBg: 'var(--ca-200-130-255-0_10)', activeBdr: 'var(--ca-200-130-255-0_45)',
             dimBg: 'var(--ca-200-130-255-0_04)', dimBdr: 'var(--ca-200-130-255-0_15)',
-            icon: 'ti-tag', subtitle: 'Client or competitor brand', clearScope: 'client',
+            icon: 'ti-tag', subtitle: 'Client brand terms', clearScope: 'client',   // v7.531: Branded = client brand only
           },
           {
             id: 'nonBranded', label: 'Non-branded', count: kwSummary.nonBrandCount, vol: kwSummary.nonBrandVol,
@@ -1607,6 +1608,10 @@ export default function KeywordsPanel({
             <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--c-6a6a90)', fontFamily: 'monospace' }}>
               {p.distinctDb.toLocaleString()} distinct of {p.rawDbRows.toLocaleString()} uploaded rows
               {dupRows > 0 && <span style={{ color: 'var(--c-f59e0b)', marginLeft: 6 }}>· {dupRows.toLocaleString()} duplicate rows</span>}
+            </span>
+            {/* v7.531: keywords held out because they have no stored category yet (Const III.1e v0.31) */}
+            <span style={{ flexBasis: '100%' }}>
+              <PendingCategorizationBar projectId={projectId} refreshKey={kwVersion} compact onFiled={onDeepJourneyBuilt} />
             </span>
             {/* v7.289: SERP-features coverage diagnostic — shows whether the uploaded SERP-features */}
             {/* column actually landed on the stored rows (the input to Local Intent). Real data only. */}

@@ -30,6 +30,7 @@ import { buildKwPool, isBrandedKeyword } from '@/lib/utils/kwVolume';
 import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape';   // v7.446: ONE membership basis
 import { parseKeywordCsvMeta } from '@/lib/keywords/csvParse';                        // v7.459: THE shared CSV parser
 import { buildSelectionTree, type SelectionNode, type SelectionTree } from '@/lib/category/selectionScope';
+import PendingCategorizationBar from './PendingCategorizationBar';   // v7.531
 
 interface Props {
   projectId: string;
@@ -88,8 +89,20 @@ export default function KeywordSelectionSection({
     includeDemand:     true,
   }), [snap, dbKeywords, clientDomain, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
 
-  const clientCount = useMemo(() => poolUnselected.filter(r => isClientFootprintRow(r as any)).length, [poolUnselected]);
-  const gapCount    = useMemo(() => poolUnselected.filter(r => isCompetitorGapRow(r as any)).length,   [poolUnselected]);
+  // v7.531: the step statuses count what was LOADED, including keywords still awaiting
+  // categorization (held out of the tree + every panel until filed — Const III.1e v0.31).
+  const poolLoaded = useMemo(() => buildKwPool({
+    semrushSnapshot:   { ...snap, _hiddenCategories: [] },
+    uploadedKeywords:  dbKeywords,
+    clientDomain,
+    competitorDomains: competitors,
+    clientVolMin:      defaultClientThreshold,
+    competitorVolMin:  defaultCompetitorThreshold,
+    includeDemand:     true,
+    includePending:    true,
+  }), [snap, dbKeywords, clientDomain, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
+  const clientCount = useMemo(() => poolLoaded.filter(r => isClientFootprintRow(r as any)).length, [poolLoaded]);
+  const gapCount    = useMemo(() => poolLoaded.filter(r => isCompetitorGapRow(r as any)).length,   [poolLoaded]);
 
   const du = snap?._demandUniverse;
   const duTopics: any[] = Array.isArray(du?.topics) ? du.topics : [];
@@ -855,8 +868,11 @@ export default function KeywordSelectionSection({
             <button style={btn('var(--c-f59e0b)')} onClick={() => onOpenCompetitors?.()}>
               {compDone ? 'Manage competitors' : competitors.length > 0 ? 'Upload competitor data' : 'Add competitors'}
             </button>
+            <div style={{ marginTop: 12 }}>
+              <PendingCategorizationBar projectId={projectId} refreshKey={kwVersion} onFiled={onDeepJourneyBuilt} />
+            </div>
             <p style={{ fontSize: 10.5, color: 'var(--c-585878)', marginTop: 10 }}>
-              Competitors categorize into the same anchored tree and inherit the Step-2 selection automatically — apples to apples. Their out-of-scope keywords are excluded from every comparison and total.
+              Competitor keywords are filed into your EXISTING categories after upload — no new categories are created. Keywords that match none of your selected categories go to "Other"; nothing counts until it is filed, and the Step-2 selection applies to all of it.
             </p>
           </div>
         )}

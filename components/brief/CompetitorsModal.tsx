@@ -38,6 +38,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { parseKeywordCsv } from '@/lib/keywords/csvParse';   // v7.459: THE shared CSV parser (Const II.7)
+import PendingCategorizationBar from './PendingCategorizationBar';   // v7.531: file new competitor keywords into the existing tree
 
 interface Competitor {
   id:        string;
@@ -463,6 +464,10 @@ export default function CompetitorsModal({
 
   /** Uploads parsed rows; when replace=true, clears the competitor's existing
    *  uploaded rows (source csv/custom, this domain only) first. */
+  // v7.531: bumped after every successful competitor upload → the bar below files the
+  // new keywords into the EXISTING category tree straight away (no manual refresh).
+  const [catRunKey, setCatRunKey] = useState(0);
+
   async function runUpload(target: Competitor, parsed: ParsedKw[], replace: boolean) {
     setPendingUpload(null);
     setUploadingId(target.id); setUploadPct(0); setStatusFor(target.id, null);
@@ -506,6 +511,7 @@ export default function CompetitorsModal({
       ? { type: 'success', msg: `${added.toLocaleString()} keywords ${replace ? 'uploaded (replaced existing)' : 'uploaded/updated'}${skipNote}.` }
       : { type: 'error',   msg: 'No keyword rows were saved.' });
     setTimeout(() => setStatusFor(target.id, null), 6000);
+    if (added > 0) setCatRunKey(k => k + 1);   // v7.531: auto-categorize into the existing tree
   }
 
   // ── Volume thresholds — instant save on click ──
@@ -607,6 +613,9 @@ export default function CompetitorsModal({
 
         {/* ── Scrollable body (NOT a form — see v7.94 lesson) ── */}
         <div style={{ overflowY: 'auto', flex: 1, padding: '20px 22px' }}>
+
+          {/* v7.531: keywords with no stored category are held out until filed into the existing tree */}
+          <PendingCategorizationBar projectId={projectId} refreshKey={catRunKey} autoRunKey={catRunKey} onFiled={onChanged} />
 
           {/* ── Section 1: Tracked competitors ── */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
