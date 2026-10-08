@@ -80,6 +80,8 @@ export interface KwPoolOptions {
   // `includePending: true` keeps them — only the categorize-pending route and the
   // "awaiting categorization" counters use it.
   includePending?:    boolean;
+  /** v7.539: keep rows in hidden categories (categorize-pending only — re-filing "Other"). */
+  includeHidden?:     boolean;
 }
 
 export interface VolumeMetrics {
@@ -289,17 +291,26 @@ export function isBrandedKeyword(
 
   // ── Long brand tokens (≥4) — original three-layer behaviour, unchanged ────
   if (longRoots.length > 0) {
+    // v7.539: half-tokens and "the keyword is part of the brand" matches apply to the CLIENT's
+    // root only. On a competitor root they turned generic words into competitor brands —
+    // rocketmortgage.com → "mortgage", so every mortgage keyword (and the "Mortgages"
+    // category itself) counted as a Rocket Mortgage brand term on Citi - Mortgage.
+    const clientTok = extractBrand(clientDomain ?? '');
     const tokenSet = new Set<string>(longRoots);
+    const clientTokens = new Set<string>();
     for (const brand of longRoots) {
+      if (brand !== clientTok) continue;
+      clientTokens.add(brand);
       const half = Math.floor(brand.length / 2);
-      if (half >= 4)                tokenSet.add(brand.slice(0, half));
-      if (brand.length - half >= 4) tokenSet.add(brand.slice(half));
+      if (half >= 4)                { tokenSet.add(brand.slice(0, half)); clientTokens.add(brand.slice(0, half)); }
+      if (brand.length - half >= 4) { tokenSet.add(brand.slice(half));    clientTokens.add(brand.slice(half)); }
     }
     const allTokens: string[] = Array.from(tokenSet);
 
     // Pass 1: exact substring
     for (const token of allTokens) {
       if (kwNorm.includes(token))                                return true;
+      if (!clientTokens.has(token)) continue;                   // v7.539: reverse/prefix only for the client
       if (token.includes(kwNorm) && kwNorm.length >= 4)         return true;
       if (token.length >= 5 && kwNorm.length >= 4 &&
           token.startsWith(kwNorm))                             return true;
@@ -404,6 +415,17 @@ interface CompetitorBrandGuards {
   aiBrandKw:             Set<string>;                  // v7.535: the AI-flagged brand list alone
   competitorBrandCats:   Set<string>;                  // v7.535: non-client brand categories
   drop:                  (kwLow: string, kwRaw: string) => boolean;   // the §5 composition
+}
+
+/**
+ * v7.539: the non-client brand categories the pool treats as someone else's brand — the
+ * categorize-pending filer must never file into one (a keyword filed there would be held as
+ * misfiled again: the loop that re-filed Citi - Mortgage's 1,045 keywords 36 times).
+ */
+export function competitorBrandCategoryNames(
+  snap: any, clientDomain: string, compDomains: string[] = [], brandTerms: string[] = [], uploadedGapDomains: string[] = [],
+): Set<string> {
+  return buildCompetitorBrandGuards(snap, clientDomain, compDomains, brandTerms, uploadedGapDomains).competitorBrandCats;
 }
 
 function buildCompetitorBrandGuards(
@@ -548,6 +570,7 @@ export function buildKwPool({
   scopeOverrides                 = {},
   includeAdjacent                = false,
   includePending                 = false,
+  includeHidden                  = false,
 }: KwPoolOptions): KwPoolItem[] {
   const blockedSet = new Set<string>(
     uploaded
@@ -857,7 +880,7 @@ export function buildKwPool({
       const n = String(h?.name ?? '').toLowerCase().trim();
       if (n) hiddenNames.add(n);
     }
-    if (hiddenKeys.length > 0 || hiddenNames.size > 0) {
+    if (!includeHidden && (hiddenKeys.length > 0 || hiddenNames.size > 0)) {
       const kp: Record<string, any> = snap?._categoryBreakdown?.keywordPaths ?? {};
       const kc: Record<string, any> = snap?._categoryBreakdown?.keywordCategories ?? {};
       out = out.filter(p => {

@@ -1,3 +1,23 @@
+# v7.539 — A competitor's domain no longer turns generic words into its brand (rocketmortgage.com → "mortgage"); re-file loop closed (2026-10-08)
+
+Found while re-sorting after v7.538: on the new Citi - Mortgage project the filer re-filed the same 1,045 client
+keywords 36 times (37,227 filings) because every keyword it filed stayed "awaiting categorization".
+
+- **Root cause.** The brand test split every long domain root into halves and also matched a keyword that was
+  merely PART of a root. For competitor rocketmortgage.com that made "mortgage" a Rocket Mortgage brand term — so
+  every competitor keyword containing "mortgage" was dropped, and the "Mortgages", "Mortgage Calculators", "Getting a
+  Mortgage" categories were treated as competitor brand categories (their client keywords held for re-filing). The
+  filer filed them back into the same categories, and the loop repeated.
+- **Fix (isBrandedKeyword).** Half-tokens and the "keyword is part of the brand" matches now apply to the CLIENT's
+  root only ("lloyds" ⊂ "lloydsbank" still the client's brand); a competitor is matched by its full root, its known
+  short names (v7.537) and 6+-letter misspellings — "rocket mortgage login" is still caught, "mortgage rates" is not.
+- **Loop guards.** categorize-pending never offers a category the pool treats as a competitor brand category, and the
+  Categorize-now bar stops (and says so) if a pass does not shrink what is left. Re-filing now also sees keywords in
+  hidden categories (client keywords an earlier rule sent to a hidden "Other").
+- Constitution v0.38 (III.1).
+- Verified: project tsc clean; retained suite 3,875 PASS / 30 FAIL — the identical pre-existing failure set (zero new),
+  incl. 6 new v539 checks.
+
 # v7.538 — The client's own brand typos and short forms are no longer filed as "other companies" (2026-10-08)
 
 Found while checking publisher candidates after v7.537: the filer sent the CLIENT's own brand searches to "Other" —

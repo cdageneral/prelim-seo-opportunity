@@ -36,7 +36,7 @@ import { projects, competitors, projectKeywords } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
-import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest, isBrandedKeyword } from '@/lib/utils/kwVolume';
+import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest, isBrandedKeyword, competitorBrandCategoryNames } from '@/lib/utils/kwVolume';
 import { isPublisherIndustry } from '@/lib/category/publisher';   // v7.537
 import { brandLabelOf, BRAND_ALIASES, brandRootOf } from '@/lib/utils/brandRoot';   // v7.537
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
@@ -100,7 +100,7 @@ async function loadContext(projectId: string) {
   // Pending = keywords the pool would carry if membership were not required, that have none.
   const pool = buildKwPool({
     semrushSnapshot: snap, uploadedKeywords: dbKws as any[], clientDomain, competitorDomains,
-    brandTerms: Array.isArray(project.brandTerms) ? project.brandTerms : [], includePending: true,
+    brandTerms: Array.isArray(project.brandTerms) ? project.brandTerms : [], includePending: true, includeHidden: true,
   });
   const pending = pool
     // v7.535: + client keywords the analysis filed into a non-client brand category
@@ -136,15 +136,19 @@ async function loadContext(projectId: string) {
     .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0));
 
   const guard = buildCategoryGuard(snap, clientDomain, competitorDomains);
+  // v7.539: never a target the pool would treat as a competitor brand category (no re-file loop).
+  const gapDomains = Array.from(new Set(dbKws.filter(k => k.type === 'gap' && k.source !== 'blocked' && k.domain).map(k => String(k.domain))));
+  const compBrandCats = competitorBrandCategoryNames(snap, clientDomain, Array.from(new Set([...competitorDomains, ...gapDomains])),
+    Array.isArray(project.brandTerms) ? project.brandTerms : [], gapDomains);
   // Competitor/footprint keywords are filed into PRODUCT categories only: brand buckets are
   // never a target (a competitor's generic term is not the client's brand search).
   const candidates = buildCandidates(
     raw?._categoryBreakdown?.categories ?? [],
     // v7.538: the client's OWN brand bucket ("Lloydsbank Brand Searches") is a filing target for
     // the client's brand searches; every other brand-typed category is not.
-    (name: string, type?: string) => type === 'brand'
+    (name: string, type?: string) => compBrandCats.has(name) || (type === 'brand'
       ? !isBrandedKeyword(name, clientDomain, [], brandTerms)
-      : guard.isCompetitorBrandCategory(name, type),
+      : guard.isCompetitorBrandCategory(name, type)),
   );
 
   // Competitor brand names (label + known aliases) the filer must never file into a category.

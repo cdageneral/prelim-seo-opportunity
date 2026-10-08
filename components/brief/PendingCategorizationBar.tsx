@@ -52,6 +52,7 @@ export default function PendingCategorizationBar({ projectId, refreshKey = 0, au
     setError(null); setSummary(null); stopRef.current = false;
     const total = first.pending;
     let done = 0, other = 0, msTotal = 0;
+    let prevRemaining: number | null = null;   // v7.539 loop guard
     setRun({ start: total, done: 0, other: 0, msPerKw: null });
     for (;;) {
       if (stopRef.current) break;
@@ -67,6 +68,13 @@ export default function PendingCategorizationBar({ projectId, refreshKey = 0, au
       done += step; other += d.other ?? 0; msTotal += d.ms ?? 0;
       setRun({ start: total, done, other, msPerKw: done > 0 ? msTotal / done : null });
       if (d.remaining === 0) break;
+      // v7.539: a pass that files keywords but does not shrink what is left would loop forever
+      // (and keep paying for model calls) — stop and say so.
+      if (prevRemaining !== null && d.remaining >= prevRemaining) {
+        setError(`${fmtN(d.remaining)} keyword${d.remaining === 1 ? '' : 's'} did not leave the queue after filing — stopped to avoid repeat charges.`);
+        break;
+      }
+      prevRemaining = d.remaining;
       if (step === 0) {
         setError(`${fmtN(d.remaining)} keyword${d.remaining === 1 ? '' : 's'} could not be filed this pass${d.failedCalls ? ` (${d.failedCalls} call${d.failedCalls === 1 ? '' : 's'} failed)` : ''} — they stay held out. Try again.`);
         break;
