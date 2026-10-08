@@ -15,6 +15,7 @@
 import { getMarket, type Market } from '@/lib/utils/markets';
 import { recordSerp } from '@/lib/usage/record';
 import { dfsBatchKeywordScan, dfsGetMapsListings, dfsGetLocalPack, dataForSeoEnabled } from './dataforseo';
+import type { ScanFailureReport } from './dataforseo';   // v7.540
 
 const SERP_BASE = 'https://serpapi.com/search';;
 
@@ -458,8 +459,9 @@ export async function batchKeywordScan(
   clientDomain: string,
   limit = 5,
   market?: Market,   // v7.99: per-project market
+  report?: ScanFailureReport,   // v7.540: DataForSEO fills this with the real failure reasons
 ): Promise<KeywordSerpData[]> {
-  if (serpProvider() === 'dataforseo') return dfsBatchKeywordScan(keywords, clientDomain, limit, market);   // v7.397
+  if (serpProvider() === 'dataforseo') return dfsBatchKeywordScan(keywords, clientDomain, limit, market, report);   // v7.397
   return serpApiBatchKeywordScan(keywords, clientDomain, limit, market);
 }
 

@@ -74,13 +74,58 @@ export function llToLocationCoordinate(ll?: string): string | null {
 
 // v7.503: `results` carries the WHOLE result array — Search Volume returns one row per
 // keyword there, so reading only the first (`result`) would drop 999 of 1,000 rows.
-interface DfsCall<T> { result: T | null; costUSD: number; results: T[] }
+interface DfsCall<T> { result: T | null; costUSD: number; results: T[]; failure?: DfsFailure }
+
+/**
+ * v7.540: WHY a call returned nothing, exactly as DataForSEO (or the network)
+ * reported it. Before this, every failure collapsed to an empty result and the
+ * scan route guessed "likely out of credits" — on 2026-10-08 the real cause was
+ * DataForSEO's own server error (status 50000) with a full $1,537 balance.
+ * The banner now shows this verbatim instead of a guess (Const I.1).
+ */
+export interface DfsFailure {
+  /** 'provider' = DataForSEO answered with a non-20000 code; 'http' = non-2xx; 'timeout'; 'network'. */
+  kind: 'provider' | 'http' | 'timeout' | 'network';
+  /** DataForSEO status_code (e.g. 50000) or HTTP status; null for timeout/network. */
+  code: number | null;
+  /** DataForSEO status_message verbatim, or the transport error text. */
+  message: string;
+}
+
+/** v7.540: per-scan failure tally the route reads to explain an empty batch. */
+export interface ScanFailureReport {
+  failures: Array<DfsFailure & { count: number }>;
+  /** Keywords never attempted because the wall-clock budget ran out. */
+  skippedForTime: number;
+}
+
+function tallyFailure(report: ScanFailureReport | undefined, f: DfsFailure | undefined): void {
+  if (!report || !f) return;
+  const hit = report.failures.find(x => x.kind === f.kind && x.code === f.code && x.message === f.message);
+  if (hit) hit.count++;
+  else report.failures.push({ ...f, count: 1 });
+}
+
+/**
+ * v7.540: transient = worth one more try. DataForSEO 5xxxx envelope codes are
+ * its own server errors; HTTP 5xx and timeouts are transport. 4xxxx codes
+ * (auth, balance, bad parameters) are NOT retried — repeating them cannot help.
+ */
+function isTransient(f: DfsFailure | undefined): boolean {
+  if (!f) return false;
+  if (f.kind === 'timeout' || f.kind === 'network') return true;
+  if (f.kind === 'http') return (f.code ?? 0) >= 500;
+  if (f.kind === 'provider') return (f.code ?? 0) >= 50000 && (f.code ?? 0) < 60000;
+  return false;
+}
+
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 /**
  * POST one live task. Returns the first result object plus the REAL cost the
  * API reported, and records that measured cost in the usage ledger.
  */
-async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string, ledgerUnit: 'searches' | 'llm_mentions' | 'search_volume' = 'searches'): Promise<DfsCall<T>> {
+async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>, ledgerEndpoint: string, ledgerUnit: 'searches' | 'llm_mentions' | 'search_volume' = 'searches', timeoutMs = 20_000): Promise<DfsCall<T>> {
   const auth = authHeader();
   if (!auth) return { result: null, costUSD: 0, results: [] };
   try {
@@ -88,17 +133,17 @@ async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>,
       method: 'POST',
       headers: { 'Authorization': auth, 'Content-Type': 'application/json' },
       body: JSON.stringify([task]),                 // DataForSEO takes an ARRAY of tasks
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       console.error(`DataForSEO ${ledgerEndpoint} HTTP ${res.status}`);
-      return { result: null, costUSD: 0, results: [] };
+      return { result: null, costUSD: 0, results: [], failure: { kind: 'http', code: res.status, message: res.statusText || `HTTP ${res.status}` } };
     }
     const body: any = await res.json();
     // status_code 20000 = OK. Anything else is a real failure, surfaced as empty.
     if (Number(body?.status_code) !== 20000) {
       console.error(`DataForSEO ${ledgerEndpoint} status ${body?.status_code}: ${body?.status_message}`);
-      return { result: null, costUSD: 0, results: [] };
+      return { result: null, costUSD: 0, results: [], failure: { kind: 'provider', code: Number(body?.status_code) || null, message: String(body?.status_message ?? 'no status message') } };
     }
     const t0 = Array.isArray(body?.tasks) ? body.tasks[0] : null;
     // Per-task cost when present, else the envelope total. Never invented.
@@ -107,13 +152,17 @@ async function dfsPost<T = any>(endpoint: string, task: Record<string, unknown>,
     await recordDataForSeo(ledgerEndpoint, costUSD, 1, process.env.DATAFORSEO_LOGIN, ledgerUnit);
     if (Number(t0?.status_code) !== 20000) {
       console.error(`DataForSEO ${ledgerEndpoint} task status ${t0?.status_code}: ${t0?.status_message}`);
-      return { result: null, costUSD, results: [] };
+      return { result: null, costUSD, results: [], failure: { kind: 'provider', code: Number(t0?.status_code) || null, message: String(t0?.status_message ?? 'no status message') } };
     }
     const results: T[] = Array.isArray(t0?.result) ? (t0.result as T[]) : [];
     return { result: (results.length ? results[0] : null) as T | null, costUSD, results };
   } catch (err) {
     console.error(`DataForSEO ${ledgerEndpoint} fetch failed:`, err);
-    return { result: null, costUSD: 0, results: [] };
+    const name = (err as any)?.name;
+    const isTimeout = name === 'TimeoutError' || name === 'AbortError';
+    return { result: null, costUSD: 0, results: [], failure: isTimeout
+      ? { kind: 'timeout', code: null, message: `no response within ${Math.round(timeoutMs / 1000)}s` }
+      : { kind: 'network', code: null, message: String((err as any)?.message ?? err) } };
   }
 }
 
@@ -182,23 +231,44 @@ export async function dfsBatchKeywordScan(
   clientDomain: string,
   limit = 5,
   market?: Market,
+  report?: ScanFailureReport,            // v7.540: why keywords came back empty
 ): Promise<KeywordSerpData[]> {
   if (!dataForSeoEnabled()) return [];
   const m = market ?? getMarket('us');
   const batch = keywords.slice(0, limit);
   const CONCURRENCY = 5;                 // mirrors serp.ts SCAN_CONCURRENCY
   const out: KeywordSerpData[] = [];
+  // v7.540: AI-Overview SERPs regularly take 15-20s, so the old 20s cap cut off
+  // healthy answers. 60s per attempt, up to 2 retries on TRANSIENT failures
+  // only, all inside a wall-clock budget well under the route's 300s cap —
+  // whatever is not finished is left unscanned (remaining count stays honest).
+  const PER_CALL_MS = 60_000;
+  const MIN_CALL_MS = 10_000;            // not worth starting an attempt with less
+  const RETRY_WAIT_MS = [2_000, 5_000];
+  const deadline = Date.now() + 230_000;
 
   async function scanOne(keyword: string): Promise<KeywordSerpData | null> {
-    const { result } = await dfsPost<any>(ORGANIC_ENDPOINT, {
+    const task = {
       keyword,
       location_name: m.dfsLocationName,
       language_code: m.dfsLanguageCode,
       device: 'desktop',
       depth: 10,
       load_async_ai_overview: true,      // AI Overview is a first-class OrbitIQ signal
-    }, 'google_organic');
-    if (!result) return null;
+    };
+    let result: any = null;
+    let failure: DfsFailure | undefined;
+    for (let attempt = 0; attempt <= RETRY_WAIT_MS.length; attempt++) {
+      const left = deadline - Date.now();
+      if (left < MIN_CALL_MS) break;
+      const call = await dfsPost<any>(ORGANIC_ENDPOINT, task, 'google_organic', 'searches', Math.min(PER_CALL_MS, left));
+      result = call.result;
+      failure = call.failure;
+      if (result || !isTransient(failure) || attempt === RETRY_WAIT_MS.length) break;
+      if (deadline - Date.now() < RETRY_WAIT_MS[attempt] + MIN_CALL_MS) break;
+      await sleep(RETRY_WAIT_MS[attempt]);
+    }
+    if (!result) { tallyFailure(report, failure ?? { kind: 'timeout', code: null, message: 'scan time budget used up before this keyword could be tried' }); return null; }
 
     const items: any[] = Array.isArray(result.items) ? result.items : [];
     const itemTypes: string[] = Array.isArray(result.item_types) ? result.item_types.slice() : [];
@@ -286,6 +356,10 @@ export async function dfsBatchKeywordScan(
   }
 
   for (let i = 0; i < batch.length; i += CONCURRENCY) {
+    if (deadline - Date.now() < MIN_CALL_MS) {           // v7.540: out of time — leave the rest unscanned
+      if (report) report.skippedForTime += batch.length - i;
+      break;
+    }
     const slice = batch.slice(i, i + CONCURRENCY);
     const settled = await Promise.all(slice.map(k => scanOne(k).catch(() => null)));
     settled.forEach(r => { if (r) out.push(r); });

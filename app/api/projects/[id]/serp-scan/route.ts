@@ -16,6 +16,7 @@
  * Returns: { scanned, results, totalScanned, poolTotal, remaining }
  */
 
+import type { ScanFailureReport } from '@/lib/apis/dataforseo';   // v7.540
 import { NextRequest, NextResponse } from 'next/server';
 import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
@@ -203,7 +204,8 @@ export async function POST(
   }
   console.log(`[OrbitIQ] SERP scan (${scanFilter}): ${batchKeywords.length} keywords for ${domain}`);
 
-  const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase));   // v7.99: market-aware scan
+  const scanReport: ScanFailureReport = { failures: [], skippedForTime: 0 };   // v7.540
+  const results = await batchKeywordScan(batchKeywords, domain, batchSize, getMarket((project as any).semrushDatabase), scanReport);   // v7.99: market-aware scan
 
   // v7.86: every keyword in the batch failed → almost certainly an account-level
   // problem (out of search credits or rate-limited), not keyword-level.
@@ -214,7 +216,7 @@ export async function POST(
     const label = activeProviderLabel();
     const where = (() => { try { return providerBalanceUrl(serpProvider()); } catch { return 'your SERP provider'; } })();
     return NextResponse.json(
-      { error: `${label} returned no results for this batch — the account is likely out of credits or rate-limited. Check your balance at ${where}, then retry; nothing was saved or double-charged.` },
+      { error: describeEmptyBatch(label, where, scanReport, batchKeywords.length), failures: scanReport.failures },
       { status: 502 }
     );
   }
@@ -241,4 +243,28 @@ export async function POST(
     remaining:    scanFilter === 'rescan' ? 0 : Math.max(unscannedCount - results.length, 0),
     filter:       scanFilter,
   });
+}
+
+/**
+ * v7.540: say WHY the batch came back empty, using what the provider actually
+ * returned — never a guess. On 2026-10-08 the old fixed text ("likely out of
+ * credits") sent Wayne to a DataForSEO balance of $1,537 while the real cause
+ * was DataForSEO's own status 50000 Internal Server Error (Const I.1).
+ */
+function describeEmptyBatch(label: string, where: string, r: ScanFailureReport, total: number): string {
+  const fs = [...r.failures].sort((a, b) => b.count - a.count);
+  if (fs.length === 0) {
+    // No reason captured (SerpAPI path, or provider not configured) — state only what is known.
+    return `${label} returned no results for this batch. No error detail was captured; check ${where} and the server logs, then retry. Nothing was saved.`;
+  }
+  const parts = fs.slice(0, 3).map(f => {
+    const code = f.code != null ? `${f.kind === 'http' ? 'HTTP ' : 'status '}${f.code}: ` : '';
+    return `${code}${f.message.replace(/\.$/, '')} on ${f.count} of ${total} keywords`;
+  });
+  const top = fs[0];
+  const serverSide = (top.kind === 'provider' && (top.code ?? 0) >= 50000) || (top.kind === 'http' && (top.code ?? 0) >= 500) || top.kind === 'timeout';
+  const hint = serverSide
+    ? `This is an error on ${label}'s side, not your balance — retried automatically and still failing. Wait a few minutes and Resume.`
+    : `Check the account at ${where}.`;
+  return `${label} returned no results for this batch — ${parts.join('; ')}. ${hint} Nothing was saved.`;
 }

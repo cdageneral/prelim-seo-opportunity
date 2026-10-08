@@ -1,3 +1,25 @@
+# v7.540 — SERP scan says why DataForSEO failed instead of blaming credits; retries server errors (2026-10-08)
+
+Found on Citi (citi.com) the morning of 2026-10-08: the SERP Features scan paused with "DataForSEO returned no results —
+the account is likely out of credits or rate-limited" while the DataForSEO balance read $1,537.90. Production logs
+showed the real cause on every attempt since ~16:00 UTC: DataForSEO's own `status 50000: Internal Server Error.`
+plus requests cut off at the 20s client timeout. The banner text was a fixed guess, not a reading of the response.
+
+- **Real reason shown (Const I.1).** Every DataForSEO call now returns why it failed (provider status code + message
+  verbatim, HTTP status, timeout or network). The scan route tallies them and the banner states them, e.g.
+  "status 50000: Internal Server Error on 25 of 25 keywords. This is an error on DataForSEO's side, not your balance".
+  4xxxx codes (auth, balance, bad request) point to the account; nothing is inferred beyond the code returned.
+  The old "nothing was double-charged" claim is removed: a request that times out on our side may still be billed by
+  DataForSEO, and the app cannot see that.
+- **Retries.** Transient failures only (DataForSEO 5xxxx, HTTP 5xx, timeout, network) are retried up to twice
+  (2s, then 5s wait). 4xxxx codes are never retried.
+- **Timeout 20s → 60s per attempt** (AI-Overview SERPs regularly take 15–20s), inside a 230s wall-clock budget under
+  the route's 300s cap. Keywords not reached stay unscanned and are counted in "remaining" — nothing is dropped.
+- Files: lib/apis/dataforseo.ts, lib/apis/serp.ts (passes the failure report through), app/api/projects/[id]/serp-scan/route.ts.
+- Downstream (II.6a): no metric, panel or PDF changed — error path only. II.9: no queries touched.
+- Verified: project tsc clean (zero delta vs v7.539); mocked-DataForSEO test — 50000-then-OK recovers on retry,
+  persistent 50000 retried twice then reported, 40100 not retried and pointed at the account.
+
 # v7.539 — A competitor's domain no longer turns generic words into its brand (rocketmortgage.com → "mortgage"); re-file loop closed (2026-10-08)
 
 Found while re-sorting after v7.538: on the new Citi - Mortgage project the filer re-filed the same 1,045 client
