@@ -317,6 +317,42 @@ export function isBrandedKeyword(
 // blocklist (filterUniverseExcludedBrands), so an auto-discovered competitor-brand
 // keyword could appear in demand-mode Journey while excluded everywhere else.
 // The client's own brand (domain root + `_brandTerms` vocabulary) is never dropped.
+/**
+ * v7.439 strict client-brand test, exported in v7.530 so the keyword pool and every
+ * category read site share ONE definition (Const II.7). True when the keyword contains
+ * the full client domain root (≥4 chars) or any project brand term (≥3 chars, normalized
+ * substring). No half-tokens, no edit distance — see buildCompetitorBrandGuards.
+ */
+export function buildClientBrandStrictTest(clientDomain: string, brandTerms: string[] = []): (kw: string) => boolean {
+  const clientRoot = extractBrand(clientDomain ?? '');
+  const strictTerms = (brandTerms ?? [])
+    .map(t => String(t ?? '').toLowerCase().replace(/[^a-z0-9]/g, ''))
+    .filter(tn => tn.length >= 3);
+  return (kw: string): boolean => {
+    const kwNorm = String(kw ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!kwNorm) return false;
+    if (clientRoot.length >= 4 && kwNorm.includes(clientRoot)) return true;
+    for (const tn of strictTerms) if (kwNorm.includes(tn)) return true;
+    return false;
+  };
+}
+
+/**
+ * v7.530: names of brand-typed categories that hold at least one CLIENT keyword (strict
+ * test). A generic "Brand Searches" bucket mixes the client's own terms with others; it is
+ * not a competitor category, so the category guards keep it (its non-client members are
+ * still removed keyword-by-keyword in buildKwPool).
+ */
+export function brandCategoriesWithClientMembers(snap: any, clientDomain: string, brandTerms: string[] = []): Set<string> {
+  const isClient = buildClientBrandStrictTest(clientDomain, brandTerms);
+  const out = new Set<string>();
+  const kc: Record<string, string> = snap?._categoryBreakdown?.keywordCategories ?? {};
+  for (const [kwLow, cat] of Object.entries(kc)) {
+    if (typeof cat === 'string' && cat && !out.has(cat) && isClient(kwLow)) out.add(cat);
+  }
+  return out;
+}
+
 interface CompetitorBrandGuards {
   effectiveBrandTerms:   string[];
   isExcludedBrand:       (kwRaw: string) => boolean;   // v7.208 user blocklist
@@ -349,18 +385,7 @@ function buildCompetitorBrandGuards(
   // term. Protection now requires an exact match on the full client root or on the
   // explicit brand vocabulary — no half-tokens, no edit distance. The loose test is
   // unchanged everywhere else (the "branded" chip still uses it).
-  const clientRoot = extractBrand(clientDomain);
-  const strictTerms = effectiveBrandTerms.map(t => (t ?? '').toLowerCase().trim()).filter(Boolean);
-  const isClientBrandedStrict = (kw: string): boolean => {
-    const kwNorm = String(kw ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!kwNorm) return false;
-    if (clientRoot.length >= 4 && kwNorm.includes(clientRoot)) return true;
-    for (const t of strictTerms) {
-      const tn = t.replace(/[^a-z0-9]/g, '');
-      if (tn.length >= 3 && kwNorm.includes(tn)) return true;
-    }
-    return false;
-  };
+  const isClientBrandedStrict = buildClientBrandStrictTest(clientDomain, effectiveBrandTerms);   // v7.530: shared
 
   // v7.208: user-maintained blocklist (client's own brand never stripped).
   const excludedBrandTokens = buildExcludedBrandTokens(snap);
@@ -393,15 +418,23 @@ function buildCompetitorBrandGuards(
       })
       .map(c => c.name),
   );
+  // v7.530 (Wayne 2026-10-07: "we need the clients branded terms always"; Const III.1 v0.30).
+  // Membership in a non-client brand category, or a place on the AI-flagged `brandKeywords`
+  // list, used to drop a keyword with NO client check. On Citi (Cards) that removed Citi's
+  // own terms ("citi double cash card" filed under a generic "Brand Searches" category;
+  // "citi travel" / "citi mastercard" on the AI list) — 256 of the 773 dropped keywords.
+  // A keyword that is the client's brand (strict: domain root or the project's brand terms,
+  // which is also where co-brand partners such as Costco/Best Buy are declared) is now
+  // NEVER dropped by these two rules. Everything else they drop is unchanged.
   const brandCatExcludedKw = new Set<string>();
   if (competitorBrandCats.size > 0) {
     for (const [kwLow, catName] of Object.entries(kwCatMap)) {
-      if (competitorBrandCats.has(catName)) brandCatExcludedKw.add(kwLow);
+      if (competitorBrandCats.has(catName) && !isClientBrandedStrict(kwLow)) brandCatExcludedKw.add(kwLow);
     }
   }
   for (const k of (cb?.brandKeywords ?? []) as string[]) {
     const kl = String(k ?? '').toLowerCase().trim();
-    if (kl) brandCatExcludedKw.add(kl);
+    if (kl && !isClientBrandedStrict(kl)) brandCatExcludedKw.add(kl);
   }
 
   // The unified §5 competitor-brand test (identical composition to pre-v7.337 buildKwPool).
