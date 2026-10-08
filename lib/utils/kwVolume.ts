@@ -323,6 +323,14 @@ export function isBrandedKeyword(
 // blocklist (filterUniverseExcludedBrands), so an auto-discovered competitor-brand
 // keyword could appear in demand-mode Journey while excluded everywhere else.
 // The client's own brand (domain root + `_brandTerms` vocabulary) is never dropped.
+// v7.532: a letter outside the Latin script. Built with the RegExp constructor so the
+// `u`-flag property escape does not depend on the tsconfig target.
+const NON_LATIN_LETTER = new RegExp('(?=\\p{L})\\P{Script=Latin}', 'u');
+/** v7.532: true when the keyword contains any letter outside the Latin script. */
+export function isForeignScriptKeyword(keyword: string): boolean {
+  return NON_LATIN_LETTER.test(String(keyword ?? ''));
+}
+
 /** v7.531: true when the snapshot carries a stored category tree (categories + membership). */
 export function hasStoredCategoryTree(snap: any): boolean {
   const cb = snap?._categoryBreakdown;
@@ -836,6 +844,14 @@ export function buildKwPool({
       });
     }
   }
+
+  // ── v7.532: FOREIGN-SCRIPT keywords never enter any set ─────────────────────
+  // Wayne (2026-10-07, "美國信用卡" from a bankofamerica.com footprint): "these should
+  // never be in any set." Every project targets a Latin-script Semrush market (us / uk),
+  // so a keyword written in another script (CJK, Cyrillic, Arabic, Hebrew, Greek, Thai…)
+  // is a different-language market, not this client's audience. Accented Latin
+  // ("préstamo") is kept. Applies to every lane, client footprint included.
+  out = out.filter(p => !isForeignScriptKeyword(p.keyword));
 
   // ── v7.531: UNCATEGORIZED = OUT (Const III.1e v0.31) ───────────────────────
   // Wayne (2026-10-07): "there could not be any new categories created which would mean

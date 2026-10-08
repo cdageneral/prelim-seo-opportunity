@@ -1,3 +1,35 @@
+# v7.532 — Phone numbers, other companies' sites and brands never filed; foreign script in no set; delete keeps your page (2026-10-07)
+
+Wayne, on Citi (Cards) after v7.531: "so why is this still in the list?" (go.amex/confirmcard, www.starz.com/activate,
+one.walmart.com), "these should never be in any set" (美國信用卡), "how are any of these part of the category tree that
+is suppose to bound these terms?" (bofa chat, 800-950-5114, 8773661121), and "when I delete a keyword on page 2 or 3 it
+reverts back to page 1".
+
+- **Root cause.** The v7.531 filer only had the category list. The brand guard drops configured competitors' brands
+  (Discover, Capital One, Bank of America) and the blocklist, so Amex, Starz, Walmart, Kohl's, Sam's, Lowe's reached
+  the filer as plain keywords, and it put them in the closest-sounding category (Citi Retail Partner Cards: 64
+  competitor-file keywords, mostly other retailers' card/login searches). Phone numbers sat in Payment Card Support.
+- **Deterministic "Other" (no AI).** `lib/category/pendingCategorization.ts`: `isPhoneNumberKeyword` (no letters,
+  7+ digits) and `isForeignAddress` ("www.", host+TLD, host/path that names neither the client domain root nor a
+  project brand term) → "Other" before any model call. Client/partner addresses (macys.com, aa.com,
+  cardactivation.citi.com, bestbuy.accountonline.com) are kept.
+- **Filer names whose brands belong.** The prompt lists the client root + project brand terms (partners) and sends
+  any other company's brand, and any login / activation / bill-pay search for another company's site, to 0 = Other.
+- **Refile.** `categorize-pending` POST `{mode:'refile'}` re-files COMPETITOR keywords (isGap) filed under an older
+  rule set; never a client-brand keyword or one in a brand bucket. Every filed keyword is stamped
+  `_categoryBreakdown.filerVersion[kw] = 532` (merged in SQL, Const II.9), so the loop ends and a future rule change
+  can re-run. GET now also reports `refile`.
+- **Foreign script in no set.** `buildKwPool` removes any keyword containing a letter outside the Latin script
+  (`isForeignScriptKeyword`) from every lane, client footprint included; accented Latin ("tarjeta de crédito") stays.
+  All 36 projects are us/uk databases. Uploaded rows affected at release: 38 across 12 projects (e.g. Citi (Cards) 8,
+  Aflac 6, U.S. Bank Credit Cards 7).
+- **Keyword list keeps your page on delete.** `KeywordsPanel` reset to page 1 whenever the row COUNT changed, so every
+  delete jumped back to page 1. The count is no longer a trigger; filter/sort/scope changes still reset; `safePage`
+  clamps if the page no longer exists.
+- Constitution v0.32 (III.1, III.1e).
+- Verified: project tsc clean; retained suite 3,835 PASS / 30 FAIL — the 30 are the identical pre-existing set from
+  v7.531 (zero new failures), incl. 11 new v532 checks.
+
 # v7.531 — Every keyword must sit in an existing category; Branded means the client only (2026-10-07)
 
 Wayne: "i am adding competitors keyword footprints and still finding a lot of keywords that are not following the

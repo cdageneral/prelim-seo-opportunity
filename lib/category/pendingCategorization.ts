@@ -19,6 +19,56 @@
 
 export const OTHER_CATEGORY = 'Other';
 
+/**
+ * v7.532: version stamp of the filing rules. Every keyword this module files is stamped
+ * `_categoryBreakdown.filerVersion[kw] = FILER_VERSION`, so a rule change can re-file the
+ * competitor keywords an older rule set filed (refile mode) and the loop knows when it is done.
+ */
+export const FILER_VERSION = 532;
+
+/** Lowercase domain root ("www.citi.com" → "citi"). */
+function domainRoot(domain: string): string {
+  const host = String(domain ?? '').toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  const parts = host.split('.').filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : (parts[0] ?? '');
+}
+
+/** Own brands the filer may keep: client domain root + project brand terms (partners). */
+export function ownBrandList(clientDomain: string, brandTerms: string[] = []): string[] {
+  const out: string[] = [];
+  const root = domainRoot(clientDomain);
+  if (root.length >= 3) out.push(root);
+  for (const t of brandTerms ?? []) {
+    const v = String(t ?? '').toLowerCase().trim();
+    if (v.length >= 3 && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/**
+ * v7.532 deterministic rule (no AI): a keyword typed as a WEB ADDRESS — "www.", a
+ * host with a TLD ("one.walmart.com", "kohls.compaybill"), or host/path
+ * ("go.amex/confirmcard") — that names neither the client nor a project brand term is
+ * a navigation search for someone else's site. It is never one of the client's product
+ * topics, so it is filed to "Other" (Wayne, 2026-10-07).
+ */
+export function isForeignAddress(keyword: string, clientDomain: string, brandTerms: string[] = []): boolean {
+  const k = String(keyword ?? '').toLowerCase().trim();
+  if (!k) return false;
+  const addressy =
+    /(^|\s)www\./.test(k) ||
+    /[a-z0-9]\.com/.test(k) ||
+    /[a-z0-9-]\.(net|org|gov|edu|io|us|biz|info|co|bank)(?![a-z])/.test(k) ||
+    /[a-z0-9-]\.[a-z0-9-]+\/[a-z0-9]/.test(k);
+  if (!addressy) return false;
+  const norm = k.replace(/[^a-z0-9]/g, '');
+  for (const b of ownBrandList(clientDomain, brandTerms)) {
+    const bn = b.replace(/[^a-z0-9]/g, '');
+    if (bn.length >= 3 && norm.includes(bn)) return false;
+  }
+  return true;
+}
+
 export interface CandidateCategory {
   /** 1-based number the model answers with. */
   n:    number;
@@ -26,6 +76,22 @@ export interface CandidateCategory {
   name: string;
   /** Full stored chain, umbrella first (`keywordPaths` value). */
   path: string[];
+}
+
+/**
+ * v7.532: a keyword that is only a phone number ("800-950-5114", "8773661121") — a
+ * search for a company's support line. No letters, 7+ digits. Never a product topic.
+ */
+export function isPhoneNumberKeyword(keyword: string): boolean {
+  const k = String(keyword ?? '').trim();
+  if (!k || /[a-z]/i.test(k)) return false;
+  if (!/^[\d\s().+\-\/]+$/.test(k)) return false;
+  return k.replace(/\D/g, '').length >= 7;
+}
+
+/** v7.532: the deterministic "Other" rules applied before any model call. */
+export function deterministicOther(keyword: string, clientDomain: string, brandTerms: string[] = []): boolean {
+  return isPhoneNumberKeyword(keyword) || isForeignAddress(keyword, clientDomain, brandTerms);
 }
 
 /**
@@ -65,7 +131,8 @@ export function buildCandidates(
 }
 
 /** Prompt for ONE batch. Keywords are numbered 1..k; categories 1..n; 0 = no fit. */
-export function buildCategorizePrompt(domain: string, keywords: string[], candidates: CandidateCategory[]): string {
+export function buildCategorizePrompt(domain: string, keywords: string[], candidates: CandidateCategory[], ownBrands: string[] = []): string {
+  const own  = ownBrands.length ? ownBrands.join(', ') : domainRoot(domain);
   const cats = candidates.map(c => `${c.n}. ${c.path.join(' > ')}`).join('\n');
   const kws  = keywords.map((k, i) => `${i + 1}. ${k}`).join('\n');
   return `You are filing search keywords into an EXISTING website taxonomy for ${domain}.
@@ -80,6 +147,9 @@ Rules:
 - For each keyword choose the ONE category whose search intent the keyword matches — what the searcher is trying to find or do, not a shared word.
 - You may ONLY answer with a category number from the list above. Never invent, rename or combine categories.
 - If no category matches the keyword's intent closely, answer 0.
+- The ONLY brands that belong in these categories are ${domain}'s own brand and its partner brands: ${own}.
+  If a keyword names any OTHER company, bank, card issuer, retailer, store, airline, service or website (e.g. "kohls payment", "walmart credit account", "credit one platinum visa", "starz activate"), answer 0 — even when it is about a credit card or a product in the list.
+- Navigation searches for another company's site — a web address, login, sign-in, activation, bill pay or account page that is not ${domain}'s or a listed partner's — answer 0.
 - Answer every keyword exactly once.
 
 Respond with STRICT JSON only, no prose:

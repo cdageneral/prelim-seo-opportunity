@@ -1,5 +1,5 @@
 /**
- * /api/projects/[id]/categorize-pending — v7.531
+ * /api/projects/[id]/categorize-pending — v7.531 (v7.532: foreign-brand rules + refile)
  *
  * Keywords with NO stored category (a competitor CSV uploaded after the last
  * categorization, a hand-added keyword) are held out of every panel by buildKwPool
@@ -7,9 +7,18 @@
  * tree — never a new category — so they can enter the pool under the Step-2
  * selection like everything else (Wayne, 2026-10-07).
  *
- * GET  → { pending, pendingAnnualVolume, candidates, batchSize, hasTree }
- * POST → body { limit? }  files up to `limit` pending keywords (highest volume first)
+ * GET  → { pending, pendingAnnualVolume, refile, candidates, batchSize, hasTree }
+ * POST → body { limit?, mode? }  files up to `limit` keywords (highest volume first)
+ *        mode 'pending' (default): keywords with no stored category
+ *        mode 'refile' (v7.532): competitor keywords filed under an OLDER rule set
  *        → { filed, other, unanswered, remaining, remainingAnnualVolume, ms }
+ *
+ * v7.532 (Wayne, 2026-10-07 — "go.amex/confirmcard", "www.starz.com/activate",
+ * "one.walmart.com" were filed into Citi's Retail Partner Cards): a web-address keyword
+ * that names neither the client nor a project brand term goes to "Other" with no AI
+ * call (isForeignAddress); the prompt names the client's own + partner brands and sends
+ * any other company's brand / login / bill-pay search to "Other". Every filed keyword is
+ * stamped `_categoryBreakdown.filerVersion[kw] = FILER_VERSION`.
  *
  * The client calls POST in a loop and shows live progress + ETA from the measured
  * time per call (Const IV.2). Every Claude call goes through instrumentAnthropic, so
@@ -27,12 +36,13 @@ import { projects, competitors, projectKeywords } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
-import { buildKwPool, hasStoredCategoryTree, hasStoredMembership } from '@/lib/utils/kwVolume';
+import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest } from '@/lib/utils/kwVolume';
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';
 import {
   buildCandidates, buildCategorizePrompt, parseAssignments, membershipFor,
+  deterministicOther, ownBrandList, FILER_VERSION, OTHER_CATEGORY,
 } from '@/lib/category/pendingCategorization';
 
 export const dynamic = 'force-dynamic';
@@ -92,6 +102,26 @@ async function loadContext(projectId: string) {
     .filter(p => p.origin !== 'demand' && !hasStoredMembership(raw, p.keyword))
     .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0));
 
+  // v7.532 refile set: COMPETITOR keywords (isGap) already filed, not yet stamped with the
+  // current rule version. Never a client-brand keyword, and never one sitting in a brand
+  // bucket (brand buckets are not filing targets, so re-filing would move it out).
+  const brandTerms: string[] = Array.isArray(project.brandTerms) ? project.brandTerms : [];
+  const isClientBrand = buildClientBrandStrictTest(clientDomain, brandTerms);
+  const cbRaw = raw?._categoryBreakdown ?? {};
+  const typeOf = new Map<string, string>();
+  for (const c of (cbRaw.categories ?? [])) if (c?.name) typeOf.set(String(c.name).toLowerCase(), String(c.type ?? ''));
+  const stamp: Record<string, number> = cbRaw.filerVersion ?? {};
+  const refile = pool
+    .filter(p => {
+      if (p.origin === 'demand' || !p.isGap) return false;
+      const k = p.keyword.toLowerCase().trim();
+      if (!hasStoredMembership(raw, k) || stamp[k] === FILER_VERSION) return false;
+      if (isClientBrand(k)) return false;
+      const cur = String(cbRaw.keywordCategories?.[k] ?? '').toLowerCase();
+      return typeOf.get(cur) !== 'brand';
+    })
+    .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0));
+
   const guard = buildCategoryGuard(snap, clientDomain, competitorDomains);
   // Competitor/footprint keywords are filed into PRODUCT categories only: brand buckets are
   // never a target (a competitor's generic term is not the client's brand search).
@@ -100,7 +130,7 @@ async function loadContext(projectId: string) {
     (name: string, type?: string) => type === 'brand' || guard.isCompetitorBrandCategory(name, type),
   );
 
-  return { analysisId: loaded.head.id, raw, clientDomain, pending, candidates, hasTree: hasStoredCategoryTree(raw) } as const;
+  return { analysisId: loaded.head.id, raw, clientDomain, brandTerms, pending, refile, candidates, hasTree: hasStoredCategoryTree(raw) } as const;
 }
 
 const annual = (rows: Array<{ searchVolume: number }>) => rows.reduce((n, r) => n + (r.searchVolume ?? 0), 0) * 12;
@@ -112,6 +142,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     hasTree:             ctx.hasTree,
     pending:             ctx.hasTree ? ctx.pending.length : 0,
     pendingAnnualVolume: ctx.hasTree ? annual(ctx.pending) : 0,
+    refile:              ctx.hasTree ? ctx.refile.length : 0,
     candidates:          ctx.candidates.length,
     batchSize:           BATCH,
   });
@@ -123,6 +154,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
   const limit = Math.max(BATCH, Math.min(MAX_LIM, Number(body?.limit) || DEFAULT_LIM));
+  const mode: 'pending' | 'refile' = body?.mode === 'refile' ? 'refile' : 'pending';
 
   const t0 = Date.now();
   const ctx = await loadContext(projectId);
@@ -132,13 +164,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'No selected categories to file into — select at least one category in Keyword Selection.' }, { status: 400 });
   }
 
-  const work = ctx.pending.slice(0, limit).map(p => p.keyword);
-  const batches: string[][] = [];
-  for (let i = 0; i < work.length; i += BATCH) batches.push(work.slice(i, i + BATCH));
+  const source = mode === 'refile' ? ctx.refile : ctx.pending;
+  const slice  = source.slice(0, limit).map(p => p.keyword);
 
   const paths: Record<string, string[]> = {};
   const cats:  Record<string, string>   = {};
   let filed = 0, other = 0, unanswered = 0, failedCalls = 0;
+
+  // v7.532 deterministic rules first — a phone number or a foreign web address never reaches the model.
+  const work: string[] = [];
+  for (const kw of slice) {
+    if (deterministicOther(kw, ctx.clientDomain, ctx.brandTerms)) {   // phone number or foreign web address
+      const k = kw.toLowerCase().trim();
+      paths[k] = [OTHER_CATEGORY]; cats[k] = OTHER_CATEGORY; other++;
+    } else work.push(kw);
+  }
+  const ownBrands = ownBrandList(ctx.clientDomain, ctx.brandTerms);
+  const batches: string[][] = [];
+  for (let i = 0; i < work.length; i += BATCH) batches.push(work.slice(i, i + BATCH));
 
   const client = getClient();
   for (let i = 0; i < batches.length; i += PARALLEL) {
@@ -147,7 +190,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         const res = await client.messages.create({
           model: MODEL, max_tokens: 2048,
-          messages: [{ role: 'user', content: buildCategorizePrompt(ctx.clientDomain, kws, ctx.candidates) }],
+          messages: [{ role: 'user', content: buildCategorizePrompt(ctx.clientDomain, kws, ctx.candidates, ownBrands) }],
         });
         const text = res.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('');
         return { kws, ...parseAssignments(text, kws.length, ctx.candidates) };
@@ -167,22 +210,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   if (Object.keys(cats).length > 0) {
+    const stamps: Record<string, number> = {};
+    for (const k of Object.keys(cats)) stamps[k] = FILER_VERSION;
     await db.execute(sql`
       UPDATE analyses
          SET semrush_snapshot = jsonb_set(
                jsonb_set(
-                 semrush_snapshot,
-                 '{_categoryBreakdown,keywordPaths}',
-                 COALESCE(semrush_snapshot #> '{_categoryBreakdown,keywordPaths}', '{}'::jsonb) || ${JSON.stringify(paths)}::jsonb,
+                 jsonb_set(
+                   semrush_snapshot,
+                   '{_categoryBreakdown,keywordPaths}',
+                   COALESCE(semrush_snapshot #> '{_categoryBreakdown,keywordPaths}', '{}'::jsonb) || ${JSON.stringify(paths)}::jsonb,
+                   true),
+                 '{_categoryBreakdown,keywordCategories}',
+                 COALESCE(semrush_snapshot #> '{_categoryBreakdown,keywordCategories}', '{}'::jsonb) || ${JSON.stringify(cats)}::jsonb,
                  true),
-               '{_categoryBreakdown,keywordCategories}',
-               COALESCE(semrush_snapshot #> '{_categoryBreakdown,keywordCategories}', '{}'::jsonb) || ${JSON.stringify(cats)}::jsonb,
+               '{_categoryBreakdown,filerVersion}',
+               COALESCE(semrush_snapshot #> '{_categoryBreakdown,filerVersion}', '{}'::jsonb) || ${JSON.stringify(stamps)}::jsonb,
                true)
        WHERE id = ${ctx.analysisId}`);
   }
 
   const done = new Set(Object.keys(cats));
-  const remainingRows = ctx.pending.filter(p => !done.has(p.keyword.toLowerCase().trim()));
+  const remainingRows = source.filter(p => !done.has(p.keyword.toLowerCase().trim()));
   return NextResponse.json({
     filed, other, unanswered, failedCalls,
     remaining:             remainingRows.length,

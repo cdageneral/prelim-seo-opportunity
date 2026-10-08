@@ -791,8 +791,11 @@ export default function KeywordsPanel({
     () => visibleRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
     [visibleRows, safePage],
   );
-  // Reset to page 1 whenever the underlying list changes shape
-  useEffect(() => { setPage(0); }, [filter, rankFilter, sourceFilter, sortCol, sortDir, journeyScope, visibleRows.length]);
+  // Reset to page 1 when the user changes WHAT the list shows (filter / sort / scope).
+  // v7.532: the row COUNT is no longer a reset trigger — deleting a keyword on page 3
+  // used to jump back to page 1 (Wayne, 2026-10-07). A shorter list keeps the current
+  // page; `safePage` clamps it if that page no longer exists.
+  useEffect(() => { setPage(0); }, [filter, rankFilter, sourceFilter, sortCol, sortDir, journeyScope]);
 
   function handleSort(col: NonNullable<SortCol>) {
     if (sortCol === col) {
