@@ -813,8 +813,10 @@ export async function computeAll(
       const plat = row[H['platform']] || '';
       const topic = row[H['topic']] || '';
       const prompt = (row[H['prompt']] || '').trim();
-      // the link store counts the SAME strict set the panel's answer count uses (type exactly 'Visibility')
-      if (linkAcc && type.trim() === 'Visibility') {
+      // v7.548 (Wayne): the link store takes EVERY visibility-typed answer (the broad set — 1,066
+      // prompts on Citi (Cards) vs 82 in Profound's strict 'Visibility' type). It is labelled as
+      // such on the Product Insights card; it does not reconcile to the panel's strict score.
+      if (linkAcc) {
         const mfiL = H['mentioned_flag'];
         const citations: string[] = [];
         for (let c = 0; c < linkCiteCols.length; c++) { const u = row[linkCiteCols[c]]; if (u) citations.push(u); }

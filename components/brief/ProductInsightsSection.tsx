@@ -86,10 +86,12 @@ const seg = (t: string, em = false): InsightSeg => ({ t, em });
 
 // v7.547 (Wayne): the AI Answer Engines prompt data, connected to the pages here — ONE basis
 // (lib/profound/pageLinks.ts) read by this panel and the Assessment PDF (II.6b / II.7).
-import { joinPromptsToTopics, buildGapViews, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
+import { joinPromptsToTopics, buildGapViews, summarizeTopics, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
 import { PromptLinksCard, PromptCell, PromptDrawer, promptLinkState, type AssignInfo } from './ProfoundPromptLinks';
 
 function normName(s: string): string { return s.toLowerCase().trim(); }
+// v7.548: sub-category drill columns (+ AI PROMPTS · PROFOUND); header and rows share it
+const NODE_GRID = 'minmax(190px,1.4fr) 72px 118px 130px 118px minmax(150px,1fr) 104px';
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -346,6 +348,14 @@ export default function ProductInsightsSection({
     for (const c of node.children) n += topicsUnder(c);
     return n;
   }, [topicsAt]);
+  // v7.548 (Wayne): the prompts behind a sub-category = every topic filed at this level and
+  // beneath it, one count per prompt (summarizeTopics dedupes). Read by the node row + drawer.
+  const topicIdsUnder = useCallback((node: CatNode): string[] => {
+    const ids = topicsAt(node.key).map(t => t.id);
+    for (const c of node.children) ids.push(...topicIdsUnder(c));
+    return ids;
+  }, [topicsAt]);
+  const nodePrompts = useCallback((node: CatNode) => summarizeTopics(promptJoin, topicIdsUnder(node), `node:${node.key}`), [promptJoin, topicIdsUnder]);
 
   /** v7.492: the one topics-and-keywords renderer, used at the product line AND at
    *  every sub-category node. Topic rows read the canonical Theme-Cluster topics
@@ -1415,8 +1425,8 @@ export default function ProductInsightsSection({
                       {'  '}· expand ANY row for its keywords, positions and volumes · AI is measured per level, never inherited from the parent
                     </span>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', padding: '0 10px 4px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
-                    <span>SUB-CATEGORY</span><span>DEMAND/MO</span><span>SEARCH · PAGE 1</span><span>WHO LEADS PAGE 1</span><span>AI ANSWERS</span><span>ACTION</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: NODE_GRID, gap: '10px', padding: '0 10px 4px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.06em', color: 'var(--c-55557a)' }}>
+                    <span>SUB-CATEGORY</span><span>DEMAND/MO</span><span>SEARCH · PAGE 1</span><span>WHO LEADS PAGE 1</span><span>AI ANSWERS</span><span title="Tracked AI-answer prompts on this level and every level beneath it (Profound export) — CITED is measured by citation URL; NAMED / ABSENT are filed; one count per prompt">AI PROMPTS · PROFOUND</span><span>ACTION</span>
                   </div>
                   {!openTree && (
                     <div style={{ fontSize: '11.5px', color: 'var(--c-8a8aa8)', padding: '8px 10px' }}>
@@ -1435,11 +1445,12 @@ export default function ProductInsightsSection({
                       const leader = node.ladder[0] ?? null;
                       const sPct = Math.round(node.p1Share * 100);
                       const scanning = nodeScanning === node.key;
+                      const np = linkState === 'ready' ? nodePrompts(node) : undefined;   // v7.548
                       rowsOut.push(
                         <div key={node.key}>
                           <div
                             onClick={() => setOpenNodes(prev => { const n = new Set(prev); if (n.has(node.key)) n.delete(node.key); else n.add(node.key); return n; })}
-                            style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1.6fr) 84px 128px 150px 132px 118px', gap: '10px', alignItems: 'center',
+                            style={{ display: 'grid', gridTemplateColumns: NODE_GRID, gap: '10px', alignItems: 'center',
                               background: 'var(--c-111120)', border: '1px solid var(--c-1e1e34)', borderRadius: '8px',
                               padding: '8px 10px', marginBottom: '5px', marginLeft: `${(node.depth - 1) * 18}px`,
                               cursor: 'pointer' }}
@@ -1490,6 +1501,7 @@ export default function ProductInsightsSection({
                                   </span>
                                 : <span style={{ color: 'var(--c-55557a)' }}>AI not measured at this level</span>}
                             </div>
+                            <div style={{ minWidth: 0 }} data-pi-node-prompts={node.key}><PromptCell s={np} state={linkState} /></div>
                             <div onClick={e => e.stopPropagation()}>
                               {scanning
                                 ? <span style={{ fontSize: '10px', color: 'var(--c-9b96ff)', fontWeight: 700 }}>Scanning…</span>
@@ -1514,6 +1526,12 @@ export default function ProductInsightsSection({
                             <div style={{ marginLeft: `${node.depth * 18}px` }}>
                               {planCard(`n:${node.key}`)}
                               {progressCard(`n:${node.key}`)}
+                            </div>
+                          )}
+                          {/* v7.548: the prompts behind this level (every topic at and beneath it) */}
+                          {isOpen && linkState === 'ready' && links && np && np.rows.length > 0 && (
+                            <div style={{ marginLeft: `${node.depth * 18}px` }}>
+                              <PromptDrawer s={np} topicLabel={node.name} sourceFile={links.sourceFile} builtAt={links.builtAt} />
                             </div>
                           )}
                           {/* v7.433: the keywords behind this level — position, volume, ranking page */}

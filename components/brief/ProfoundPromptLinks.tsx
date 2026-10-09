@@ -110,6 +110,7 @@ function PromptRowView({ r }: { r: TopicPromptRow }) {
       <span style={{ color: 'var(--c-c8c8e8)' }}>
         {l.prompt}
         {r.lane === 'measured' && r.paths.length > 0 && <span style={{ fontSize: '9px', color: 'var(--c-6a6a90)' }}> · {r.paths.join(', ')}</span>}
+        {r.lane === 'assigned' && r.bucket === 'cited' && r.paths.length > 0 && <span style={{ fontSize: '9px', color: 'var(--c-6a6a90)' }} title="This page is cited by the answers but holds no keyword rank in the canonical pool, so it is not a topic's ranking page — the prompt was filed here by the taxonomy filer"> · {r.paths.join(', ')} (page not in ranking pool)</span>}
         {r.lane === 'assigned' && a && <span style={{ fontSize: '8.5px', marginLeft: '6px', color: a.status === 'review' ? 'var(--c-f59e0b)' : 'var(--c-6a6a90)' }} title={`Filed into ${a.path.join(' › ')} by ${a.model} — the model's own confidence, not a data metric`}>{a.status === 'review' ? 'REVIEW' : 'ASSIGNED'} {a.confidence.toFixed(2)}</span>}
       </span>
       <span style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)' }}>{engText}</span>
@@ -136,7 +137,7 @@ export function PromptDrawer({ s, topicLabel, sourceFile, builtAt }: { s: TopicP
     <div onClick={e => e.stopPropagation()} style={{ margin: '0 0 6px 18px', padding: '8px 10px', border: '1px solid var(--c-1e1e34)', borderLeft: '3px solid var(--c-6c63ff)', borderRadius: '0 8px 8px 0', background: 'var(--c-111120)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', marginBottom: '5px' }}>
         <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-8a8aa8)' }}>
-          AI PROMPTS · PROFOUND — {s.rows.length} ON THIS TOPIC · {s.cited} CITE {page ? page.toUpperCase() : 'A PAGE'}{s.unknown > 0 ? ` · ${s.unknown} FILED, NOT CITED (MENTION UNKNOWN)` : ` · ${s.named} NAME YOU WITHOUT CITING · ${s.absent} NEVER MENTION YOU`}
+          AI PROMPTS · PROFOUND — {s.rows.length} ON {s.pages.length > 1 ? 'THIS LEVEL' : 'THIS TOPIC'} · {s.cited} CITE {s.pages.length > 1 ? `ONE OF ITS ${s.pages.length} PAGES` : page ? page.toUpperCase() : 'A PAGE'}{s.unknown > 0 ? ` · ${s.unknown} FILED, NOT CITED (MENTION UNKNOWN)` : ` · ${s.named} NAME YOU WITHOUT CITING · ${s.absent} NEVER MENTION YOU`}
         </div>
         <button onClick={download} style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '5px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>Download TSV</button>
       </div>
@@ -239,7 +240,7 @@ export function PromptLinksCard(p: CardProps) {
   return card(<>
     {head}
     <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'baseline', fontSize: '11px', color: 'var(--c-8a8aa8)', marginBottom: '8px' }}>
-      <span><b style={{ color: 'var(--c-e8e8ff)', fontSize: '13px' }} className="num">{L.prompts.length.toLocaleString()}</b> prompts{L.promptTotal > L.prompts.length ? ` of ${L.promptTotal.toLocaleString()} (store capped)` : ''} · {L.totalRows.toLocaleString()} answers</span>
+      <span><b style={{ color: 'var(--c-e8e8ff)', fontSize: '13px' }} className="num">{L.prompts.length.toLocaleString()}</b> prompts{L.promptTotal > L.prompts.length ? ` of ${L.promptTotal.toLocaleString()} (store capped)` : ''} · {L.totalRows.toLocaleString()} visibility-typed answers</span>
       <span><b style={{ color: 'var(--c-34d399)' }}>{c.citedAny}</b> cite one of your pages</span>
       {L.hasNamedFlag ? <span><b style={{ color: 'var(--c-f59e0b)' }}>{c.namedAny}</b> name you</span> : <span title="This export carries no mentioned? column">named: not in export</span>}
       <span style={{ color: 'var(--c-55557a)' }}>{L.sourceFile} · {new Date(L.builtAt).toLocaleDateString('en-US')}</span>

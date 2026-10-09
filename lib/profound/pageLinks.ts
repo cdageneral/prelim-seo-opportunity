@@ -70,7 +70,7 @@ export interface ProfoundLinkStore {
   builtAt:     string;
   sourceFile:  string;
   clientRoot:  string;                      // brandRootOf(project domain) used for OWNED detection
-  totalRows:   number;                      // Visibility-typed answers read
+  totalRows:   number;                      // visibility-typed answers read (BROAD set: every type containing 'Visibility', v7.548)
   hasNamedFlag: boolean;                    // the export carried `mentioned?` (else `named` is unknowable, I.5)
   promptTotal: number;                      // distinct prompts seen (may exceed prompts.length — capped)
   prompts:     ProfoundPromptLink[];
@@ -97,7 +97,8 @@ export function ownedPathOf(url: string): string {
 /** Query keys an AI engine appends to a citation link (ChatGPT's utm_source=chatgpt.com, Google's
  *  srsltid, ad/click ids). They are not part of the page's identity, so they are removed from the
  *  CITATION side only — the cluster side keeps normContentUrl's query untouched. */
-const TRACKING_KEY = /^(utm_[a-z0-9_]*|srsltid|gclid|gbraid|wbraid|fbclid|msclkid|dclid|twclid|ttclid|yclid|igshid|mc_cid|mc_eid|ref|ref_src|ref_url|_hsenc|_hsmi|vero_id|mkt_tok|cmpid|icid|s_kwcid|ocid)$/i;
+// v7.548: + msockid (Copilot/Bing), ef_id, _ga/_gl, s_cid/sc_cid, ncid, mkwid/pcrid, trk — seen on Citi's citations
+const TRACKING_KEY = /^(utm_[a-z0-9_]*|srsltid|gclid|gbraid|wbraid|fbclid|msclkid|msockid|dclid|twclid|ttclid|yclid|igshid|mc_cid|mc_eid|ref|ref_src|ref_url|_hsenc|_hsmi|vero_id|mkt_tok|cmpid|icid|s_kwcid|ocid|ef_id|_ga|_gl|s_cid|sc_cid|ncid|mkwid|pcrid|trk|trkcampaign)$/i;
 export function citationPathOf(url: string): string {
   let u: URL | null = null;
   try { u = new URL(url); } catch { return ownedPathOf(url); }
@@ -203,9 +204,11 @@ export type PromptBucket = 'cited' | 'named' | 'absent' | 'unknown';
 export interface TopicPromptRow {
   link:     ProfoundPromptLink;
   bucket:   PromptBucket;
-  /** Lane: 'measured' when attached by a citation URL on this topic's page; 'assigned' when filed. */
+  /** Lane: 'measured' when attached by a citation URL on this topic's page; 'assigned' when filed.
+   *  v7.548: a CITED row can be 'assigned' — the answers cite an owned page that is no topic's
+   *  ranking page, and the prompt was filed here; `paths` then names that page (not in the pool). */
   lane:     'measured' | 'assigned';
-  /** Owned paths on THIS topic the answers cited (measured rows only). */
+  /** Owned paths the answers cited: this topic's page (measured) or the un-pooled page (assigned). */
   paths:    string[];
   assignment?: PromptAssignment;
 }
@@ -236,7 +239,7 @@ export interface JoinResult {
   assignedElsewhere: number;
   /** assigned to a node NAME that matches more than one topic and no id — not guessed onto either */
   assignedAmbiguous: number;
-  /** prompts whose answers cite an owned URL that is no topic's page — never filed as named/absent */
+  /** prompts whose answers cite an owned URL that is no topic's page and are NOT filed yet — never named/absent */
   citedUnmappedOnly: number;
   /** every primary page cited at least once (by its owner topic) */
   citedPages: Set<string>;
@@ -338,21 +341,24 @@ export function joinPromptsToTopics(store: ProfoundLinkStore | null, topics: Lin
     // prompt that cites an owned URL no topic owns is disclosed in unmappedOwned and likewise
     // never filed as named/absent — an answer DID cite the client.
     if (hitTopics.size > 0) continue;
-    if (link.cited > 0) { citedUnmappedOnly++; continue; }
+    const citesUnpooled = link.cited > 0;   // cites an owned page no topic owns (not in the ranking pool)
     if (a && a.status !== 'none') {
       const t = resolveAssigned(a);
       if (t === 'ambiguous') { assignedAmbiguous++; continue; }
       if (!t) { assignedElsewhere++; continue; }
       const s = byTopic.get(t.id)!;
-      const bucket: PromptBucket = !store.hasNamedFlag ? 'unknown' : link.named > 0 ? 'named' : 'absent';
-      if (bucket === 'named') s.named++; else if (bucket === 'absent') s.absent++; else s.unknown++;
+      // v7.548 (Wayne: "prompts mapped to an individual page below in the category structure"):
+      // a prompt that cites an un-pooled owned page lands on its FILED topic as CITED, with that
+      // page named — the answer did cite the client; the page just holds no keyword rank.
+      const bucket: PromptBucket = citesUnpooled ? 'cited' : !store.hasNamedFlag ? 'unknown' : link.named > 0 ? 'named' : 'absent';
+      if (bucket === 'cited') s.cited++; else if (bucket === 'named') s.named++; else if (bucket === 'absent') s.absent++; else s.unknown++;
       if (a.status === 'review') s.review++;
-      s.rows.push({ link, bucket, lane: 'assigned', paths: [], assignment: a });
+      s.rows.push({ link, bucket, lane: 'assigned', paths: citesUnpooled ? Object.keys(link.owned) : [], assignment: a });
       for (const [eng, et] of Object.entries(link.engines)) {
         const x = s.engines[eng] ?? (s.engines[eng] = { cited: 0, runs: 0 });
-        x.runs += et.runs;
+        x.runs += et.runs; if (citesUnpooled) x.cited += et.cited;
       }
-    }
+    } else if (citesUnpooled) citedUnmappedOnly++;
   }
 
   const order: Record<PromptBucket, number> = { cited: 0, named: 1, absent: 2, unknown: 2 };
@@ -368,6 +374,39 @@ export function joinPromptsToTopics(store: ProfoundLinkStore | null, topics: Lin
     assignedElsewhere, assignedAmbiguous, citedUnmappedOnly, citedPages,
     counts,
   };
+}
+
+// ─── v7.548: one summary for a SET of topics (a sub-category node and every level beneath) ──
+// A prompt is counted ONCE per node even when it is cited on two of the node's topic pages
+// (the cited row wins); engines and pages are unioned. The node row and its drawer read this.
+export function summarizeTopics(join: JoinResult, topicIds: string[], key: string): TopicPromptSummary {
+  const out: TopicPromptSummary = { topicId: key, cited: 0, named: 0, absent: 0, unknown: 0, review: 0, engines: {}, rows: [], pages: [] };
+  const best = new Map<string, TopicPromptRow>();
+  const order: Record<PromptBucket, number> = { cited: 0, named: 1, absent: 2, unknown: 2 };
+  const pages = new Set<string>();
+  for (const id of topicIds) {
+    const s = join.byTopic.get(id);
+    if (!s) continue;
+    for (const p of s.pages) pages.add(p);
+    for (const r of s.rows) {
+      const k = promptKey(r.link.prompt);
+      const cur = best.get(k);
+      if (!cur || order[r.bucket] < order[cur.bucket]) best.set(k, cur ? { ...r, paths: Array.from(new Set([...cur.paths, ...r.paths])) } : r);
+      else if (cur && r.bucket === cur.bucket && r.paths.length) best.set(k, { ...cur, paths: Array.from(new Set([...cur.paths, ...r.paths])) });
+    }
+  }
+  for (const r of Array.from(best.values())) {
+    out.rows.push(r);
+    if (r.bucket === 'cited') out.cited++; else if (r.bucket === 'named') out.named++; else if (r.bucket === 'absent') out.absent++; else out.unknown++;
+    if (r.assignment?.status === 'review' && r.lane === 'assigned') out.review++;
+    for (const [eng, et] of Object.entries(r.link.engines)) {
+      const x = out.engines[eng] ?? (out.engines[eng] = { cited: 0, runs: 0 });
+      x.runs += et.runs; if (r.bucket === 'cited') x.cited += et.cited;
+    }
+  }
+  out.rows.sort((x, y) => order[x.bucket] - order[y.bucket] || y.link.runs - x.link.runs || x.link.prompt.localeCompare(y.link.prompt));
+  out.pages = Array.from(pages);
+  return out;
 }
 
 // ─── Gap views (the two cards) ────────────────────────────────────────────
