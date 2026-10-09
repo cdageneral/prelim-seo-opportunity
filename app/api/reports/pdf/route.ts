@@ -10,7 +10,7 @@ import { eq }      from 'drizzle-orm';
 // capture from buildKwPool/computeVolumeMetrics, SoV from computeSov, and the
 // AI answer-layer sections from the stored Profound panel metrics
 // (projects.profound_data — the panel's own aggregate of real CSV rows, v7.318).
-import { buildAssessmentHTML, type ProfoundMetrics, type SerpFeatureSnapshot } from '@/lib/pdf/assessmentTemplate';
+import { buildAssessmentHTML, type ProfoundMetrics, type SerpFeatureSnapshot, type AssessmentData } from '@/lib/pdf/assessmentTemplate';
 // v7.405: Part V counts — computed off the SAME pool the capture metrics use, so
 // the ladder reconciles with the rest of the report (Const II.6/II.7).
 import { buildProgramData } from '@/lib/pdf/programData';
@@ -29,7 +29,8 @@ import { computeSov }                          from '@/lib/sov/model';
 // home (semrushSnapshot._clusterAssigns) and computed+persisted once if absent, so
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
-import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames, buildCategoryToUmbrella, probeResultsForUmbrella } from '@/lib/productInsights';   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
+import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames, buildCategoryToUmbrella, probeResultsForUmbrella } from '@/lib/productInsights';
+import { joinPromptsToTopics, buildGapViews, type ProfoundLinkStore } from '@/lib/profound/pageLinks';   // v7.547 (Const II.6b)   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -74,6 +75,7 @@ const REPORT_PROJECT_COLUMNS = {
   scopeOverrides:           projects.scopeOverrides,
   hiddenCategories:         projects.hiddenCategories,
   profoundData:             projects.profoundData,
+  profoundPageLinks:        projects.profoundPageLinks,   // v7.547: prompt ↔ page link store
   productInsights:          projects.productInsights,
   productInsightsUpdatedAt: projects.productInsightsUpdatedAt,
   insightsPanel:            projects.insightsPanel,
@@ -196,6 +198,7 @@ export async function POST(req: NextRequest) {
   // ── v7.427: Product Insights — the SAME shared basis the panel renders (Const II.6b) ──
   // Inputs are all already loaded above; a build failure omits the section honestly.
   let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[]; productPrompts?: any[] } | null = null;
+  let promptLinks: AssessmentData['promptLinks'] = null;   // v7.547
   try {
     if (journeyTopics && journeyTopics.length > 0) {
       const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
@@ -331,6 +334,45 @@ export async function POST(req: NextRequest) {
             .filter((r: any) => r.prompt),
         })).filter(x => x.rows.length > 0);
         productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct, productPrompts };
+
+        // ── v7.547 (Const II.6b): AI prompts (Profound) → pages — the SAME joiner the panel
+        // renders, over the SAME topics (built.products[].topics). No link store → null → omitted.
+        try {
+          const store = ((project as any).profoundPageLinks ?? null) as ProfoundLinkStore | null;
+          if (store && Array.isArray(store.prompts) && store.prompts.length > 0) {
+            const allTopics = built.products.flatMap(p => p.topics);
+            const join = joinPromptsToTopics(store, allTopics as any);
+            const gaps = buildGapViews(join, allTopics as any);
+            // per line: DISTINCT prompts per bucket and DISTINCT pages (several topics can share a
+            // page, and a prompt can cite the pages of two topics on one line — never double counted)
+            const byLine = built.products.map(prod => {
+              const citedP = new Set<string>(), namedP = new Set<string>(), absentP = new Set<string>();
+              const pagesS = new Set<string>(), citedPagesS = new Set<string>();
+              for (const t of prod.topics) {
+                const s = join.byTopic.get(t.id);
+                if (!s) continue;
+                if (s.pages[0]) { pagesS.add(s.pages[0]); if (s.cited > 0 || s.citedOn) citedPagesS.add(s.pages[0]); }
+                for (const r of s.rows) {
+                  const k = r.link.prompt;
+                  if (r.bucket === 'cited') citedP.add(k); else if (r.bucket === 'named') namedP.add(k); else absentP.add(k);
+                }
+              }
+              return { line: prod.name, topics: prod.topics.length, cited: citedP.size, named: namedP.size, absent: absentP.size, citedPages: citedPagesS.size, pages: pagesS.size };
+            });
+            promptLinks = {
+              sourceFile: store.sourceFile, builtAt: store.builtAt, hasNamedFlag: store.hasNamedFlag,
+              prompts: store.prompts.length, promptTotal: store.promptTotal, answers: store.totalRows,
+              citedAny: join.counts.citedAny, namedAny: join.counts.namedAny,
+              assigned: join.counts.assigned, review: join.counts.review, noFit: join.counts.noFit, unassigned: join.counts.unassigned,
+              byLine,
+              noPage: gaps.noPage.slice(0, 10).map(g => ({ topic: g.topic, theme: g.theme, prompts: g.prompts, review: g.review, rivals: g.rivals })),
+              neverCited: gaps.neverCited.slice(0, 10).map(g => ({ topic: g.topic, theme: g.theme, page: g.page, bestPos: g.bestPos, absent: g.absent, named: g.named, unknown: g.unknown, rivals: g.rivals })),
+              noPageTotal: gaps.noPage.length, neverCitedTotal: gaps.neverCited.length, unmappedOwned: join.unmappedOwned.length,
+            };
+          }
+        } catch (err) {
+          console.error('[PDF v7.547] prompt links build FAILED — section omitted:', err);
+        }
       }
     }
   } catch (err) {
@@ -440,6 +482,7 @@ export async function POST(req: NextRequest) {
     serpFeatures,
     program,
     productInsights,   // v7.427 (Const II.6b)
+    promptLinks,       // v7.547 (Const II.6b)
     // v7.471 (Const II.6b): the Insights panel ships its PDF section in the same
     // release — the STORED machine-verified blob + the panel's own quadrant
     // builder over the stored Profound export. Both read verbatim (II.6a).

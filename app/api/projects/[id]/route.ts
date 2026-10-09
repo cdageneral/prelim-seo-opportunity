@@ -121,6 +121,12 @@ async function ensureColumns() {
   } catch { /* already exists */ }
   // v7.426: Product Insights — DataForSEO LLM Mentions scan store (project-level)
   try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_page_links JSONB`);              // v7.547
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_page_links_updated_at TIMESTAMP`); // v7.547
+  } catch { /* already exists */ }
+  try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_insights JSONB`);                  // v7.426
   } catch { /* already exists */ }
   try {
@@ -291,6 +297,7 @@ async function measureProjectBytes(projectId: string) {
            COALESCE(octet_length(hidden_categories::text),              0) AS "hiddenCategories",
            COALESCE(octet_length(priority_overrides::text),             0) AS "priorityOverrides",
            COALESCE(octet_length(profound_data::text),                  0) AS "profoundData",
+           COALESCE(octet_length(profound_page_links::text),            0) AS "profoundPageLinks",
            COALESCE(octet_length(product_insights::text),               0) AS "productInsights",
            COALESCE(octet_length(insights_panel::text),                 0) AS "insightsPanel",
            COALESCE(octet_length(market_benchmarks::text),              0) AS "marketBenchmarks",
@@ -460,6 +467,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   // grow past the limit.
   const project = await db.query.projects.findFirst({
     where: eq(projects.id, params.id),
+    // v7.547: the Profound prompt ↔ page link store has its own route; the page never reads it here
+    columns: { profoundPageLinks: false },
     with: { competitors: { orderBy: (c, { asc }) => [asc(c.createdAt)] } },
   });
 

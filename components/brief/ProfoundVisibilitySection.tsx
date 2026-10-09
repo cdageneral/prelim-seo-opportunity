@@ -61,6 +61,9 @@ import {
   emptyAgg, addScore, meanOf, parseScore, parseEvalPrompt, rollBuckets, isDataRow,
   type ScoreAgg, type SentScoreBucket,
 } from '@/lib/profound/sentimentScore';
+// v7.547 — prompt ↔ owned-URL link store, built from the SAME visibility pass (one row per prompt)
+// and saved to its own column so Product Insights can link prompts to pages (lib/profound/pageLinks.ts).
+import { createLinkAccumulator, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand' | 'citations';
@@ -621,6 +624,20 @@ async function serverSave(pid: string, m: Metrics): Promise<boolean> {
   } catch { return false; }
 }
 
+// v7.547: the prompt ↔ page link store rides on the same upload — saved beside the metrics,
+// cleared with them. Its own route/column so Product Insights never loads the metrics blob.
+async function serverSaveLinks(pid: string, links: ProfoundLinkStore): Promise<boolean> {
+  try {
+    const r = await fetch(`/api/projects/${pid}/profound-links`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+async function serverDeleteLinks(pid: string): Promise<void> {
+  try { await fetch(`/api/projects/${pid}/profound-links`, { method: 'DELETE' }); } catch { /* no-op */ }
+}
+
 async function serverDelete(pid: string): Promise<void> {
   try { await fetch(`/api/projects/${pid}/profound`, { method: 'DELETE' }); } catch { /* no-op */ }
 }
@@ -640,8 +657,13 @@ export async function computeAll(
   files: FileMap,
   clientName: string,
   setProgress: (p: Progress | null) => void,
+  // v7.547: when the project domain is known, the SAME visibility pass also builds the
+  // prompt ↔ owned-URL link store (one entry per prompt) and hands it back here. Optional,
+  // so every existing caller — and every retained-suite check — computes exactly as before.
+  opts: { domain?: string; onLinks?: (links: ProfoundLinkStore) => void } = {},
 ): Promise<Metrics> {
   const slots: SlotMap = {};
+  const linkAcc = opts.domain ? createLinkAccumulator(opts.domain) : null;
 
   // ── Sentiment pass: tracked roster + per-brand / per-theme sentiment ──
   const assets: Record<string, boolean> = {};
@@ -775,9 +797,14 @@ export async function computeAll(
   // capture each visibility row's mentions for pass-2 by re-streaming (files stay in memory)
   if (files.visibility) {
     let H: Record<string, number> = {};
+    let linkCiteCols: number[] = [];   // v7.547: citation_1..N on the visibility rows (passed through by resolveHeader)
     const f = files.visibility;
     await streamCsv(f, (row, idx) => {
-      if (idx === 0) { H = resolveHeader('visibility', row); return; }
+      if (idx === 0) {
+        H = resolveHeader('visibility', row);
+        linkCiteCols = Object.keys(H).filter((k) => /^citation\d+$/.test(k)).map((k) => H[k]);
+        return;
+      }
       const type = row[H['type']] || '';
       const ev = /^Evaluate (.+?) on /.exec(row[H['prompt']] || '');
       if (ev) evalSubjects[ev[1].trim()] = true;
@@ -786,6 +813,14 @@ export async function computeAll(
       const plat = row[H['platform']] || '';
       const topic = row[H['topic']] || '';
       const prompt = (row[H['prompt']] || '').trim();
+      // the link store counts the SAME strict set the panel's answer count uses (type exactly 'Visibility')
+      if (linkAcc && type.trim() === 'Visibility') {
+        const mfiL = H['mentioned_flag'];
+        const citations: string[] = [];
+        for (let c = 0; c < linkCiteCols.length; c++) { const u = row[linkCiteCols[c]]; if (u) citations.push(u); }
+        linkAcc.add({ prompt, topic, platform: plat,
+          mentioned: mfiL === undefined ? null : (row[mfiL] || '').trim().toLowerCase() === 'yes', citations });
+      }
       // v7.380: strict = Profound's denominator; broad = every answer the client could have won.
       if (type.trim() === 'Visibility') {
         visRuns++;
@@ -834,6 +869,7 @@ export async function computeAll(
     if (Object.keys(overallRaw).length === 0) {
       throw new ProfoundParseError('visibility', [{ field: 'normalized_mentions', aliases: COLS.visibility[4].aliases, required: true, note: `resolved, but ${totalRuns} answers yielded zero brand mentions — the column format may have changed` }], []);
     }
+    if (linkAcc && opts.onLinks) opts.onLinks(linkAcc.finish(f.name));   // v7.547
   }
 
   // ── Determine client + tracked roster (no hardcoding) ──
@@ -1342,9 +1378,10 @@ function disp(b: string): string {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────────
-interface Props { projectId: string; clientName?: string | null; }
+interface Props { projectId: string; clientName?: string | null; domain?: string; }   // v7.547: domain → owned-URL links
 
-export default function ProfoundVisibilitySection({ projectId, clientName }: Props) {
+export default function ProfoundVisibilitySection({ projectId, clientName, domain }: Props) {
+  const [linkSaveErr, setLinkSaveErr] = useState<string | null>(null);   // v7.547
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [files, setFiles] = useState<FileMap>({});
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -1385,19 +1422,25 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
   }, [projectId]);
 
   async function runCompute(nextFiles: FileMap) {
-    setError(null); setParseErr(null);
+    setError(null); setParseErr(null); setLinkSaveErr(null);
     setFiles(nextFiles);
     if (!nextFiles.visibility) {
       // Step 1 is the required file — with it gone there is nothing to compute (I.5).
       setMetrics(null);
       void serverDelete(projectId);
+      void serverDeleteLinks(projectId);   // v7.547
       void idbDelete(projectId);
       return;
     }
     try {
-      const m = await computeAll(nextFiles, cName || 'client', setProgress);
+      let links: ProfoundLinkStore | null = null;
+      const m = await computeAll(nextFiles, cName || 'client', setProgress, { domain: domain || undefined, onLinks: (l) => { links = l; } });
       setMetrics(m);
       void serverSave(projectId, m);   // v7.318: persist to the shared project row (survives refresh + reaches other users)
+      if (links) {   // v7.547: prompt ↔ page links for Product Insights — a failed save is said, not swallowed
+        const l = links as ProfoundLinkStore;
+        void serverSaveLinks(projectId, l).then(ok => { if (!ok) setLinkSaveErr(`The prompt → page link store (${l.prompts.length} prompts, ${Math.round(JSON.stringify(l).length / 1024)} KB) could not be saved — Product Insights will keep asking for a re-upload. Try the upload again; if it repeats, the store is too large for one request.`); else setLinkSaveErr(null); });
+      }
       void idbSave(projectId, m);      // and the fast local cache
     } catch (e) {
       // v7.379: a schema mismatch is NOT a generic parse failure — surface the structured
@@ -1428,6 +1471,7 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
   function clearAll() {
     setMetrics(null); setFiles({}); setError(null); setParseErr(null);
     void serverDelete(projectId);   // v7.318: clear the shared store so it clears for everyone
+    void serverDeleteLinks(projectId);   // v7.547
     void idbDelete(projectId);
   }
 
@@ -1574,6 +1618,9 @@ export default function ProfoundVisibilitySection({ projectId, clientName }: Pro
 
       {error && !parseErr && (
         <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{error}</div>
+      )}
+      {linkSaveErr && (
+        <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{linkSaveErr}</div>
       )}
 
       {/* v7.379 · non-fatal integrity notices (Const I.5 — an honest gap, stated on screen) */}

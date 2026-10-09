@@ -114,6 +114,13 @@ async function ensureColumns() {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_updated_at TIMESTAMP`);   // v7.419
   } catch { /* already exists */ }
 
+  // v7.547: Profound prompt ↔ page link store (the projects-list ensureColumns lesson, v7.327)
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_page_links JSONB`);              // v7.547
+  } catch { /* already exists */ }
+  try {
+    await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS profound_page_links_updated_at TIMESTAMP`); // v7.547
+  } catch { /* already exists */ }
   // v7.426: Product Insights scan store (the projects-list ensureColumns lesson, v7.327)
   try {
     await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS product_insights JSONB`);                  // v7.426

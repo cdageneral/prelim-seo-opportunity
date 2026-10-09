@@ -84,6 +84,11 @@ function fmtVol(v: number): string {
 }
 const seg = (t: string, em = false): InsightSeg => ({ t, em });
 
+// v7.547 (Wayne): the AI Answer Engines prompt data, connected to the pages here — ONE basis
+// (lib/profound/pageLinks.ts) read by this panel and the Assessment PDF (II.6b / II.7).
+import { joinPromptsToTopics, buildGapViews, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
+import { PromptLinksCard, PromptCell, PromptDrawer, promptLinkState, type AssignInfo } from './ProfoundPromptLinks';
+
 function normName(s: string): string { return s.toLowerCase().trim(); }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -163,6 +168,27 @@ export default function ProductInsightsSection({
   }, [projectId]);
   useEffect(() => { void refreshStored(); }, [refreshStored]);
 
+  // ── v7.547: Profound prompt ↔ page link store (own column, never the metrics blob — II.9) ──
+  const [links, setLinks]           = useState<ProfoundLinkStore | null>(null);
+  const [hasProfound, setHasProfound] = useState<boolean>(false);
+  const [assignInfo, setAssignInfo] = useState<AssignInfo | null>(null);
+  const refreshLinks = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/profound-links`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const d = await res.json();
+      setLinks(d.links ?? null);
+      setHasProfound(d.hasProfoundData === true);
+      if (d.links && Array.isArray(d.links.prompts) && d.links.prompts.length > 0) {
+        try {
+          const r2 = await fetch(`/api/projects/${projectId}/profound-links/assign`, { cache: 'no-store' });
+          if (r2.ok) setAssignInfo(await r2.json());
+        } catch { /* status line says "loading" — never fabricated (I.5) */ }
+      } else setAssignInfo(null);
+    } catch { /* keep prior state */ }
+  }, [projectId]);
+  useEffect(() => { void refreshLinks(); }, [refreshLinks]);
+
   const clientNorm = normSovDomain(domain);
   const brandToks  = useMemo(() => buildBrandTokens(domain, brandTerms), [domain, brandTerms]);
   // v7.475 (Wayne): every URL the panel shows is a real link. A bare path
@@ -201,6 +227,11 @@ export default function ProductInsightsSection({
     trackedCompetitors: competitors,
   }), [topics, uploadedKeywords, analysis, stored, domain, brandTerms, competitors]);
   const products = built.products;
+  // v7.547: join the stored prompt links to THESE topics (every line) — same call the PDF route makes
+  const allTopics = useMemo(() => built.products.flatMap(p => p.topics), [built]);
+  const promptJoin = useMemo(() => joinPromptsToTopics(links, allTopics as any), [links, allTopics]);
+  const promptGaps = useMemo(() => buildGapViews(promptJoin, allTopics as any), [promptJoin, allTopics]);
+  const linkState  = promptLinkState(links, hasProfound);
 
   // v7.444: the same tree build, callable for ANY product — the cascade must know a
   // product's whole subtree before the row has ever been expanded.
@@ -328,7 +359,8 @@ export default function ProductInsightsSection({
       const ranked = t.keywords.filter(k => k.position !== null && k.position >= 1 && k.position <= 10).length;
       return { t, best, ranked };
     }).sort((a, b) => b.t.totalVolume - a.t.totalVolume);
-    const grid = 'minmax(210px,1.8fr) minmax(120px,1fr) 78px 70px 92px 92px';
+    // v7.547: + the AI PROMPTS · PROFOUND column (theme column narrowed to make room)
+    const grid = 'minmax(200px,1.6fr) minmax(96px,0.8fr) 70px 66px 80px 84px minmax(170px,1.2fr)';
     return (
       <div key={`topics:${key}`} style={{ marginLeft: `${indentPx}px`, marginBottom: '8px', padding: '10px 12px', background: 'var(--c-0a0a14)', border: '1px solid var(--ca-108-99-255-0_25)', borderRadius: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px', marginBottom: '3px' }}>
@@ -342,12 +374,13 @@ export default function ProductInsightsSection({
         {rows.length === 0 && <div style={{ fontSize: '11px', color: 'var(--c-8a8aa8)' }}>No topics file at this level — every topic here lives in a level beneath it.</div>}
         {rows.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: grid, gap: '8px', padding: '0 6px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
-            <span>TOPIC · YOUR PAGE</span><span>THEME</span><span>STAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>KEYWORDS</span>
+            <span>TOPIC · YOUR PAGE</span><span>THEME</span><span>STAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>KEYWORDS</span><span title="Tracked AI-answer prompts linked to this topic's page (Profound export): CITED is measured by citation URL; NAMED / ABSENT are filed to the topic">AI PROMPTS · PROFOUND</span>
           </div>
         )}
         {rows.map(({ t, best, ranked }) => {
           const kwOpen = openTopicKw.has(`${key}::${t.id}`);
           const kws = t.keywords.slice().sort((a, b) => (b.searchVolume || 0) - (a.searchVolume || 0));
+          const ps = promptJoin.byTopic.get(t.id);   // v7.547
           return (
             <div key={t.id}>
               <div onClick={e => { e.stopPropagation(); setOpenTopicKw(prev => { const n = new Set(prev); const id = `${key}::${t.id}`; if (n.has(id)) n.delete(id); else n.add(id); return n; }); }}
@@ -371,7 +404,11 @@ export default function ProductInsightsSection({
                 </div>
                 <div style={{ fontSize: '11px', fontWeight: 700, fontVariantNumeric: 'tabular-nums', color: 'var(--c-c8c8e8)' }}>{fmtVol(t.totalVolume)}</div>
                 <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{t.keywords.length} kw · {ranked} p1</div>
+                <div style={{ minWidth: 0 }}><PromptCell s={ps} state={linkState} /></div>
               </div>
+              {kwOpen && linkState === 'ready' && links && ps && ps.rows.length > 0 && (
+                <PromptDrawer s={ps} topicLabel={t.product || t.parentName} sourceFile={links.sourceFile} builtAt={links.builtAt} />
+              )}
               {kwOpen && (
                 <div style={{ margin: '0 0 6px 18px', padding: '6px 8px', border: '1px solid var(--c-14142a)', borderRadius: '7px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 58px 74px minmax(150px,1.4fr)', gap: '8px', padding: '0 2px 3px', fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)' }}>
@@ -740,6 +777,12 @@ export default function ProductInsightsSection({
             );
           })}
         </div>
+
+        {/* ── v7.547 · AI prompts (Profound) → pages: upload state, filing, the two gap cards ── */}
+        {!loading && products.length > 0 && (
+          <PromptLinksCard projectId={projectId} links={links} hasProfoundData={hasProfound} join={promptJoin} gaps={promptGaps}
+            assign={assignInfo} onLinksChanged={() => { void refreshLinks(); }} hrefFor={(u) => hrefFor(u)} />
+        )}
 
         {/* ── v7.429 · KPI drill-down: every topic behind the number, across every product ── */}
         {drill && (() => {

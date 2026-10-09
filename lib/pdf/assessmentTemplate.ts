@@ -35,6 +35,7 @@ import { normSovDomain } from '@/lib/sov/model';
 // v7.492: top-6 + placements on both product ladders — the SAME helper the panel
 // renders (Const II.6a): rank of you + every tracked brand in the full list.
 import { placeInLadder, SERP_ENTRY_MAX_POS } from '@/lib/productInsights';
+import { ASSIGN_REVIEW_BELOW } from '@/lib/profound/pageLinks';   // v7.547
 // v7.459: the gap statement moved to plain language (coverage basis) — the v7.449
 // CONTENT_GAP_MIN import went with it; the constant still lives in the shared lib.
 import {
@@ -252,6 +253,18 @@ export interface AssessmentData {
     unmatched: Array<{ brand: string; isClient: boolean; visibilityPct: number }>;
     medians: { visibilityPct: number; citations: number };
     basis: string;
+  } | null;
+  // v7.547 (Const II.6b): AI prompts (Profound) → pages — the SAME joiner the panel renders
+  // (lib/profound/pageLinks joinPromptsToTopics + buildGapViews, computed by the route).
+  // null/undefined = no link store on the project (section omitted — honest gap, I.5).
+  promptLinks?: {
+    sourceFile: string; builtAt: string; hasNamedFlag: boolean;
+    prompts: number; promptTotal: number; answers: number;
+    citedAny: number; namedAny: number; assigned: number; review: number; noFit: number; unassigned: number;
+    byLine: Array<{ line: string; topics: number; cited: number; named: number; absent: number; citedPages: number; pages: number }>;
+    noPage: Array<{ topic: string; theme: string; prompts: number; review: number; rivals: Array<{ domain: string; n: number }> }>;
+    neverCited: Array<{ topic: string; theme: string; page: string; bestPos: number | null; absent: number; named: number; unknown: number; rivals: Array<{ domain: string; n: number }> }>;
+    noPageTotal: number; neverCitedTotal: number; unmappedOwned: number;
   } | null;
   productInsights?: {
     products: Array<{
@@ -1312,6 +1325,50 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         ${pair}
         <div class="src">Source: same shared computation as the Product Insights panel — page-1 volume held is measured volume at positions 1-10 from the canonical pool (no click model); citations are direct counts from recorded AI answers; prompts are the analysis-time unbranded probe prompts verbatim, NAMED meaning the brand appeared in that answer. Nothing here is re-derived for the report.</div>`));
     }
+  }
+
+  // ── v7.547 (Wayne 2026-10-09, Const II.6b): AI PROMPTS (PROFOUND) -> PAGES ──
+  // The tracked AI-answer prompts the AI Answer Engines export carries, connected to the
+  // pages in Product Insights. CITED = measured (a citation URL on the topic's ranking
+  // page); NAMED / ABSENT = the prompt filed to the topic by the taxonomy filer (stored,
+  // labelled with the model's own confidence). Reads the SAME join the panel renders;
+  // omitted entirely when the project has no link store (I.5). ASCII-safe (v7.414).
+  if (d.promptLinks && d.promptLinks.prompts > 0) {
+    const pl = d.promptLinks;
+    const filed = pl.assigned + pl.review;
+    const linesWith = pl.byLine.filter(l => l.cited + l.named + l.absent > 0);
+    const lineRows = linesWith.slice(0, 10).map(l =>
+      `<tr><td><b>${esc(l.line)}</b></td><td>${n0(l.topics)}</td><td>${n0(l.citedPages)} of ${n0(l.pages)}</td><td>${n0(l.cited)}</td><td>${n0(l.named)}</td><td>${n0(l.absent)}</td></tr>`).join('');
+    const neverRows = pl.neverCited.slice(0, 10).map(g =>
+      `<tr><td><b>${esc(g.topic)}</b><br><span style="color:var(--muted); font-size:8.5px;">${esc(g.theme)}</span></td><td style="font-family:monospace; font-size:8.5px;">${esc(g.page)}</td><td>${g.bestPos !== null ? '#' + n0(g.bestPos) : '-'}</td><td>${g.unknown > 0 ? `${n0(g.unknown)} <span style="color:var(--muted);">filed, mention unknown</span>` : n0(g.absent)}${g.named ? ` <span style="color:var(--muted);">+ ${n0(g.named)} named</span>` : ''}</td><td style="font-size:8.5px;">${g.rivals.length ? esc(g.rivals.map(r => r.domain).join(', ')) : '-'}</td></tr>`).join('');
+    const noPageRows = pl.noPage.slice(0, 10).map(g =>
+      `<tr><td><b>${esc(g.topic)}</b><br><span style="color:var(--muted); font-size:8.5px;">${esc(g.theme)}</span></td><td>${n0(g.prompts)}${g.review ? ` <span style="color:var(--muted);">(${n0(g.review)} review)</span>` : ''}</td><td style="font-size:8.5px;">${g.rivals.length ? esc(g.rivals.map(r => `${r.domain} x${r.n}`).join(', ')) : '-'}</td></tr>`).join('');
+    const filedNote = filed === 0
+      ? `<div style="font-size:9px; color:var(--muted); margin:4px 0 8px;">The prompts have not yet been filed into the taxonomy on the Product Insights panel, so only the measured citation lane is shown here; the "should be answering" views appear once filing has run.</div>`
+      : '';
+    pages.push(pageWrap('AI PROMPTS - WHICH PAGES THE ANSWERS CITE', 'PART II · THE DIAGNOSIS', `
+      <h1 class="pg sm">${n0(pl.citedAny)} of ${n0(pl.prompts)} tracked AI questions cite one of ${esc(d.clientName)}'s pages.</h1>
+      <div class="lede">${n0(pl.prompts)} prompts${pl.promptTotal > pl.prompts ? ` (of ${n0(pl.promptTotal)} tracked)` : ''} across ${n0(pl.answers)} recorded answers in the AI Answer Engines export (${esc(pl.sourceFile)}, ${esc(new Date(pl.builtAt).toLocaleDateString('en-US'))}). <b>${n0(pl.citedAny)}</b> have at least one answer citing an owned page${pl.hasNamedFlag ? `; <b>${n0(pl.namedAny)}</b> name the brand in at least one answer` : ''}.${filed > 0 ? ` ${n0(filed)} prompts are filed to a taxonomy page (${n0(pl.review)} below the confidence threshold, marked review; ${n0(pl.noFit)} fit no page).` : ''}</div>
+      ${filedNote}
+      <h2 class="h2" style="margin-top:4px;">By product line</h2>
+      <table class="dt" style="margin-bottom:8px;">
+        <tr><th>Product line</th><th style="width:.6in;">Topics</th><th style="width:.9in;">Pages cited</th><th style="width:.6in;">Cited</th><th style="width:.6in;">Named</th><th style="width:.75in;">${pl.hasNamedFlag ? 'Absent' : 'Filed, not cited'}</th></tr>
+        ${lineRows || '<tr><td colspan="6" style="color:var(--muted);">No prompt attaches to a topic on these lines yet.</td></tr>'}
+      </table>
+      ${linesWith.length > 10 ? `<div style="font-size:8.5px; color:var(--muted); margin:-4px 0 8px;">Showing the top 10 of ${n0(linesWith.length)} product lines - the full set lives on the Product Insights panel.</div>` : ''}
+      <div style="font-size:8px; color:var(--muted); margin:-4px 0 8px;">Pages cited = distinct ranking pages on the line cited by at least one answer, of the line's distinct ranking pages. Cited / Named / ${pl.hasNamedFlag ? 'Absent' : 'Filed'} = distinct prompts.${pl.hasNamedFlag ? '' : ' This export carries no mentioned column, so whether an uncited answer named the brand is unknown and is never reported as absent.'}</div>
+      <h2 class="h2">Pages that rank but are never cited <span style="font-weight:400; color:var(--muted);">- ${n0(pl.neverCitedTotal)} pages${pl.neverCitedTotal > 10 ? ', top 10 by prompts' : ''}</span></h2>
+      <table class="dt" style="margin-bottom:8px;">
+        <tr><th>Topic</th><th>Ranking page</th><th style="width:.5in;">Rank</th><th style="width:1in;">${pl.hasNamedFlag ? 'Absent' : 'Filed, not cited'}</th><th>Cited instead</th></tr>
+        ${neverRows || `<tr><td colspan="5" style="color:var(--muted);">${filed === 0 ? 'Appears once the prompts are filed.' : 'Every ranking page with filed prompts is cited at least once.'}</td></tr>`}
+      </table>
+      <h2 class="h2">Prompts with no page to answer them <span style="font-weight:400; color:var(--muted);">- ${n0(pl.noPageTotal)} topics${pl.noPageTotal > 10 ? ', top 10' : ''}</span></h2>
+      <table class="dt" style="margin-bottom:6px;">
+        <tr><th>Topic to build</th><th style="width:.9in;">Prompts</th><th>Rivals cited</th></tr>
+        ${noPageRows || `<tr><td colspan="3" style="color:var(--muted);">${filed === 0 ? 'Appears once the prompts are filed.' : 'Every filed prompt has a ranking page on its topic.'}</td></tr>`}
+      </table>
+      ${pl.unmappedOwned > 0 ? `<div style="font-size:8.5px; color:var(--muted);">${n0(pl.unmappedOwned)} owned URL${pl.unmappedOwned === 1 ? ' is' : 's are'} cited by answers but ${pl.unmappedOwned === 1 ? 'is' : 'are'} not a ranking page of any topic on these lines, so no topic owns them (listed on the panel, never dropped; their prompts are never reported as named or absent).</div>` : ''}
+      <div class="src">Source: the Profound Responses export uploaded to the AI Answer Engines panel - one row per prompt (answers per engine, owned citation URLs, third-party domains cited), a direct count. CITED = a recorded answer's citation URL is the topic's ranking page (the same URL identity the page clusters use). NAMED / ABSENT = the prompt was filed to that topic by the taxonomy filer (stored once; the confidence shown on the panel is the model's own estimate, under ${ASSIGN_REVIEW_BELOW} marked review) and the answer did / did not name the brand per Profound's mentioned flag. Measured and filed figures are never added together. Same shared computation as the Product Insights panel.</div>`));
   }
 
 

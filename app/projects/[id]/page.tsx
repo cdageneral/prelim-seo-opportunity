@@ -2047,7 +2047,7 @@ export default function ProjectBriefPage() {
                Upload-driven, so it renders independent of analysis results (like API Usage). */}
           {activeSection === 'aiEngines' && (
             <div className="overflow-y-auto flex-1 min-h-0 p-3 animate-fade-in">
-              <ProfoundVisibilitySection projectId={projectId} clientName={project?.clientName} />
+              <ProfoundVisibilitySection projectId={projectId} clientName={project?.clientName} domain={domainDisplay} />
             </div>
           )}
 
