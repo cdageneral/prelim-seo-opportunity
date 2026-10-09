@@ -848,7 +848,7 @@ export default function ProductInsightsSection({
             <div key={p.name}>
               <div
                 onClick={() => { setOpenProduct(isOpen ? null : p.name); setShowAllTopics(false); setCfCell(null); setOpenTopicsNode(null); }}
-                style={{ display: 'grid', gridTemplateColumns: '22px minmax(130px,0.9fr) minmax(250px,1fr) minmax(350px,1.3fr) minmax(180px,0.7fr) 236px', gap: '10px', alignItems: 'start',
+                style={{ display: 'grid', gridTemplateColumns: '22px minmax(120px,140px) minmax(0,1fr)', gap: '10px', alignItems: 'start',
                   background: 'var(--c-111120)', border: `1px solid ${isOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`,
                   borderRadius: isOpen ? '10px 10px 0 0' : '10px', padding: '10px 14px', marginBottom: isOpen ? 0 : '7px', cursor: 'pointer' }}
               >
@@ -879,9 +879,15 @@ export default function ProductInsightsSection({
                     </div>
                   )}
                 </div>
+                {/* ── v7.546 (Wayne: "the formatting is off"): the four metric groups used to be
+                    fixed grid columns whose minimums summed to ~1,250px, so on a narrower window the
+                    Pages card was pushed out past the row's right edge. They now sit in ONE wrapping
+                    flex row — same order, same widths when there is room; a group that doesn't fit
+                    drops to the next line instead of overflowing. Marker: pi-metric-wrap-v7546 ── */}
+                <div data-pi-metric-wrap="v7546" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'flex-start', minWidth: 0 }}>
                 {/* ── v7.458 (Wayne): the header's metrics grouped under named lenses —
                     Google first, then LLM/AI, then the journey-vs-actual pages chip ── */}
-                <div>
+                <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                   <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.08em', color: 'var(--c-8a8aa8)',
                     borderBottom: '1px solid var(--c-1e1e34)', paddingBottom: '3px', marginBottom: '6px' }}>GOOGLE RANK DEMAND</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '112px 1fr', gap: '10px' }}>
@@ -906,7 +912,7 @@ export default function ProductInsightsSection({
                     </div>
                   </div>
                 </div>
-                <div>
+                <div style={{ flex: '1.3 1 352px', minWidth: '352px' }}>
                   <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.08em', color: 'var(--c-8a8aa8)',
                     borderBottom: '1px solid var(--c-1e1e34)', paddingBottom: '3px', marginBottom: '6px' }}>LLM &amp; AI VISIBILITY</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px,0.9fr) minmax(150px,1.1fr) 62px', gap: '10px' }}>
@@ -951,7 +957,7 @@ export default function ProductInsightsSection({
                     should be mentioned in the category level summary." Read from the shared
                     computeSerpFeatureRollup over THIS line's keywords — the same math the SERP
                     Features panel and the Executive Summary strip show, scoped to the line. ── */}
-                <div>
+                <div style={{ flex: '0.7 1 170px', minWidth: 0 }}>
                   <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.08em', color: 'var(--c-8a8aa8)',
                     borderBottom: '1px solid var(--c-1e1e34)', paddingBottom: '3px', marginBottom: '6px' }}>GOOGLE SERP FEATURES · YOU CITED</div>
                   {!p.serpFeatures && (
@@ -986,13 +992,13 @@ export default function ProductInsightsSection({
                 {(() => {
                   const jTotal = p.topics.length;
                   const covered = lineCovered.get(p.name);
-                  if (jTotal === 0 || covered === undefined) return <div />;
+                  if (jTotal === 0 || covered === undefined) return null;
                   const pct = Math.min(100, Math.round((covered / jTotal) * 100));
                   const missing = Math.max(0, jTotal - covered);
                   return (
                     <div
                       title={`The full ${p.name} journey needs ${jTotal} pages (Theme-Cluster topics — one per intent cluster). You cover ${covered} topic${covered === 1 ? '' : 's'} — measured from rank evidence: a topic counts when you hold a stored rank on at least one of its keywords.`}
-                      style={{ border: '1px solid var(--ca-108-99-255-0_25)', background: 'var(--ca-108-99-255-0_12)', borderRadius: '9px', padding: '7px 10px' }}
+                      style={{ flex: '0 1 210px', minWidth: '200px', boxSizing: 'border-box', border: '1px solid var(--ca-108-99-255-0_25)', background: 'var(--ca-108-99-255-0_12)', borderRadius: '9px', padding: '7px 10px' }}
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
                         <span style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-8a8aa8)' }}>PAGES · JOURNEY VS ACTUAL</span>
@@ -1012,6 +1018,7 @@ export default function ProductInsightsSection({
                     </div>
                   );
                 })()}
+                </div>
               </div>
 
               {/* v7.450: the plan opened from THIS product line's control renders here, under it */}
