@@ -41,7 +41,7 @@ import {
   type PageMapStore, type PageMapPhase, type NodeInfo, type PageRecord,
   emptyPageMap, hostOf, canonicalPageUrl, extractTitleH1, ruleType, taxonomyNodes, nodeSig,
   pagesToFetch, pagesToLabel, nodesToMap, pageMapStatus, assembleInventory, sitemapsFromRobots,
-  candidatePagesFor, buildPageLabelPrompt, parsePageLabels, buildNodeMapPrompt, parseNodeMaps, mappingFor,
+  candidatePagesFor, takenByDescendants, buildPageLabelPrompt, parsePageLabels, buildNodeMapPrompt, parseNodeMaps, mappingFor,
 } from '@/lib/pages/pageMap';
 
 export const dynamic = 'force-dynamic';
@@ -275,10 +275,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       total = todo.length;
       const pages = store.inventory?.pages ?? [];
       const client = getClient();
-      const items = todo.map(n => ({ node: n, candidates: candidatePagesFor(n, pages, electPage(n.own.length ? n.own : n.all)) }));
+      // v7.551: DEEPEST level first, one level at a time — a parent is matched only after its
+      // sub-categories, so a page a sub-category already took is shown to the parent as taken.
+      const depths = Array.from(new Set(todo.map(n => n.depth))).sort((a, b) => b - a);
+      outer: for (const depth of depths) {
+      const level = todo.filter(n => n.depth === depth);
+      const items = level.map(n => ({ node: n, candidates: candidatePagesFor(n, pages, electPage(n.own.length ? n.own : n.all), undefined, takenByDescendants(n, store.nodes)) }));
       const batches: typeof items[] = [];
       for (let i = 0; i < items.length; i += MAP_BATCH) batches.push(items.slice(i, i + MAP_BATCH));
-      for (let i = 0; i < batches.length && budgetLeft() > 30_000; i += CLAUDE_PARALLEL) {
+      for (let i = 0; i < batches.length; i += CLAUDE_PARALLEL) {
+        if (budgetLeft() <= 30_000) break outer;
         const group = batches.slice(i, i + CLAUDE_PARALLEL);
         await Promise.all(group.map(async its => {
           try {
@@ -295,6 +301,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           }
         }));
         await saveStore(projectId, store);
+      }
       }
       phase = phaseNow();
     }

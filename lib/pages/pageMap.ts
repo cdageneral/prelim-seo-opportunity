@@ -31,7 +31,7 @@
 import { normContentUrl, pathOfNormUrl } from '@/lib/utils/pageUrl';
 import { electPage, type PageVoteKw, type PageElection, type PageOverrides, type PageOverride, pageOverrideKey } from '@/lib/pages/electPage';
 
-export const PAGE_MAP_VERSION     = 550;   // v7.550: spanning-hub rule + hubs always offered + blocked titles ignored (re-maps every node once)
+export const PAGE_MAP_VERSION     = 551;   // v7.551: children first — a page taken by a sub-category is never the parent's; non-branded keywords shown (re-maps every node once)
 export const PAGE_MAP_MODEL       = 'claude-sonnet-4-6';   // same model the keyword + prompt filers settled on
 export const PAGE_INVENTORY_CAP   = 3000;   // pages kept (ranking pages first, then sitemap by depth)
 export const SITEMAP_CHILD_CAP    = 60;     // child sitemaps followed from an index
@@ -369,9 +369,12 @@ export function pageMatches(pg: { path: string; title?: string; topic?: string; 
   return terms.every(t => { const s = stem(t.toLowerCase()); return hay.has(s) || raw.includes(t.toLowerCase()); });
 }
 
-export interface Candidate { n: number; page: PageRecord; score: number; evidenceKw: number; evidenceVol: number; evidenceBest: number | null }
+export interface Candidate { n: number; page: PageRecord; score: number; evidenceKw: number; evidenceVol: number; evidenceBest: number | null; takenBy?: string }
 
-export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election: PageElection, cap: number = MAP_CANDIDATES): Candidate[] {
+/** v7.551: pages already matched to this node's DESCENDANTS (norm url → sub-category name) — shown to the model as taken. */
+export type TakenPages = Map<string, string>;
+
+export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election: PageElection, cap: number = MAP_CANDIDATES, taken?: TakenPages): Candidate[] {
   const nodeToks = new Set<string>();
   for (const t of tokens(node.name)) nodeToks.add(stem(t));
   const parentToks = new Set<string>();
@@ -413,7 +416,20 @@ export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election:
       .slice(0, HUB_CANDIDATE_CAP);
     out = out.concat(hubs);
   }
+  if (taken && taken.size) for (const c of out) { const t = taken.get(normContentUrl(c.page.url)); if (t) c.takenBy = t; }
   out.forEach((c, i) => { c.n = i + 1; });
+  return out;
+}
+
+/** The pages this node's descendants are already matched to (from the stored node map). */
+export function takenByDescendants(node: NodeInfo, mapping: Record<string, NodeMapping>): TakenPages {
+  const out: TakenPages = new Map();
+  const prefix = node.key + ' › ';
+  for (const [k, m] of Object.entries(mapping)) {
+    if (!k.startsWith(prefix) || !m || m.status !== 'mapped' || !m.url) continue;
+    const norm = normContentUrl(m.url);
+    if (!out.has(norm)) out.set(norm, k.slice(prefix.length).split(' › ')[0]);
+  }
   return out;
 }
 
@@ -468,8 +484,11 @@ export function buildNodeMapPrompt(host: string, items: NodePromptItem[]): strin
   const levelOf = (n: NodeInfo) => n.depth === 1 ? 'PRODUCT LINE (top level)' : n.children.length ? `CATEGORY (has sub-categories: ${n.children.slice(0, 6).join(', ')}${n.children.length > 6 ? ', …' : ''})` : 'SPECIFIC TOPIC (leaf)';
   const blocks = items.map((it, i) => {
     const n = it.node;
-    const kws = n.own.slice(0, NODE_KW_SHOWN).map(k => `${k.keyword} (${k.searchVolume}/mo)`).join('; ');
-    const cands = it.candidates.map(c => `   ${c.n}. ${c.page.path} — ${c.page.type ? PAGE_TYPE_LABEL[c.page.type] : 'type unknown'}${c.page.topic ? ` — ${c.page.topic}` : pageTitle(c.page) ? ` — ${trunc(pageTitle(c.page), 70)}` : ''}${c.evidenceKw ? ` — ranks for ${c.evidenceKw} of this cluster's keywords` : ''}`).join('\n');
+    // v7.551: the theme is carried by the NON-branded terms — a branded term names a product, not the theme
+    const nb = n.own.filter(k => !k.isBranded), br = n.own.length - nb.length;
+    const shown = (nb.length ? nb : n.own).slice(0, NODE_KW_SHOWN);
+    const kws = shown.map(k => `${k.keyword} (${k.searchVolume}/mo)`).join('; ') + (nb.length && br ? ` [+ ${br} branded term${br === 1 ? '' : 's'} not shown]` : '');
+    const cands = it.candidates.map(c => `   ${c.n}. ${c.page.path} — ${c.page.type ? PAGE_TYPE_LABEL[c.page.type] : 'type unknown'}${c.page.topic ? ` — ${c.page.topic}` : pageTitle(c.page) ? ` — ${trunc(pageTitle(c.page), 70)}` : ''}${c.evidenceKw ? ` — ranks for ${c.evidenceKw} of this cluster's keywords` : ''}${c.takenBy ? ` — ALREADY the page of sub-category "${c.takenBy}" (not this cluster's page)` : ''}`).join('\n');
     return `CLUSTER ${i + 1}: ${n.path.join(' > ')}
    level: ${levelOf(n)} · dominant intent: ${n.intent} · ${n.own.length} keywords filed here (${n.all.length} incl. sub-levels)
    keywords: ${kws || '(none filed at this level — judge by the name and its sub-categories)'}
@@ -483,6 +502,7 @@ ${blocks}
 Rules:
 - A PRODUCT LINE or CATEGORY cluster belongs on a category hub about that theme (a listing / "view all" / range page), never on one specific product's page even if that product dominates the keywords.
 - A CATEGORY cluster that has sub-categories belongs on the hub that SPANS all of them (an overview / "view all" / "compare" / "all X" page) — not on the hub of one of its own sub-categories (a cash-back hub is the page for the Cash Back sub-category, not for "Credit Card Types").
+- A candidate marked ALREADY the page of a sub-category is that sub-category's page and can NEVER be this cluster's answer. If no page spans the whole cluster, answer 0 — the site needs to build the spanning page.
 - A SPECIFIC TOPIC cluster about one product belongs on that product's page; an informational cluster belongs on the guide / article about it; a comparison cluster on the comparison page.
 - "ranks for N keywords" is evidence, not the decision: a product page that ranks for category terms is still the wrong page for a category cluster.
 - Answer 0 when no listed page is about this theme at the right level — the site needs to build one. Never pick a loosely related page just to answer.
