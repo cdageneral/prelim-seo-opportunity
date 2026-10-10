@@ -227,7 +227,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           const r = await fetchText(p.url, 'text/html,application/xhtml+xml,*/*');
           const { title, h1 } = extractTitleH1(r.text);
           p.fetchedAt = new Date().toISOString(); p.httpStatus = r.status;
-          if (title) p.title = title; if (h1) p.h1 = h1;
+          // v7.550: a blocked / errored page's "title" ("Access Denied") is not the page's title
+          if (r.status >= 200 && r.status < 400) { if (title) p.title = title; if (h1) p.h1 = h1; }
+          else { delete p.title; delete p.h1; }
           const rt = ruleType(p.path);
           if (rt) { p.type = rt; p.typeBasis = 'rule'; p.labeledAt = p.fetchedAt; }
           done++;

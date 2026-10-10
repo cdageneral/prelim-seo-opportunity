@@ -31,7 +31,7 @@
 import { normContentUrl, pathOfNormUrl } from '@/lib/utils/pageUrl';
 import { electPage, type PageVoteKw, type PageElection, type PageOverrides, type PageOverride, pageOverrideKey } from '@/lib/pages/electPage';
 
-export const PAGE_MAP_VERSION     = 549;
+export const PAGE_MAP_VERSION     = 550;   // v7.550: spanning-hub rule + hubs always offered + blocked titles ignored (re-maps every node once)
 export const PAGE_MAP_MODEL       = 'claude-sonnet-4-6';   // same model the keyword + prompt filers settled on
 export const PAGE_INVENTORY_CAP   = 3000;   // pages kept (ranking pages first, then sitemap by depth)
 export const SITEMAP_CHILD_CAP    = 60;     // child sitemaps followed from an index
@@ -39,6 +39,7 @@ export const SITEMAP_URL_CAP      = 20000;  // raw sitemap URLs read before the 
 export const LABEL_BATCH          = 40;     // pages per Claude call
 export const MAP_BATCH            = 8;      // nodes per Claude call
 export const MAP_CANDIDATES       = 30;     // candidate pages shown per node
+export const HUB_CANDIDATE_CAP    = 40;     // v7.550: hub / comparison pages always added for category-level nodes
 export const MAP_REVIEW_BELOW     = 0.6;    // confidence under this = review, not mapped
 export const NODE_KW_SHOWN        = 12;     // top own keywords shown per node in the prompt
 export const TITLE_MAX            = 90;
@@ -162,6 +163,10 @@ const decodeEntities = (s: string): string =>
    .replace(/&nbsp;/g, ' ').replace(/&([a-z]+);/g, (m, n) => NAMED_ENTITY[n] ?? m).replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch { return ''; } })
    .replace(/&#x([0-9a-f]+);/gi, (_, n) => { try { return String.fromCodePoint(parseInt(n, 16)); } catch { return ''; } });
 const stripTags = (s: string): string => decodeEntities(s.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+
+/** v7.550: a blocked / errored fetch (403 "Access Denied", 404, 5xx) carries no real title — judge by path. */
+export const pageTitle = (p: { title?: string; httpStatus?: number }): string => (p.httpStatus && p.httpStatus >= 400) ? '' : (p.title ?? '');
+export const pageH1    = (p: { h1?: string; httpStatus?: number }): string => (p.httpStatus && p.httpStatus >= 400) ? '' : (p.h1 ?? '');
 
 export function extractTitleH1(html: string): { title: string; h1: string } {
   const h = String(html ?? '');
@@ -356,10 +361,11 @@ export function tokens(s: string): string[] {
 }
 export const stem = (t: string): string => t.replace(/(ies)$/, 'y').replace(/(s|es)$/, '').replace(/(ing|ed)$/, '');
 /** Lexical match used by the Set-page picker: every query term (stemmed) appears in the page's path / title / topic tokens. */
-export function pageMatches(pg: { path: string; title?: string; topic?: string; h1?: string }, terms: string[]): boolean {
+export function pageMatches(pg: { path: string; title?: string; topic?: string; h1?: string; httpStatus?: number }, terms: string[]): boolean {
   const hay = new Set<string>();
-  for (const t of tokens(`${pg.path} ${pg.title ?? ''} ${pg.h1 ?? ''} ${pg.topic ?? ''}`)) hay.add(stem(t));
-  const raw = `${pg.path} ${pg.title ?? ''} ${pg.h1 ?? ''} ${pg.topic ?? ''}`.toLowerCase();
+  const text = `${pg.path} ${pageTitle(pg as any)} ${pageH1(pg as any)} ${pg.topic ?? ''}`;
+  for (const t of tokens(text)) hay.add(stem(t));
+  const raw = text.toLowerCase();
   return terms.every(t => { const s = stem(t.toLowerCase()); return hay.has(s) || raw.includes(t.toLowerCase()); });
 }
 
@@ -381,8 +387,8 @@ export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election:
     if (p.type === 'support' || p.type === 'other' || p.type === 'location') continue;   // never a cluster's landing page
     const pt = new Set<string>();
     for (const t of tokens(p.path)) pt.add(stem(t));
-    for (const t of tokens(p.title ?? '')) pt.add(stem(t));
-    for (const t of tokens(p.h1 ?? '')) pt.add(stem(t));
+    for (const t of tokens(pageTitle(p))) pt.add(stem(t));
+    for (const t of tokens(pageH1(p))) pt.add(stem(t));
     for (const t of tokens(p.topic ?? '')) pt.add(stem(t));
     let score = 0;
     for (const t of Array.from(nodeToks)) if (pt.has(t)) score += 3;
@@ -394,7 +400,19 @@ export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election:
     scored.push({ n: 0, page: p, score, evidenceKw: e?.kw ?? 0, evidenceVol: e?.vol ?? 0, evidenceBest: e ? e.best : null });
   }
   scored.sort((a, b) => b.score - a.score || a.page.depth - b.page.depth || a.page.url.localeCompare(b.page.url));
-  const out = scored.slice(0, cap);
+  let out = scored.slice(0, cap);
+  // v7.550: a category-level cluster (a product line or a node with sub-categories) is ALWAYS offered
+  // every hub / comparison page on the site — the spanning hub it belongs on ("view all", "compare")
+  // rarely shares the node's words, so a lexical cut could leave it out (Citi: Credit Card Types
+  // was never shown /credit-cards/view-all-credit-cards). Hubs are few; the list stays bounded.
+  if (node.depth <= 2 || node.children.length > 0) {
+    const have = new Set(out.map(c => c.page.url));
+    const hubs = pages.filter(p => (p.type === 'hub' || p.type === 'comparison') && !have.has(p.url))
+      .map(p => { const e = evid.get(normContentUrl(p.url)); return { n: 0, page: p, score: 0, evidenceKw: e?.kw ?? 0, evidenceVol: e?.vol ?? 0, evidenceBest: e ? e.best : null } as Candidate; })
+      .sort((a, b) => a.page.depth - b.page.depth || a.page.url.localeCompare(b.page.url))
+      .slice(0, HUB_CANDIDATE_CAP);
+    out = out.concat(hubs);
+  }
   out.forEach((c, i) => { c.n = i + 1; });
   return out;
 }
@@ -404,7 +422,7 @@ export function candidatePagesFor(node: NodeInfo, pages: PageRecord[], election:
 export const trunc = (s: string, n: number = TITLE_MAX): string => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 
 export function buildPageLabelPrompt(host: string, pages: PageRecord[]): string {
-  const lines = pages.map((p, i) => `${i + 1}. ${p.path}${p.title ? ` | title: ${trunc(p.title)}` : ''}${p.h1 && p.h1 !== p.title ? ` | h1: ${trunc(p.h1)}` : ''}${!p.fetchedAt || !p.title ? ' | (page text unavailable — judge by the path)' : ''}`).join('\n');
+  const lines = pages.map((p, i) => { const t = pageTitle(p), h = pageH1(p); return `${i + 1}. ${p.path}${t ? ` | title: ${trunc(t)}` : ''}${h && h !== t ? ` | h1: ${trunc(h)}` : ''}${!t ? ' | (page text unavailable — judge by the path)' : ''}`; }).join('\n');
   return `You are classifying pages on ${host} by the ROLE each page plays on the site.
 
 PAGES:
@@ -451,7 +469,7 @@ export function buildNodeMapPrompt(host: string, items: NodePromptItem[]): strin
   const blocks = items.map((it, i) => {
     const n = it.node;
     const kws = n.own.slice(0, NODE_KW_SHOWN).map(k => `${k.keyword} (${k.searchVolume}/mo)`).join('; ');
-    const cands = it.candidates.map(c => `   ${c.n}. ${c.page.path} — ${c.page.type ? PAGE_TYPE_LABEL[c.page.type] : 'type unknown'}${c.page.topic ? ` — ${c.page.topic}` : c.page.title ? ` — ${trunc(c.page.title, 70)}` : ''}${c.evidenceKw ? ` — ranks for ${c.evidenceKw} of this cluster's keywords` : ''}`).join('\n');
+    const cands = it.candidates.map(c => `   ${c.n}. ${c.page.path} — ${c.page.type ? PAGE_TYPE_LABEL[c.page.type] : 'type unknown'}${c.page.topic ? ` — ${c.page.topic}` : pageTitle(c.page) ? ` — ${trunc(pageTitle(c.page), 70)}` : ''}${c.evidenceKw ? ` — ranks for ${c.evidenceKw} of this cluster's keywords` : ''}`).join('\n');
     return `CLUSTER ${i + 1}: ${n.path.join(' > ')}
    level: ${levelOf(n)} · dominant intent: ${n.intent} · ${n.own.length} keywords filed here (${n.all.length} incl. sub-levels)
    keywords: ${kws || '(none filed at this level — judge by the name and its sub-categories)'}
@@ -464,6 +482,7 @@ ${blocks}
 
 Rules:
 - A PRODUCT LINE or CATEGORY cluster belongs on a category hub about that theme (a listing / "view all" / range page), never on one specific product's page even if that product dominates the keywords.
+- A CATEGORY cluster that has sub-categories belongs on the hub that SPANS all of them (an overview / "view all" / "compare" / "all X" page) — not on the hub of one of its own sub-categories (a cash-back hub is the page for the Cash Back sub-category, not for "Credit Card Types").
 - A SPECIFIC TOPIC cluster about one product belongs on that product's page; an informational cluster belongs on the guide / article about it; a comparison cluster on the comparison page.
 - "ranks for N keywords" is evidence, not the decision: a product page that ranks for category terms is still the wrong page for a category cluster.
 - Answer 0 when no listed page is about this theme at the right level — the site needs to build one. Never pick a loosely related page just to answer.

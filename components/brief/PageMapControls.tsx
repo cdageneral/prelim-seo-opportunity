@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { MAP_REVIEW_BELOW, PAGE_TYPE_LABEL, basisLabelAll, pageMatches, type PageBasisAll, type PageMapInventory } from '@/lib/pages/pageMap';
+import { MAP_REVIEW_BELOW, PAGE_TYPE_LABEL, basisLabelAll, pageMatches, pageTitle, type PageBasisAll, type PageMapInventory } from '@/lib/pages/pageMap';
 import type { PageCandidate } from '@/lib/pages/electPage';
 import type { PageMapState } from '@/lib/pages/usePageMap';
 
@@ -233,7 +233,7 @@ export function PagePicker(p: PagePickerProps) {
       <div style={{ fontSize: '8.5px', fontWeight: 700, letterSpacing: '0.05em', color: 'var(--c-55557a)', margin: '8px 0 3px' }}>PAGE INVENTORY {p.inventory ? `(${invPages.length.toLocaleString()} pages)` : '(loading…)'}</div>
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="search path, title or topic…" style={{ width: '100%', boxSizing: 'border-box', fontSize: '10.5px', padding: '4px 8px', borderRadius: '6px', background: 'var(--c-111120)', color: 'var(--c-e8e8ff)', border: '1px solid var(--c-2a2a40)', marginBottom: '4px' }} />
       {listed.length === 0 && p.inventory && <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', padding: '3px 0' }}>No inventory page matches{terms.length ? ' that search' : ` "${p.nodeName}"`}. Search another word or enter a URL below.</div>}
-      {listed.filter(pg => uniq(pg.url)).map(pg => row(pg.url, <>{pg.type ? PAGE_TYPE_LABEL[pg.type] : 'untyped'}{pg.topic ? ` · ${pg.topic}` : pg.title ? ` · ${pg.title.slice(0, 50)}` : ''}</>, 'i:' + pg.url))}
+      {listed.filter(pg => uniq(pg.url)).map(pg => row(pg.url, <>{pg.type ? PAGE_TYPE_LABEL[pg.type] : 'untyped'}{pg.topic ? ` · ${pg.topic}` : pageTitle(pg) ? ` · ${pageTitle(pg).slice(0, 50)}` : ''}</>, 'i:' + pg.url))}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '8px' }}>
         <input value={custom} onChange={e => setCustom(e.target.value)} placeholder="or enter a page URL / path on the client site" style={{ flex: 1, fontSize: '10.5px', padding: '4px 8px', borderRadius: '6px', background: 'var(--c-111120)', color: 'var(--c-e8e8ff)', border: '1px solid var(--c-2a2a40)' }} />
         <button disabled={busy || !custom.trim()} onClick={() => void save(custom)} style={{ fontSize: '9.5px', fontWeight: 700, padding: '3px 9px', borderRadius: '6px', cursor: 'pointer', background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_25)' }}>Save</button>
