@@ -19,6 +19,8 @@ import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.226 (
 import { buildTaxonomyTree, type TaxoTreeNode } from '@/lib/category/taxonomyTree';   // v7.239 (Const II.7)
 import { buildJourneyClassifier } from '@/lib/journey/classifier';   // v7.203/v7.376: single-source product/pre-product split
 import { normContentUrl, pathOfNormUrl, proposePagePath, uniquePath } from '@/lib/utils/pageUrl';   // v7.541: URL-rooted clusters
+import { pageOverrideKey, type PageOverrides } from '@/lib/pages/electPage';   // v7.549: ONE page rule
+import { resolveNodePage, type NodeMapping, type PageBasisAll } from '@/lib/pages/pageMap';   // v7.549: the automatic page map
 
 export type IntentType   = 'informational' | 'commercial' | 'transactional' | 'navigational' | 'unmatched';
 export type JourneyStage = 'awareness' | 'consideration' | 'decision' | 'retention';
@@ -32,6 +34,7 @@ export interface KwItem {
   origin?:      'footprint' | 'demand';  // v7.162: provenance (demand = deep-journey "missing demand")
   demandSeeds?: string[];        // v7.162: seed(s) that surfaced a demand keyword
   url?:         string;          // v7.190: client's ranking page URL (for sub-product page detection)
+  isBranded?:   boolean;         // v7.549: client-brand keyword (pool flag) — never elects a page while a non-branded one can
   subTopic?:    string;          // v7.238: the canonical sub-topic from the STORED taxonomy path
                                  // (the node BELOW the theme, i.e. keywordPaths[kw] level after path[1]).
                                  // Used to label cluster sub-topics from the taxonomy instead of mining
@@ -286,6 +289,7 @@ export function buildThemeClusters(
     // v7.251: prefer the URL carried on the pool item itself (uploaded CSV "URL" column,
     // now persisted) and fall back to the snapshot lookup (topKeywords + page-map, v7.250).
     url:          item.url ?? urlByKeyword.get(item.keyword.toLowerCase()),
+    isBranded:    item.isBranded,
     subTopic:     subTopicOf(item.keyword.toLowerCase()),
   }));
 
@@ -524,6 +528,13 @@ export interface Topic {
   product:       string;        // v7.190: sub-product name (client page name when matched, else mined modifier, else Core)
   productKey:    string;        // v7.190: stable product grouping key
   pageUrl?:      string;        // v7.190: client product-page URL when this product maps to a real page
+  /** v7.549: how pageUrl was decided — user override, the intent-matched page map, or the ranking
+   *  vote as a labelled fallback (lib/pages/pageMap.ts resolveNodePage); `pageShare` = the page's
+   *  share of the cluster's ranked volume; `pageMapStatus` = the map's own verdict for this node. */
+  pageBasis?:    PageBasisAll;
+  pageShare?:    number;
+  pageMapStatus?: 'mapped' | 'review' | 'none' | 'pending';
+  pageConfidence?: number | null;
   intent:        IntentType;
   stage:         JourneyStage;
   contentType:   string;
@@ -1154,6 +1165,8 @@ export function _canonSig(
     // (the second half of the Synchrony leak). Fingerprint both stores by content.
     (Array.isArray(snap?._hiddenCategories) ? snap._hiddenCategories.map((h: any) => String(h?.key ?? h?.name ?? '')).sort().join('~') : ''),
     JSON.stringify(snap?._scopeOverrides ?? {}),
+    JSON.stringify(snap?._pageOverrides ?? {}),   // v7.549: a set page changes the roots
+    Object.keys(snap?._pageMapNodes ?? {}).length + ':' + String(Object.values(snap?._pageMapNodes ?? {}).map((m: any) => m?.mappedAt ?? '').sort().pop() ?? ''),   // v7.549: a new mapping changes the roots
     clientDomain,
     competitorDomains.join(','),
     uploadedKeywords.length,
@@ -1208,7 +1221,12 @@ export function buildCanonicalClusterTopics(
   // v7.541: root every cluster on a unique page (Const III.5 revised v0.39). The taxonomy
   // nodes above are the page ARCHITECTURE; this pass maps them onto the client's REAL page
   // inventory — one cluster per existing ranking URL, one per net-new page to build.
-  const topics = pageRootTopics(nodeTopics);
+  // v7.549: per-node page overrides ride on the snapshot like every other project store
+  // (hydrateSnapshotForPool server-side, analysisForPanels client-side — Const II.7).
+  const _po = analysis?.semrushSnapshot?._pageOverrides;
+  const _pm = analysis?.semrushSnapshot?._pageMapNodes;
+  const topics = pageRootTopics(nodeTopics, (_po && typeof _po === 'object') ? (_po as PageOverrides) : undefined,
+                                (_pm && typeof _pm === 'object') ? (_pm as Record<string, NodeMapping>) : undefined);
 
   _canonTopicsCache.set(sig, topics);
   if (_canonTopicsCache.size > 4) {              // small LRU — keep a few analyses / threshold variants
@@ -1229,9 +1247,12 @@ export function buildCanonicalClusterTopics(
 // in four nodes was reported as four "existing pages" (the 197-vs-58 mismatch). This pass
 // makes the PAGE the unit:
 //
-//   1. Per node, the PRIMARY ranking page = the client URL holding the most client-ranked
-//      volume among that node's keywords (real position + real URL rows only; gap, demand
-//      and feature-placement rows never vote). Tie → more keywords → shorter URL → first.
+//   1. Per node, the PRIMARY ranking page = electPage() (lib/pages/electPage.ts, v7.549):
+//      the client URL holding the most client-ranked volume among the node's NON-BRANDED
+//      keywords ranking in the top 20 (real position + real URL rows only; gap, demand and
+//      feature-placement rows never vote); branded-only and deep-only fallbacks are
+//      labelled on the cluster (`pageBasis`); a stored user override wins ("set by you").
+//      Tie → more keywords → best position → shorter URL → first.
 //   2. Every node with the same primary URL merges into ONE cluster rooted on that URL:
 //      the node with the most volume on the URL is the cluster's identity (id, labels,
 //      category); the others are recorded in `mergedTopics`; keywords are the exact union
@@ -1254,18 +1275,18 @@ const clientRankedWithUrl = (k: KwItem): boolean =>
 const clientRanked = (k: KwItem): boolean =>
   k.position !== null && !k.isGap && k.origin !== 'demand';
 
-interface UrlVote { norm: string; raw: string; vol: number; kw: number; best: number }
+interface UrlVote { norm: string; raw: string; vol: number; kw: number; best: number; basis: PageBasisAll; share: number; mapStatus: 'mapped' | 'review' | 'none' | 'pending'; confidence: number | null }
 
-function urlVotes(t: Topic): UrlVote[] {
-  const m = new Map<string, UrlVote>();
-  for (const k of t.keywords) {
-    if (!clientRankedWithUrl(k)) continue;
-    const norm = normContentUrl(k.url as string);
-    const v = m.get(norm) ?? (m.set(norm, { norm, raw: k.url as string, vol: 0, kw: 0, best: Infinity }).get(norm)!);
-    v.vol += k.searchVolume; v.kw += 1; v.best = Math.min(v.best, k.position as number);
-  }
-  return Array.from(m.values()).sort((a, b) =>
-    b.vol - a.vol || b.kw - a.kw || a.norm.length - b.norm.length || (a.norm < b.norm ? -1 : 1));
+/** v7.549: the ONE page rule (lib/pages/pageMap.ts resolveNodePage) — user override → the
+ *  intent-matched page map → the ranking vote as a labelled fallback. A node the map says has
+ *  NO page ('none') stays unrooted: it is a page to build, never a borrowed ranking page. */
+function primaryPageOf(t: Topic, overrides?: PageOverrides, mapping?: Record<string, NodeMapping>): UrlVote | null {
+  const r = resolveNodePage(pageOverrideKey(t.id), t.keywords, mapping, overrides);
+  if (!r.url) return null;
+  const norm = normContentUrl(r.url);
+  const c = r.election.candidates.find(x => x.norm === norm);
+  return { norm, raw: r.url, vol: c?.vol ?? 0, kw: c?.kw ?? 0, best: c?.best ?? Infinity, basis: r.basis,
+           share: r.election.rankedVol > 0 && c ? c.vol / r.election.rankedVol : 0, mapStatus: r.mapStatus, confidence: r.confidence };
 }
 
 const bestPosOf = (kws: KwItem[]): number | null => {
@@ -1274,10 +1295,10 @@ const bestPosOf = (kws: KwItem[]): number | null => {
   return best;
 };
 
-export function pageRootTopics(topics: Topic[]): Topic[] {
-  // 1. primary URL per node
+export function pageRootTopics(topics: Topic[], overrides?: PageOverrides, mapping?: Record<string, NodeMapping>): Topic[] {
+  // 1. primary URL per node — v7.549: ONE rule (override → page map → ranking vote)
   const primaryOf = new Map<Topic, UrlVote | null>();
-  for (const t of topics) { const v = urlVotes(t); primaryOf.set(t, v.length ? v[0] : null); }
+  for (const t of topics) primaryOf.set(t, primaryPageOf(t, overrides, mapping));
 
   // 2. group nodes by primary URL (insertion order = first node seen, keeps output stable)
   const groups = new Map<string, Topic[]>();
@@ -1340,6 +1361,10 @@ export function pageRootTopics(topics: Topic[]): Topic[] {
         keywords,
         totalVolume:  keywords.reduce((s, k) => s + k.searchVolume, 0),
         pageUrl:      p.raw,
+        pageBasis:    p.basis,
+        pageShare:    p.share,
+        pageMapStatus: p.mapStatus,
+        pageConfidence: p.confidence,
         pageKind:     'existing',
         urlKnown:     true,
         proposedPath: undefined,
@@ -1353,22 +1378,33 @@ export function pageRootTopics(topics: Topic[]): Topic[] {
     }
 
     emitted.add(t);
-    if (t.keywords.some(clientRanked)) {
+    const mapNone = !!mapping && mapping[pageOverrideKey(t.id)]?.status === 'none' && !overrides?.[pageOverrideKey(t.id)];
+    if (t.keywords.some(clientRanked) && !mapNone) {
       // ranks, but no URL on file for any ranked keyword — existing, URL unknown (I.5)
       out.push({
-        ...t, pageUrl: undefined, pageKind: 'existing', urlKnown: false, proposedPath: undefined,
+        ...t, pageUrl: undefined, pageBasis: 'none', pageShare: 0, pageKind: 'existing', urlKnown: false, proposedPath: undefined,
         mergedIds: [t.id], mergedTopics: [], otherUrls: [], bestPosition: bestPosOf(t.keywords),
       });
       continue;
     }
-    // net-new page: one unique proposed path from the stored labels
+    // net-new page: one unique proposed path from the stored labels. v7.549: ALSO a node the
+    // page map filed as 'none' — the client ranks for its keywords on pages about OTHER themes,
+    // so the right page does not exist yet (the ranking pages are listed in `otherUrls`).
     const labels = t.parentType === 'problem'
       ? ['guides', t.product]
       : [t.umbrella, t.parentName, t.product];
     const proposedPath = uniquePath(proposePagePath(labels), taken);
+    const rankingUrls = new Map<string, OtherUrlRef>();
+    for (const k of t.keywords) {
+      if (!clientRankedWithUrl(k)) continue;
+      const norm = normContentUrl(k.url as string);
+      const o = rankingUrls.get(norm) ?? (rankingUrls.set(norm, { url: norm, kwCount: 0, volume: 0, bestPosition: Infinity }).get(norm)!);
+      o.kwCount += 1; o.volume += k.searchVolume; o.bestPosition = Math.min(o.bestPosition, k.position as number);
+    }
     out.push({
-      ...t, pageUrl: undefined, pageKind: 'net-new', urlKnown: false, proposedPath,
-      mergedIds: [t.id], mergedTopics: [], otherUrls: [], bestPosition: null,
+      ...t, pageUrl: undefined, pageBasis: 'none', pageShare: 0, pageMapStatus: mapNone ? 'none' : undefined, pageKind: 'net-new', urlKnown: false, proposedPath,
+      mergedIds: [t.id], mergedTopics: [], otherUrls: Array.from(rankingUrls.values()).sort((a, b) => b.volume - a.volume || a.url.localeCompare(b.url)),
+      bestPosition: mapNone ? bestPosOf(t.keywords) : null,
     });
   }
   return out;

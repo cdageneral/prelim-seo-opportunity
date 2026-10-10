@@ -193,6 +193,8 @@ export interface LinkTopicLike {
   parentName?: string;
   totalVolume: number;
   keywords: Array<{ position: number | null; url?: string; searchVolume?: number; isGap?: boolean; origin?: string }>;
+  /** v7.549: the cluster's resolved page (override → page map → ranking vote) — the primary page when set */
+  pageUrl?: string;
   mergedIds?: string[];
   mergedTopics?: Array<{ id: string; name: string }>;
 }
@@ -246,10 +248,12 @@ export interface JoinResult {
   counts: { prompts: number; citedAny: number; namedAny: number; assigned: number; review: number; noFit: number; unassigned: number };
 }
 
-/** Primary page = the topic's displayed "your page" (best-ranked keyword's URL — the SAME rule the
- *  panel's topic row uses); then every other client URL ranking for its keywords. */
+/** Primary page = the topic's displayed "your page" — v7.549: the cluster's resolved `pageUrl`
+ *  (override → intent-matched page map → ranking vote, the SAME rule every surface reads); a
+ *  topic without one (pre-v7.549 shape) falls back to the best-ranked keyword's URL. Then every
+ *  other client URL ranking for its keywords. */
 export function topicPages(t: LinkTopicLike): string[] {
-  let bestPos: number | null = null; let bestUrl = '';
+  let bestPos: number | null = null; let bestUrl = t.pageUrl ? (ownedPathOf(t.pageUrl) ?? '') : '';
   const others = new Map<string, number>();
   for (const k of t.keywords) {
     // real client rank + URL rows only — a competitor gap row's URL is never a client page (v7.541 rule)
@@ -257,7 +261,7 @@ export function topicPages(t: LinkTopicLike): string[] {
     const p = ownedPathOf(k.url);
     if (!p) continue;
     others.set(p, (others.get(p) ?? 0) + (k.searchVolume ?? 0));
-    if (bestPos === null || k.position < bestPos) { bestPos = k.position; bestUrl = p; }
+    if (!t.pageUrl && (bestPos === null || k.position < bestPos)) { bestPos = k.position; bestUrl = p; }
   }
   const out: string[] = [];
   if (bestUrl) out.push(bestUrl);

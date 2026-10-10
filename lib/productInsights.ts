@@ -19,6 +19,8 @@
 
 import type { Topic } from '@/lib/clusters/canonical';
 import { normContentUrl } from '@/lib/utils/pageUrl';   // v7.541: one URL identity (moved from here)
+import { type PageCandidate, type PageOverrides } from '@/lib/pages/electPage';   // v7.549: ONE page rule
+import { resolveNodePage, type NodeMapping, type PageBasisAll } from '@/lib/pages/pageMap';   // v7.549: the automatic page map
 import { normSovDomain } from '@/lib/sov/model';
 import { extractBrand } from '@/lib/utils/kwVolume';
 import { qualifySeed } from '@/lib/category/seedQualify';   // v7.444
@@ -691,6 +693,10 @@ export function buildTopicRows(p: { topics: Topic[]; aiRate: number | null; dfsS
       if (k.position !== null && k.position >= 1 && (acc.pos === null || k.position < acc.pos)) return { pos: k.position, url: k.url };
       return acc;
     }, { pos: null });
+    // v7.549: "your page" is the cluster's RESOLVED page (override → page map → ranking vote),
+    // the same URL every surface shows; the best position stays the measured best rank.
+    if ((t as any).pageUrl) best.url = (t as any).pageUrl as string;
+    else if ((t as any).pageKind === 'net-new') best.url = undefined;
     return { t, best, v: topicVerdict(best.pos, p.aiRate, p.dfsShare) };
   });
   const order: Record<TopicVerdict, number> = { arb: 0, aiOnly: 1, none: 2, dual: 3, noAiData: 4 };
@@ -737,6 +743,20 @@ export interface CatNode {
   bestPos:    number | null;
   /** Client's best ranking URL among the node's keywords, when the source rows carry one. */
   bestUrl?:   string;
+  // v7.549 (Wayne): the node's PAGE under the ONE rule (lib/pages/pageMap.ts resolveNodePage):
+  // user override → the intent-matched page map → the ranking vote as a labelled fallback.
+  // The vote uses the keywords filed AT this node; when none of them ranks it falls to the
+  // descendants and `pageInheritedFrom` names the child whose page it is. `pageCandidates` =
+  // every client URL ranking here (evidence + Set-page picker). Never a guess: null when the
+  // map says no page exists ('none') or nothing ranks.
+  pageUrl:            string | null;
+  pageBasis:          PageBasisAll;
+  pageMapStatus:      'mapped' | 'review' | 'none' | 'pending';
+  pageConfidence:     number | null;
+  pageEvidence:       { kw: number; vol: number; best: number | null };
+  pageShare:          number;
+  pageInheritedFrom:  string | null;
+  pageCandidates:     PageCandidate[];
   // v7.433 (Wayne): the keywords BEHIND the number, so a level can be inspected without
   // leaving the panel. `kws` = the keywords filed at THIS node (its own, most-specific
   // placement, III.6) — descendants keep theirs, so nothing is double-listed (I.3).
@@ -748,6 +768,8 @@ export interface CatNode {
 
 export interface NodeKw {
   keyword: string; searchVolume: number; position: number | null; url?: string;
+  /** v7.549: client-brand keyword (pool flag) — carried so the page vote can rank it second. */
+  isBranded?: boolean;
   // v7.435: provenance carried verbatim from the SAME canonical pool the Keyword list
   // panel renders (buildKwPool -> buildCanonicalClusterTopics). Nothing here is derived:
   // `origin:'demand'` = surfaced by the deep-journey demand build (no client ranking row
@@ -759,7 +781,7 @@ export interface NodeKw {
 export interface BuildCategoryTreeOpts {
   breakdown:        any;              // semrushSnapshot._categoryBreakdown (keywordPaths + categories)
   poolKeywords:     Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
-                            origin?: 'footprint' | 'demand'; isGap?: boolean }>;
+                            origin?: 'footprint' | 'demand'; isGap?: boolean; isBranded?: boolean }>;
   uploadedKeywords: any[];
   serpPositions:    Record<string, Array<{ keyword: string; position: number }>>;
   storedScans:      StoredCatScan[];  // keyed by node key (' › ' path) OR legacy top-level name
@@ -767,6 +789,8 @@ export interface BuildCategoryTreeOpts {
   brandTerms?:      string[];
   serpScan?:        SerpScanLike | null;   // v7.492: same SERP-scan source the product ladder reads
   trackedCompetitors?: string[];           // v7.492
+  pageOverrides?:   PageOverrides | null;  // v7.549: per-node "Set page" (key = node key)
+  pageMapNodes?:    Record<string, NodeMapping> | null;   // v7.549: the automatic page map (snapshot._pageMapNodes)
 }
 
 /**
@@ -776,7 +800,7 @@ export interface BuildCategoryTreeOpts {
  * list it already has, never a fabricated tree).
  */
 export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts): CatNode | null {
-  const { breakdown, poolKeywords, uploadedKeywords, serpPositions, storedScans, clientDomain, brandTerms = [], serpScan = null, trackedCompetitors = [] } = opts;
+  const { breakdown, poolKeywords, uploadedKeywords, serpPositions, storedScans, clientDomain, brandTerms = [], serpScan = null, trackedCompetitors = [], pageOverrides = null, pageMapNodes = null } = opts;
   const rawPaths: Record<string, any> = breakdown?.keywordPaths ?? {};
   if (!rawPaths || Object.keys(rawPaths).length === 0) return null;
 
@@ -793,7 +817,8 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
     // fields and silently dropped `origin`/`isGap`, so every keyword rendered as a bare
     // "unranked" with no reason — the exact ambiguity v7.435 set out to remove.
     kwRow.set(key, { keyword: key, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: (k as any).url,
-                     origin: (k as any).origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any).isGap });
+                     origin: (k as any).origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any).isGap,
+                     isBranded: !!(k as any).isBranded });
   }
 
   // competitor rank map — v7.492: the SAME shared builder the product ladder reads
@@ -851,6 +876,28 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
     const clientIdx = ladder.findIndex(e => e.kind === 'client');
 
     const key = raw.path.join(' › ');
+    // v7.549: the node's page — its OWN keywords elect; descendants only when none of its own
+    // ranks (then the child whose page it is, is named). The override key is the node key.
+    const ownPage = resolveNodePage(key, raw.kws, pageMapNodes, pageOverrides);
+    let pageUrl = ownPage.url, pageBasis: CatNode['pageBasis'] = ownPage.basis, pageShare = ownPage.election.share;
+    let pageInheritedFrom: string | null = null;
+    let pageCandidates = ownPage.election.candidates;
+    let pageEvidence = ownPage.evidence;
+    // the vote falls to the descendants only when the map has no verdict and nothing of the
+    // node's own ranks — a map verdict ('mapped' / 'none') is final for this level
+    if (!pageUrl && children.length > 0 && ownPage.mapStatus !== 'none') {
+      const allPage = resolveNodePage(key, all, pageMapNodes, pageOverrides);
+      if (allPage.url && allPage.basis !== 'map' && allPage.basis !== 'override') {
+        pageUrl = allPage.url; pageBasis = allPage.basis; pageShare = allPage.election.share; pageCandidates = allPage.election.candidates; pageEvidence = allPage.evidence;
+        const norm = normContentUrl(allPage.url);
+        pageInheritedFrom = children.find(c => c.pageUrl && normContentUrl(c.pageUrl) === norm)?.name
+          ?? children.find(c => c.allKws.some(k => k.url && k.position !== null && normContentUrl(k.url) === norm))?.name ?? null;
+      }
+    }
+    if (pageUrl && pageBasis !== 'vote-non-branded' && pageBasis !== 'vote-branded-only' && pageBasis !== 'vote-deep-only') {
+      pageShare = ownPage.election.rankedVol > 0 ? pageEvidence.vol / ownPage.election.rankedVol : 0;
+    }
+    if (ownPage.mapStatus === 'none' && !pageUrl) { pageBasis = 'none'; pageEvidence = { kw: 0, vol: 0, best: null }; }
     // Scans are keyed by the node key; the top-level node also honours the legacy
     // name-keyed scans written before v7.432 (no re-scan needed, I.5).
     const scan = scanByKey.get(normName(key)) ?? (depth === 0 ? (scanByKey.get(rootNorm) ?? null) : null);
@@ -877,6 +924,7 @@ export function buildCategoryTree(rootName: string, opts: BuildCategoryTreeOpts)
       p1Share: demand > 0 ? (bands[0] + bands[1]) / demand : 0,
       ladder, clientRank: clientIdx >= 0 ? clientIdx + 1 : null,
       scan, dfsShare, citedTop, bestPos, bestUrl,
+      pageUrl, pageBasis, pageMapStatus: ownPage.mapStatus, pageConfidence: ownPage.confidence, pageEvidence, pageShare, pageInheritedFrom, pageCandidates,
       kws: raw.kws.slice().sort(byVol),
       allKws: all.slice().sort(byVol),
     };

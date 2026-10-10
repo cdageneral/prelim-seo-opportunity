@@ -76,6 +76,8 @@ const REPORT_PROJECT_COLUMNS = {
   hiddenCategories:         projects.hiddenCategories,
   profoundData:             projects.profoundData,
   profoundPageLinks:        projects.profoundPageLinks,   // v7.547: prompt ↔ page link store
+  pageOverrides:            projects.pageOverrides,       // v7.549: per-node Set page
+  pageMapping:              projects.pageMapping,         // v7.549: the automatic page map
   productInsights:          projects.productInsights,
   productInsightsUpdatedAt: projects.productInsightsUpdatedAt,
   insightsPanel:            projects.insightsPanel,
@@ -197,7 +199,7 @@ export async function POST(req: NextRequest) {
 
   // ── v7.427: Product Insights — the SAME shared basis the panel renders (Const II.6b) ──
   // Inputs are all already loaded above; a build failure omits the section honestly.
-  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[]; productPrompts?: any[] } | null = null;
+  let productInsights: { products: ProductRow[]; kpi: ProductKpi; scannedAt: string | null; subNodes?: any[]; contentByProduct?: any[]; productPrompts?: any[]; pageMap?: any } | null = null;
   let promptLinks: AssessmentData['promptLinks'] = null;   // v7.547
   try {
     if (journeyTopics && journeyTopics.length > 0) {
@@ -221,6 +223,8 @@ export async function POST(req: NextRequest) {
         // reaches the report — the deepest measured levels, ranked by demand. Same
         // shared builder; AI is shown only where THAT node carries its own scan.
         const subNodes: Array<{ name: string; path: string; depth: number; demand: number; kwCount: number;
+          page?: string | null; pageBasis?: string; pageMapStatus?: string; pageConfidence?: number | null;   // v7.549
+          pageEvidence?: { kw: number; vol: number; best: number | null }; pageInheritedFrom?: string | null;
           p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
           dfsShare: number | null; scanned: boolean;
           platformMix?: Array<{ label: string; rows: number; cited: number }> | null;
@@ -230,14 +234,14 @@ export async function POST(req: NextRequest) {
         const contentByProduct: any[] = [];
         for (const prod of built.products) {
           const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
-      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+      origin?: 'footprint' | 'demand'; isGap?: boolean; isBranded?: boolean }> = [];
           const seenKw = new Set<string>();
           for (const t of prod.topics) for (const k of (t.keywords as any[])) {
             const kk = String(k?.keyword ?? '').toLowerCase().trim();
             if (!kk || seenKw.has(kk)) continue;
             seenKw.add(kk);
             poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
-              origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+              origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap, isBranded: !!(k as any)?.isBranded });
           }
           const tree = buildCategoryTree(prod.name, {
             breakdown:        (snap as any)?._categoryBreakdown,
@@ -249,6 +253,8 @@ export async function POST(req: NextRequest) {
             brandTerms:       (((project as any).brandTerms ?? []) as string[]),
             serpScan:         ((analysis as any)?.serpApiSnapshot ?? null) as any,   // v7.492
             trackedCompetitors: competitorDomains,
+            pageOverrides:    ((snap as any)?._pageOverrides ?? null),   // v7.549
+            pageMapNodes:     ((snap as any)?._pageMapNodes ?? null),    // v7.549
           });
           // v7.449: Content Footprint by Brand — SAME shared builder the panel calls
           // (Const II.6b). Works without a stored taxonomy (flat line-level node).
@@ -304,6 +310,10 @@ export async function POST(req: NextRequest) {
             subNodes.push({
               probe: nodeProbe.length > 0 ? { mentioned: nodeProbe.filter((r: any) => r.mentioned).length, total: nodeProbe.length } : null,
               name: n.name, path: n.path.join(' > '), depth: n.depth, demand: n.demand, kwCount: n.kwCount,
+              // v7.549 (II.6b): the node's resolved page + how it was decided + measured evidence
+              page: n.pageUrl ? (n.pageUrl.replace(/^https?:\/\/[^/]*/, '') || '/') : null,
+              pageBasis: n.pageBasis, pageMapStatus: n.pageMapStatus, pageConfidence: n.pageConfidence,
+              pageEvidence: n.pageEvidence, pageInheritedFrom: n.pageInheritedFrom,
               p1Share: n.p1Share,
               leader: lead ? (lead.kind === 'client' ? 'you' : lead.domain) : null,
               leaderPct: lead ? (lead.p1Vol / Math.max(n.demand, 1)) * 100 : null,
@@ -333,7 +343,13 @@ export async function POST(req: NextRequest) {
             .map((r: any) => ({ prompt: String(r?.prompt ?? ''), platform: String(r?.platform ?? ''), mentioned: !!r?.mentioned }))
             .filter((r: any) => r.prompt),
         })).filter(x => x.rows.length > 0);
-        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct, productPrompts };
+        // v7.549 (II.6b): the automatic page map's state for the report's basis line
+        const pmStore: any = (project as any).pageMapping ?? null;
+        const pmNodes: Record<string, any> = pmStore?.nodes ?? {};
+        const pmCounts = { mapped: 0, review: 0, none: 0 };
+        for (const m of Object.values(pmNodes)) { if (m?.status === 'mapped') pmCounts.mapped++; else if (m?.status === 'review') pmCounts.review++; else if (m?.status === 'none') pmCounts.none++; }
+        const pageMap = pmStore ? { pages: pmStore.inventory?.pages?.length ?? 0, sitemapRead: !!pmStore.inventory && !pmStore.inventory.sitemapError, ...pmCounts, model: String(Object.values(pmNodes).map((m: any) => m?.model).find(Boolean) ?? ''), overrides: Object.keys(((snap as any)?._pageOverrides ?? {})).length } : null;
+        productInsights = { ...built, scannedAt: ts ? new Date(ts).toISOString() : null, subNodes, contentByProduct, productPrompts, pageMap };
 
         // ── v7.547 (Const II.6b): AI prompts (Profound) → pages — the SAME joiner the panel
         // renders, over the SAME topics (built.products[].topics). No link store → null → omitted.

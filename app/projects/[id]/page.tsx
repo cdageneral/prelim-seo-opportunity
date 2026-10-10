@@ -36,6 +36,7 @@ import { getMarket } from '@/lib/utils/markets';
 import { normalizeFootprintDomain } from '@/lib/keywords/footprintDomains';   // v7.402
 import { initialResumeState, nextResumeState } from '@/lib/synthesis/resumeDecision';   // v7.403
 import { pickDisplayAnalysis } from '@/lib/analysis/displayAnalysis';
+import { usePageMap } from '@/lib/pages/usePageMap';   // v7.549: the automatic page map
 
 interface Competitor { id: string; domain: string; name: string | null; createdAt: string; }
 
@@ -91,6 +92,8 @@ interface Project {
   priorityOverridesUpdatedAt?: string | null;
   hiddenCategories?:           Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }> | null;   // v7.419: soft-hidden categories
   hiddenCategoriesUpdatedAt?:  string | null;
+  pageOverrides?:              Record<string, { url: string; setAt: string }> | null;   // v7.549: per-node Set page
+  pageOverridesUpdatedAt?:     string | null;
   analyses:                 Analysis[];
   competitors:              Competitor[];
 }
@@ -428,11 +431,24 @@ export default function ProjectBriefPage() {
     () => (Array.isArray((project as any)?.hiddenCategories) ? (project as any).hiddenCategories : []),
     [project],
   );
+  // v7.549: per-node "Set page" decisions (Product Insights). Injected as `_pageOverrides`
+  // so the cluster builder, Product Insights tree, Profound join and PDF root a node on the
+  // SAME page (Const II.7); a set page takes effect on refetch, no re-analysis (II.8).
+  const pageOverrides = useMemo<Record<string, { url: string; setAt: string }>>(
+    () => ((project as any)?.pageOverrides && typeof (project as any).pageOverrides === 'object' ? (project as any).pageOverrides : {}),
+    [project],
+  );
+  // v7.549: the AUTOMATIC page map (lib/pages/pageMap.ts). The runner lives at the page so it
+  // runs whichever tab is open; the node → page map is injected as `_pageMapNodes` so the
+  // cluster builder, Product Insights, the Profound join and the PDF all read ONE page per
+  // node (Const II.7). Re-checked when the analysis or the keyword set changes.
+  const pageMap = usePageMap(projectId, !!(analysis as any)?.semrushSnapshot, `${kwVersion}:${(analysis as any)?.id ?? ''}`);
+  const pageMapNodes = pageMap.nodes;
   const analysisForPanels = useMemo(
     () => (analysis
-      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides, _priorityOverrides: priorityOverrides, _hiddenCategories: hiddenCategories } }
+      ? { ...analysis, semrushSnapshot: { ...((analysis as any).semrushSnapshot ?? {}), _brandTerms: brandTerms, _excludedBrands: excludedBrands, _scopeOverrides: scopeOverrides, _priorityOverrides: priorityOverrides, _hiddenCategories: hiddenCategories, _pageOverrides: pageOverrides, _pageMapNodes: pageMapNodes } }
       : analysis),
-    [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides, hiddenCategories],
+    [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides, hiddenCategories, pageOverrides, pageMapNodes],
   );
 
   // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
@@ -1927,6 +1943,8 @@ export default function ProjectBriefPage() {
               domain={domainDisplay}
               brandTerms={brandTerms}
               claudeAssigns={pageClaudeAssigns}
+              onPageChanged={() => { fetchProject(); setKwVersion(v => v + 1); }}   // v7.549: a set page → refetch (new _pageOverrides) so every panel re-roots
+              pageMap={pageMap}   // v7.549: status + progress of the automatic page map
             />
           )}
 

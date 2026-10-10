@@ -73,6 +73,8 @@ async function loadContext(projectId: string) {
       excludedBrands:    projects.excludedBrands,
       scopeOverrides:    projects.scopeOverrides,
       hiddenCategories:  projects.hiddenCategories,
+      pageOverrides:     projects.pageOverrides,   // v7.549: cluster roots honour a set page
+      pageMapping:       projects.pageMapping,
       industry:          projects.industry,   // v7.537: publisher mode
       clientName:        projects.clientName, // v7.538: own-brand variants
     })

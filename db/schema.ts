@@ -117,6 +117,14 @@ export const projects = pgTable('projects', {
   // the metrics blob (Const II.9). Ensured in the projects-list route (v7.327 lesson).
   profoundPageLinks:          jsonb('profound_page_links'),
   profoundPageLinksUpdatedAt: timestamp('profound_page_links_updated_at'),
+  // v7.549: per-node "Set page" — taxonomy path (' › ') → { url, setAt }. A user decision
+  // that wins over the page vote on every surface (lib/pages/electPage.ts).
+  pageOverrides:              jsonb('page_overrides'),
+  pageOverridesUpdatedAt:     timestamp('page_overrides_updated_at'),
+  // v7.549: the automatic page map (lib/pages/pageMap.ts) — page inventory + intent labels +
+  // node → page mappings. Own column; the project GET never loads it (II.9).
+  pageMapping:                jsonb('page_mapping'),
+  pageMappingUpdatedAt:       timestamp('page_mapping_updated_at'),
   // v7.426: Product Insights — recorded AI answers pulled from DataForSEO LLM Mentions
   // (ChatGPT + Google AI Overviews), keyed by top-level product category. Server-side so
   // the scan survives refreshes/devices and is visible to any user opening the project

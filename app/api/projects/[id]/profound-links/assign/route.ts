@@ -62,6 +62,7 @@ async function loadStore(projectId: string) {
     // the SAME scope inputs categorize-pending loads, so the category guard drops hidden /
     // excluded / de-selected categories here too (review 2026-10-09)
     excludedBrands: projects.excludedBrands, scopeOverrides: projects.scopeOverrides, hiddenCategories: projects.hiddenCategories,
+    pageOverrides: projects.pageOverrides, pageMapping: projects.pageMapping,   // v7.549
     links: projects.profoundPageLinks,
   }).from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return { error: 'Project not found', status: 404 } as const;

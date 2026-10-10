@@ -362,14 +362,14 @@ export function ensureProductRows(ctx: SeerContext): ProductRow[] {
 export function footprintForLine(ctx: SeerContext, prod: ProductRow) {
   const { project, snap, dbKeywords, clientDomain } = ctx;
   const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
-    origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+    origin?: 'footprint' | 'demand'; isGap?: boolean; isBranded?: boolean }> = [];
   const seenKw = new Set<string>();
   for (const t of prod.topics) for (const k of (t.keywords as any[])) {
     const kk = String(k?.keyword ?? '').toLowerCase().trim();
     if (!kk || seenKw.has(kk)) continue;
     seenKw.add(kk);
     poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
-      origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+      origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap, isBranded: !!(k as any)?.isBranded });
   }
   const scans = (((project as any).productInsights?.categories ?? []) as StoredCatScan[]);
   const tree = buildCategoryTree(prod.name, {
@@ -382,6 +382,8 @@ export function footprintForLine(ctx: SeerContext, prod: ProductRow) {
     brandTerms:       (((project as any).brandTerms ?? []) as string[]),
     serpScan:         ((ctx.analysis as any)?.serpApiSnapshot ?? null) as any,   // v7.492
     trackedCompetitors: ctx.competitorDomains,
+    pageOverrides:    ((snap as any)?._pageOverrides ?? null),   // v7.549
+    pageMapNodes:     ((snap as any)?._pageMapNodes ?? null),    // v7.549
   });
   const cfNode = tree ?? { name: prod.name, allKws: poolKeywords as NodeKw[], children: [] as any[] };
   const cf = buildContentFootprint({

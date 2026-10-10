@@ -73,6 +73,8 @@ interface Props {
   domain:        string;               // client domain
   brandTerms?:   string[];
   claudeAssigns?: Record<string, IntentType>;
+  onPageChanged?: () => void;        // v7.549: a Set page / reset → the page refetches the project (new _pageOverrides)
+  pageMap?:       PageMapState;      // v7.549: status + progress of the automatic page map (page-level runner)
 }
 
 // ─── Small helpers ───────────────────────────────────────────────────────────
@@ -88,6 +90,13 @@ const seg = (t: string, em = false): InsightSeg => ({ t, em });
 // (lib/profound/pageLinks.ts) read by this panel and the Assessment PDF (II.6b / II.7).
 import { joinPromptsToTopics, buildGapViews, summarizeTopics, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
 import { PromptLinksCard, PromptCell, PromptDrawer, promptLinkState, type AssignInfo } from './ProfoundPromptLinks';
+// v7.549 (Wayne): the AUTOMATIC page map — one resolved page per node / topic, how it was
+// decided, measured ranking evidence beside it, and Set page (lib/pages/pageMap.ts).
+import { PageMapCard, PageLine, PagePicker } from './PageMapControls';
+import { electPage, pageOverrideKey } from '@/lib/pages/electPage';
+import type { PageMapInventory } from '@/lib/pages/pageMap';
+import type { PageMapState } from '@/lib/pages/usePageMap';
+import { normContentUrl as normPageUrl } from '@/lib/utils/pageUrl';
 
 function normName(s: string): string { return s.toLowerCase().trim(); }
 // v7.548: sub-category drill columns (+ AI PROMPTS · PROFOUND); header and rows share it
@@ -96,8 +105,30 @@ const NODE_GRID = 'minmax(190px,1.4fr) 72px 118px 130px 118px minmax(150px,1fr) 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ProductInsightsSection({
-  projectId, kwVersion = 0, analysis, competitors, domain, brandTerms = [], claudeAssigns = {},
+  projectId, kwVersion = 0, analysis, competitors, domain, brandTerms = [], claudeAssigns = {}, onPageChanged, pageMap,
 }: Props) {
+  // v7.549: Set page picker — which row's picker is open (override key) + the inventory, read once
+  const [pickerKey, setPickerKey] = useState<string | null>(null);
+  const [inventory, setInventory] = useState<PageMapInventory | null>(null);
+  const [inventoryAt, setInventoryAt] = useState<string | null>(null);
+  // the override key is shared by a topic row and its sub-category row — the picker opens in ONE view (scope prefix)
+  const openPicker = useCallback((key: string, scope: 'topic' | 'node') => { const k = `${scope}::${key}`; setPickerKey(prev => (prev === k ? null : k)); }, []);
+  useEffect(() => {
+    if (!pickerKey) return;
+    const stamp = pageMap?.status?.inventory?.builtAt ?? null;
+    if (inventory && inventoryAt === stamp) return;
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/page-mapping?inventory=1`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (alive) { setInventory(d.inventory ?? null); setInventoryAt(stamp); }
+      } catch { /* picker shows "loading" until the next open */ }
+    })();
+    return () => { alive = false; };
+  }, [pickerKey, projectId, inventory, inventoryAt, pageMap?.status?.inventory?.builtAt]);
+  const pageChanged = useCallback(() => { onPageChanged?.(); void pageMap?.refresh(); }, [onPageChanged, pageMap]);
   const [uploadedKeywords, setUploadedKeywords] = useState<any[] | null>(null);
   const [stored, setStored]           = useState<{ categories: StoredCatScan[] } | null>(null);
   const [storedAt, setStoredAt]       = useState<string | null>(null);
@@ -242,14 +273,14 @@ export default function ProductInsightsSection({
     const p = built.products.find(x => x.name === productName);
     if (!p) return null;
     const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
-      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+      origin?: 'footprint' | 'demand'; isGap?: boolean; isBranded?: boolean }> = [];
     const seen = new Set<string>();
     for (const t of p.topics) for (const k of t.keywords as any[]) {
       const kk = String(k?.keyword ?? '').toLowerCase().trim();
       if (!kk || seen.has(kk)) continue;
       seen.add(kk);
       poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
-        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap, isBranded: !!(k as any)?.isBranded });
     }
     try {
       return buildCategoryTree(p.name, {
@@ -262,6 +293,8 @@ export default function ProductInsightsSection({
         brandTerms,
         serpScan: (analysis?.serpApiSnapshot ?? null) as any,   // v7.492
         trackedCompetitors: competitors,
+        pageOverrides: ((analysis?.semrushSnapshot as any)?._pageOverrides ?? null),   // v7.549
+        pageMapNodes:  ((analysis?.semrushSnapshot as any)?._pageMapNodes ?? null),    // v7.549
       });
     } catch { return null; }
   }, [built, analysis, uploadedKeywords, stored, domain, brandTerms, competitors]);
@@ -273,7 +306,7 @@ export default function ProductInsightsSection({
     const p = built.products.find(x => x.name === openProduct);
     if (!p) return null;
     const poolKeywords: Array<{ keyword: string; searchVolume: number; position: number | null; url?: string;
-      origin?: 'footprint' | 'demand'; isGap?: boolean }> = [];
+      origin?: 'footprint' | 'demand'; isGap?: boolean; isBranded?: boolean }> = [];
     const seen = new Set<string>();
     for (const t of p.topics) for (const k of t.keywords as any[]) {
       const kk = String(k?.keyword ?? '').toLowerCase().trim();
@@ -281,7 +314,7 @@ export default function ProductInsightsSection({
       seen.add(kk);
       poolKeywords.push({ keyword: kk, searchVolume: k.searchVolume || 0, position: k.position ?? null, url: k.url,
         // v7.435: carried through untouched — same fields, same pool, as the Keyword list panel
-        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap });
+        origin: (k as any)?.origin === 'demand' ? 'demand' : 'footprint', isGap: !!(k as any)?.isGap, isBranded: !!(k as any)?.isBranded });
     }
     try {
       return buildCategoryTree(p.name, {
@@ -294,6 +327,8 @@ export default function ProductInsightsSection({
         brandTerms,
         serpScan: (analysis?.serpApiSnapshot ?? null) as any,   // v7.492
         trackedCompetitors: competitors,
+        pageOverrides: ((analysis?.semrushSnapshot as any)?._pageOverrides ?? null),   // v7.549
+        pageMapNodes:  ((analysis?.semrushSnapshot as any)?._pageMapNodes ?? null),    // v7.549
       });
     } catch { return null; }
   }, [openProduct, built, analysis, uploadedKeywords, stored, domain, brandTerms, competitors]);
@@ -367,8 +402,18 @@ export default function ProductInsightsSection({
       let best: { pos: number | null; url?: string } = { pos: null };
       for (const k of t.keywords) if (k.position !== null && k.position >= 1 && (best.pos === null || k.position < best.pos)) best = { pos: k.position, url: k.url };
       const ranked = t.keywords.filter(k => k.position !== null && k.position >= 1 && k.position <= 10).length;
-      return { t, best, ranked };
+      // v7.549: the cluster's RESOLVED page (override → page map → ranking vote) + measured evidence for it
+      const el = electPage(t.keywords as any);
+      const pageUrl = (t as any).pageUrl as string | undefined;
+      const cand = pageUrl ? el.candidates.find(c => c.norm === normPageUrl(pageUrl)) : undefined;
+      const evidence = { kw: cand?.kw ?? 0, vol: cand?.vol ?? 0, best: cand ? cand.best : null };
+      return { t, best, ranked, el, pageUrl: pageUrl ?? null, evidence };
     }).sort((a, b) => b.t.totalVolume - a.t.totalVolume);
+    const sameAsTopic = (url: string | null, selfId: string): string[] => {
+      if (!url) return [];
+      const n = normPageUrl(url);
+      return rows.filter(r => r.t.id !== selfId && r.pageUrl && normPageUrl(r.pageUrl) === n).map(r => r.t.product || r.t.parentName);
+    };
     // v7.547: + the AI PROMPTS · PROFOUND column (theme column narrowed to make room)
     const grid = 'minmax(200px,1.6fr) minmax(96px,0.8fr) 70px 66px 80px 84px minmax(170px,1.2fr)';
     return (
@@ -387,12 +432,17 @@ export default function ProductInsightsSection({
             <span>TOPIC · YOUR PAGE</span><span>THEME</span><span>STAGE</span><span>BEST RANK</span><span>DEMAND/MO</span><span>KEYWORDS</span><span title="Tracked AI-answer prompts linked to this topic's page (Profound export): CITED is measured by citation URL; NAMED / ABSENT are filed to the topic">AI PROMPTS · PROFOUND</span>
           </div>
         )}
-        {rows.map(({ t, best, ranked }) => {
+        {rows.map(({ t, best, ranked, el, pageUrl, evidence }) => {
           const kwOpen = openTopicKw.has(`${key}::${t.id}`);
           const kws = t.keywords.slice().sort((a, b) => (b.searchVolume || 0) - (a.searchVolume || 0));
           const ps = promptJoin.byTopic.get(t.id);   // v7.547
+          const okey = pageOverrideKey(t.id);
           return (
             <div key={t.id}>
+              {pickerKey === `topic::${okey}` && (
+                <PagePicker projectId={projectId} nodeKey={okey} nodeName={t.product || t.parentName} current={pageUrl} basis={(t as any).pageBasis ?? 'none'}
+                  candidates={el.candidates} inventory={inventory} hrefFor={(u) => hrefFor(u)} onClose={() => setPickerKey(null)} onChanged={pageChanged} />
+              )}
               <div onClick={e => { e.stopPropagation(); setOpenTopicKw(prev => { const n = new Set(prev); const id = `${key}::${t.id}`; if (n.has(id)) n.delete(id); else n.add(id); return n; }); }}
                 style={{ display: 'grid', gridTemplateColumns: grid, gap: '8px', alignItems: 'center', padding: '5px 6px', marginBottom: '3px', cursor: 'pointer',
                   background: 'var(--c-111120)', border: `1px solid ${kwOpen ? 'var(--ca-108-99-255-0_45)' : 'var(--c-1e1e34)'}`, borderRadius: '7px' }}>
@@ -400,11 +450,10 @@ export default function ProductInsightsSection({
                   <span style={{ color: kwOpen ? 'var(--c-9b96ff)' : 'var(--c-55557a)', fontSize: '9px', flexShrink: 0 }}>{kwOpen ? '▼' : '▶'}</span>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-e8e8ff)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.product || t.parentName}</div>
-                    <div style={{ fontSize: '9px', color: best.url ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {best.url
-                        ? <a href={hrefFor(best.url)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{best.url.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
-                        : (best.pos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
-                    </div>
+                    {/* v7.549: the resolved page, how it was decided, evidence, Set page */}
+                    <PageLine url={pageUrl} basis={(t as any).pageBasis ?? (pageUrl ? 'vote-non-branded' : 'none')} mapStatus={(t as any).pageMapStatus} confidence={(t as any).pageConfidence}
+                      evidence={evidence} sameAs={sameAsTopic(pageUrl, t.id)} bestPos={best.pos} hrefFor={(u) => hrefFor(u)} linkStyle={linkStyle} fontSize="9px"
+                      onSetPage={() => openPicker(okey, 'topic')} />
                   </div>
                 </div>
                 <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.parentName}</div>
@@ -787,6 +836,9 @@ export default function ProductInsightsSection({
             );
           })}
         </div>
+
+        {/* ── v7.549 · the automatic page map: inventory, page types, cluster matches, live progress ── */}
+        {!loading && products.length > 0 && pageMap && <PageMapCard pm={pageMap} onRemap={() => { /* rows re-resolve as the status refreshes */ }} />}
 
         {/* ── v7.547 · AI prompts (Profound) → pages: upload state, filing, the two gap cards ── */}
         {!loading && products.length > 0 && (
@@ -1440,6 +1492,11 @@ export default function ProductInsightsSection({
                   )}
                   {openTree && (() => {
                     const rowsOut: JSX.Element[] = [];
+                    // v7.549: every node in this line that resolves to the same page — disclosed on each row
+                    const byPage = new Map<string, CatNode[]>();
+                    const walkPages = (n: CatNode) => { if (n.pageUrl) { const k = normPageUrl(n.pageUrl); (byPage.get(k) ?? byPage.set(k, []).get(k)!).push(n); } for (const c of n.children) walkPages(c); };
+                    for (const c of openTree.children) walkPages(c);
+                    const samePageNodes = (n: CatNode): string[] => n.pageUrl ? (byPage.get(normPageUrl(n.pageUrl)) ?? []).filter(x => x.key !== n.key).map(x => x.name) : [];
                     const render = (node: CatNode) => {
                       const isOpen = openNodes.has(node.key);
                       const leader = node.ladder[0] ?? null;
@@ -1448,6 +1505,12 @@ export default function ProductInsightsSection({
                       const np = linkState === 'ready' ? nodePrompts(node) : undefined;   // v7.548
                       rowsOut.push(
                         <div key={node.key}>
+                          {pickerKey === `node::${node.key}` && (
+                            <div style={{ marginLeft: `${(node.depth - 1) * 18}px` }}>
+                              <PagePicker projectId={projectId} nodeKey={node.key} nodeName={node.name} current={node.pageUrl} basis={node.pageBasis} mapUrl={pageMap?.nodes?.[node.key]?.url ?? null}
+                                candidates={node.pageCandidates} inventory={inventory} hrefFor={(u) => hrefFor(u)} onClose={() => setPickerKey(null)} onChanged={pageChanged} />
+                            </div>
+                          )}
                           <div
                             onClick={() => setOpenNodes(prev => { const n = new Set(prev); if (n.has(node.key)) n.delete(node.key); else n.add(node.key); return n; })}
                             style={{ display: 'grid', gridTemplateColumns: NODE_GRID, gap: '10px', alignItems: 'center',
@@ -1462,13 +1525,11 @@ export default function ProductInsightsSection({
                                 {isOpen ? '▼' : '▶'}
                               </span>
                               <div style={{ minWidth: 0 }}>
-                                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{node.name}</div>
-                                <div style={{ fontSize: '9.5px', color: node.bestUrl ? 'var(--c-6a6a90)' : 'var(--c-55557a)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {node.bestUrl
-                                    ? <a href={hrefFor(node.bestUrl)!} target="_blank" rel="noopener noreferrer" style={linkStyle} onClick={e => e.stopPropagation()}>{node.bestUrl.replace(/^https?:\/\/[^/]*/, '') || '/'}</a>
-                                    : (node.bestPos !== null ? 'ranking URL not in source rows' : 'no ranking page')}
-                                  {' '}· {node.kwCount.toLocaleString()} kw{node.children.length > 0 ? ` · ${node.children.length} sub` : ''}
-                                </div>
+                                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--c-e8e8ff)' }}>{node.name} <span style={{ fontSize: '9.5px', fontWeight: 400, color: 'var(--c-55557a)' }}>· {node.kwCount.toLocaleString()} kw{node.children.length > 0 ? ` · ${node.children.length} sub` : ''}</span></div>
+                                {/* v7.549: the resolved page (override → page map → ranking vote), evidence, Set page */}
+                                <PageLine url={node.pageUrl} basis={node.pageBasis} mapStatus={node.pageMapStatus} confidence={node.pageConfidence} evidence={node.pageEvidence}
+                                  inheritedFrom={node.pageInheritedFrom} sameAs={samePageNodes(node)} bestPos={node.bestPos} hrefFor={(u) => hrefFor(u)} linkStyle={linkStyle}
+                                  onSetPage={() => openPicker(node.key, 'node')} />
                               </div>
                             </div>
                             <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--c-c8c8e8)', fontVariantNumeric: 'tabular-nums' }}>{fmtVol(node.demand)}</div>

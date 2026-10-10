@@ -32,11 +32,22 @@ export function hydrateSnapshotForPool(project: any, snap: any): any {
     Array.isArray(project?.hiddenCategories)
       ? (project.hiddenCategories as Array<{ name: string; kwCount: number; hiddenAt: string }>)
       : [];
+  // v7.549: per-node page overrides ("Set page") — page.tsx `pageOverrides` memo.
+  const pageOverrides: Record<string, { url: string; setAt: string }> =
+    project?.pageOverrides && typeof project.pageOverrides === 'object'
+      ? (project.pageOverrides as Record<string, { url: string; setAt: string }>)
+      : {};
+  // v7.549: the automatic page map's node → page mappings (lib/pages/pageMap.ts) — page.tsx
+  // `pageMapNodes` memo. Only the node map rides on the snapshot (the inventory is picker data).
+  const pm = project?.pageMapping && typeof project.pageMapping === 'object' ? project.pageMapping : null;
+  const pageMapNodes: Record<string, unknown> = pm && pm.nodes && typeof pm.nodes === 'object' ? pm.nodes : {};
   return {
     ...(snap ?? {}),
     _brandTerms:       brandTerms,
     _excludedBrands:   excludedBrands,
     _scopeOverrides:   scopeOverrides,
     _hiddenCategories: hiddenCategories,
+    _pageOverrides:    pageOverrides,
+    _pageMapNodes:     pageMapNodes,
   };
 }

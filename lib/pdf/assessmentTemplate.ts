@@ -134,6 +134,18 @@ export interface AuthoritySnapshot {
   domains: ADomainSignals[];
 }
 
+// v7.549: ASCII-safe wording for a node's page basis (lib/pages/pageMap.ts PageBasisAll)
+function pageBasisWord(b?: string, mapStatus?: string): string {
+  switch (b) {
+    case 'override':          return 'set by the team';
+    case 'map':               return 'intent-matched';
+    case 'vote-non-branded':  return mapStatus === 'review' ? 'review - ranking page shown' : mapStatus === 'pending' ? 'ranking page, match pending' : 'ranking page';
+    case 'vote-branded-only': return 'branded ranking only';
+    case 'vote-deep-only':    return 'deep ranking only';
+    default:                  return 'no page';
+  }
+}
+
 // v7.376: structural slice of the canonical Topic the journey sections read —
 // the route passes the exact objects buildCanonicalClusterTopics returns.
 export interface JourneyTopicLike {
@@ -285,8 +297,13 @@ export interface AssessmentData {
     }>;
     kpi: { arb: number; dual: number; aiOnly: number; none: number; citesClient: number; citesTotal: number };
     scannedAt: string | null;
+    // v7.549 (II.6b): the automatic page map behind every "your page" in this section
+    pageMap?: { pages: number; sitemapRead: boolean; mapped: number; review: number; none: number; model: string; overrides: number } | null;
     // v7.432 (Const II.6b): the sub-category level the panel measures, ranked by demand.
     subNodes?: Array<{ name: string; path: string; depth: number; demand: number; kwCount: number;
+      // v7.549 (II.6b): the node's resolved page (override / page map / ranking vote) + measured evidence
+      page?: string | null; pageBasis?: string; pageMapStatus?: string; pageConfidence?: number | null;
+      pageEvidence?: { kw: number; vol: number; best: number | null }; pageInheritedFrom?: string | null;
       p1Share: number; leader: string | null; leaderPct: number | null; clientRank: number | null;
       dfsShare: number | null; scanned: boolean;
       // v7.435: which AI platforms this node's figure actually covers. A scan stored
@@ -1206,13 +1223,14 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       <table class="dt">
         <tr><th>Sub-category</th><th style="width:.7in;">Demand</th><th style="width:.6in;">Page 1</th><th>Who leads page 1</th><th style="width:1.25in;">AI answers</th></tr>
         ${subs.map(n => `<tr>
-          <td><b>${esc(n.name)}</b><br><span style="color:var(--muted); font-size:8px;">${esc(n.path)} - ${n0(n.kwCount)} kws</span></td>
+          <td><b>${esc(n.name)}</b><br><span style="color:var(--muted); font-size:8px;">${esc(n.path)} - ${n0(n.kwCount)} kws</span>${n.page !== undefined ? `<br><span style="font-size:8px;">${n.page ? `${esc(n.page)} <span style="color:var(--muted);">(${esc(pageBasisWord(n.pageBasis, n.pageMapStatus))}${n.pageEvidence && n.pageEvidence.kw > 0 ? `; ranks ${n0(n.pageEvidence.kw)} kws, best #${n.pageEvidence.best ?? '-'}` : n.pageEvidence ? '; ranks 0 of these kws' : ''}${n.pageInheritedFrom ? `; via ${esc(n.pageInheritedFrom)}` : ''})</span>` : `<span style="color:var(--critical);">${n.pageMapStatus === 'none' ? 'no page about this theme - build' : 'no ranking page'}</span>`}</span>` : ''}</td>
           <td>${vol(n.demand)}/mo</td>
           <td>${p0(n.p1Share * 100)}</td>
           <td>${n.leader ? (n.leader === 'you' ? `You - ${p1(n.leaderPct ?? 0)}` : `${esc(n.leader)} - ${p1(n.leaderPct ?? 0)}${n.clientRank !== null ? ` (you #${n.clientRank})` : ''}`) : 'No page-1 holds'}</td>
           <td>${n.scanned ? `named in ${p0((n.dfsShare ?? 0) * 100)}${(n.platformMix && n.platformMix.length) ? `<br><span style="color:var(--muted); font-size:8px;">${n.platformMix.map(m => `${n0(m.rows)} ${esc(m.label)}`).join(' - ')}${(n.platformsMissing && n.platformsMissing.length) ? `; ${n.platformsMissing.map(esc).join(' + ')} not measured` : ''}</span>` : ''}` : 'not measured at this level'}${n.probe ? `<br><span style="color:var(--muted); font-size:8px;">probe: named in ${n0(n.probe.mentioned)} of ${n0(n.probe.total)} prompts</span>` : ''}</td>
         </tr>`).join('')}
       </table>
+      ${pi.pageMap ? `<div style="font-size:8px; color:var(--muted); margin-top:3px;">Page map: ${n0(pi.pageMap.pages)} pages in the site inventory${pi.pageMap.sitemapRead ? ' (sitemap + ranking URLs)' : ' (ranking URLs only - the sitemap could not be read)'}; ${n0(pi.pageMap.mapped)} clusters matched to a page by intent and theme, ${n0(pi.pageMap.review)} in review, ${n0(pi.pageMap.none)} with no page to match (a page to build)${pi.pageMap.overrides ? `; ${n0(pi.pageMap.overrides)} set by the team` : ''}. Page types and matches are labelled by ${esc(pi.pageMap.model || 'Claude')} with its own confidence and are not measured data; the ranking figures beside each page are.</div>` : ''}
       <div style="font-size:8px; color:var(--muted); margin-top:3px;">AI is measured per level and never inherited from the product line - a sub-category reads "not measured" until its own recorded-answer scan is run. Each scan queries Google AI Overviews and ChatGPT separately (one request per platform), so the platform counts under each figure are what was actually measured on each; a platform listed as not measured is unknown, not zero.</div>`;
     // v7.449 (Const II.6b): Content Footprint by Brand — reads the route-computed
     // shared basis verbatim; a missing you-row or leader renders as its honest
