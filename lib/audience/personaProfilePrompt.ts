@@ -11,6 +11,8 @@
  * Three canvas lines are parameterised because the image API fixes the canvas:
  *   • 4:5  — models that accept a custom WIDTHxHEIGHT (1024x1280)
  *   • 2:3  — gpt-image-1, whose only portrait size is 1024x1536
+ * v7.553: the attached-reference clauses on the GOAL line and under VISUAL SYSTEM
+ * were added when the reference image began travelling with every request.
  * Everything else in the prompt is Wayne's text. Two copy artifacts of the
  * source doc were normalised: every LAYOUT section was numbered "1." (fixed to
  * 1–6), and "High-resolution PNG" reads "High-resolution image" because the
@@ -21,7 +23,7 @@
 
 import { buildSegmentRows, type AudienceSegment } from './segmentRows';
 
-export const PERSONA_PROFILE_PROMPT_VERSION = 1;
+export const PERSONA_PROFILE_PROMPT_VERSION = 2;   // v7.553: attached-reference clauses
 
 export type ProfileAspect = '4:5' | '2:3';
 
@@ -41,7 +43,7 @@ export interface ProfileContext {
 export function personaProfilePromptText(canvas: ProfileCanvas): string {
   const px = canvas.size.replace('x', '×');
   return `GOAL
-Produce a polished, presentation-ready persona profile that belongs to the exact same visual system as the reference:
+Produce a polished, presentation-ready persona profile that belongs to the exact same visual system as the reference (the attached image is the reference — a different segment's finished profile; reuse its design system, not its content):
 * Vertical ${canvas.aspect} format (${px} pixels — the whole canvas is the profile; no margins or letterboxing)
 * Premium financial-services strategy aesthetic
 * Off-white background
@@ -149,7 +151,7 @@ Examples of the structure—not copy to reuse:
 * “Warm. Direct. Empowerment without judgment.”
 Create a new line that accurately reflects the supplied segment.
 VISUAL SYSTEM
-Match the reference image’s:
+Match the attached reference image’s:
 * Overall hierarchy
 * Section order
 * Proportions

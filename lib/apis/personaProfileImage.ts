@@ -1,7 +1,13 @@
 /**
  * Persona profile image — one presentation-ready profile card per audience
  * segment, rendered by OpenAI's image API from Wayne's prompt + the segment's
- * own data (v7.552). Sibling of lib/apis/personaImage.ts (the v7.149 circular
+ * own data (v7.552), against Wayne's REFERENCE profile image (v7.553).
+ *
+ * v7.553: every request goes to /v1/images/edits with the reference profile
+ * (lib/audience/personaProfileReference.ts) as the input image, so "match the
+ * reference image" in the prompt has a real image to match. Same model plan,
+ * same fallback, same ledger row; only the endpoint and the multipart body
+ * changed. Sibling of lib/apis/personaImage.ts (the v7.149 circular
  * portrait); same fault-tolerant shape: never throws, returns { bytes } or
  * { error } with the provider's real reason.
  *
@@ -29,8 +35,9 @@
 
 import { recordOpenAIImages } from '@/lib/usage/record';
 import { type ProfileCanvas } from '@/lib/audience/personaProfilePrompt';
+import { referenceImageBytes, PERSONA_PROFILE_REFERENCE_FILENAME, PERSONA_PROFILE_REFERENCE_MIME, PERSONA_PROFILE_REFERENCE_VERSION } from '@/lib/audience/personaProfileReference';
 
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
+const OPENAI_IMAGE_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 
 export const PROFILE_PRIMARY_MODEL_DEFAULT = 'gpt-image-2';
 export const PROFILE_FALLBACK_MODEL = 'gpt-image-1';
@@ -78,18 +85,28 @@ export function isModelRefusal(status: number, detail: string): boolean {
   return false;
 }
 
+/**
+ * The multipart body of one edits request: the reference profile as the input
+ * image + the prompt and render settings. Exported for the retained suite.
+ */
+export function buildEditsForm(model: string, prompt: string, size: string): FormData {
+  const form = new FormData();
+  form.append('model', model);
+  form.append('prompt', prompt);
+  form.append('size', size);
+  form.append('quality', PROFILE_QUALITY);
+  form.append('output_format', PROFILE_OUTPUT_FORMAT);
+  form.append('n', '1');
+  const ref = new Blob([new Uint8Array(referenceImageBytes())], { type: PERSONA_PROFILE_REFERENCE_MIME });
+  form.append('image', ref, PERSONA_PROFILE_REFERENCE_FILENAME);
+  return form;
+}
+
 async function attempt(model: string, prompt: string, size: string, key: string): Promise<AttemptResult> {
-  const res = await fetch(OPENAI_IMAGE_URL, {
+  const res = await fetch(OPENAI_IMAGE_EDITS_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      prompt,
-      size,
-      quality: PROFILE_QUALITY,
-      output_format: PROFILE_OUTPUT_FORMAT,
-      n: 1,
-    }),
+    headers: { Authorization: `Bearer ${key}` },   // multipart boundary is set by fetch from the FormData
+    body: buildEditsForm(model, prompt, size),
   });
   if (!res.ok) {
     const detail = (await res.text().catch(() => '')).slice(0, 400);
@@ -146,6 +163,7 @@ export async function generatePersonaProfileImage(
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         fallbackFrom,
+        referenceVersion: PERSONA_PROFILE_REFERENCE_VERSION,
         ...(opts.ledgerMeta ?? {}),
       });
       console.log(`[OrbitIQ] persona profile rendered by ${model} (${canvas.size}, ${durationMs} ms${fallbackFrom ? `, fallback from ${fallbackFrom}` : ''})`);
