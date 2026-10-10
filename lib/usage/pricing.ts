@@ -190,8 +190,8 @@ export const UNPRICED_DECLARATIONS: UnpricedEntry[] = [
   },
   {
     provider: 'openai', unit: 'images',
-    reason:   'gpt-image-1 is billed per token by quality tier; the ledger records image COUNT only, which cannot be priced without the per-image tier.',
-    asOf:     '2026-08-03',
+    reason:   'GPT image models (gpt-image-1 portraits; gpt-image-2 / gpt-image-1 persona profiles since v7.552) are billed per token by quality tier; the ledger records image COUNT, with size/quality/tokens on meta where the API reports them, and no per-image list price is on file for every size+quality pair — left unpriced rather than guessed (I.1).',
+    asOf:     '2026-10-10',
   },
   {
     provider: 'profound', unit: 'calls',

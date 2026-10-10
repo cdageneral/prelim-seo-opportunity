@@ -1,103 +1,181 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  buildSegmentRows, csvEscape, segmentToCsv, segmentToClipboardText, segmentCsvFilename,
+  personaProfileFilename, SEGMENT_LABELS,
+  type AudienceSegment, type AudienceTouchpoint,
+} from '@/lib/audience/segmentRows';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Types + v7.352 export helpers ─────────────────────────────────────────────
+// v7.552: the segment type and the pure row/CSV/clipboard helpers moved to
+// lib/audience/segmentRows.ts so the persona-profile API route can read the SAME
+// rows on the server (Const II.7). Re-exported here so every existing import
+// (and the retained suite) is unchanged.
+export type { AudienceSegment, AudienceTouchpoint };
+export { buildSegmentRows, csvEscape, segmentToCsv, segmentToClipboardText, segmentCsvFilename };
 
-export interface AudienceTouchpoint {
-  stage: string;       // "Stage 1 (LLM)"
-  description: string;
-}
+interface Props { analysis: any; projectId?: string; }
 
-export interface AudienceSegment {
-  id: string;
-  name: string;              // "The Crisis Converter"
-  tagline: string;           // "I can't afford my mortgage renewal. I need options — fast."
-  volumePct: number;         // 42
-  yoyGrowth?: string;        // "+32% YoY"
-  personaImageUrl?: string;  // v7.149: AI-generated photoreal portrait (Vercel Blob URL)
-
-  whoTheyAre: {
-    demographics: string;    // Age range, employment status, financial profile
-    trigger: string;         // What drives them to search
-    influencerRole?: string; // Spouse / adult child / advisor role
-  };
-
-  preLLMPrompts: string[];   // Life-problem prompts before they think of the product
-  productPrompts: string[];  // Product/solution-stage searches
-
-  touchpoints: AudienceTouchpoint[];
-
-  messagingAndTone: string;
-  creativeDirection: string;
-  channelApproach: string;
-}
-
-interface Props { analysis: any; }
-
-// ── v7.352: per-segment export (CSV download + copy to clipboard) ─────────────
-// Every field the panel renders for a segment is flattened into ordered
-// [field, value] rows — the single source both exports read, so the CSV and the
-// clipboard text can never drift from each other or from the UI (Const II.7 in
-// miniature). Pure functions, unit-tested in the harness.
-
-export function buildSegmentRows(segment: AudienceSegment, label: string): Array<[string, string]> {
-  const rows: Array<[string, string]> = [
-    ['Segment', label],
-    ['Name', segment.name ?? ''],
-    ['Tagline', segment.tagline ?? ''],
-    ['Share of Volume (%)', String(segment.volumePct ?? '')],
-  ];
-  if (segment.yoyGrowth) rows.push(['YoY Growth', segment.yoyGrowth]);
-  rows.push(['Demographics', segment.whoTheyAre?.demographics ?? '']);
-  rows.push(['Trigger', segment.whoTheyAre?.trigger ?? '']);
-  if (segment.whoTheyAre?.influencerRole) rows.push(['Influencer / Gatekeeper Role', segment.whoTheyAre.influencerRole]);
-  (segment.preLLMPrompts ?? []).forEach((p, i) => rows.push([`Pre-Product LLM Prompt ${i + 1}`, p]));
-  (segment.productPrompts ?? []).forEach((p, i) => rows.push([`Product-Stage Search Prompt ${i + 1}`, p]));
-  (segment.touchpoints ?? []).forEach((tp, i) => rows.push([`Touchpoint ${i + 1} — ${tp.stage}`, tp.description]));
-  rows.push(['Messaging & Tone', segment.messagingAndTone ?? '']);
-  rows.push(['Creative & Imagery Direction', segment.creativeDirection ?? '']);
-  rows.push(['Channel Approach', segment.channelApproach ?? '']);
-  return rows;
-}
-
-// RFC-4180 escaping: quote any field carrying a comma, quote, or newline; double
-// embedded quotes. Values pass through otherwise untouched (Const I.1 — export
-// exactly what the panel shows, no reformatting).
-export function csvEscape(v: string): string {
-  const s = String(v ?? '');
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export function segmentToCsv(segment: AudienceSegment, label: string): string {
-  const lines = ['Field,Value'];
-  buildSegmentRows(segment, label).forEach(([f, v]) => lines.push(`${csvEscape(f)},${csvEscape(v)}`));
-  return lines.join('\r\n');
-}
-
-export function segmentToClipboardText(segment: AudienceSegment, label: string): string {
-  return buildSegmentRows(segment, label).map(([f, v]) => `${f}: ${v}`).join('\n');
-}
-
-export function segmentCsvFilename(segment: AudienceSegment, label: string): string {
-  const slug = `${label} ${segment.name ?? ''}`
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return `audience-${slug || 'segment'}.csv`;
-}
-
-function downloadSegmentCsv(segment: AudienceSegment, label: string): void {
-  // \uFEFF BOM so Excel opens the UTF-8 CSV with accents/dashes intact.
-  const blob = new Blob(['\uFEFF' + segmentToCsv(segment, label)], { type: 'text/csv;charset=utf-8;' });
+/** Hand a Blob to the browser as a file download. */
+function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = segmentCsvFilename(segment, label);
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadSegmentCsv(segment: AudienceSegment, label: string): void {
+  // ﻿ BOM so Excel opens the UTF-8 CSV with accents/dashes intact.
+  downloadBlob(new Blob(['﻿' + segmentToCsv(segment, label)], { type: 'text/csv;charset=utf-8;' }), segmentCsvFilename(segment, label));
+}
+
+// ── v7.552: persona profile image (OpenAI image API) ──────────────────────────
+// The left-hand control on every segment card. One click → POST the segment id
+// to /api/projects/[id]/persona-profile → the server builds Wayne's prompt from
+// the STORED segment rows, renders it with the OpenAI image API, and the JPG
+// comes back as a download. While it runs the control is a live pill: a
+// changing step label + elapsed seconds (IV.3) and, once at least one render
+// has been measured, "of ~Ns" from the median of real previous runs (IV.2) —
+// a measured figure, never a guess.
+
+export type ProfileStep = 'idle' | 'preparing' | 'rendering' | 'downloading' | 'done' | 'error';
+
+export interface ProfileHistory { runs: number; medianMs: number | null; lastMs: number | null }
+
+/** "Rendering profile · 42s of ~95s" — the pill text for a given state. */
+export function profileStatusText(step: ProfileStep, elapsedSec: number, history: ProfileHistory | null): string {
+  const eta = history && history.medianMs ? ` of ~${Math.max(1, Math.round(history.medianMs / 1000))}s` : '';
+  switch (step) {
+    case 'preparing':   return `Preparing segment data · ${elapsedSec}s`;
+    case 'rendering':   return `Rendering profile · ${elapsedSec}s${eta}`;
+    case 'downloading': return `Downloading · ${elapsedSec}s`;
+    case 'done':        return 'Profile downloaded';
+    default:            return '';
+  }
+}
+
+export function profileEtaTitle(history: ProfileHistory | null): string {
+  if (!history || !history.medianMs) return 'No previous render measured yet — showing elapsed time';
+  return `~${Math.round(history.medianMs / 1000)}s is the median of ${history.runs} measured previous render${history.runs === 1 ? '' : 's'}`;
+}
+
+/** Shorten a provider error for the pill; the full text goes in the tooltip. */
+export function shortError(msg: string, max = 72): string {
+  const s = String(msg ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+function PersonaProfileButton({ segment, label, projectId, analysisId }: {
+  segment: AudienceSegment;
+  label: string;
+  projectId?: string;
+  analysisId?: string;
+}) {
+  const [step, setStep] = useState<ProfileStep>('idle');
+  const [elapsed, setElapsed] = useState(0);
+  const [history, setHistory] = useState<ProfileHistory | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const tick = useRef<ReturnType<typeof setInterval> | null>(null);
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (tick.current) clearInterval(tick.current);
+    if (doneTimer.current) clearTimeout(doneTimer.current);
+  }, []);
+
+  const busy = step === 'preparing' || step === 'rendering' || step === 'downloading';
+
+  const run = async () => {
+    if (busy) return;
+    if (!projectId) { setStep('error'); setError('No project id — reload the page'); return; }
+    setError(null);
+    setStep('preparing');
+    setElapsed(0);
+    const t0 = Date.now();
+    if (tick.current) clearInterval(tick.current);
+    tick.current = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    try {
+      // Measured history for the ETA, in parallel with the render itself.
+      fetch(`/api/projects/${projectId}/persona-profile`, { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => { if (j && j.history) setHistory(j.history as ProfileHistory); })
+        .catch(() => { /* ETA is optional — elapsed time still shows (IV.3) */ });
+      setStep('rendering');
+      const res = await fetch(`/api/projects/${projectId}/persona-profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ segmentId: segment.id, ...(analysisId ? { analysisId } : {}) }),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const j = await res.json(); if (j?.error) msg = typeof j.error === 'string' ? j.error : JSON.stringify(j.error); } catch { /* keep status */ }
+        throw new Error(msg);
+      }
+      setStep('downloading');
+      const blob = await res.blob();
+      downloadBlob(blob, personaProfileFilename(segment, label));
+      setStep('done');
+      if (doneTimer.current) clearTimeout(doneTimer.current);
+      doneTimer.current = setTimeout(() => setStep('idle'), 2400);
+    } catch (err) {
+      setError((err as any)?.message ?? String(err));
+      setStep('error');
+    } finally {
+      if (tick.current) { clearInterval(tick.current); tick.current = null; }
+    }
+  };
+
+  const btnCls = 'w-7 h-7 rounded-md border border-orbit-border bg-orbit-surface text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/50 flex items-center justify-center transition-colors cursor-pointer';
+  const pillCls = 'h-7 max-w-full rounded-md border border-orbit-border bg-orbit-surface px-2 flex items-center gap-1.5 text-[10.5px] font-medium whitespace-nowrap overflow-hidden';
+
+  if (busy || step === 'done') {
+    return (
+      <div
+        className={`${pillCls} text-orbit-secondary`}
+        role="status"
+        aria-live="polite"
+        title={step === 'done' ? `Saved ${personaProfileFilename(segment, label)}` : profileEtaTitle(history)}
+        data-profile-step={step}
+      >
+        <i className={`text-[12px] shrink-0 ${step === 'done' ? 'ti ti-check text-orbit-green' : 'ti ti-loader-2 animate-spin text-orbit-accent'}`} aria-hidden="true" />
+        <span className="truncate">{profileStatusText(step, elapsed, history)}</span>
+      </div>
+    );
+  }
+
+  if (step === 'error') {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); void run(); }}
+        className={`${pillCls} text-orbit-amber hover:text-orbit-primary cursor-pointer`}
+        title={`Profile failed — ${error ?? 'unknown error'}. Click to try again.`}
+        aria-label={`Persona profile for ${segment.name} failed — click to try again`}
+        data-profile-step="error"
+      >
+        <i className="ti ti-alert-triangle text-[12px] shrink-0" aria-hidden="true" />
+        <span className="truncate">Profile failed — {shortError(error ?? 'unknown error')}</span>
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); void run(); }}
+      className={btnCls}
+      title={`Download ${label} — ${segment.name} as a persona profile image (JPG). AI-generated by the OpenAI image API from this segment's data — illustrative, not a customer photo.`}
+      aria-label={`Persona profile image for ${segment.name} (JPG download)`}
+      data-profile-step="idle"
+    >
+      <i className="ti ti-id-badge-2 text-[13px]" aria-hidden="true" />
+    </button>
+  );
 }
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
@@ -234,9 +312,11 @@ function PromptChip({ text, accent }: { text: string; accent: typeof SEGMENT_ACC
 // a SIBLING of the card <button> (inside a shared relative wrapper), never nested
 // inside it: interactive elements inside a <button> are invalid HTML and break
 // hydration. The copy button flips to a ✓ for 1.6s as its success feedback.
-function SegmentExportActions({ segment, label }: {
+function SegmentExportActions({ segment, label, projectId, analysisId }: {
   segment: AudienceSegment;
   label: string;
+  projectId?: string;
+  analysisId?: string;
 }) {
   const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -252,6 +332,13 @@ function SegmentExportActions({ segment, label }: {
   const btnCls = 'w-7 h-7 rounded-md border border-orbit-border bg-orbit-surface text-orbit-secondary hover:text-orbit-primary hover:border-orbit-accent/50 flex items-center justify-center transition-colors cursor-pointer';
 
   return (
+    <>
+    {/* v7.552: persona profile image — bottom-LEFT, mirroring the export pair on the
+        right. Same sibling-of-the-card rule as v7.352. The strip is capped so a
+        running/failed pill never runs under the right-hand icons. */}
+    <div className="absolute bottom-3 left-3 z-20 flex items-center" style={{ maxWidth: 'calc(100% - 96px)' }}>
+      <PersonaProfileButton segment={segment} label={label} projectId={projectId} analysisId={analysisId} />
+    </div>
     <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5">
       <button
         type="button"
@@ -275,6 +362,7 @@ function SegmentExportActions({ segment, label }: {
         />
       </button>
     </div>
+    </>
   );
 }
 
@@ -534,14 +622,18 @@ function SegmentDetail({ segment, accent, label, connected, cardRef }: {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function AudienceSegmentsSection({ analysis }: Props) {
+export default function AudienceSegmentsSection({ analysis, projectId }: Props) {
   // Rich segment data is stored in semrushSnapshot._audienceSegments (JSONB blob).
   // This avoids the old personas relational table whose rigid schema is incompatible
   // with the new AudienceSegment shape.
   const segments: AudienceSegment[] = analysis?.semrushSnapshot?._audienceSegments ?? [];
   const [active, setActive] = useState(0);
 
-  const segmentLabels = ['Segment A', 'Segment B', 'Segment C', 'Segment D'];
+  const segmentLabels = SEGMENT_LABELS;
+  // v7.552: the persona-profile route reads the segment from THIS analysis (the one
+  // on screen), so the image, the CSV and the clipboard copy share one source.
+  const resolvedProjectId: string | undefined = projectId ?? (analysis?.projectId ? String(analysis.projectId) : undefined);
+  const analysisId: string | undefined = analysis?.id ? String(analysis.id) : undefined;
 
   // v7.150: portrait-generation diagnostic. Shown only when something is off
   // (a status exists and at least one segment has no portrait) so it stays out
@@ -696,8 +788,8 @@ export default function AudienceSegmentsSection({ analysis }: Props) {
                   )}
                 </button>
 
-                {/* v7.352: per-segment export — CSV download + copy to clipboard */}
-                <SegmentExportActions segment={seg} label={segmentLabels[i]} />
+                {/* v7.352: per-segment export — CSV download + copy to clipboard; v7.552: persona profile (left) */}
+                <SegmentExportActions segment={seg} label={segmentLabels[i]} projectId={resolvedProjectId} analysisId={analysisId} />
                 </div>
               );
             })}

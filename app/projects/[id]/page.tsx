@@ -2072,7 +2072,7 @@ export default function ProjectBriefPage() {
           {/* ── Audience Segments ── */}
           {hasResults && analysis && activeSection === 'audienceSegments' && (
             <div className="overflow-y-auto flex-1 p-3 animate-fade-in">
-              <AudienceSegmentsSection analysis={analysisForPanels} />
+              <AudienceSegmentsSection analysis={analysisForPanels} projectId={projectId} />
             </div>
           )}
 

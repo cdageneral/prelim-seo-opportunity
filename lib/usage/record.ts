@@ -273,14 +273,20 @@ export function instrumentAnthropic<T extends { messages: { create: (...args: an
   return client;
 }
 
-/** Record OpenAI image generations (billed per image). */
-export async function recordOpenAIImages(count: number, endpoint: string, key?: string | null): Promise<void> {
+/**
+ * Record OpenAI image generations (billed per image). v7.552: optional `meta`
+ * carries measured provenance for the call — feature, size, quality, wall-clock
+ * duration, the API's reported tokens — so a later rate can be applied to real
+ * figures (I.5b) and the persona-profile ETA reads real history (IV.2).
+ */
+export async function recordOpenAIImages(count: number, endpoint: string, key?: string | null, meta?: Record<string, unknown>): Promise<void> {
   await recordUsage({
     provider: 'openai',
     endpoint,
     unit:     'images',
     quantity: count,
     keyHash:  keyFingerprint(key ?? process.env.OPENAI_API_KEY),
+    ...(meta ? { meta } : {}),
   });
 }
 
