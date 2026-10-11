@@ -14,6 +14,8 @@ import { demandInversionInsight, funnelBlindSpotInsight } from '@/lib/insights';
 // canonical topics server-side (Const II.6/II.7). Everything is imported back
 // here and the previously-exported names are re-exported, so every existing
 // consumer of this module keeps working unchanged.
+import type { NodeMapping } from '@/lib/pages/pageMap';
+import type { PageOverrides } from '@/lib/pages/electPage';   // v7.555: the page map reaches this panel
 import {
   INTENT_META, JOURNEY_ORDER, JOURNEY_LABELS, isCoreKey,
   buildThemeClusters, buildPreProductClusters, flattenTopics,
@@ -21,6 +23,7 @@ import {
   buildTopicsFromTaxonomy as _buildTopicsFromTaxonomy,
   buildCanonicalClusterTopics as _buildCanonicalClusterTopics,
   pageRootTopics, pageInventory,   // v7.541: URL-rooted clusters (Const III.5 v0.39)
+  pageUrlSummary,                   // v7.555: unique-URL count per theme / umbrella header
   type IntentType as _IntentType, type JourneyStage, type KwItem as _KwItem,
   type IntentCluster, type ThemeCluster, type Topic as _Topic,
 } from '@/lib/clusters/canonical';
@@ -677,6 +680,23 @@ function PlanCheckbox({ state, saving, onToggle, label, size = 15 }: {
   );
 }
 
+// v7.555: "N unique URLs · M to build" on a theme / umbrella header — one shared count
+// (lib/clusters/canonical.ts pageUrlSummary). Numbers are bold in the header's OWN colour: the
+// hero's green/amber measured 3.1:1 on the light procedure-tint header band (WCAG needs 4.5).
+function UrlNote({ ts }: { ts: Topic[] }) {
+  const s = pageUrlSummary(ts);
+  const title = `${s.uniqueUrls} distinct existing page URL${s.uniqueUrls === 1 ? '' : 's'} these topics are mapped to`
+    + (s.existingUrlUnknown > 0 ? ` · ${s.existingUrlUnknown} existing topic${s.existingUrlUnknown === 1 ? '' : 's'} with no URL on file` : '')
+    + ` · ${s.build} net-new page${s.build === 1 ? '' : 's'} to build`;
+  return (
+    <span title={title} data-url-note="">
+      <span style={{ fontWeight: 700 }}>{s.uniqueUrls}</span> unique {s.uniqueUrls === 1 ? 'URL' : 'URLs'}
+      {s.existingUrlUnknown > 0 && <> (+{s.existingUrlUnknown} not on file)</>}
+      {s.build > 0 && <> · <span style={{ fontWeight: 700 }}>{s.build}</span> to build</>}
+    </span>
+  );
+}
+
 function TopicTable({
   rows, sortKey, sortDir, onSort, expanded, onToggle, expandedParents, onToggleParent,
   expandedUmbrellas, onToggleUmbrella,
@@ -733,7 +753,12 @@ function TopicTable({
             // the whole group into the Content Plan in one click (keyed exactly like `agg`/`umbAgg`).
             const themeIds = new Map<string, string[]>();
             const umbIds = new Map<string, string[]>();
+            // v7.555: the topics under each theme / umbrella, for the unique-URL line (pageUrlSummary)
+            const themeTopics = new Map<string, Topic[]>();
+            const umbTopics = new Map<string, Topic[]>();
             for (const r of rows) {
+              (themeTopics.get(r.t.parentName) ?? themeTopics.set(r.t.parentName, []).get(r.t.parentName)!).push(r.t);
+              (umbTopics.get(r.t.umbrella) ?? umbTopics.set(r.t.umbrella, []).get(r.t.umbrella)!).push(r.t);
               const a = agg.get(r.t.parentName) ?? { n: 0, vol: 0 };
               a.n += 1; a.vol += r.t.totalVolume; agg.set(r.t.parentName, a);
               const u = umbAgg.get(r.t.umbrella) ?? { n: 0, vol: 0 };
@@ -770,7 +795,7 @@ function TopicTable({
                           {!selfUmb && <span style={{ fontSize: 9, color: 'var(--c-585878)', textTransform: 'uppercase', letterSpacing: '.06em' }}>umbrella</span>}
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                          {ua.n} {ua.n === 1 ? 'topic' : 'topics'} · {fmtVol(ua.vol)}/mo
+                          {ua.n} {ua.n === 1 ? 'topic' : 'topics'} · <UrlNote ts={umbTopics.get(t.umbrella) ?? []} /> · {fmtVol(ua.vol)}/mo
                         </span>
                       </div>
                     </td>
@@ -803,7 +828,7 @@ function TopicTable({
                           <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-e2e2f6)' }}>{t.parentName}</span>
                         </span>
                         <span style={{ fontSize: 10.5, color: 'var(--c-8a8ab0)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                          {a.n} {a.n === 1 ? 'topic' : 'topics'} · {fmtVol(a.vol)}/mo
+                          {a.n} {a.n === 1 ? 'topic' : 'topics'} · <UrlNote ts={themeTopics.get(t.parentName) ?? []} /> · {fmtVol(a.vol)}/mo
                         </span>
                       </div>
                     </td>
@@ -946,6 +971,8 @@ function ClustersTab({
   keywordPaths,
   projectId,
   kwVersion = 0,
+  pageOverrides,
+  pageMapNodes,
 }: {
   clusters:      ThemeCluster[];
   clientDomain:  string;
@@ -958,6 +985,11 @@ function ClustersTab({
   aiRefined?:       boolean;
   projectId?:       string;   // v7.371: needed for the Content-Plan add-to-cart wiring
   kwVersion?:       number;   // v7.371: refetch the plan selection when keywords change
+  // v7.555: the SAME page inputs buildCanonicalClusterTopics roots on (user "Set page" overrides +
+  // the automatic intent-matched page map). Before v7.555 this panel rooted on the ranking vote
+  // alone, so its existing/net-new counts could disagree with every canonical surface (II.7).
+  pageOverrides?:   PageOverrides;
+  pageMapNodes?:    Record<string, NodeMapping>;
 }) {
   const [filter, setFilter] = useState<ClusterFilter>('all');
   // v7.371: shared Content-Plan selection — checking a topic / theme / umbrella here pushes it
@@ -1008,7 +1040,8 @@ function ClustersTab({
   // net-new page) — the SAME pass buildCanonicalClusterTopics applies, so this panel's count
   // is the Content Plan's / Journey's / Exec's count by construction (Const II.7, III.5 v0.39).
   const flatten = (cl: ThemeCluster[]): Topic[] =>
-    pageRootTopics((keywordPaths && keywordPaths.size > 0) ? buildTopicsFromTaxonomy(cl, keywordPaths) : flattenTopics(cl));
+    pageRootTopics((keywordPaths && keywordPaths.size > 0) ? buildTopicsFromTaxonomy(cl, keywordPaths) : flattenTopics(cl),
+                   pageOverrides, pageMapNodes);   // v7.555: page map + overrides, same as the canonical build
   const topics: Topic[] = flatten(scopedClusters);
   const topicStats: TopicStat[] = topics.map(classifyTopic);
   const catCount = new Set(scopedClusters.map(c => `${c.type}:${c.name}`)).size;
@@ -1921,11 +1954,21 @@ export default function ThemeClustersPanel({
   // when keywordPaths exist, the intent flatten only as the pre-taxonomy fallback — so
   // the header reconciles with the "Total clusters" card by construction (Const II.7;
   // QC audit A1: header said 360 while the cards/funnel/chips/Exec all said 531).
+  // v7.555: the page map + "Set page" overrides ride on the snapshot (page.tsx analysisForPanels),
+  // exactly where buildCanonicalClusterTopics reads them — one source, every surface.
+  const pageOverrides = useMemo(() => {
+    const po = effectiveAnalysis?.semrushSnapshot?._pageOverrides;
+    return (po && typeof po === 'object') ? (po as PageOverrides) : undefined;
+  }, [effectiveAnalysis]);
+  const pageMapNodes = useMemo(() => {
+    const pm = effectiveAnalysis?.semrushSnapshot?._pageMapNodes;
+    return (pm && typeof pm === 'object') ? (pm as Record<string, NodeMapping>) : undefined;
+  }, [effectiveAnalysis]);
   const topicCnt   = useMemo(
     () => pageRootTopics(keywordPathsMap.size > 0
       ? buildTopicsFromTaxonomy(allClusters, keywordPathsMap)
-      : flattenTopics(allClusters)).length,   // v7.541: page-rooted, same pass as ClustersTab
-    [allClusters, keywordPathsMap],
+      : flattenTopics(allClusters), pageOverrides, pageMapNodes).length,   // v7.541/v7.555: page-rooted on the page map, same pass as ClustersTab
+    [allClusters, keywordPathsMap, pageOverrides, pageMapNodes],
   );
   const catCnt     = allClusters.length;
 
@@ -2004,6 +2047,8 @@ export default function ThemeClustersPanel({
           keywordPaths={keywordPathsMap}
           projectId={projectId}
           kwVersion={kwVersion}
+          pageOverrides={pageOverrides}
+          pageMapNodes={pageMapNodes}
         />
       )}
     </div>

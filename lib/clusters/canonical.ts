@@ -1453,6 +1453,22 @@ export function pageInventory(topics: Topic[]): PageInventory {
   };
 }
 
+// v7.555: the unique-URL line on every theme / umbrella header. Counts DISTINCT normalised page
+// URLs the group's clusters are rooted on — measured from the rows, never assumed from the
+// one-cluster-per-URL rule — plus the clusters that are pages to build and the existing
+// clusters whose URL is not on file, so urls + unknown + build == topics whenever every
+// cluster owns its own URL (the invariant the suite checks).
+export interface PageUrlSummary { topics: number; uniqueUrls: number; existingUrlUnknown: number; build: number }
+export function pageUrlSummary(topics: Array<Pick<Topic, 'pageKind' | 'pageUrl'>>): PageUrlSummary {
+  const urls = new Set<string>();
+  let unknown = 0, build = 0;
+  for (const t of topics) {
+    if (t.pageKind === 'existing') { if (t.pageUrl) urls.add(normContentUrl(t.pageUrl)); else unknown++; }
+    else if (t.pageKind === 'net-new') build++;
+  }
+  return { topics: topics.length, uniqueUrls: urls.size, existingUrlUnknown: unknown, build };
+}
+
 // v7.541: the ONE existing-vs-build predicate for a page-rooted topic. Readers that still see
 // a raw node (no pageKind) fall back to the pre-v7.541 rule so nothing silently changes shape.
 export function topicIsExistingPage(t: { pageKind?: PageKind; pageUrl?: string; keywords: Array<{ position: number | null; isGap: boolean; origin?: 'footprint' | 'demand' }> }): boolean {
