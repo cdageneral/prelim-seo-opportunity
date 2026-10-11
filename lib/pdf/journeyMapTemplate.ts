@@ -26,6 +26,7 @@ import {
   MIND_COL_LABELS, truncMindLabel,
   type MindLayout, type MindNode, type MindPlanState,
 } from '@/lib/journey/mapLayout';
+import { fmtSummaryVol, type JourneyPdfSummary } from '@/lib/journey/segmentSummary';
 
 // ── Page geometry: Letter LANDSCAPE at 96dpi ────────────────────────────────────
 const PAGE_W = 1056;
@@ -72,6 +73,8 @@ export interface JourneyMapInput {
   segmentLabel?: string | null;
   planCount: number;
   umbrellas: JourneyMapUmbrella[];
+  /** v7.554: the panel's segment summary or all-journeys rollup — printed as page 2, never re-derived */
+  summary?: JourneyPdfSummary | null;
   generatedAt: string;
 }
 
@@ -253,7 +256,7 @@ function coverPage(d: JourneyMapInput): string {
       <div class="tile"><div class="tv">${n0(totals.topics)}</div><div class="tl">Topics</div></div>
       <div class="tile"><div class="tv green">${n0(totals.existing)}</div><div class="tl">Existing pages</div></div>
       <div class="tile"><div class="tv red">${n0(totals.build)}</div><div class="tl">To build</div></div>
-      <div class="tile"><div class="tv">${n0(d.planCount)}</div><div class="tl">In Content Plan</div></div>
+      <div class="tile"><div class="tv">${n0(totals.plan)}</div><div class="tl">In Content Plan</div></div>
     </div>
     <table class="tbl">
       <tr><th>Umbrella</th><th class="num">Volume</th><th class="num">Categories</th><th class="num">Topics</th><th class="num">Existing</th><th class="num">Build</th><th class="num">In plan</th></tr>
@@ -373,6 +376,85 @@ function mapPages(u: JourneyMapUmbrella, d: JourneyMapInput, layout: MindLayout,
   }).join('');
 }
 
+/**
+ * v7.554: the segment Journey & Content Gap page (one segment selected) or the
+ * all-journeys rollup page (All Segments). Every figure is the panel's own, handed over
+ * pre-computed by lib/journey/segmentSummary.ts — this function formats, it never counts.
+ * Covers BOTH journey lanes (the panel summary does), whatever lane the map pages show.
+ * No persona photo: the report stays fully self-contained (no external requests).
+ */
+export function summaryPage(d: JourneyMapInput): string {
+  const sm = d.summary;
+  if (!sm) return '';
+  const sl = sm.slice;
+  const tiles = `<div class="tiles">
+      <div class="tile"><div class="tv">${n0(sl.lobs)}</div><div class="tl">LOBs</div></div>
+      <div class="tile"><div class="tv">${n0(sl.categories)}</div><div class="tl">Categories</div></div>
+      <div class="tile"><div class="tv">${n0(sl.topics)}</div><div class="tl">Topics</div></div>
+      <div class="tile"><div class="tv green">${n0(sl.existing)}</div><div class="tl">Existing pages</div></div>
+      <div class="tile"><div class="tv red">${n0(sl.build)}</div><div class="tl">To build</div></div>
+      <div class="tile"><div class="tv">${n0(sl.inPlan)}</div><div class="tl">In Content Plan</div></div>
+    </div>`;
+  const table = sl.umbrellas.length ? `<table class="tbl">
+      <tr><th>Umbrella</th><th class="num">Volume</th><th class="num">Categories</th><th class="num">Topics</th><th class="num">Existing</th><th class="num">Build</th><th class="num">In plan</th></tr>
+      ${sl.umbrellas.map(u => `<tr>
+        <td><b>${esc(u.name)}</b></td>
+        <td class="num">${esc(fmtSummaryVol(u.volume))}/mo</td>
+        <td class="num">${n0(u.categories)}</td>
+        <td class="num">${n0(u.topics)}</td>
+        <td class="num green">${n0(u.existing)}</td>
+        <td class="num red">${n0(u.build)}</td>
+        <td class="num">${n0(u.inPlan)}</td>
+      </tr>`).join('')}
+    </table>` : `<div class="sub">No journey topics are attributed to this segment yet.</div>`;
+
+  if (sm.kind === 'segment' && sm.persona) {
+    const p = sm.persona;
+    const blk = (t: string, v?: string) => v ? `<div class="pblk"><div class="plab">${esc(t)}</div><div class="ptxt">${esc(v)}</div></div>` : '';
+    const path = (p.touchpoints ?? []).length
+      ? `<div class="pblk"><div class="plab">Path to purchase</div>${(p.touchpoints ?? []).map((tp, i) => `<div class="ptxt"><b>${i + 1}. ${esc(tp.stage)}</b>${tp.description ? ` &mdash; ${esc(tp.description)}` : ''}</div>`).join('')}</div>` : '';
+    return `<section class="page" data-summary="segment">
+      <div class="kicker">OrbitIQ &middot; Audience journey</div>
+      <h1 style="font-size:28px">${esc(p.label)}: <span style="color:var(--umb)">Journey &amp; Content Gap</span></h1>
+      <div class="sumgrid">
+        <div class="pcard">
+          <div class="plabel">${esc(p.label)}</div>
+          <div class="pname">${esc(p.name)}</div>
+          ${p.volumePct ? `<div class="ppct"><b>${n0(p.volumePct)}%</b> of volume <span>(modeled share of real demand)</span></div>` : ''}
+          ${p.tagline ? `<div class="pquote">&ldquo;${esc(p.tagline)}&rdquo;</div>` : ''}
+          ${blk('Who they are', p.demographics)}
+          ${blk('The wake-up call', p.trigger)}
+          ${blk('Influence & validation', p.influencerRole)}
+          ${path}
+          ${blk('Messaging that wins', p.messagingAndTone)}
+        </div>
+        <div class="sumright">${tiles}${table}${legend()}</div>
+      </div>
+      <div class="src">Both journey lanes. Volumes are real Semrush monthly searches, each keyword counted once. Topics are attributed to this segment by the audience-language partition every panel uses (a modeled attribution, Constitution I.5a). In plan = this segment&rsquo;s topics in the Content Plan. Figures are the panel&rsquo;s own (Constitution II.6a).</div>
+    </section>`;
+  }
+
+  const r = sm.rollup;
+  if (!r) return '';
+  const segCards = r.segments.length
+    ? `<div class="rsegs">${r.segments.map(s => `<div class="rseg"><div class="rsl">${esc(s.label)}</div><div class="rsv">${n0(s.topics)}</div><div class="rss">${esc(s.name)}</div></div>`).join('')}
+        <div class="rseg ov"><div class="rsl">Overlapping segments</div><div class="rsv">${n0(r.shared)}</div><div class="rss">shared across segments</div></div></div>` : '';
+  return `<section class="page" data-summary="rollup">
+    <div class="kicker">OrbitIQ &middot; All audience journeys</div>
+    <div class="rhead">Total pages required in all product journeys</div>
+    <div class="rtop">
+      <div><div class="rbig">${n0(r.topics)}</div><div class="sub">topics across ${n0(r.categories)} categories &middot; <span class="green">${n0(sl.existing)} existing</span> &middot; <span class="red">${n0(sl.build)} to build</span></div></div>
+      <div class="rvol">
+        <div class="rvl">Total annual search volume</div><div><span class="rvv">${esc(fmtSummaryVol(r.annualVolume))}</span> searches / yr</div>
+        <div class="rvl" style="margin-top:8px">Total monthly volume</div><div><span class="rvv2">${esc(fmtSummaryVol(r.monthlyVolume))}</span> searches / mo</div>
+      </div>
+    </div>
+    ${segCards}
+    ${table}
+    <div class="src">One topic = one page; both journey lanes. Monthly volume is the real Semrush average monthly searches across every journey keyword, each keyword counted once; annual = monthly &times; 12.${r.segments.length ? ' Segment counts use the panels&rsquo; audience-language partition (a modeled attribution, Constitution I.5a); overlapping = topics shared by more than one segment or matching none specifically. Segments + overlapping sum to the total.' : ''} Figures are the panel&rsquo;s own (Constitution II.6a).</div>
+  </section>`;
+}
+
 function umbrellaPages(u: JourneyMapUmbrella, d: JourneyMapInput): string {
   // An umbrella leads with its shape — umbrella -> categories, the whole product line
   // at a glance — then every topic underneath it. Both trees come from the same builder.
@@ -416,9 +498,31 @@ export function buildJourneyMapHTML(d: JourneyMapInput): string {
   .lg { display:inline-flex; align-items:center; gap:6px; }
   .lg i { width:10px; height:10px; border-radius:3px; display:inline-block; }
   .src { font-size:9px; color:var(--faint); line-height:1.5; margin-top:16px; max-width:9in; }
+  .sumgrid { display:flex; gap:18px; margin-top:12px; align-items:flex-start; }
+  .pcard { width:3.1in; flex:none; background:var(--card); border:1px solid var(--line); border-top:4px solid var(--umb); border-radius:10px; padding:12px 14px; }
+  .plabel { font-size:8.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--umb); }
+  .pname { font-size:17px; font-weight:700; margin-top:2px; }
+  .ppct { font-size:10.5px; color:var(--muted); margin-top:4px; } .ppct span { color:var(--faint); font-size:9px; }
+  .pquote { font-size:10.5px; font-style:italic; border-left:3px solid var(--umb); padding-left:8px; margin-top:8px; line-height:1.45; }
+  .pblk { margin-top:8px; } .plab { font-size:8px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--cat); }
+  .ptxt { font-size:9.5px; color:var(--muted); line-height:1.45; margin-top:1px; }
+  .sumright { flex:1; min-width:0; } .sumright .tiles { margin-top:0; }
+  .rhead { font-size:15px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--umb); margin-top:10px; }
+  .rtop { display:flex; gap:36px; align-items:center; margin:8px 0 14px; }
+  .rbig { font-size:88px; font-weight:800; line-height:1; color:var(--cat); }
+  .rvol { border-left:4px solid var(--umb); padding-left:18px; font-size:12px; color:var(--muted); }
+  .rvl { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .rvv { font-size:34px; font-weight:800; color:var(--cat); } .rvv2 { font-size:24px; font-weight:800; color:var(--muted); }
+  .rsegs { display:flex; gap:12px; margin-bottom:14px; }
+  .rseg { flex:1; background:var(--card); border-top:5px solid var(--cat); padding:10px 14px; border-radius:0 0 8px 8px; }
+  .rseg.ov { border-top-color:var(--umb); } .rseg.ov .rsv { color:var(--umb); }
+  .rsl { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .rsv { font-size:34px; font-weight:800; color:var(--cat); line-height:1.1; }
+  .rss { font-size:10px; color:var(--muted); }
   .stamp { position:absolute; left:${MARGIN}px; bottom:${MARGIN}px; font-size:9px; color:var(--faint); }
 </style></head><body>
 ${coverPage(d)}
+${summaryPage(d)}
 ${d.umbrellas.map(u => umbrellaPages(u, d)).join('')}
 </body></html>`;
 }

@@ -55,6 +55,8 @@ import {
   SHARED_BUCKET, type SegmentLike,
 } from '@/lib/journey/segments';
 import { JOURNEY_ORDER, JOURNEY_LABELS, type JourneyStage as CanonStage } from '@/lib/clusters/canonical';
+import { summarizeJourneySlice, summarizeJourneyRollup } from '@/lib/journey/segmentSummary';   // v7.554 (II.6b)
+import { segmentLabelAt } from '@/lib/audience/segmentRows';
 // v7.405: the Part V counts (striking-distance set, Pareto cut, AIO/PAA on that
 // same keyword set) — pure functions over the shared pool, so the report and the
 // panels cannot drift (Const II.6/II.7).
@@ -154,6 +156,8 @@ export interface JourneyTopicLike {
   parentType:  string;
   product:     string;
   pageUrl?:    string;
+  pageKind?:   'existing' | 'net-new';   // v7.554: typed (always carried at runtime) — the existing-page rule reads it
+  umbrella?:   string;                   // v7.554: the stored product line the Journey summary groups by
   stage:       CanonStage;
   totalVolume: number;
   // v7.404: `url` (the client's ranking URL for this keyword) is now carried
@@ -1661,6 +1665,53 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       ${jGroupBars}
       ${jRead ? `<div class="callout" style="margin-top:10px;"><div class="t">READ</div><p>${jRead}</p></div>` : ''}
       <div class="src">Source: journey map over canonical topic clusters — counts and volumes are real rows; stage and segment links are model-inferred, labeled.${jPreN === 0 ? ' The pre-product (life-events) lane joins this map once that journey build runs.' : ''}</div>`));
+  }
+
+  // v7.554 (II.6b): the Journey panel's new summary — total pages the journeys require, the
+  // real volume behind them, and each segment's Journey & Content Gap — printed off the SAME
+  // builder the panel and the Journey-map PDF run (lib/journey/segmentSummary.ts), over the
+  // same canonical topics and the same segment partition this report already uses above.
+  // "In plan" is omitted here: this report carries no Content Plan selection (honest gap, I.5).
+  if (hasSeg && hasJourney) {
+    const roll = summarizeJourneyRollup(jt as any, segs, segTok, segmentLabelAt);
+    const none = new Set<string>();
+    const allSl = summarizeJourneySlice(jt as any, none);
+    const SEG_ACC2 = ['var(--blue)', 'var(--good)', 'var(--violet)', 'var(--aqua)'];
+    const segRows = segs.map((s, i) => {
+      const sl = summarizeJourneySlice(jt.filter(t => segMap.get(t.id) === s.id) as any, none);
+      const top = sl.umbrellas[0];
+      return `<tr><td><b style="color:${SEG_ACC2[i % SEG_ACC2.length]};">${esc(segmentLabelAt(i))}</b> &middot; ${esc(s.name ?? '')}</td>
+        <td class="n">${n0(sl.lobs)}</td><td class="n">${n0(sl.categories)}</td><td class="n">${n0(sl.topics)}</td>
+        <td class="n" style="color:var(--good);">${n0(sl.existing)}</td><td class="n" style="color:var(--critical);">${n0(sl.build)}</td>
+        <td>${top ? `${esc(top.name)} &middot; ${vol(top.volume)}/mo` : '&mdash;'}</td></tr>`;
+    }).join('');
+    // No cap (I.6): the first page holds UMB_FIRST product lines; the rest continue on their
+    // own pages, UMB_CONT per page, so a fixed-height page never clips a row.
+    const UMB_FIRST = 12, UMB_CONT = 30;
+    const umbRow = (u: typeof allSl.umbrellas[number]) => `<tr><td><b>${esc(u.name)}</b></td><td class="n">${vol(u.volume)}/mo</td><td class="n">${n0(u.categories)}</td><td class="n">${n0(u.topics)}</td><td class="n" style="color:var(--good);">${n0(u.existing)}</td><td class="n" style="color:var(--critical);">${n0(u.build)}</td></tr>`;
+    const umbHead = `<tr><th>Umbrella</th><th style="width:.8in;">Volume</th><th style="width:.75in;">Categories</th><th style="width:.6in;">Topics</th><th style="width:.65in;">Existing</th><th style="width:.55in;">Build</th></tr>`;
+    const umbRows = allSl.umbrellas.slice(0, UMB_FIRST).map(umbRow).join('');
+    const umbRest = allSl.umbrellas.slice(UMB_FIRST);
+    pages.push(pageWrap('JOURNEY &amp; CONTENT GAP', partWho, `
+      <h1 class="pg">${n0(roll.topics)} pages complete every product journey. ${n0(allSl.build)} of them don't exist yet.</h1>
+      <div class="lede">Every topic on the journey map is one page. Across <b>${n0(roll.categories)} categories</b> they carry <b>${vol(roll.monthlyVolume)} searches a month</b> (${vol(roll.annualVolume)} a year) &mdash; <b>${n0(allSl.existing)}</b> already have a ${brandName} page to optimize and <b>${n0(allSl.build)}</b> must be built.</div>
+      <div class="tiles c3" style="margin-bottom:13px;">
+        ${tile('Total pages required', n0(roll.topics), `Topics across ${n0(roll.categories)} categories, both journey lanes.`)}
+        ${tile('Annual search volume', vol(roll.annualVolume), `Monthly ${vol(roll.monthlyVolume)} × 12; each keyword counted once.`)}
+        ${tile('Pages to build', n0(allSl.build), `${n0(allSl.existing)} existing pages to optimize.`, 'bad')}
+      </div>
+      <div class="figtitle">Content articles by segment</div>
+      <div class="figsub">${roll.segments.map(x => `${esc(x.label)} ${n0(x.topics)}`).join(' &middot; ')} &middot; Overlapping segments ${n0(roll.shared)} &mdash; sums to ${n0(roll.topics)}</div>
+      <table class="dt" style="margin-bottom:12px;"><tr><th>Segment</th><th style="width:.5in;">LOBs</th><th style="width:.7in;">Categories</th><th style="width:.55in;">Topics</th><th style="width:.6in;">Existing</th><th style="width:.5in;">Build</th><th style="width:2.1in;">Biggest product line</th></tr>${segRows}</table>
+      <div class="figtitle">Journey &amp; content gap by product line</div>
+      <table class="dt" style="margin-bottom:6px;">${umbHead}${umbRows}</table>
+      ${umbRest.length ? `<div class="figsub">Showing ${n0(UMB_FIRST)} of ${n0(allSl.umbrellas.length)} product lines by volume &mdash; the remaining ${n0(umbRest.length)} continue on the next page.</div>` : ''}
+      <div class="src">Source: the Journey panel summary (one shared builder) over canonical topic clusters. Volumes are real scanned monthly searches, each keyword counted once; annual = monthly × 12. Segment counts use the audience-language partition (a modeled attribution, Constitution I.5a); overlapping = topics shared by more than one segment or matching none specifically.</div>`));
+    for (let i = 0; i < umbRest.length; i += UMB_CONT) {
+      pages.push(pageWrap('JOURNEY &amp; CONTENT GAP (CONTINUED)', partWho, `
+      <div class="figtitle">Journey &amp; content gap by product line &mdash; lines ${n0(UMB_FIRST + i + 1)}&ndash;${n0(Math.min(allSl.umbrellas.length, UMB_FIRST + i + UMB_CONT))} of ${n0(allSl.umbrellas.length)}</div>
+      <table class="dt" style="margin-bottom:6px;">${umbHead}${umbRest.slice(i, i + UMB_CONT).map(umbRow).join('')}</table>`));
+    }
   }
 
   // ── Program (v7.405) ───────────────────────────────────────────────────────

@@ -13,7 +13,11 @@ import {
 } from '@/lib/journey/graph';
 import { buildKwPool, filterUniverseExcludedBrands, buildCompetitorBrandDropTest } from '@/lib/utils/kwVolume';   // v7.208: competitor-brand blocklist on the demand lens; v7.335: canonical pool for buildClusters (Const II.7, QC audit B1); v7.337: FULL competitor-brand drop test on the demand lens (QC audit B9a)
 import { buildCategoryGuard } from '@/lib/category/categoryGuard';   // v7.335 (QC audit B1): guard on buildClusters/classifier category reads (Const III.1a)
-import SegmentDownloadButton from './SegmentDownloadButton';   // v7.328: per-segment XLSX download
+import SegmentDownloadButton from './SegmentDownloadButton';
+// v7.554: segment Journey & Content Gap summary + all-journeys rollup (one builder, panel + PDF)
+import { SegmentJourneySummary, AllJourneysRollup, type SummaryPersona } from './JourneySegmentSummary';
+import { summarizeJourneySlice, summarizeJourneyRollup, type JourneyPdfSummary } from '@/lib/journey/segmentSummary';
+import { segmentLabelAt } from '@/lib/audience/segmentRows';   // v7.328: per-segment XLSX download
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
 import { mandateInsight, preProductZeroInsight } from '@/lib/insights';   // v7.366 (G6 + pre-product zero)
@@ -91,6 +95,8 @@ interface AudienceSegment {
   whoTheyAre:      { demographics: string; trigger: string; influencerRole?: string };
   preLLMPrompts:   string[];
   productPrompts:  string[];
+  touchpoints?:    Array<{ stage: string; description: string }>;   // v7.554: persona card path
+  messagingAndTone?: string;                                         // v7.554: persona card
 }
 
 interface Props {
@@ -1687,7 +1693,7 @@ function PlanCheckbox({ state, saving, onToggle, label, size = 16 }: {
 // the cluster count instead of the demand-universe graph. The map is a collapsible
 // parent-category list (the flat node map can't legibly show thousands of clusters),
 // grouped into the two journey lanes. Every number is a real roll-up of the topics.
-export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null, projectId = '', kwVersion = 0, clientName = 'client' }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; projectId?: string; kwVersion?: number; clientName?: string }) {
+export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel = null, projectId = '', kwVersion = 0, clientName = 'client', onPlanIdsChange }: { topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; projectId?: string; kwVersion?: number; clientName?: string; onPlanIdsChange?: (ids: Set<string>) => void }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   // v7.247: Product / Pre-product / All journey scope (matches the Cluster panel).
@@ -1695,6 +1701,9 @@ export function CanonicalJourneyView({ topics, problemSeeds = [], segmentLabel =
   // v7.266: same Content-Plan selection the mind-map / Content Map use — checking a topic (or a
   // whole category / lane) in this list pushes it into the shared plan set (Const II.7).
   const { planIds, planStateForIds, savingForIds, toggleIds, clearPlan } = useContentPlanSelection(projectId, kwVersion);
+  // v7.554: report the live plan selection up so the segment summary's "In plan" reads
+  // THIS hook's state (the one the checkboxes write) — no second copy (Const II.7).
+  useEffect(() => { onPlanIdsChange?.(planIds); }, [planIds]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // v7.223: a topic is PRE-PRODUCT (problem-aware, awareness-only — Const III.2a) when it
   // is a 'problem' cluster OR a missing-demand cluster seeded by a problem head term from
@@ -2012,8 +2021,11 @@ const MIND_LEVEL = [
   { border: 'var(--c-22d3ee)', bg: 'var(--ca-34-211-238-0_06)', label: 'Topic' },
 ];
 
-export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null, clientDomain = '', projectId = '', kwVersion = 0 }: {
+export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null, clientDomain = '', projectId = '', kwVersion = 0, onPlanIdsChange, pdfSummary = null }: {
   topics: CanonicalJourneyTopic[]; problemSeeds?: string[]; segmentLabel?: string | null; clientDomain?: string; projectId?: string; kwVersion?: number;
+  onPlanIdsChange?: (ids: Set<string>) => void;
+  /** v7.554: the panel's segment summary / all-journeys rollup, printed as the PDF's summary page (same builder) */
+  pdfSummary?: JourneyPdfSummary | null;
 }) {
   const [journeyScope, setJourneyScope] = useState<'all' | 'product' | 'pre'>('all');
   const [focusUmbrella, setFocusUmbrella] = useState<string | null>(null);
@@ -2036,6 +2048,9 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
   // source of truth, no parallel copy; Const II.7). idsForNode (below) maps a node to its topic
   // ids; the hook handles load / optimistic persist / saving state / clear.
   const { planIds, planStateForIds, savingForIds, toggleIds, clearPlan } = useContentPlanSelection(projectId, kwVersion);
+  // v7.554: report the live plan selection up so the segment summary's "In plan" reads
+  // THIS hook's state (the one the checkboxes write) — no second copy (Const II.7).
+  useEffect(() => { onPlanIdsChange?.(planIds); }, [planIds]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const problemSet = useMemo(() => new Set((problemSeeds ?? []).map(s => s.toLowerCase().trim())), [problemSeeds]);
   const isPreProduct = (t: CanonicalJourneyTopic): boolean =>
@@ -2234,6 +2249,7 @@ export function JourneyMindMap({ topics, problemSeeds = [], segmentLabel = null,
           segmentLabel: segmentLabel ?? null,
           planCount: planIds.size,
           umbrellas: payloadUmbrellas,
+          summary: pdfSummary ?? null,
         }),
       });
       if (!res.ok) {
@@ -2936,6 +2952,43 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
   // layout — the segment selector is now a flat row of boxes (the active segment box
   // expands inline), so no measured SVG connector is needed.
 
+  // v7.554 (Wayne 2026-10-11): the segment Journey & Content Gap summary and the
+  // all-journeys rollup. Built by ONE pure builder (lib/journey/segmentSummary.ts) that
+  // the Journey-map PDF prints too. Both lanes, the segment's own canonical slice (the
+  // SAME filteredCanonicalTopics the map draws) and the live Content Plan selection
+  // reported up by whichever view is mounted.
+  const [summaryPlanIds, setSummaryPlanIds] = useState<Set<string>>(new Set());
+  const segIndex = activeSegment ? segments.indexOf(activeSegment) : -1;
+  const segAccent = segIndex >= 0 ? SEGMENT_ACCENTS[segIndex % SEGMENT_ACCENTS.length].text : 'var(--c-a78bfa)';
+  const segSlice = useMemo(
+    () => (activeSegment && filteredCanonicalTopics) ? summarizeJourneySlice(filteredCanonicalTopics as any, summaryPlanIds) : null,
+    [activeSegment, filteredCanonicalTopics, summaryPlanIds],
+  );
+  const allSlice = useMemo(
+    () => (!activeSegment && canonicalTopics?.length) ? summarizeJourneySlice(canonicalTopics as any, summaryPlanIds) : null,
+    [activeSegment, canonicalTopics, summaryPlanIds],
+  );
+  const rollup = useMemo(
+    () => (!activeSegment && canonicalTopics?.length) ? summarizeJourneyRollup(canonicalTopics as any, segments, segTok, segmentLabelAt) : null,
+    [activeSegment, canonicalTopics, segments, segTok],
+  );
+  const persona: SummaryPersona | null = activeSegment ? {
+    label: segmentLabelAt(segIndex),
+    name: activeSegment.name,
+    tagline: activeSegment.tagline,
+    volumePct: activeSegment.volumePct,
+    personaImageUrl: activeSegment.personaImageUrl,
+    demographics: activeSegment.whoTheyAre?.demographics,
+    trigger: activeSegment.whoTheyAre?.trigger,
+    influencerRole: activeSegment.whoTheyAre?.influencerRole,
+    touchpoints: activeSegment.touchpoints,
+    messagingAndTone: activeSegment.messagingAndTone,
+  } : null;
+  const pdfSummary: JourneyPdfSummary | null =
+    persona && segSlice ? { kind: 'segment', persona, slice: segSlice }
+  : rollup && allSlice  ? { kind: 'rollup', slice: allSlice, rollup }
+  : null;
+
   const preLLMPrompts = activeSegment
     ? (activeSegment.preLLMPrompts ?? [])
     : segments.flatMap((s: AudienceSegment) => s.preLLMPrompts ?? []);
@@ -3038,6 +3091,13 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
         })}
       </div>
 
+      {/* v7.554: segment summary (one segment selected) or the all-journeys rollup */}
+      {(canonicalTopics?.length ?? 0) > 0 && (
+        persona && segSlice ? <SegmentJourneySummary persona={persona} summary={segSlice} accent={segAccent} />
+        : rollup && allSlice ? <AllJourneysRollup rollup={rollup} existing={allSlice.existing} build={allSlice.build} accents={SEGMENT_ACCENTS.map(a => a.text)} />
+        : null
+      )}
+
       <Legend />
 
       {/* v7.337 (QC audit B9b, Const I.5): when the page's canonical topic build FAILED,
@@ -3067,6 +3127,7 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               clientName={clientDomain || 'client'}
               projectId={projectId}
               kwVersion={kwVersion}
+              onPlanIdsChange={setSummaryPlanIds}
             />
           ) : (
             <JourneyMindMap
@@ -3076,6 +3137,8 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
               clientDomain={clientDomain}
               projectId={projectId}
               kwVersion={kwVersion}
+              onPlanIdsChange={setSummaryPlanIds}
+              pdfSummary={pdfSummary}
             />
           )}
         </>

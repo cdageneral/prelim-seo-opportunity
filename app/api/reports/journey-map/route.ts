@@ -48,6 +48,30 @@ const LayoutSchema = z.object({
   colX: z.array(z.number()).length(3),
 });
 
+const UmbRowSchema = z.object({
+  name: z.string(), volume: z.number(), categories: z.number(), topics: z.number(),
+  existing: z.number(), build: z.number(), inPlan: z.number(),
+});
+const SummarySchema = z.object({
+  kind: z.enum(['segment', 'rollup']),
+  persona: z.object({
+    label: z.string(), name: z.string(),
+    tagline: z.string().optional(), volumePct: z.number().optional(), personaImageUrl: z.string().optional(),
+    demographics: z.string().optional(), trigger: z.string().optional(), influencerRole: z.string().optional(),
+    touchpoints: z.array(z.object({ stage: z.string(), description: z.string() }).passthrough()).optional(),
+    messagingAndTone: z.string().optional(),
+  }).passthrough().nullable().optional(),
+  slice: z.object({
+    lobs: z.number(), categories: z.number(), topics: z.number(), existing: z.number(),
+    build: z.number(), inPlan: z.number(), volume: z.number(), umbrellas: z.array(UmbRowSchema),
+  }),
+  rollup: z.object({
+    topics: z.number(), categories: z.number(), monthlyVolume: z.number(), annualVolume: z.number(),
+    segments: z.array(z.object({ id: z.string(), label: z.string(), name: z.string(), topics: z.number() })),
+    shared: z.number(),
+  }).nullable().optional(),
+});
+
 const Schema = z.object({
   clientDomain: z.string(),
   projectName: z.string().nullable().optional(),
@@ -62,6 +86,8 @@ const Schema = z.object({
     layout: LayoutSchema,
     overview: LayoutSchema.nullable().optional(),
   })).min(1),
+  // v7.554: the panel's segment summary / all-journeys rollup (lib/journey/segmentSummary.ts)
+  summary: SummarySchema.nullable().optional(),
 });
 
 export async function POST(req: NextRequest) {
