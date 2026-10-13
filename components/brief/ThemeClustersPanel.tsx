@@ -1334,8 +1334,23 @@ function ClustersTab({
                   {' · '}
                   <span style={{ color: 'var(--c-f59e0b)', fontWeight: 700 }}>{inv.netNew.toLocaleString()}</span> net-new pages
                 </div>
+                {/* v7.556: the mapped-page reconciliation, stated so the numbers add up on screen —
+                    existing pages with a URL = those that rank for a tracked keyword + those the
+                    page map / "Set page" chose that don't rank yet. */}
+                {inv.existingUrlKnown > 0 && (() => {
+                  const nr = inv.mappedNotRanking;
+                  const byMap = nr.filter(x => x.basis === 'map').length, byYou = nr.filter(x => x.basis === 'override').length, other = nr.length - byMap - byYou;
+                  const src = [byMap > 0 ? `${byMap} chosen by the page map` : '', byYou > 0 ? `${byYou} set by you` : '', other > 0 ? `${other} other` : ''].filter(Boolean).join(' · ');
+                  return (
+                    <div data-mapped-line="" style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 2, lineHeight: 1.5 }}
+                         title={nr.slice(0, 30).map(x => `${x.url} · ${x.product} · ${x.basis === 'map' ? 'page map' : x.basis === 'override' ? 'set by you' : 'other'}`).join('\n')}>
+                      {inv.existingUrlKnown.toLocaleString()} existing pages mapped · {inv.rootedUrls.toLocaleString()} rank for tracked keywords today
+                      {nr.length > 0 && <> · {nr.length.toLocaleString()} don't rank yet{src ? ` (${src})` : ''}</>}
+                    </div>
+                  );
+                })()}
                 <div style={{ fontSize: 10, color: 'var(--c-6a6a90)', marginTop: 2, lineHeight: 1.5 }} title={inv.unrootedUrls.slice(0, 20).map(u => `${u.url} · ${u.kwCount} kw · rooted on ${u.rootedOn.join(', ') || '—'}`).join('\n')}>
-                  {inv.rankingUrls.toLocaleString()} ranking URLs on file · {inv.rootedUrls.toLocaleString()} are cluster pages
+                  {inv.rankingUrls.toLocaleString()} ranking URLs on file
                   {inv.unrootedUrls.length > 0 && <> · {inv.unrootedUrls.length} rank only for keywords rooted on another page</>}
                   {inv.mergedNodes > 0 && <> · {inv.mergedNodes} topics share a page</>}
                 </div>

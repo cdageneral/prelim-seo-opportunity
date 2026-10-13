@@ -1424,6 +1424,11 @@ export interface PageInventory {
   existingUrlUnknown: number;
   netNew:             number;   // clusters with pageKind 'net-new'
   mergedNodes:        number;   // taxonomy nodes absorbed into another node's page
+  // v7.556: existing cluster pages (URL on file) that hold NO client rank for any keyword in this
+  // pool — pages the intent-matched page map (or a "Set page") chose that don't rank yet. The
+  // ranking vote can never produce one (it only elects ranking URLs), so every entry is labelled
+  // by its real basis. existingUrlKnown === rootedUrls + mappedNotRanking.length (suite-checked).
+  mappedNotRanking:   Array<{ url: string; product: string; basis: 'map' | 'override' | 'other' }>;
 }
 export function pageInventory(topics: Topic[]): PageInventory {
   const roots = new Map<string, string>();            // norm url → cluster label
@@ -1447,9 +1452,18 @@ export function pageInventory(topics: Topic[]): PageInventory {
     unrooted.push({ url, kwCount: a.kwCount, volume: a.volume, rootedOn: Array.from(a.rootedOn).sort() });
   }
   unrooted.sort((a, b) => b.volume - a.volume || a.url.localeCompare(b.url));
+  const mappedNotRanking: PageInventory['mappedNotRanking'] = [];
+  for (const t of topics) {
+    if (t.pageKind !== 'existing' || !t.urlKnown || !t.pageUrl) continue;
+    const norm = normContentUrl(t.pageUrl);
+    if (urlAcc.has(norm)) continue;
+    mappedNotRanking.push({ url: norm, product: t.product, basis: t.pageBasis === 'map' ? 'map' : t.pageBasis === 'override' ? 'override' : 'other' });
+  }
+  mappedNotRanking.sort((a, b) => a.url.localeCompare(b.url));
   return {
     rankingUrls: urlAcc.size, rootedUrls: Array.from(urlAcc.keys()).filter(u => roots.has(u)).length,
     unrootedUrls: unrooted, existing, existingUrlKnown: known, existingUrlUnknown: unknown, netNew, mergedNodes: merged,
+    mappedNotRanking,
   };
 }
 

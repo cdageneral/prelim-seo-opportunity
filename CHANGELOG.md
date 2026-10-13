@@ -1,3 +1,24 @@
+# v7.556 — Themes hero: mapped pages reconciled to ranking pages in plain words (2026-10-11)
+
+Wayne: *"yes do that"* — on rewording the hero line that read "148 ranking URLs on file · 107 are cluster pages"
+under "136 existing pages", which looked like a mismatch.
+
+- **Why it looked wrong.** Since v7.555 the panel roots on the intent-matched page map, which can choose a page that
+  holds no client rank for any tracked keyword (e.g. a category hub). "107 are cluster pages" counted only cluster
+  pages that also rank, so it sat under "136 existing pages" with no explanation.
+- **Now.** A new line states the reconciliation so it adds up on screen:
+  "136 existing pages mapped · 107 rank for tracked keywords today · 29 don't rank yet (N chosen by the page map ·
+  M set by you)". The basis split reads each cluster's stored `pageBasis`; the tooltip lists the non-ranking URLs.
+  The ranking-inventory line keeps "148 ranking URLs on file · 41 rank only for keywords rooted on another page ·
+  174 topics share a page".
+- **Shared builder.** `pageInventory` gains `mappedNotRanking` (url, topic, basis) — existing-with-URL ==
+  ranking-today + not-ranking, suite-checked.
+- **Verified.** Project `tsc` clean; real `next build` clean; suite zero delta (49 pre-existing FAILs identical to
+  v7.555); +8 checks in both themes (hand tally "3 mapped · 2 rank today · 1 don't rank yet (1 chosen by the page
+  map)"; the reconciliation identity; no-map fixture = every mapped page ranks); v541 inventory check updated by
+  design with a dated note.
+- Files: lib/clusters/canonical.ts, components/brief/ThemeClustersPanel.tsx, package.json.
+
 # v7.555 — Themes panel roots on the page map; unique-URL count on every theme summary (2026-10-11)
 
 Wayne: *"are the themes now mapped to unique URLs? so is the 100 existing matching 100 unique existing urls?"* …
