@@ -555,10 +555,8 @@ export default function KeywordsPanel({
   const clientName        = clientDomain || 'keywords';
 
   const [dbKeywords,  setDbKeywords]  = useState<DbKeyword[]>([]);
-  // v7.451: position-basis verification (organic rank vs SERP-feature placement)
-  const [verifyPlan, setVerifyPlan] = useState<{ unverified: number; window: number; note: string } | null>(null);
-  const [verifyBusy, setVerifyBusy] = useState(false);
-  const [verifyMsg,  setVerifyMsg]  = useState<string | null>(null);
+  // v7.557: Verify positions REMOVED (Wayne 2026-10-15). It spent Semrush units to confirm what a
+  // current Positions export already states; the banner now points to a free re-upload instead.
   const [dbLoaded,    setDbLoaded]    = useState(false);
   const [filter,      setFilter]      = useState<KwFilter>('all');
   const [rankFilter,  setRankFilter]  = useState<RankFilter>('all');
@@ -1233,63 +1231,21 @@ export default function KeywordsPanel({
             background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--c-f59e0b)' }}>
             <b>{cov.unknown.toLocaleString()} of {cov.total.toLocaleString()} positions at rank 1&ndash;20 have an unverified basis.</b>{' '}
             <span style={{ color: 'var(--c-c8c8e8)' }}>
-              These rows were uploaded without Semrush&rsquo;s &ldquo;Position Type&rdquo; column, so a real organic ranking
-              cannot be told apart from a SERP-feature placement &mdash; Semrush exports a People-also-ask or
-              Things-to-know slot as <b>position 1</b>. Until they are verified, page-1 share, best rank and
+              These rows were uploaded without Semrush&rsquo;s &ldquo;Position Type&rdquo; column, or before v7.557
+              from a file that listed a SERP-feature slot and the organic result as separate rows &mdash; either way a
+              real organic ranking cannot be told apart from a SERP-feature placement, which Semrush exports
+              as <b>position 1</b>. Until the file is re-uploaded, page-1 share, best rank and
               Share of Voice on this project may read high. Rows deeper than #20 are not counted here: a
               SERP feature never exports as a deep position, so their basis cannot be in doubt.
             </span>
-            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-              {!verifyPlan && !verifyBusy && (
-                <button
-                  onClick={async () => {
-                    setVerifyMsg(null);
-                    try {
-                      const r = await fetch(`/api/projects/${projectId}/verify-positions`);
-                      const d = await r.json();
-                      if (!r.ok) { setVerifyMsg(d.error ?? 'Could not read the verification plan.'); return; }
-                      setVerifyPlan({ unverified: d.unverified, window: d.window, note: d.note });
-                    } catch (e: any) { setVerifyMsg(String(e?.message ?? e)); }
-                  }}
-                  style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer',
-                    background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}
-                >Verify positions</button>
-              )}
-              {verifyBusy && <span style={{ color: 'var(--c-9b96ff)', fontWeight: 700 }}>Checking against Semrush&rsquo;s organic index…</span>}
+            {/* v7.557: the fix costs nothing — re-upload the export WITH Position Type. The uploader takes each
+                 keyword's rank from its Organic row, keeps feature slots as badges, and stamps the basis, so
+                 these rows leave this count. (Verify positions was removed: it spent API units per click.) */}
+            <div style={{ marginTop: '8px', color: 'var(--c-c8c8e8)' }}>
+              <b style={{ color: 'var(--c-e8e8ff)' }}>To fix:</b> re-upload a current Semrush export from
+              <b> Organic Research &rarr; Positions</b> with the <b>Position Type</b> column included, in Keyword
+              Selection &rarr; Step 1. No API units are used.
             </div>
-            {verifyPlan && !verifyBusy && (
-              <div style={{ marginTop: '8px', padding: '9px 11px', borderRadius: '8px', background: 'var(--c-0a0a14)', border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)' }}>
-                <b style={{ color: 'var(--c-e8e8ff)' }}>Verify {verifyPlan.unverified.toLocaleString()} position{verifyPlan.unverified === 1 ? '' : 's'} at rank 1&ndash;{verifyPlan.window}?</b>
-                <div style={{ marginTop: '3px', color: 'var(--c-8a8aa8)', fontSize: '11.5px' }}>
-                  {verifyPlan.note} Semrush publishes no per-unit price, so this is charged in API units
-                  (10 per returned line) and posts to this project&rsquo;s API Usage ledger. Rows deeper than
-                  #{verifyPlan.window} are left untouched &mdash; a SERP feature never exports as a deep position.
-                </div>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                  {verifyPlan.unverified > 0 && (
-                    <button
-                      onClick={async () => {
-                        setVerifyBusy(true); setVerifyMsg(null);
-                        try {
-                          const r = await fetch(`/api/projects/${projectId}/verify-positions`, { method: 'POST' });
-                          const d = await r.json();
-                          setVerifyMsg(r.ok ? d.note : (d.error ?? 'Verification failed.'));
-                          if (r.ok) { setVerifyPlan(null); await fetchDb(); }
-                        } catch (e: any) { setVerifyMsg(String(e?.message ?? e)); }
-                        finally { setVerifyBusy(false); }
-                      }}
-                      style={{ padding: '5px 12px', fontSize: '12px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer',
-                        background: 'var(--ca-108-99-255-0_12)', color: 'var(--c-9b96ff)', border: '1px solid var(--ca-108-99-255-0_45)' }}
-                    >Run verification</button>
-                  )}
-                  <button onClick={() => setVerifyPlan(null)}
-                    style={{ padding: '5px 12px', fontSize: '12px', borderRadius: '7px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>
-                    {verifyPlan.unverified > 0 ? 'Cancel' : 'Close'}
-                  </button>
-                </div>
-              </div>
-            )}
-            {verifyMsg && <div style={{ marginTop: '7px', fontSize: '11.5px', color: 'var(--c-c8c8e8)' }}>{verifyMsg}</div>}
           </div>
         );
       })()}

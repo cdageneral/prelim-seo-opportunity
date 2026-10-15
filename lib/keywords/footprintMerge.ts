@@ -58,3 +58,54 @@ export function mergeFootprintFacts(prior: FootprintRowFacts, next: FootprintRow
     url,
   };
 }
+
+// ─── v7.557 — the rank comes from ORGANIC rows only ────────────────────────────
+//
+// A Semrush Positions export lists a keyword once per placement: one row per
+// ranking URL AND one row per SERP-feature slot the domain holds (AI overview,
+// Local pack, People also ask …), each with its own Position. A feature slot is
+// exported at #1. mergeFootprintFacts above keeps the best position across ALL
+// rows, so "va loan rates" (USAA, 2026-10-14) — AI overview #1, Organic #6 —
+// was stored as #1, and because the types were unioned to "Organic, AI overview"
+// every panel read it as an ORGANIC #1. Verified against Semrush phrase_organic
+// the same day: usaa.com is organic #6. Const I.4 — two lenses, one number.
+//
+// The fix keeps the lenses apart at the merge. Every occurrence carries a TIER:
+//   'organic' — from a row whose Position Type is Organic (or a stored row whose
+//               organic basis is established).
+//   'unknown' — no Position Type (older export / hand-built file), or a stored
+//               pre-v7.557 mixed row whose position may be a feature's.
+//   'feature' — a SERP-feature slot. Its position is presence, never a rank.
+// The stored position + URL come from the HIGHEST tier that has a position
+// (organic > unknown > feature); within one tier the v7.405 best-position rule
+// applies unchanged. Volume stays the max across every occurrence. The feature
+// signal is not lost — the caller still unions Position Type and SERP features,
+// so the row keeps its badge (Wayne's 2026-08-14 display choice).
+
+export type RankTier = 'organic' | 'unknown' | 'feature';
+
+export interface TieredFacts extends FootprintRowFacts {
+  tier: RankTier;
+}
+
+const TIER_ORDER: Record<RankTier, number> = { organic: 0, unknown: 1, feature: 2 };
+
+/** Collapse two occurrences of the SAME keyword, rank taken from the best tier. */
+export function mergeTieredFacts(prior: TieredFacts, next: TieredFacts): TieredFacts {
+  const has = (f: TieredFacts) => f.position != null && f.position >= 1;
+  const searchVolume = Math.max(prior.searchVolume || 0, next.searchVolume || 0);
+  // A tier only competes when it actually carries a position.
+  if (has(prior) && has(next) && prior.tier !== next.tier) {
+    const win = TIER_ORDER[prior.tier] < TIER_ORDER[next.tier] ? prior : next;
+    return { position: win.position, url: win.url ?? null, searchVolume, tier: win.tier };
+  }
+  if (has(prior) !== has(next)) {
+    const win = has(prior) ? prior : next;
+    const other = win === prior ? next : prior;
+    return { position: win.position, url: win.url ?? other.url ?? null, searchVolume, tier: win.tier };
+  }
+  // Same tier (or neither has a position): the v7.405 rule, unchanged.
+  const m = mergeFootprintFacts(prior, next);
+  const tier = TIER_ORDER[prior.tier] <= TIER_ORDER[next.tier] ? prior.tier : next.tier;
+  return { ...m, tier };
+}

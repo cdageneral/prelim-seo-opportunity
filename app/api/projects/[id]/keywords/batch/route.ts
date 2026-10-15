@@ -39,7 +39,10 @@ import { normalizeFootprintDomain, isClientFootprintDomain } from '@/lib/keyword
 // wins (max volume, URL follows the winning position) instead of last-occurrence-
 // wins — row order in an export must never decide which rank is stored. One shared
 // pure rule, tested directly by the retained suite.
-import { mergeFootprintFacts } from '@/lib/keywords/footprintMerge';
+import { mergeTieredFacts, type TieredFacts, type RankTier } from '@/lib/keywords/footprintMerge';
+// v7.557: the stored rank comes from ORGANIC rows only — a SERP-feature slot (exported
+// at #1) never outranks the keyword's real organic row. See mergeTieredFacts.
+import { positionBasisOf, isLegacyMixed } from '@/lib/keywords/positionBasis';
 
 async function ensureTable() {
   try {
@@ -134,7 +137,12 @@ export async function POST(
   // were counted as client rankings in every panel (Wayne's 28K airsculpt.com
   // rows showed up as 36,281 ranked / 0 gap). The competitor's position is
   // still stored (needed for page-1 Share of Voice) — only the type changes.
-  const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+  // v7.557 (Const II.9): name the one column this route reads — the bare findFirst
+  // shipped every JSONB store on the projects row with each 250-row chunk.
+  const project = await db.query.projects.findFirst({
+    where:   eq(projects.id, projectId),
+    columns: { websiteUrl: true },
+  });
   const clientDomainNorm = normalizeFootprintDomain(project?.websiteUrl ?? '');
   const isClientUpload = isClientFootprintDomain(domainNorm, clientDomainNorm);
 
@@ -197,6 +205,7 @@ export async function POST(
       position:     projectKeywords.position,
       searchVolume: projectKeywords.searchVolume,
       url:          projectKeywords.url,
+      positionVerifiedAt: projectKeywords.positionVerifiedAt,   // v7.557: basis stamp
     })
     .from(projectKeywords)
     .where(and(
@@ -209,13 +218,21 @@ export async function POST(
   const existingFeat = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.serpFeatures ?? null]));
   // v7.451: prior Position Type per keyword, unioned across chunks like serp-features
   const existingPosType = new Map<string, string | null>(existing.map((r: any) => [r.keyword, r.positionType ?? null]));
-  const existingFacts = new Map<string, { position: number | null; searchVolume: number; url: string | null }>(
+  // v7.557: a stored row competes in the tier its basis has EARNED — a pre-v7.557 mixed
+  // row ("Organic, AI overview", unstamped) may hold a feature's #1, so it is 'unknown'
+  // and a re-upload's real Organic row replaces it instead of losing to it.
+  const storedTier = (r: any): RankTier =>
+    isLegacyMixed(r.positionType, r.positionVerifiedAt) ? 'unknown' : positionBasisOf(r.positionType);
+  const existingFacts = new Map<string, TieredFacts>(
     existing.map((r: any) => [r.keyword, {
       position:     r.position ?? null,
       searchVolume: r.searchVolume ?? 0,
       url:          r.url ?? null,
+      tier:         storedTier(r),
     }]),
   );
+  const existingStamp = new Map<string, Date | null>(existing.map((r: any) => [r.keyword, r.positionVerifiedAt ?? null]));
+  const stampNow = new Date();
 
   // Build valid rows (dedupe within the payload itself; UNION serp-features across duplicates)
   const byKw = new Map<string, any>();
@@ -246,7 +263,7 @@ export async function POST(
     const rowPosType = typeof k.positionType === 'string' && k.positionType.trim().length > 0
       ? k.positionType.trim().slice(0, 200)
       : null;
-    const priorPosType = byKw.has(kw) ? (byKw.get(kw).positionType as string | null) : (existingPosType.get(kw) ?? null);
+    const priorPosType = byKw.has(kw) ? (byKw.get(kw)._posTypeUnion as string | null) : (existingPosType.get(kw) ?? null);
     const posType = mergeSerpFeatures(priorPosType, rowPosType);
     // v7.405: BEST-position-wins across duplicate rows — prior state is the earlier
     // occurrence in THIS payload, or (first time seen here) the stored row from a
@@ -255,12 +272,21 @@ export async function POST(
     // be LAST in the file — i.e. row order, not rank, decided the stored data. The
     // merged facts keep the best real rank, the max volume, and the URL of the page
     // that actually holds the winning rank (mergeFootprintFacts, shared + suite-tested).
-    const prior = byKw.has(kw)
-      ? { position: byKw.get(kw).position, searchVolume: byKw.get(kw).searchVolume, url: byKw.get(kw).url }
+    // v7.557: each occurrence carries its tier — this ROW's own Position Type, never the
+    // union (a union containing "Organic" is what turned an AI-overview #1 into an organic #1).
+    const prior: TieredFacts | null = byKw.has(kw)
+      ? { position: byKw.get(kw).position, searchVolume: byKw.get(kw).searchVolume, url: byKw.get(kw).url, tier: byKw.get(kw)._tier }
       : (existingFacts.get(kw) ?? null);
-    const merged = prior
-      ? mergeFootprintFacts(prior, { position: pos, searchVolume: vol, url: kurl })
-      : { position: pos, searchVolume: vol, url: kurl };
+    const nextFacts: TieredFacts = { position: pos, searchVolume: vol, url: kurl, tier: positionBasisOf(rowPosType) };
+    const merged = prior ? mergeTieredFacts(prior, nextFacts) : nextFacts;
+    // The basis of the stored rank is ESTABLISHED when it came from a typed row (Organic,
+    // or feature-only presence). Stamp it, keeping an earlier stamp (e.g. a pre-v7.557 Verify positions run).
+    const priorStamp = byKw.has(kw) ? (byKw.get(kw).positionVerifiedAt ?? null) : (existingStamp.get(kw) ?? null);
+    const stamp = merged.tier === 'unknown' ? null : (priorStamp ?? stampNow);
+    // A rank of UNKNOWN basis must not be relabelled a feature placement just because a
+    // feature row for the same keyword was unioned in — that would blank a rank the
+    // untyped row may genuinely hold (I.5). Leave its basis unknown so Verify can settle it.
+    const storedPosType = merged.tier === 'unknown' && positionBasisOf(posType) === 'feature' ? null : posType;
     byKw.set(kw, {
       projectId,
       keyword:      kw,
@@ -268,7 +294,10 @@ export async function POST(
       position:     merged.position,
       serpFeatures: feats,
       url:          merged.url,
-      positionType: posType,   // v7.451
+      positionType: storedPosType,   // v7.451 (v7.557: never a feature label on an unknown-basis rank)
+      positionVerifiedAt: stamp,     // v7.557: basis stamp — see isLegacyMixed
+      _tier:        merged.tier,     // v7.557: in-payload merge state only; stripped before insert
+      _posTypeUnion: posType,        // v7.557: full type union, kept for the next duplicate row
       // v7.100: 'ranked' is reserved for CLIENT rows (the client ranks for it).
       // Competitor rows are ALWAYS 'gap' — their position is the competitor's
       // rank, kept for Share of Voice, not a client ranking.
@@ -281,7 +310,8 @@ export async function POST(
       domain:       isClientUpload ? '' : domainNorm,
     });
   }
-  const rows     = Array.from(byKw.values());
+  // v7.557: drop the in-payload merge state (_tier, _posTypeUnion) — not table columns.
+  const rows     = Array.from(byKw.values()).map(({ _tier, _posTypeUnion, ...row }: any) => row);
   const toUpdate = rows.filter(r => existingSet.has(r.keyword));
   const toInsert = rows.filter(r => !existingSet.has(r.keyword));
 

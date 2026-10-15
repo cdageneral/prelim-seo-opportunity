@@ -199,7 +199,7 @@ function splitDelimitedLine(line: string, delimiter: string): string[] {
   return out.map(s => s.replace(/\r$/, '').trim().replace(/^"|"$/g, '').trim());
 }
 
-function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number; url?: string; serpFeatures?: string }[] {
+function parseCsvText(text: string): { keyword: string; searchVolume: number; position?: number; url?: string; serpFeatures?: string; positionType?: string }[] {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const firstLine  = lines[0] ?? '';
@@ -231,7 +231,14 @@ function parseCsvText(text: string): { keyword: string; searchVolume: number; po
     const rawFeats = (vals['serp features by keyword'] || vals['serp features'] || vals['serp_features'] || vals['fl'] || '').trim();
     const serpFeatures = rawFeats ? rawFeats : undefined;
 
-    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined, url, serpFeatures };
+    // v7.557: Semrush "Position Type" — 'Organic' or the SERP feature the row's position
+    // belongs to. This pre-run upload parser never read it, so every footprint uploaded
+    // here stored ranks of UNKNOWN basis (a feature slot exports as #1) and needed Verify
+    // positions. Same header aliases as the shared parser (lib/keywords/csvParse.ts).
+    const rawType = (vals['position type'] || vals['position_type'] || vals['positiontype'] || vals['type of position'] || '').trim();
+    const positionType = rawType ? rawType : undefined;
+
+    return { keyword: kw, searchVolume: vol, position: pos && !isNaN(pos) ? pos : undefined, url, serpFeatures, positionType };
   }).filter(r => r.keyword && r.searchVolume > 0);
 }
 
@@ -919,6 +926,10 @@ export default function ProjectBriefPage() {
       }
 
       const { inserted, updated } = await res.json();
+      // v7.557: say plainly when the file cannot separate organic ranks from SERP-feature slots.
+      const typeNote = keywords.some(k => k.positionType)
+        ? ''
+        : ' ⚠ This file has no "Position Type" column, so its positions cannot be told apart from SERP-feature placements (Semrush exports an AI-overview or People-also-ask slot as #1). Re-export from Semrush Organic Research → Positions with Position Type included.';
       // v7.344: inserted === 0 means every row ALREADY EXISTS for this domain —
       // that is SUCCESS (the data is loaded), not an error. The old code showed a
       // red error and never unlocked the Run button, dead-ending Wayne with fully
@@ -936,7 +947,7 @@ export default function ProjectBriefPage() {
         setUploadMsgKind('info');
         setUploadError(
           `${file.name}: no new keywords for ${domain} — ${n.toLocaleString()} existing rows were refreshed with this file's values. ` +
-          `Rows this file no longer contains are still stored; use Clear data on this row first for a clean replace.`,
+          `Rows this file no longer contains are still stored; use Clear data on this row first for a clean replace.` + typeNote,
         );
         setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
         await fetchFootprint();
@@ -946,7 +957,7 @@ export default function ProjectBriefPage() {
       setUploadMsgKind('info');
       setUploadError(
         `${file.name}: imported ${Number(inserted).toLocaleString()} new keywords for ${domain}` +
-        (Number(updated ?? 0) > 0 ? ` · ${Number(updated).toLocaleString()} existing rows refreshed` : '') + '.',
+        (Number(updated ?? 0) > 0 ? ` · ${Number(updated).toLocaleString()} existing rows refreshed` : '') + '.' + typeNote,
       );
       setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
       await fetchFootprint();

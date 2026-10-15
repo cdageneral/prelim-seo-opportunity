@@ -16,6 +16,7 @@
 import { db }              from '@/db';
 import { projectKeywords } from '@/db/schema';
 import { and, eq }         from 'drizzle-orm';
+import { organicPositionOf } from '@/lib/keywords/positionBasis';   // v7.557
 import type { SemrushSnapshot, SemrushKeyword, SemrushKeywordGap, SemrushCompetitor } from './semrush';
 // v7.137: reuse the canonical bucketing helpers so uploaded (CSV) footprints
 // produce the same rank-distribution fields as a Semrush pull.
@@ -49,7 +50,10 @@ export async function buildSnapshotFromUploads(
   // ── topKeywords ────────────────────────────────────────────────────────────
   const topKeywords: SemrushKeyword[] = clientRows.map(r => ({
     keyword:      r.keyword,
-    position:     r.position ?? 999,
+    // v7.557 (Const I.4): a SERP-feature placement is presence, not a rank. Feature-only
+    // rows reached the analysis snapshot as their exported #1 here even after v7.451 fixed
+    // the pool — the same shared rule (organicPositionOf) now applies on this path too.
+    position:     organicPositionOf(r.position, r.positionType) ?? 999,
     searchVolume: r.searchVolume,
     // v7.405: the uploaded CSV's real ranking URL (project_keywords.url, v7.251)
     // was being discarded here, so every upload-sourced snapshot stored a blank

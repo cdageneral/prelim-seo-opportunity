@@ -507,10 +507,15 @@ export default function CompetitorsModal({
     setUploadingId(null); setUploadTarget(null);
     await fetchKeywords();
     const skipNote = skipped > 0 ? ` · ${skipped} skipped` : '';
+    // v7.557: a competitor file without Semrush's "Position Type" column cannot separate this
+    // competitor's organic ranks from its SERP-feature slots (exported at #1) — say so.
+    const typeNote = parsed.some(r => r.positionType)
+      ? ''
+      : ' ⚠ No "Position Type" column — these positions may include SERP-feature slots counted as #1. Re-export from Organic Research → Positions with Position Type included.';
     setStatusFor(target.id, added > 0
-      ? { type: 'success', msg: `${added.toLocaleString()} keywords ${replace ? 'uploaded (replaced existing)' : 'uploaded/updated'}${skipNote}.` }
+      ? { type: 'success', msg: `${added.toLocaleString()} keywords ${replace ? 'uploaded (replaced existing)' : 'uploaded/updated'}${skipNote}.${typeNote}` }
       : { type: 'error',   msg: 'No keyword rows were saved.' });
-    setTimeout(() => setStatusFor(target.id, null), 6000);
+    setTimeout(() => setStatusFor(target.id, null), typeNote ? 15000 : 6000);   // v7.557: a warning needs time to be read
     if (added > 0) setCatRunKey(k => k + 1);   // v7.531: auto-categorize into the existing tree
   }
 

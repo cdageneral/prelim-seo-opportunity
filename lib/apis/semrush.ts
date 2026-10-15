@@ -458,6 +458,10 @@ export async function getCompetitors(domain: string, database = 'us'): Promise<S
 // target keyword is still inside the query by construction — it only drops long-tail rows
 // that could never match a target. Const I.6 (no unrequested cap) holds: nothing the
 // caller needs is trimmed, and a still-full page is reported as `capped`.
+// v7.557: NO LONGER CALLED — the Verify positions feature was removed (Wayne 2026-10-15). On
+// 2026-09-07 one click spent 1,200,000 units here on Amex (Card Shop) and wrote nothing: the cost
+// grows with the size of the domain. Kept only for the retained suite's v7.453/v7.454 checks.
+// Do not wire it to a button.
 export async function getOrganicPositions(
   domain:   string,
   maxPos    = 20,

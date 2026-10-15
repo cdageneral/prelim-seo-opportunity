@@ -90,6 +90,27 @@ export function organicPositionOf(
   return positionBasisOf(positionType) === 'feature' ? null : p;
 }
 
+/**
+ * v7.557 — a stored row whose Position Type lists BOTH "Organic" AND a SERP feature,
+ * written before v7.557 and never verified. Until v7.557 the uploader collapsed a
+ * keyword's duplicate export rows BEST-position-wins across ALL of them (v7.405) and
+ * unioned their types (v7.451) — so when Semrush listed an AI-overview / Local-pack slot
+ * at #1 and the organic result at #8, the stored row became "#1 · Organic, AI overview",
+ * an organic #1 that never existed (USAA export 2026-10-14: 83 keywords, 29 of them not
+ * on page 1 organically). The basis of such a row's POSITION is therefore unproven.
+ *
+ * From v7.557 the uploader takes the rank from Organic rows only and stamps
+ * `positionVerifiedAt` on every row whose basis it read from the file, so a mixed row
+ * WITH a stamp is trustworthy and a mixed row WITHOUT one is legacy-suspect.
+ */
+export function isLegacyMixed(
+  positionType: string | null | undefined,
+  positionVerifiedAt: unknown,
+): boolean {
+  if (positionVerifiedAt) return false;
+  return positionBasisOf(positionType) === 'organic' && featureLabelOf(positionType) !== null;
+}
+
 /** Does this row hold a SERP feature (whatever its organic position)? */
 export function holdsFeature(positionType: string | null | undefined): boolean {
   return featureLabelOf(positionType) !== null;
@@ -99,7 +120,7 @@ export interface BasisCoverage {
   total:    number;   // rows considered
   organic:  number;   // Position Type captured and organic
   feature:  number;   // Position Type captured and a feature placement
-  unknown:  number;   // pre-v7.451 rows — basis not captured
+  unknown:  number;   // basis not proven: pre-v7.451 rows (no type captured) + v7.557 legacy-mixed rows
   /** True when nothing in the set carries a captured Position Type. */
   allUnknown: boolean;
 }
@@ -110,7 +131,10 @@ export interface BasisCoverage {
  * carries a captured type (uploaded with the column, or set by verification).
  */
 export function basisCoverage(
-  rows: Array<{ positionType?: string | null; position?: number | null }>,
+  // v7.557: a row that CARRIES the `positionVerifiedAt` key (rows read from the DB do) is
+  // judged for the legacy-mixed defect — see isLegacyMixed. Rows without the key (pure
+  // fixtures, older callers) keep the v7.451 reading unchanged.
+  rows: Array<{ positionType?: string | null; position?: number | null; positionVerifiedAt?: unknown }>,
   // v7.455: only positions inside the RISK WINDOW count. A SERP feature is exported at
   // position 1, so a row at #35 cannot be one — counting it as "unverified" made the
   // banner cry wolf after a successful run (348 flagged, every one of them deeper than
@@ -121,7 +145,9 @@ export function basisCoverage(
   for (const r of rows) {
     if (r?.position == null) continue;
     if (window > 0 && Number(r.position) > window) continue;
-    const b = positionBasisOf(r.positionType);
+    const legacy = Object.prototype.hasOwnProperty.call(r, 'positionVerifiedAt')
+      && isLegacyMixed(r.positionType, r.positionVerifiedAt);
+    const b = legacy ? 'unknown' : positionBasisOf(r.positionType);
     if (b === 'organic') organic++; else if (b === 'feature') feature++; else unknown++;
   }
   const total = organic + feature + unknown;

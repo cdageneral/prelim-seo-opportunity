@@ -506,7 +506,7 @@ export default function KeywordSelectionSection({
     const withType = parsed.filter(r => r.positionType).length;
     const posTypeNote = csvMeta.hasPositionType
       ? ` Position Type read on ${fmtN(withType)} row${withType !== 1 ? 's' : ''} — organic rankings and SERP-feature placements are kept apart.`
-      : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export with Position Type included, or run Verify positions on this project.`;
+      : ` ⚠ No "Position Type" column in this file, so these positions cannot be told apart from SERP-feature placements (Semrush exports a People-also-ask or Things-to-know slot as position 1). Re-export from Semrush Organic Research → Positions with Position Type included and upload again.`;
     setCsvStatus({
       type: (failed > 0 || (serpPrepared > 0 && serpStored === 0) || !csvMeta.hasPositionType) ? 'error' : 'success',
       msg:  `Saved ${fmtN(added)} of ${fmtN(fileRows)} CSV row${fileRows !== 1 ? 's' : ''}${parts.length ? ` (${parts.join(' · ')})` : ''}.${serpNote}${posTypeNote}`,

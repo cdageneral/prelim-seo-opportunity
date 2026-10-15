@@ -1,3 +1,46 @@
+# v7.557 — CSV ranks come from Organic rows only; Verify positions removed (2026-10-15)
+
+Wayne: *"i noticed in the amex card project that it used 1.7 mil semrush credits. What workflow triggered this"* …
+*"the verify positions - i think we should remove. The csv are coming right from semrush as a current download -
+those positions should be verified. Right now people are hitting that verify position and using all of the credits."*
+
+- **Where Amex's units went (usage ledger, measured 2026-10-14).** 1,727,140 Semrush units over 183 calls. 1,200,000
+  of them were ONE Verify-positions click (2026-09-07 01:00 UTC): 12 volume bands × 10,000 rows × 10 units. The
+  verifier pulled amex.com's whole organic 1–20 footprint, hit its 12-pass stop, was reported capped and wrote nothing.
+- **Verify positions is removed.** The button, the confirm card and the `/api/projects/[id]/verify-positions` route
+  are gone, so there is no endpoint left that can spend units this way. `getOrganicPositions` stays in
+  lib/apis/semrush.ts only for retained suite checks and is marked do-not-wire.
+- **The upload bug the USAA file exposed — fixed at the source.** A Positions export lists a keyword once per
+  placement — the organic result AND each SERP-feature slot (AI overview, Local pack …), and a slot is exported at #1.
+  The uploader kept the best position across ALL rows and unioned the types, so "va loan rates" (AI overview #1,
+  Organic #6) was stored as an organic #1. In the USAA file: 83 keywords, 349,800 searches/mo, 29 not on page 1
+  organically. Semrush phrase_organic confirmed usaa.com at organic #6 for "va loan rates" (2026-10-15).
+  New shared `mergeTieredFacts` (lib/keywords/footprintMerge.ts): rank + URL come from Organic rows first, then untyped
+  rows, and a feature slot only when nothing else exists; the v7.405 best-position rule is unchanged inside a tier.
+  Feature badges stay. Rows whose basis came from the file are stamped (`position_verified_at`).
+- **Older projects.** "Organic + feature" rows written before v7.557 without a stamp are treated as unverified
+  (`isLegacyMixed`) and counted in the Keyword-panel banner. The banner's fix is now free: re-upload the Semrush
+  Organic Research → Positions export with Position Type — the re-upload repairs them (proven on the USAA file).
+- **Upload paths.** The pre-run upload panel (project page) never read Position Type — it does now. It and the
+  competitor upload warn when the column is missing; the Keyword Selection warning no longer points to Verify. The
+  analysis snapshot built from uploads applies the same organic rule (`organicPositionOf`).
+- **II.9.** The batch route's `projects` read named no columns (every JSONB store per 250-row chunk); it now reads
+  `websiteUrl` only.
+- **Downstream (II.6a).** No metric definition changed; rank VALUES on CSV-sourced projects become correct. Panels and
+  the Assessment PDF read the pool through `buildKwPool`/`organicPositionOf` and inherit the fix; the upload-built
+  analysis snapshot was the one bypass and is fixed. Not changed: competitor rows with no position still fall back to
+  #1 in uploadedFootprint (pre-existing, logged).
+- **Verified.** Project `tsc` clean; real `next build` clean (no verify-positions route); retained suite zero delta
+  (49 pre-existing FAILs identical to v7.556), +28 v7557 checks: real-scale replay of the 6,434-row USAA export
+  through the REAL batch route (0 wrong ranks vs 83 on v7.556; negative control fails on base; legacy rows repaired by
+  re-upload), tiered-merge rules, the real KeywordsPanel in jsdom (banner + free fix, no verify control, no call to
+  the route), source guard that nothing in app/components/lib references verify-positions. New text ≥11:1 both themes.
+  v7451/v405 checks updated by design with dated notes.
+- Files: lib/keywords/footprintMerge.ts, lib/keywords/positionBasis.ts, lib/apis/semrush.ts, lib/apis/uploadedFootprint.ts,
+  app/api/projects/[id]/keywords/batch/route.ts, app/projects/[id]/page.tsx, components/brief/KeywordsPanel.tsx,
+  components/brief/KeywordSelectionSection.tsx, components/brief/CompetitorsModal.tsx, package.json;
+  DELETED app/api/projects/[id]/verify-positions/route.ts.
+
 # v7.556 — Themes hero: mapped pages reconciled to ranking pages in plain words (2026-10-11)
 
 Wayne: *"yes do that"* — on rewording the hero line that read "148 ranking URLs on file · 107 are cluster pages"
