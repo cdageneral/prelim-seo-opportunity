@@ -24,7 +24,7 @@
  * carries Hours Saved and the full cost position, so the route streams the bytes
  * straight back and never writes them to public blob storage (Const II.6c).
  *
- * v7.483 — a scope bar: a date range (All time by default, plus this month /
+ * v7.483 — a scope bar: a date range (v7.563: This month by default; All time, last month /
  * last month / this quarter / year to date / a custom range) and a project
  * picker. The range is applied SERVER-side by all three routes; the project
  * selection is applied client-side through the shared folds in rollupView, which
@@ -49,7 +49,7 @@ import {
   PROVIDER_LABEL, UNIT_LABEL, PROVIDER_ICON,
   resolveRange, rangeIsBounded, rangeLabel, rangeQuery, scopeStatement,
   filterRollupByProjects, filterCostByProjects, filterHoursByProjects,
-  rowKey, rowNoun, PRODUCT_LABEL, selectionIsFiltered, RANGE_OPTIONS, ALL_TIME,
+  rowKey, rowNoun, PRODUCT_LABEL, selectionIsFiltered, RANGE_OPTIONS,
   type Line, type RollupPayload, type CostPayload,
   type HoursPayload, type HoursProject, type KwCount,
   type UsageRange, type RangeKey, type ProductFilter,
@@ -80,7 +80,8 @@ export default function UsageRollup() {
   const pdfTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // v7.483 scope. Default is ALL TIME (Wayne, 2026-09-04) so the panel opens on
   // exactly the figures it has always opened on.
-  const [range, setRange]           = useState<UsageRange>(ALL_TIME);
+  // v7.563: opens on THIS MONTH (Wayne: "all time takes too long to load"). All time stays one pick away.
+  const [range, setRange]           = useState<UsageRange>(() => resolveRange('this_month', new Date()));
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo]     = useState('');
   // null = every project. A Set names exactly the selected ones.
@@ -424,9 +425,9 @@ export default function UsageRollup() {
             )}
           </div>
 
-          {(dated || projFiltered) && (
+          {(range.key !== 'this_month' || projFiltered) && (
             <button
-              onClick={() => { setRange(ALL_TIME); setCustomFrom(''); setCustomTo(''); setProjectSel(null); }}
+              onClick={() => { setRange(resolveRange('this_month', new Date())); setCustomFrom(''); setCustomTo(''); setProjectSel(null); }}
               className="text-[11px] text-orbit-accent hover:underline ml-1"
             >
               Reset scope

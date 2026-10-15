@@ -1,3 +1,16 @@
+# v7.563 — API Usage opens on This month (2026-10-15)
+
+Wayne: *"default the usage to the current month as the all time takes too long to load"*.
+
+- **Default.** The API Usage dashboard now opens on **This month** (from the 1st at local midnight, open-ended).
+  All time, Last month, This quarter, Year to date and Custom range are unchanged in the picker.
+- **Reset scope** appears only when the view differs from the default, and returns to This month and all projects.
+- **Verified.** Project `tsc` clean; retained suite zero delta vs v7.562 apart from the five v7.483 checks that
+  asserted the old All time default. Those were updated with a dated note (not deleted) and pass on the new default,
+  including a render check that the first load sends the current-month window. +4 v7563 checks. The v7552 ETA
+  render check remains timing-flaky (fails on pristine v7.558 too).
+- Files: components/dashboard/UsageRollup.tsx, package.json, CHANGELOG.md.
+
 # v7.562 — API Usage "All time" totals stop serving a cached answer (2026-10-15)
 
 After the v7.561 attribution moved $625.45 onto 12 projects, the database was right, but the dashboard's default
