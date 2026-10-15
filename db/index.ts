@@ -13,7 +13,11 @@ function getInstance(): DbType {
   if (_instance) return _instance;
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL environment variable is not set');
-  _instance = drizzle(neon(url), { schema });
+  // v7.562: every query goes to the database, never Next.js's fetch cache. neon-http
+  // speaks over fetch(); without no-store, an identical query in a GET route could be
+  // answered from cache, which froze the API Usage "All time" totals (moved/new rows
+  // never showed until the query text changed, e.g. by picking a date range).
+  _instance = drizzle(neon(url, { fetchOptions: { cache: 'no-store' } }), { schema });
   return _instance;
 }
 

@@ -1,3 +1,17 @@
+# v7.562 — API Usage "All time" totals stop serving a cached answer (2026-10-15)
+
+After the v7.561 attribution moved $625.45 onto 12 projects, the database was right, but the dashboard's default
+"All time" view still showed the old split ($1,020.65 Unattributed, TD Bank $482.93). The same report run with a
+date range showed the correct numbers ($395.20 Unattributed, TD Bank $671.96). The database client talks to Neon
+over fetch(), and Next.js was answering an identical query from its fetch cache. Any query whose wording never
+changed could serve stale results. That likely explains the "stale totals" seen in v7.399 as well.
+
+- **Fix.** The one shared database client (db/index.ts) now sends every query with `cache: 'no-store'`, so every
+  route reads the database on every request.
+- **Verified.** Project `tsc` clean; retained suite zero delta vs v7.561 (same 49 pre-existing FAILs); +3 v7562
+  checks (no-store on the shared client, one Neon client only, no route builds its own).
+- Files: db/index.ts, package.json, CHANGELOG.md.
+
 # v7.561 — Product Insights AI-scan spend lands on its project (2026-10-15)
 
 Wayne: *"i noticed an others category with $1000 in it. whats that"*. The "Unattributed" row on the API Usage
