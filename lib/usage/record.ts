@@ -220,17 +220,18 @@ export async function recordProfound(endpoint: string, key?: string | null, call
 }
 
 /** Record an Anthropic message call from its response usage block (input+output tokens). */
-export async function recordAnthropic(resp: any, endpoint: string, key?: string | null): Promise<void> {
+export async function recordAnthropic(resp: any, endpoint: string, key?: string | null, feature?: string): Promise<void> {
   const usage = resp?.usage ?? {};
   const inTok  = Number(usage.input_tokens)  || 0;
   const outTok = Number(usage.output_tokens) || 0;
   await recordUsage({
     provider: 'anthropic',
-    endpoint,                       // model name (e.g. claude-haiku-4-5)
+    endpoint,                       // MODEL id (e.g. claude-haiku-4-5) — the rate registry prices by this
     unit:     'tokens',
     quantity: inTok + outTok,
     keyHash:  keyFingerprint(key ?? process.env.ANTHROPIC_API_KEY),
-    meta:     { inputTokens: inTok, outputTokens: outTok },
+    // v7.560: a feature label (seer, insights) is provenance, so it lives on meta — never in endpoint
+    meta:     feature ? { inputTokens: inTok, outputTokens: outTok, feature } : { inputTokens: inTok, outputTokens: outTok },
   });
 }
 
@@ -265,7 +266,10 @@ export function instrumentAnthropic<T extends { messages: { create: (...args: an
   messages.create = async (body: any, options?: any) => {
     const resp = await orig(body, options);
     try {
-      if (resp && resp.usage) await recordAnthropic(resp, label ?? body?.model ?? 'anthropic');
+      // v7.560: endpoint is ALWAYS the model that actually ran (response first, then
+      // request). The label used to win here, which logged Seer/Insights tokens as
+      // "seer"/"insights" — unpriceable, so their spend fell out of every total.
+      if (resp && resp.usage) await recordAnthropic(resp, resp.model ?? body?.model ?? label ?? 'anthropic', undefined, label);
     } catch { /* never break the real call */ }
     return resp;
   };

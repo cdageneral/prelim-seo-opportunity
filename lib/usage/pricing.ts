@@ -205,13 +205,40 @@ export type RateResolution =
   | { status: 'unpriced';     reason: string; asOf: string }
   | { status: 'unregistered'; reason: string };
 
+/**
+ * v7.560 — ledger rows written under a FEATURE name instead of a model id.
+ * Before v7.560, Seer and the Insights panel passed a label to
+ * instrumentAnthropic() and that label overwrote the model, so their rows read
+ * endpoint "seer" / "insights" and resolved UNREGISTERED — their spend was
+ * missing from every total. Both features have only ever called ONE model:
+ * git history of app/api/projects/[id]/seer/route.ts, the insights-panel route
+ * and lib/seer shows claude-sonnet-4-6 and nothing else from v7.462 to v7.559.
+ * So each legacy label maps to that model by EXACT string match (never a
+ * pattern — v7.396 lesson). New rows record the real model (record.ts), so this
+ * table only ever has to cover history. Do not add a label here without the
+ * same code-history proof of a single model.
+ */
+export const LEGACY_FEATURE_MODELS: Record<string, Record<string, string>> = {
+  anthropic: {
+    seer:     'claude-sonnet-4-6',   // Seer, v7.462–v7.559 (SEER_MODEL)
+    insights: 'claude-sonnet-4-6',   // Insights panel, v7.471–v7.559 (SEER_MODEL)
+  },
+};
+
+/** The model a ledger endpoint actually ran on: itself, or its legacy feature label's proven model. */
+export function modelForEndpoint(provider: string, endpoint: string): string {
+  const legacy = LEGACY_FEATURE_MODELS[provider];
+  return (legacy && Object.prototype.hasOwnProperty.call(legacy, endpoint)) ? legacy[endpoint] : endpoint;
+}
+
 function findTokenRate(provider: string, endpoint: string): RateEntry | null {
   const table =
     provider === 'anthropic' ? ANTHROPIC_TOKEN_RATES :
     provider === 'openai'    ? OPENAI_TOKEN_RATES :
     [];
+  const model = modelForEndpoint(provider, endpoint);
   for (const e of table) {
-    if (e.match.test(endpoint)) return e;
+    if (e.match.test(model)) return e;
   }
   return null;
 }

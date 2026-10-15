@@ -1,3 +1,22 @@
+# v7.560 — Seer and Insights Claude spend back in the cost totals (2026-10-15)
+
+The API Usage dashboard showed an amber "Unpriced source" alarm for Anthropic tokens logged as "seer" and
+"insights". Those two features passed a label to the usage recorder, and the label overwrote the model name, so the
+cost table had no rate to apply. 18,304,924 tokens over 652 calls on 16 projects were left out of every total.
+
+- **History priced correctly, not guessed.** Seer and the Insights panel have only ever called `claude-sonnet-4-6`
+  (checked across the full git history of both routes and lib/seer, v7.462 to v7.559). The two legacy labels now map
+  to that model by exact name only, so those rows price at the Sonnet 4.6 list rate ($3 in / $15 out per M tokens).
+  The input and output split comes from the token counts already stored on each row.
+- **Fixed at the source.** The recorder now always logs the model that actually ran (from the API response, then the
+  request), and keeps the feature name on the row as `feature`. New Seer and Insights calls price with no special
+  handling.
+- **Still fail-closed.** Look-alike names (seer2, Seer, insights-v2), other providers and unknown models stay
+  unregistered.
+- **Verified.** Project `tsc` clean; retained suite zero delta vs pristine v7.559; +15 v7560 checks (legacy rows price
+  exactly like claude-sonnet-4-6, registry audit clean, exact-match only, new rows log model + feature). No UI files changed.
+- Files: lib/usage/pricing.ts, lib/usage/record.ts, package.json, CHANGELOG.md.
+
 # v7.559 — Semrush priced on the API Usage cost table (2026-10-15)
 
 Wayne: *"We currently do not have a cost for SemRush, however I just learned we get 2 million credits for $100 per
