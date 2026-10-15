@@ -1,3 +1,29 @@
+# v7.561 — Product Insights AI-scan spend lands on its project (2026-10-15)
+
+Wayne: *"i noticed an others category with $1000 in it. whats that"*. The "Unattributed" row on the API Usage
+dashboard held $1,020.65. $1,020.03 of it was 9,282 DataForSEO LLM Mentions calls: the AI-visibility scans run
+from the Product Insights panel. The scan route never told the usage ledger which project it was working for, so
+every one of those charges landed with no project from v7.426 to v7.560. The dollars are DataForSEO's own
+reported cost per call, not an estimate.
+
+- **Fixed going forward.** The Product Insights scan route now tags the project before it calls DataForSEO, the
+  same way every other metered route already does.
+- **History moved only where the match is exact.** The ledger keeps each charge's time and cost. Each project
+  keeps its latest scan per category, with the scan time, its measured duration and the cost of each platform
+  request. A charge moves to a project only when (1) its cost equals a stored request exactly, (2) its time falls
+  inside that scan's measured window, (3) every stored request it could belong to is from one project, and (4) that
+  project has at least as many stored requests as charges in the group. Scans that were later re-run were
+  overwritten, so their charges cannot be traced and stay in Unattributed.
+- **Dry run first, reversible.** New owner/admin endpoint `/api/admin/usage/attribute-llm-mentions`: GET shows what
+  would move per project and what stays (and why) without writing anything; POST `{"apply":true}` moves exactly
+  that set and stamps each row `attributedBy: v7.561`; POST `{"undo":true}` puts them all back.
+- **Verified.** Project `tsc` clean; retained suite zero delta vs pristine v7.560 (same 49 pre-existing FAILs; the
+  v7552 ETA render check is timing-flaky and fails on pristine v7.558 too); +17 v7561 checks: exact cost and time
+  window, two-project and too-many-charges cases refused, moved + left reconciles to the cent, real scale
+  (9,282 charges / 4,641 scans in under a second), dry run writes nothing, apply is stamped and reversible.
+- Files: app/api/projects/[id]/product-insights/route.ts, lib/usage/llmMentionsAttribution.ts (new),
+  app/api/admin/usage/attribute-llm-mentions/route.ts (new), package.json, CHANGELOG.md.
+
 # v7.560 — Seer and Insights Claude spend back in the cost totals (2026-10-15)
 
 The API Usage dashboard showed an amber "Unpriced source" alarm for Anthropic tokens logged as "seer" and

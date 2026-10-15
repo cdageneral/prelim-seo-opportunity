@@ -29,6 +29,7 @@ import { db }       from '@/db';
 import { projects } from '@/db/schema';
 import { eq, sql }  from 'drizzle-orm';
 import { dfsSearchLlmMentions, dataForSeoEnabled } from '@/lib/apis/dataforseo';
+import { setUsageProject } from '@/lib/usage/context';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -83,6 +84,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const project = await db.query.projects.findFirst({ where: eq(projects.id, params.id) });
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  // v7.561: tag every LLM Mentions charge with this project. Missing since v7.426, so
+  // all of them landed in "Unattributed" on the API Usage dashboard.
+  setUsageProject(params.id);
 
   const { category, keyword, limit } = parsed.data;
 
