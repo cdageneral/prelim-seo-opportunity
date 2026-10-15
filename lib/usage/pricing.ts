@@ -40,7 +40,7 @@
  */
 
 /** Date the rates below were verified against their sources. */
-export const PRICING_ASOF = '2026-08-03';
+export const PRICING_ASOF = '2026-10-15';   // v7.559: Semrush rate added
 
 /** Stated on-panel wherever a plan-quota rate contributes to a total (I.5a). */
 export const PLAN_QUOTA_CAVEAT =
@@ -168,26 +168,25 @@ export const UNIT_RATES: UnitRateEntry[] = [
     source:     'https://serpapi.com/pricing',
     asOf:       '2026-08-03',
   },
-  // Semrush: 2,000,000 units/mo package confirmed by Wayne (2026-08-03), but
-  // Semrush publishes NO per-unit price — API unit packages are sales-quoted.
-  // Until the subscription figure is on file it stays an explicit UNPRICED
-  // declaration below rather than a guessed rate (I.1). Adding it is one entry:
-  //   { provider: 'semrush', unit: 'units', label: 'Semrush API unit',
-  //     usdPerUnit: <monthly $> / 2_000_000, basis: 'plan-quota',
-  //     plan: '2,000,000 units/mo package — $<monthly> ÷ 2,000,000',
-  //     source: "Wayne's Semrush subscription", asOf: '<date>' },
-  // …and deleting the matching UNPRICED_DECLARATIONS row.
+  // v7.559 — Semrush priced. Wayne, 2026-10-15: the package is 2,000,000 API
+  // units for $100/month. Semrush publishes no per-unit price (sales-quoted), so
+  // the source is Wayne's subscription, not a public page.
+  {
+    provider:   'semrush',
+    unit:       'units',
+    label:      'Semrush API unit',
+    usdPerUnit: 100 / 2_000_000,  // = $0.00005 — kept as arithmetic so the plan string and the number can never drift
+    basis:      'plan-quota',
+    plan:       '2,000,000 units/mo package — $100/mo ÷ 2,000,000 units (Wayne confirmed, 2026-10-15)',
+    source:     "Wayne's Semrush subscription (sales-quoted; no public per-unit price)",
+    asOf:       '2026-10-15',
+  },
 ];
 
 // ── Explicit, dated "we deliberately don't price this" declarations ─────────
 export interface UnpricedEntry { provider: string; unit: string; reason: string; asOf: string; }
 
 export const UNPRICED_DECLARATIONS: UnpricedEntry[] = [
-  {
-    provider: 'semrush', unit: 'units',
-    reason:   'Semrush does not publish a per-unit price — API unit packages are quoted by sales. The 2,000,000-unit/mo package is confirmed; the subscription dollar figure is not yet on file, so the rate is left off rather than guessed.',
-    asOf:     '2026-08-03',
-  },
   {
     provider: 'openai', unit: 'images',
     reason:   'GPT image models (gpt-image-1 portraits; gpt-image-2 / gpt-image-1 persona profiles since v7.552) are billed per token by quality tier; the ledger records image COUNT, with size/quality/tokens on meta where the API reports them, and no per-image list price is on file for every size+quality pair — left unpriced rather than guessed (I.1).',

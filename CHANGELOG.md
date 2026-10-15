@@ -1,3 +1,23 @@
+# v7.559 — Semrush priced on the API Usage cost table (2026-10-15)
+
+Wayne: *"We currently do not have a cost for SemRush, however I just learned we get 2 million credits for $100 per
+month. Can we assign a per credit value and update the cost table?"*
+
+- **Rate.** Semrush API units now cost **$0.00005 each** ($100/mo ÷ 2,000,000 units), kept in code as the arithmetic
+  `100 / 2_000_000` so the plan string and the number can't drift. Basis is plan-quota, same as SerpAPI: it spreads
+  a prepaid subscription over the units we actually used, so it sums to less than the invoice when quota goes unused.
+- **Source.** Wayne's Semrush subscription, as of 2026-10-15. Semrush publishes no per-unit price (it's sales-quoted),
+  so the subscription is the only defensible source. The old dated "unpriced" declaration for Semrush is removed.
+- **Applies to history too.** Cost is computed at read time from the measured units in the ledger, so every Semrush
+  call already recorded now carries a dollar figure (e.g. Amex's 1,727,140 measured units = $86.36). Totals on the
+  API Usage dashboard, the per-project cost column, and the usage PDF all pick it up; Semrush moves out of the
+  "Deliberately unpriced" note and into the rate card.
+- **Verified.** Project `tsc` clean; retained suite zero delta vs pristine v7.558 (same 50 pre-existing FAILs); the two
+  v7.396 checks that used Semrush as the "declared unpriced" example now use openai images, with a dated note;
+  +14 v7559 checks (rate arithmetic, $100 for the full 2M allowance, Amex real-scale $86.36, registry audit clean,
+  rate renders as "$0.00005"). No UI files changed.
+- Files: lib/usage/pricing.ts, package.json, CHANGELOG.md.
+
 # v7.558 — Pre-run upload panel uploads in 250-row pieces (2026-10-15)
 
 Sono Bello's client footprint (3,553 keywords) would not upload from the project page's "Click to upload" rows. That
