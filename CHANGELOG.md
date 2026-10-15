@@ -1,3 +1,19 @@
+# v7.558 — Pre-run upload panel uploads in 250-row pieces (2026-10-15)
+
+Sono Bello's client footprint (3,553 keywords) would not upload from the project page's "Click to upload" rows. That
+panel posted the WHOLE file in one request; v7.557 added Position Type to every row, which took this file from about
+4.2 MB to 4.72 MB — over Vercel's 4.5 MB request-body limit. Vercel refused it before it reached the app (no server log),
+and the panel said "check file format".
+
+- **Fix.** The panel now sends the file in 250-row pieces with up to 3 retries each — the same pattern Keyword Selection
+  Step 1 already used. The row shows "Uploading X of Y rows (N%)…" while it works. Rows that still fail are reported
+  with a count and a re-upload instruction instead of being silently lost; a total failure says nothing was saved.
+- **Same result as one request.** A keyword's duplicate rows can land in two pieces; the batch route merges each piece
+  onto what earlier pieces stored (v7.557 tiered best-position), so the stored rank is unchanged.
+- **Verified.** Project `tsc` clean; real `next build` clean; retained suite zero delta (49 pre-existing FAILs), +6 v7558
+  checks incl. a real-scale size check: a 250-row piece of the USAA export serialises to 54 KB. No new colours.
+- Files: app/projects/[id]/page.tsx, package.json.
+
 # v7.557 — CSV ranks come from Organic rows only; Verify positions removed (2026-10-15)
 
 Wayne: *"i noticed in the amex card project that it used 1.7 mil semrush credits. What workflow triggered this"* …

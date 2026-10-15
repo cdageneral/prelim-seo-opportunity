@@ -264,6 +264,8 @@ export default function ProjectBriefPage() {
   const [dataSource,       setDataSource]       = useState<'auto' | 'upload'>('auto');
   const [uploadedDomains,  setUploadedDomains]  = useState<Set<string>>(new Set());
   const [uploadingDomain,  setUploadingDomain]  = useState<string | null>(null);
+  // v7.558: rows sent so far for the file being uploaded (chunked upload, Const IV.2).
+  const [uploadProgress,   setUploadProgress]   = useState<{ done: number; total: number } | null>(null);
   const [uploadError,      setUploadError]      = useState<string | null>(null);
   // v7.402: the message strip carries both failures and confirmations now
   // ("cleared N rows", "already loaded"). Colour follows THIS flag, not a
@@ -912,20 +914,52 @@ export default function ProjectBriefPage() {
         return;
       }
 
-      const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ domain, source: 'csv', keywords }),
-      });
-
-      if (!res.ok) {
-        const d = await res.json();
+      // v7.558: send the file in 250-row pieces, exactly like Keyword Selection Step 1.
+      // This panel posted the WHOLE file in one request, so any export over Vercel's 4.5 MB
+      // request-body limit was refused before it reached the app (Sono Bello, 2026-10-15:
+      // 3,553 rows ≈ 4.72 MB once v7.557 added Position Type to every row — no server log,
+      // and the panel said "check file format"). A keyword's duplicate rows may now span
+      // two pieces; the batch route merges each piece onto what earlier pieces stored
+      // (tiered best-position, v7.405/v7.557), so the result is the same as one request.
+      const CHUNK = 250, MAX_ATTEMPTS = 3;
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+      let inserted = 0, updated = 0, failedRows = 0, lastErr = '';
+      setUploadProgress({ done: 0, total: keywords.length });
+      for (let i = 0; i < keywords.length; i += CHUNK) {
+        const piece = keywords.slice(i, i + CHUNK);
+        let saved = false;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS && !saved; attempt++) {
+          try {
+            const res = await fetch(`/api/projects/${projectId}/keywords/batch`, {
+              method:  'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ domain, source: 'csv', keywords: piece }),
+            });
+            if (res.ok) {
+              const d = await res.json();
+              inserted += Number(d?.inserted ?? 0);
+              updated  += Number(d?.updated ?? 0);
+              saved = true;
+            } else {
+              lastErr = (await res.text().catch(() => '')).slice(0, 160) || `HTTP ${res.status}`;
+              if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);
+            }
+          } catch (e: any) {
+            lastErr = String(e?.message ?? e);
+            if (attempt < MAX_ATTEMPTS) await sleep(attempt * 800);
+          }
+        }
+        if (!saved) failedRows += piece.length;
+        setUploadProgress({ done: Math.min(i + CHUNK, keywords.length), total: keywords.length });
+      }
+      if (failedRows === keywords.length) {
         setUploadMsgKind('error');
-        setUploadError(d?.error ?? 'Upload failed');
+        setUploadError(`${file.name}: upload failed — nothing was saved (${lastErr}).`);
         return;
       }
-
-      const { inserted, updated } = await res.json();
+      const failNote = failedRows > 0
+        ? ` ⚠ ${failedRows.toLocaleString()} of ${keywords.length.toLocaleString()} rows failed to save — upload the same file again to fill them in (rows already saved are refreshed, not duplicated).`
+        : '';
       // v7.557: say plainly when the file cannot separate organic ranks from SERP-feature slots.
       const typeNote = keywords.some(k => k.positionType)
         ? ''
@@ -947,7 +981,7 @@ export default function ProjectBriefPage() {
         setUploadMsgKind('info');
         setUploadError(
           `${file.name}: no new keywords for ${domain} — ${n.toLocaleString()} existing rows were refreshed with this file's values. ` +
-          `Rows this file no longer contains are still stored; use Clear data on this row first for a clean replace.` + typeNote,
+          `Rows this file no longer contains are still stored; use Clear data on this row first for a clean replace.` + failNote + typeNote,
         );
         setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
         await fetchFootprint();
@@ -957,7 +991,7 @@ export default function ProjectBriefPage() {
       setUploadMsgKind('info');
       setUploadError(
         `${file.name}: imported ${Number(inserted).toLocaleString()} new keywords for ${domain}` +
-        (Number(updated ?? 0) > 0 ? ` · ${Number(updated).toLocaleString()} existing rows refreshed` : '') + '.' + typeNote,
+        (Number(updated ?? 0) > 0 ? ` · ${Number(updated).toLocaleString()} existing rows refreshed` : '') + '.' + failNote + typeNote,
       );
       setUploadedDomains(prev => new Set([...Array.from(prev), domain]));
       await fetchFootprint();
@@ -966,6 +1000,7 @@ export default function ProjectBriefPage() {
       setUploadError('Upload failed — check file format and try again.');
     } finally {
       setUploadingDomain(null);
+      setUploadProgress(null);   // v7.558
     }
   }
 
@@ -1888,6 +1923,7 @@ export default function ProjectBriefPage() {
                 onSelectSource={setDataSource}
                 uploadedDomains={uploadedDomains}
                 uploadingDomain={uploadingDomain}
+                uploadProgress={uploadProgress}
                 uploadError={uploadError}
                 uploadMsgKind={uploadMsgKind}
                 footprintRows={footprintRows}
@@ -2177,6 +2213,7 @@ interface DataSourceCardProps {
   onSelectSource:  (s: 'auto' | 'upload') => void;
   uploadedDomains: Set<string>;
   uploadingDomain: string | null;
+  uploadProgress?: { done: number; total: number } | null;   // v7.558
   uploadError:     string | null;
   uploadMsgKind:   'error' | 'info';                    // v7.402
   footprintRows:   Record<string, number>;              // v7.402: real stored CSV rows per domain
@@ -2189,7 +2226,7 @@ interface DataSourceCardProps {
 
 function DataSourceCard({
   clientDomain, competitors, dataSource, onSelectSource,
-  uploadedDomains, uploadingDomain, uploadError, uploadMsgKind,
+  uploadedDomains, uploadingDomain, uploadProgress, uploadError, uploadMsgKind,
   footprintRows, clearingDomain, onClearDomain,
   fileInputRefs, onFileSelect, onRun,
 }: DataSourceCardProps) {
@@ -2276,6 +2313,7 @@ function DataSourceCard({
               label="client"
               uploaded={uploadedDomains.has(clientDomain)}
               uploading={uploadingDomain === clientDomain}
+              progress={uploadingDomain === clientDomain ? uploadProgress : null}
               storedRows={footprintRows[clientDomain] ?? 0}
               clearing={clearingDomain === clientDomain}
               onClear={() => onClearDomain(clientDomain)}
@@ -2289,6 +2327,7 @@ function DataSourceCard({
                 domain={c.domain}
                 uploaded={uploadedDomains.has(c.domain)}
                 uploading={uploadingDomain === c.domain}
+                progress={uploadingDomain === c.domain ? uploadProgress : null}
                 storedRows={footprintRows[c.domain] ?? 0}
                 clearing={clearingDomain === c.domain}
                 onClear={() => onClearDomain(c.domain)}
@@ -2334,6 +2373,7 @@ interface UploadZoneProps {
   label?:     string;
   uploaded:   boolean;
   uploading:  boolean;
+  progress?:  { done: number; total: number } | null;   // v7.558: rows sent so far
   storedRows: number;          // v7.402: rows actually in the DB for this domain (0 = nothing stored)
   clearing:   boolean;         // v7.402
   onClear:    () => void;      // v7.402
@@ -2343,7 +2383,7 @@ interface UploadZoneProps {
 }
 
 function UploadZone({
-  domain, label, uploaded, uploading, storedRows, clearing, onClear,
+  domain, label, uploaded, uploading, progress, storedRows, clearing, onClear,
   onTrigger, inputRef, onFileChange,
 }: UploadZoneProps) {
   // v7.402: two-step confirm, inline. Deliberately NOT window.confirm — a native
@@ -2380,7 +2420,11 @@ function UploadZone({
         }}
       >
         {uploading ? (
-          <span style={{ fontSize: '11px', color: 'var(--c-707090)' }}>Uploading…</span>
+          <span style={{ fontSize: '11px', color: 'var(--c-707090)' }}>
+            {progress && progress.total > 0
+              ? `Uploading ${progress.done.toLocaleString()} of ${progress.total.toLocaleString()} rows (${Math.round((progress.done / progress.total) * 100)}%)…`
+              : 'Uploading…'}
+          </span>
         ) : uploaded ? (
           <span style={{ fontSize: '11px', color: 'var(--c-4ade80)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
             <i className="ti ti-circle-check" style={{ fontSize: '13px' }} aria-hidden="true" /> Uploaded
