@@ -38,6 +38,7 @@ import { brandLabelOf } from '@/lib/utils/brandRoot';   // v7.533
  * Data stored in: analyses.profoundSnapshot (JSONB) — source: 'llm_probe_v2'
  */
 
+import { classifierTimeoutMs } from '@/lib/synthesis/timeBudget';   // v7.565
 import Anthropic from '@anthropic-ai/sdk';
 import { recordAnthropic, recordOpenAITokens } from '@/lib/usage/record';
 
@@ -292,7 +293,9 @@ async function askClaude(prompt: string): Promise<string> {
     model:      'claude-haiku-4-5-20251001',
     max_tokens: PROBE_MAX_TOKENS,
     messages:   [{ role: 'user', content: prompt }],
-  }, { timeout: 30_000 });
+  // v7.565: maxRetries 1 (SDK default is 2) — a call already in flight when the
+  // pool deadline passes could otherwise run 3 × 30s and overrun the window.
+  }, { timeout: 30_000, maxRetries: 1 });
   await recordAnthropic(msg, 'claude-haiku-4-5-20251001');   // v7.225
   return msg.content
     .filter(b => b.type === 'text')
@@ -393,9 +396,21 @@ function quoteIsVerbatim(quote: string, responseText: string): boolean {
 async function classifyResults(
   results:    ProbeResultV2[],
   clientName: string,
+  deadlineMs?: number,
 ): Promise<{ assessed: boolean }> {
   const candidates = results.filter(r => r.mentioned || r.branded);
   if (candidates.length === 0) return { assessed: true };
+
+  // v7.565: the classifier gets whatever is left before its cut-off, never more.
+  // Before this it always took up to 100s AFTER the pool deadline, which pushed
+  // the probe past the synthesis race and the whole partial probe was thrown away
+  // (Citi, 2026-10-19). Not enough time → skip; assessed=false is the existing,
+  // caveated fallback (mention detection only) — no sentiment is invented.
+  const timeoutMs = classifierTimeoutMs(deadlineMs);
+  if (timeoutMs === null) {
+    console.warn(`[LLMProbe] Sentiment/recognition classification skipped — not enough time left in this window (assessed=false, Const I.5).`);
+    return { assessed: false };
+  }
 
   const payload = candidates.map(r => ({
     id:       r.id,
@@ -430,7 +445,7 @@ ${JSON.stringify(payload)}`;
       model:      'claude-sonnet-4-6',
       max_tokens: 16000,
       messages:   [{ role: 'user', content: prompt }],
-    }, { timeout: 100_000 });
+    }, { timeout: timeoutMs, maxRetries: 0 });
     await recordAnthropic(msg, 'claude-sonnet-4-6');   // v7.225
 
     const text = msg.content.filter(b => b.type === 'text').map(b => (b as any).text as string).join('');
@@ -518,6 +533,7 @@ export async function getLLMProbeSnapshotV2(
   industry:   string,
   categories: ProbeCategoryInput[],
   deadlineMs?: number,
+  classifyDeadlineMs?: number,   // v7.565: absolute cut-off for the classifier pass
 ): Promise<LLMProbeSnapshotV2> {
   const specs = buildPromptSpecs(clientName, industry, categories);
   console.log(
@@ -545,7 +561,7 @@ export async function getLLMProbeSnapshotV2(
   const results = [...claudeResults, ...chatgptResults];
 
   // Sentiment + recognition (mutates results in place)
-  const { assessed } = await classifyResults(results, clientName);
+  const { assessed } = await classifyResults(results, clientName, classifyDeadlineMs);
 
   // Unbranded visibility — prompts that never named the brand
   const unbrandedRows = results.filter(r => !r.branded);

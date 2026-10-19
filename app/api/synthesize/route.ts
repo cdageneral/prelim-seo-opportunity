@@ -13,6 +13,7 @@ import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { runFullSynthesis, type SynthesisCheckpoint } from '@/lib/claude/synthesize';
 import { generatePersonaImages } from '@/lib/apis/personaImage';
+import { PORTRAIT_START_CUTOFF_MS } from '@/lib/synthesis/timeBudget';   // v7.565
 import { setUsageProject } from '@/lib/usage/context';
 
 export const maxDuration = 300;
@@ -39,6 +40,7 @@ function normalizeDomain(url: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  const routeStartMs = Date.now();   // v7.565: window clock for the portrait hand-off
   let body: unknown;
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -219,6 +221,22 @@ export async function POST(req: NextRequest) {
     // circular avatar in the panel). Non-fatal — on missing keys or any failure
     // the segments are returned unchanged and the analysis still completes.
     // v7.150: also capture a diagnostic status string for the panel/logs.
+    // v7.565: if this window is already late, hand the portraits + final write to
+    // the next window instead of letting the 300s kill land mid-write. Every pass
+    // above is checkpointed (personas, categories, probe or its attempt marker,
+    // opportunities, narrative), so the next window starts here in seconds and
+    // re-spends nothing. Returning (not throwing) leaves the run resumable,
+    // exactly like a timeout — the panel's auto-resume picks it up.
+    const needsPortraits = Array.isArray(synthesis.personas)
+      && synthesis.personas.some((p: any) => !(p && typeof p.personaImageUrl === 'string' && p.personaImageUrl));
+    if (needsPortraits && Date.now() - routeStartMs > PORTRAIT_START_CUTOFF_MS) {
+      console.warn(`[OrbitIQ] Window at ${Math.round((Date.now() - routeStartMs) / 1000)}s — portraits + final write handed to the next window (all passes checkpointed, no re-spend)`);
+      return NextResponse.json(
+        { error: 'Synthesis window ended before the final step — resuming automatically (all completed steps are saved).', resume: true },
+        { status: 503 },
+      );
+    }
+
     const personaImg = await generatePersonaImages(synthesis.personas, {
       industry,
       clientName,

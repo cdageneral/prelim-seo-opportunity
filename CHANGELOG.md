@@ -1,3 +1,37 @@
+# v7.565 — Synthesis no longer loops on "Analysis failed (timeout)": the AI probe fits the window and is never re-run (2026-10-19)
+
+Wayne, with a screenshot: *"i keep getting this"*, the **Analysis failed · Synthesis was interrupted (timeout)** banner.
+
+- **What was happening (from live logs, Citi (travel cards), analysis 10d593ef).** Every `/api/synthesize` window
+  hit Vercel's 300s kill: at 19:47, 19:52, 19:57, 20:02, 20:25, 20:30 and 20:35. In one window: the LLM probe
+  started at 0s with a 220s prompt deadline. The Sonnet sentiment classifier then ran after that deadline with a
+  100s timeout, so the v7.346 250s race fired and **discarded the whole partial probe**. Nothing was checkpointed. The
+  narrative finished at 271s, and portraits plus the final write were killed at 300s. The next window re-ran the full
+  probe, re-spending about 216 prompts, and died the same way. Because the batch counter never moved, the panel called it a stall
+  after two windows. Refresh Analysis restarted the same loop.
+- **Fix: one window budget (`lib/synthesis/timeBudget.ts`).** Probe prompts stop starting at 100s, the classifier
+  must finish by 180s, and the race backstop is at 190s. That leaves at least 100s for opportunities, the narrative,
+  portraits and the write. The classifier's timeout is now the time left before its cut-off, not a flat 100s.
+  With under 15s left it is skipped, and the probe stores `assessed=false`, the existing caveated fallback; no sentiment is invented. In-flight
+  Claude probe calls retry once, not twice.
+- **No re-spend on resume.** When a probe produces nothing storable, the window checkpoints `llmProbeAttempted`,
+  and a resumed window uses the prior or empty probe instead of paying for it again (Const I.5: an honest gap that a later
+  run backfills). Narrative and PPT prompt are now checkpointed too.
+- **Late-window hand-off.** If the route is past 215s before portraits, it returns a resumable 503. Every pass is
+  already checkpointed, so the panel's auto-resume finishes the portraits and the final write in the next window in seconds.
+  Portrait requests are bounded at 75s each.
+- **Trade-off, disclosed.** On very large projects fewer probe prompts may complete in one window than the old
+  220s pool allowed. Completed prompts are kept and the rest are marked absent (the v7.474 deadline-partial coverage
+  marker), never zero. Before this release a large project stored **no** probe at all.
+- **Verified.** Project `tsc` clean (no target override). Real `next build` clean. Retained suite: 3497 PASS / 49 FAIL,
+  zero new FAILs vs v7.564. The v474-wiring check was amended with a dated note because the probe call now also passes the
+  classifier cut-off. +20 v7565 checks: real `llmProbe.ts` driven with stubbed providers, a 216-prompt Citi-shaped probe kept 180
+  partial results with the classifier skipped, the classifier timeout equals the time left with no SDK retries, plus the
+  synthesis and route wiring. Negative control: 7 of the checks fail on v7.564.
+- Release gate: II.9 not touched (no new queries). II.6 not applicable (no panel metric changed). IV.6/V.5 not applicable (no UI change).
+- Files: lib/synthesis/timeBudget.ts (new), lib/claude/synthesize.ts, lib/apis/llmProbe.ts, lib/apis/personaImage.ts,
+  app/api/synthesize/route.ts, package.json, CHANGELOG.md.
+
 # v7.564 — Local map packs recognise "Sono Bello …" listings; AI standing reads coverage-only Profound exports (2026-10-16)
 
 Wayne, after the Sonobello CEO deck review: *"yes package the fixes and deploy"*. Two defects found while

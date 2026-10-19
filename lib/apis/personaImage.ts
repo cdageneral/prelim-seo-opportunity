@@ -24,6 +24,7 @@
  * are skipped so retries never re-spend on images.
  */
 
+import { PORTRAIT_TIMEOUT_MS } from '@/lib/synthesis/timeBudget';   // v7.565
 import { put } from '@vercel/blob';
 import { recordOpenAIImages } from '@/lib/usage/record';
 
@@ -91,6 +92,9 @@ async function generateOne(
   try {
     const res = await fetch(OPENAI_IMAGE_URL, {
       method: 'POST',
+      // v7.565: bounded — an unbounded portrait call could hold the synthesis
+      // window past the 300s kill. A timeout is a recorded, non-fatal miss.
+      signal: AbortSignal.timeout(PORTRAIT_TIMEOUT_MS),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,

@@ -12,6 +12,7 @@
  * (prompts.ts handles null gracefully with optional chaining).
  */
 
+import { PROBE_POOL_END_MS, PROBE_CLASSIFY_END_MS, PROBE_BACKSTOP_MS, PROBE_MIN_MS, msLeft } from '@/lib/synthesis/timeBudget';   // v7.565
 import Anthropic from '@anthropic-ai/sdk';
 import { instrumentAnthropic } from '@/lib/usage/record';
 import { groupCategoriesByIntent } from '@/lib/claude/intentGroups';
@@ -1013,6 +1014,13 @@ export interface SynthesisCheckpoint {
   cbProgress?:        CbDiscoveryProgress;   // v7.86: partial discovery (wave-level resume)
   llmProbe?:          any;
   opportunities?:     any[];
+  // v7.565: the probe ran in an earlier window but produced nothing storable
+  // (timed out with no prior probe). Resume must NOT re-run it — that re-spent
+  // ~216 prompts per window and looped forever (Citi, 2026-10-19). The brief
+  // completes with an honest empty probe (Const I.5); a later run backfills.
+  llmProbeAttempted?: boolean;
+  narrative?:         any;   // v7.565: tail passes checkpointed so a kill after them is cheap
+  pptPrompt?:         any;
 }
 
 export async function runFullSynthesis(
@@ -1088,7 +1096,10 @@ export async function runFullSynthesis(
   // fall back to the previous analysis's probe data (passed in as `profound`)
   // so the panel degrades gracefully instead of going blank.
   let llmProbe = cachedProbe;
-  if (!llmProbe) {
+  if (!llmProbe && cached.llmProbeAttempted) {
+    console.warn('[OrbitIQ] LLM probe already attempted in an earlier window with no storable result — not re-running it (no re-spend); brief completes with prior/empty probe (Const I.5)');
+    llmProbe = profound ?? null;
+  } else if (!llmProbe) {
     // v7.274: cap probe input at the top 30 procedure categories by demand.
     // The probe sends 6 prompts/category (5 unbranded + 1 branded) × 2 platforms.
     // This cap is a deliberate, Wayne-requested runtime exception (Const I.6).
@@ -1190,31 +1201,37 @@ export async function runFullSynthesis(
     // the brief completes with the previous probe (or an honest empty gap, Const I.5) and
     // a later run backfills — the function ALWAYS returns cleanly, so the run finishes and
     // the brief renders instead of looping forever.
-    const PROBE_SAFETY_MS = 250_000;                       // return well under the 300s kill
-    const remainingMs = PROBE_SAFETY_MS - (Date.now() - synthStartMs);
-    if (remainingMs < 20_000) {
-      console.warn(`[OrbitIQ] LLM probe skipped this window — only ${Math.round(remainingMs / 1000)}s left; brief completes with prior/empty probe, backfills later (Const I.5)`);
+    // v7.565: the budget now comes from lib/synthesis/timeBudget.ts and is sized so
+    // the WHOLE window fits: prompts stop at 100s, the classifier must finish by
+    // 180s, the race backstop is 190s — leaving the tail (opportunities, narrative,
+    // portraits, final write) room before the 300s kill. v7.346's 250s budget left
+    // ~50s for a tail that measured ~50s+ on Citi, so the run never finished.
+    const poolLeftMs = msLeft(synthStartMs, PROBE_POOL_END_MS);
+    if (poolLeftMs < PROBE_MIN_MS) {
+      console.warn(`[OrbitIQ] LLM probe skipped this window — only ${Math.round(poolLeftMs / 1000)}s left; brief completes with prior/empty probe, backfills later (Const I.5)`);
       llmProbe = profound ?? null;
     } else {
-      // v7.474: the probe now receives a hard deadline and returns PARTIAL
-      // results at that point (completed prompts kept — real, paid-for data;
-      // the rest absent, never zero). The pool deadline sits 30s inside the
-      // race budget so classification + assembly finish before the backstop
-      // race (kept as a last-resort guard) could discard anything.
-      const poolDeadline = Date.now() + Math.max(20_000, remainingMs - 30_000);
-      const budget = new Promise<{ __timeout: true }>(res => setTimeout(() => res({ __timeout: true }), remainingMs));
+      // v7.474: the probe receives a hard deadline and returns PARTIAL results at
+      // that point (completed prompts kept — real, paid-for data; the rest absent,
+      // never zero). v7.565: the classifier gets its own absolute cut-off too.
+      const poolDeadline     = synthStartMs + PROBE_POOL_END_MS;
+      const classifyDeadline = synthStartMs + PROBE_CLASSIFY_END_MS;
+      const backstopMs       = msLeft(synthStartMs, PROBE_BACKSTOP_MS);
+      const budget = new Promise<{ __timeout: true }>(res => setTimeout(() => res({ __timeout: true }), backstopMs));
       const raced: any = await Promise.race([
-        getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories, poolDeadline)
+        getLLMProbeSnapshotV2(clientName, domain, industry, probeCategories, poolDeadline, classifyDeadline)
           .catch(err => { console.error('[OrbitIQ] LLM probe v2 failed (using previous probe data):', err); return (profound ?? null) as any; }),
         budget,
       ]);
       if (raced && raced.__timeout === true) {
-        console.warn(`[OrbitIQ] LLM probe exceeded its ${Math.round(remainingMs / 1000)}s budget — completing brief with prior/empty probe, backfills on a later run (Const I.5)`);
+        console.warn(`[OrbitIQ] LLM probe exceeded its ${Math.round(backstopMs / 1000)}s backstop — completing brief with prior/empty probe, backfills on a later run (Const I.5)`);
         llmProbe = profound ?? null;
       } else {
         llmProbe = raced;
       }
     }
+    // v7.565: record the attempt so a resumed window never re-runs (and re-pays for) it.
+    if (!llmProbe) await onCheckpoint?.({ llmProbeAttempted: true });
     if (llmProbe) await onCheckpoint?.({ llmProbe });
   }
 
@@ -1229,7 +1246,8 @@ export async function runFullSynthesis(
 
   // Passes 3 & 4 run in parallel — PPT prompt uses placeholder narrative snippets
   // until narrative is available; the deck is built from opportunities + raw data.
-  const [narrative, pptPrompt] = await Promise.all([
+  const cachedNarr = cached.narrative != null && cached.pptPrompt != null;
+  const [narrative, pptPrompt] = cachedNarr ? [cached.narrative, cached.pptPrompt] : await Promise.all([
     generateNarrative(
       domain, clientName, industry,
       semrush, serp, llmProbe,
@@ -1243,7 +1261,8 @@ export async function runFullSynthesis(
       semrush, serp, llmProbe
     ),
   ]);
-  console.log(`[OrbitIQ] Narrative + PPT prompt generated in parallel`);
+  console.log(`[OrbitIQ] Narrative + PPT prompt ${cachedNarr ? 'reused from checkpoint' : 'generated in parallel'}`);
+  if (!cachedNarr && narrative != null && pptPrompt != null) await onCheckpoint?.({ narrative, pptPrompt });
 
   // ── Hero metrics from FULL keyword footprint (not capped-200 category analysis) ──
   // This ensures totalCategoryVolume stored in DB matches what Keyword Landscape displays.
