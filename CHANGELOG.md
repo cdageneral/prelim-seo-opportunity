@@ -1,3 +1,33 @@
+# v7.564 — Local map packs recognise "Sono Bello …" listings; AI standing reads coverage-only Profound exports (2026-10-16)
+
+Wayne, after the Sonobello CEO deck review: *"yes package the fixes and deploy"*. Two defects found while
+building the deck from OrbitIQ data.
+
+- **Map-pack client match.** The Insights panel said Sono Bello appeared in 0 of 252 local map packs. The stored
+  scan held "Sono Bello Atlanta", "Sono Bello Oklahoma City" and 67 more pack slots, all flagged as not the client.
+  The scan matched brand words by plain substring: the project is "Sonobello" and the domain root is "sonobello",
+  but Google's listing title is "Sono Bello …", so the space broke the match. Place ids could not rescue it (office
+  listings carry ChIJ… ids; pack rows carry numeric CIDs). New shared rule in `lib/local/clientMatch.ts`: a listing
+  is the client when the registrable domain root (6+ letters) appears in its title with spaces and punctuation
+  removed. New scans use it inside the route; stored scans get it at read time on every surface (Local panel,
+  Insights decision, Assessment PDF, delivery package, Seer), so no paid re-scan is needed. It only ever adds a
+  client hit; it never removes a stored one. Real stored scan replayed: 69 of 252 packs, #1 in 25, zero
+  non-Sono Bello listings marked.
+- **AI standing.** The decision panel's "Named in AI answers" row said "no Profound export is stored" on
+  Sonobello, whose export (Oct 7–13) is stored. The row needed a per-domain citation table that current Profound
+  exports do not carry. It now shows the stored per-brand coverage (% of tracked prompts naming the brand) when
+  that table is absent and states that domain citations are unmeasured, not zero.
+- **Not changed (checked, not a defect).** Rows whose only Position Type is a SERP feature (Image pack, Local
+  pack) already resolve to no organic rank via `organicPositionOf` (v7.451/v7.557).
+- **Stored Insights.** The Insights decision block is stored with the narrative (v7.497). Re-run Generate
+  insights on a project to refresh it; the Local panel, PDF, Seer and delivery package read the fix immediately.
+- **Verified.** Project `tsc` clean (no target override); retained suite zero new FAILs vs v7.563 (the v7552
+  timing-flaky ETA check passed this run); +16 v7564 checks incl. the real 300-cell Sonobello scan as a fixture;
+  negative control: 9 of the new checks fail on pristine v7.563.
+- Files: lib/local/clientMatch.ts (new), app/api/projects/[id]/local-scan/route.ts, lib/insightsPanel/decision.ts,
+  components/brief/LocalSearchSection.tsx, app/api/reports/pdf/route.ts, app/api/reports/delivery-package/route.ts,
+  lib/seer/core.ts, package.json, CHANGELOG.md.
+
 # v7.563 — API Usage opens on This month (2026-10-15)
 
 Wayne: *"default the usage to the current month as the all time takes too long to load"*.

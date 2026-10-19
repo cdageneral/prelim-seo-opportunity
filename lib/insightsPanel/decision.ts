@@ -51,6 +51,7 @@ import { classifyLocalKeywords, buildClientRelevance } from '@/lib/local/detect'
 import { buildShareOfLocalVoice, type LocalScan } from '@/lib/local/build';
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
 import { buildQuadrant } from '@/lib/insightsPanel/build';
+import { rematchLocalScan } from '@/lib/local/clientMatch';   // v7.564
 
 // ─── shapes ──────────────────────────────────────────────────────────────────
 
@@ -359,7 +360,22 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
     ai.push(standingRow('aiCited', 'AI-answer citations of the brand domain', 'count', 'measured', cited, cited.some(b => b.isClient),
       `Measured — stored Profound export citation counts for each brand's matched domain.${quadrant.unmatched.length ? ` Not matchable (unmeasured, not zero): ${quadrant.unmatched.map(u => u.brand).join(', ')}.` : ''}`));
   } else {
-    ai.push({ key: 'aiNamed', metric: 'Named in AI answers (share of tracked prompts)', unit: 'pct', basis: 'measured', client: null, fieldAvg: null, best: null, clientRank: null, of: 0, standing: 'unmeasured', brands: [], brandsShown: 0, note: 'UNMEASURED for every brand — no Profound export is stored for this project. Upload it in AI Answer Engines to measure the field.' });
+    // v7.564 — buildQuadrant needs BOTH per-brand coverage and a per-domain citation table.
+    // Current Profound exports (Sonobello, 2026-10-14) store coverage but no `domains`
+    // table, so the quadrant is null and this row used to say "no Profound export is
+    // stored" while the export sat in projects.profound_data (Const I.5 — a stored
+    // measurement must never be reported as absent). The named-in-answers figure needs
+    // coverage only, so it is shown; citations stay unmeasured, not zero.
+    const cov: any[] = Array.isArray((project as any).profoundData?.coverage) ? (project as any).profoundData.coverage : [];
+    const named = cov
+      .filter(b => b && String(b.brand ?? '').trim() && Number.isFinite(Number(b.pct)))
+      .map(b => ({ domain: String(b.brand).trim(), value: r1(Number(b.pct)), isClient: !!b.isClient }));
+    if (named.length) {
+      ai.push(standingRow('aiNamed', 'Named in AI answers (share of tracked prompts)', 'pct', 'measured', named, named.some(b => b.isClient),
+        'Measured — stored Profound export: % of tracked prompts whose answers name the brand. This export carries no per-domain citation table, so brand-domain citations are unmeasured (not zero).'));
+    } else {
+      ai.push({ key: 'aiNamed', metric: 'Named in AI answers (share of tracked prompts)', unit: 'pct', basis: 'measured', client: null, fieldAvg: null, best: null, clientRank: null, of: 0, standing: 'unmeasured', brands: [], brandsShown: 0, note: 'UNMEASURED for every brand — no Profound export is stored for this project. Upload it in AI Answer Engines to measure the field.' });
+    }
   }
   // LLM probe (client only) + DataForSEO answer share + cited-domain leaders per line — aggregated across lines in TS
   let probeM = 0, probeT = 0, linesScanned = 0, linesWithShare = 0;
@@ -487,7 +503,7 @@ export function buildDecisionInputs(ctx: SeerContext): DecisionInputs {
 
   // ── COMPETITOR PLAYS ─────────────────────────────────────────────────────────
   // local pack rows (by business name) for the play's local block
-  const localScan = (rawSnap?._localScan ?? null) as LocalScan | null;
+  const localScan = rematchLocalScan((rawSnap?._localScan ?? null) as LocalScan | null, clientDomain);   // v7.564: shared client rule
   const solv = localScan?.keywords?.length ? buildShareOfLocalVoice(localScan.keywords) : [];
   const brandRoot = (d: string) => brandLabelOf(normSovDomain(d));   // v7.533: registrable label
   const squash = (s: string) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');

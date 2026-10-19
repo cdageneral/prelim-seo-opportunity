@@ -34,6 +34,7 @@ import { assembleDeliveryZip }                 from '@/lib/export/deliveryPackag
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
 import Anthropic                               from '@anthropic-ai/sdk';
+import { rematchLocalScan } from '@/lib/local/clientMatch';   // v7.564
 
 const Schema = z.object({ analysisId: z.string().uuid() });
 export const maxDuration = 60;
@@ -145,7 +146,7 @@ export async function POST(req: NextRequest) {
       // v7.407: the live list, so the frozen authority snapshot is scoped to the
       // competitors actually tracked today (same list the SoV block above uses).
       competitorDomains,
-      localScan: (((snap as any)?._localScan) ?? null),
+      localScan: rematchLocalScan((((snap as any)?._localScan) ?? null), clientDomain),   // v7.564
       umbrellaScope: (((snap as any)?._categoryBreakdown?.umbrellaScope) ?? null),
       positionDist: (((snap as any)?.positionDist) ?? null),
       contentPlanSelections,

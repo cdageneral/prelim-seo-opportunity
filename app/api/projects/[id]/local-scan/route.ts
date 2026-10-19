@@ -52,6 +52,7 @@ import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
 // v7.407: the shared "which analysis is this project showing" rule — the same one
 // the project page uses, so the scan target and the report's read target cannot drift.
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';   // v7.503 (II.9)
+import { titleMatchesClientRoot } from '@/lib/local/clientMatch';   // v7.564
 
 export const maxDuration = 300;
 
@@ -464,6 +465,8 @@ export async function POST(
     if (w && clientDomain && w === clientDomain) return true;
     const t = (p.title ?? '').toLowerCase();
     for (let i = 0; i < tokens.length; i++) { if (t.indexOf(tokens[i]) >= 0) return true; }
+    // v7.564: "Sono Bello Atlanta" vs root "sonobello" — the shared spacing-blind rule.
+    if (titleMatchesClientRoot(p.title, clientDomain)) return true;
     return false;
   };
 

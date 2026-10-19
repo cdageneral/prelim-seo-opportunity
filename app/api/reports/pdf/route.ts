@@ -39,6 +39,7 @@ import { buildQuadrant }                       from '@/lib/insightsPanel/build';
 import { buildDecisionInputs }                 from '@/lib/insightsPanel/decision'; // v7.496 (Const II.6b): the panel's standing / scenarios / local basis
 import { readComputed }                        from '@/lib/insightsPanel/computed'; // v7.497 (Const II.6a): the block stored with the narrative is read, not rebuilt
 import { assembleContext }                     from '@/lib/seer/core';
+import { rematchLocalScan } from '@/lib/local/clientMatch';   // v7.564
 
 /**
  * v7.490 — the project columns this report actually reads, named explicitly.
@@ -489,7 +490,7 @@ export async function POST(req: NextRequest) {
     // and name the ones added since the crawl (Const I.5). Same list the SoV
     // section above already uses, so one report can no longer print two rival sets.
     competitorDomains,
-    localScan:    (((snap as any)?._localScan) ?? null),
+    localScan:    rematchLocalScan((((snap as any)?._localScan) ?? null), clientDomain),   // v7.564
     localDemand:  (((snap as any)?._localDemand) ?? null),   // v7.504 (II.6b)
     hasLocalIntent: buildLocalPackKeywordSet(snap, kwRows).size > 0,
     segments:     (((snap as any)?._audienceSegments) ?? null),

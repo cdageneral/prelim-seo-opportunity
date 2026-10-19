@@ -22,6 +22,7 @@ import {
   type StoredCatScan, type NodeKw, type ProductRow,
 } from '@/lib/productInsights';
 import { buildCanonicalClusterTopics } from '@/lib/clusters/canonical';
+import { rematchLocalScan } from '@/lib/local/clientMatch';   // v7.564
 
 export const SEER_MODEL = 'claude-sonnet-4-6';
 export const SLICE_CAP = 28_000;         // max JSON chars a single tool result returns
@@ -140,7 +141,7 @@ export function assembleContext(
   });
   // v7.464: stored sections Seer was missing (all panel-owned, read-only)
   add('page_map', 'Ranking-URL page map (URL Taxonomy panel): every known ranking URL with its keywords and per-page Semrush traffic', rawSnap?._pageMap ?? null);
-  add('local_search', 'Local Search scan (the Local panel\'s stored blob): local-pack presence per category and location', rawSnap?._localScan ?? null);
+  add('local_search', 'Local Search scan (the Local panel\'s stored blob): local-pack presence per category and location', rematchLocalScan(rawSnap?._localScan ?? null, clientDomain));   // v7.564
   add('audience_segments', 'Audience segments (the Audience panel\'s stored segments)', rawSnap?._audienceSegments ?? null);
 
   return { project, analysis, pool, guardedCategories, droppedCategoryCount, sections,

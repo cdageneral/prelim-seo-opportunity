@@ -29,6 +29,7 @@ import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand
 import { buildDemandGaps, demandGapTotals, GAP_LABEL } from '@/lib/local/demandGaps';   // v7.505
 import { InsightPanel } from './InsightBanner';   // v7.366: insight-sentence layer · v7.415: one card, no accent slabs
 import { localDiagnosisInsight, localUsurperInsight, reviewDeficitInsight, localTeaserInsight, type Insight } from '@/lib/insights';   // v7.366 (L1–L4)
+import { rematchLocalScan } from '@/lib/local/clientMatch';   // v7.564
 import {
   buildPackRollup, buildReviewRollup, buildShareOfLocalVoice,
   buildLocalOpportunities, buildLocalIndex,
@@ -59,12 +60,12 @@ const cacheKey = (a: any): string => `orbitiq-local-${a?.id ?? 'none'}`;
 export type LocalScanOrigin = 'snapshot' | 'browser-only' | 'none';
 function readLocalScanSourced(a: any): { scan: LocalScan | null; origin: LocalScanOrigin } {
   const fromSnap = (a?.semrushSnapshot as any)?._localScan ?? null;
-  if (fromSnap) return { scan: fromSnap, origin: 'snapshot' };
+  if (fromSnap) return { scan: rematchLocalScan(fromSnap as LocalScan, null), origin: 'snapshot' };   // v7.564
   if (typeof window === 'undefined' || !a?.id) return { scan: null, origin: 'none' };
   try {
     const c = window.localStorage.getItem(cacheKey(a));
     const parsed = c ? JSON.parse(c) : null;
-    return parsed ? { scan: parsed, origin: 'browser-only' } : { scan: null, origin: 'none' };
+    return parsed ? { scan: rematchLocalScan(parsed as LocalScan, null), origin: 'browser-only' } : { scan: null, origin: 'none' };
   } catch { return { scan: null, origin: 'none' }; }
 }
 function readLocalScan(a: any): LocalScan | null { return readLocalScanSourced(a).scan; }
