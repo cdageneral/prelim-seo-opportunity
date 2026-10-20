@@ -281,6 +281,7 @@ export interface AssessmentData {
     noPage: Array<{ topic: string; theme: string; prompts: number; review: number; rivals: Array<{ domain: string; n: number }> }>;
     neverCited: Array<{ topic: string; theme: string; page: string; bestPos: number | null; absent: number; named: number; unknown: number; rivals: Array<{ domain: string; n: number }> }>;
     noPageTotal: number; neverCitedTotal: number; unmappedOwned: number;
+    unmappedTop?: Array<{ path: string; prompts: number; answers: number; category: string | null; filed: number }>;   // v7.569
   } | null;
   productInsights?: {
     products: Array<{
@@ -1390,6 +1391,12 @@ export function buildAssessmentHTML(d: AssessmentData): string {
         ${noPageRows || `<tr><td colspan="3" style="color:var(--muted);">${filed === 0 ? 'Appears once the prompts are filed.' : 'Every filed prompt has a ranking page on its topic.'}</td></tr>`}
       </table>
       ${pl.unmappedOwned > 0 ? `<div style="font-size:8.5px; color:var(--muted);">${n0(pl.unmappedOwned)} owned URL${pl.unmappedOwned === 1 ? ' is' : 's are'} cited by answers but ${pl.unmappedOwned === 1 ? 'is' : 'are'} not a ranking page of any topic on these lines, so no topic owns them (listed on the panel, never dropped; their prompts are never reported as named or absent).</div>` : ''}
+      ${pl.unmappedTop && pl.unmappedTop.length > 0 ? `<h2 class="h2">Cited pages outside the ranking pool <span style="font-weight:400; color:var(--muted);">- ${n0(pl.unmappedOwned)} pages${pl.unmappedOwned > 10 ? ', top 10 by prompts' : ''}</span></h2>
+      <table class="dt" style="margin-bottom:6px;">
+        <tr><th>Cited page</th><th>Product category</th><th style="width:.7in;">Prompts</th><th style="width:.7in;">Answers</th></tr>
+        ${pl.unmappedTop.map(u => `<tr><td style="font-family:ui-monospace,monospace; font-size:8px;">${esc(u.path)}</td><td>${u.category ? esc(u.category) : '<span style="color:var(--muted);">not in a category' + (u.prompts > 0 && u.filed === 0 ? ' (prompts not filed yet)' : '') + '</span>'}</td><td>${n0(u.prompts)}</td><td>${n0(u.answers)}</td></tr>`).join('')}
+      </table>
+      <div style="font-size:8px; color:var(--muted); margin:-2px 0 6px;">Product category = the category most of the page's prompts were filed into by the taxonomy filer (stored filing, not read from the URL). Answers = recorded answers citing the page.</div>` : ''}
       <div class="src">Source: the Profound Responses export uploaded to the AI Answer Engines panel - one row per prompt (answers per engine, owned citation URLs, third-party domains cited), a direct count. CITED = a recorded answer's citation URL is the topic's ranking page (the same URL identity the page clusters use). NAMED / ABSENT = the prompt was filed to that topic by the taxonomy filer (stored once; the confidence shown on the panel is the model's own estimate, under ${ASSIGN_REVIEW_BELOW} marked review) and the answer did / did not name the brand per Profound's mentioned flag. Measured and filed figures are never added together. Same shared computation as the Product Insights panel.</div>`));
   }
 

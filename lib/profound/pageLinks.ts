@@ -115,6 +115,26 @@ export interface LinkRowInput {
   /** Profound's `mentioned?` flag: true/false when the column exists, null when it does not. */
   mentioned: boolean | null;
   citations: string[];                      // every citation_N cell on the row (non-empty)
+  /** v7.569: the answer text and its run date — kept only for answers that cite an owned page */
+  response?: string;
+  date?:     string;
+}
+
+/**
+ * v7.569 (Wayne 2026-10-20: "when it says 96 prompts, what are those 96 prompts. 472 answers what
+ * are those answers"): one recorded answer that cites at least one owned page, verbatim from the
+ * Profound Responses export. Not part of the link store (which stays small, one row per prompt) —
+ * the upload sends these to their own table (profound_answers) and the drill reads them a page
+ * at a time (Const II.9). Every field is a cell of the export; nothing is summarised.
+ */
+export interface ProfoundAnswerRow {
+  pk:        string;                        // promptKey(prompt)
+  prompt:    string;
+  date:      string;                        // the export's run date ('' when the column is absent)
+  platform:  string;
+  mentioned: boolean | null;                // Profound's mentioned? flag (null = column absent)
+  paths:     string[];                      // owned paths this answer cites (citationPathOf, deduped)
+  response:  string;                        // the answer text as exported
 }
 
 /**
@@ -126,6 +146,7 @@ export function createLinkAccumulator(clientDomain: string) {
   const byPrompt = new Map<string, ProfoundPromptLink & { rivalSeen: Set<string>; ownedSeen: Set<string> }>();
   let totalRows = 0;
   let hasNamedFlag = false;
+  const answers: ProfoundAnswerRow[] = [];   // v7.569: only answers that cite an owned page
 
   const add = (r: LinkRowInput): void => {
     const prompt = String(r.prompt ?? '').trim();
@@ -164,6 +185,10 @@ export function createLinkAccumulator(clientDomain: string) {
       }
     }
     if (citedOwned) { e.cited++; et.cited++; }
+    if (citedOwned && typeof r.response === 'string') {
+      answers.push({ pk: key, prompt, date: String(r.date ?? '').slice(0, 10), platform: plat,
+        mentioned: r.mentioned, paths: Array.from(seenOwned), response: r.response });
+    }
   };
 
   const finish = (sourceFile: string): ProfoundLinkStore => {
@@ -181,7 +206,7 @@ export function createLinkAccumulator(clientDomain: string) {
     };
   };
 
-  return { add, finish, get size() { return byPrompt.size; } };
+  return { add, finish, get size() { return byPrompt.size; }, answers: () => answers };
 }
 
 // ─── Reading side: join prompts to topics ──────────────────────────────────
@@ -472,4 +497,55 @@ export function topicPromptsTsv(s: TopicPromptSummary): string {
       r.assignment ? r.assignment.path.join(' > ') : '', r.assignment ? r.assignment.confidence.toFixed(2) : ''].join('\t'));
   }
   return lines.join('\n');
+}
+
+
+// ─── v7.569: drill helpers — the prompts behind a cited page, and the category it sits in ───
+
+export interface PagePromptRow {
+  link:       ProfoundPromptLink;
+  /** answers to THIS prompt that cite THIS page (the store's per-prompt owned count) */
+  answers:    number;
+  assignment?: PromptAssignment;
+}
+
+/** Every stored prompt whose answers cite `path` — the rows behind "N prompts · M answers".
+ *  Sums back exactly to the unmappedOwned row (same store, same counts — Const I.1). */
+export function promptsCitingPath(store: ProfoundLinkStore | null, path: string): PagePromptRow[] {
+  if (!store || !Array.isArray(store.prompts)) return [];
+  const a = store.assignments ?? {};
+  const out: PagePromptRow[] = [];
+  for (const link of store.prompts) {
+    const n = link.owned[path];
+    if (typeof n === 'number' && n > 0) out.push({ link, answers: n, assignment: a[promptKey(link.prompt)] });
+  }
+  return out.sort((x, y) => y.answers - x.answers || y.link.runs - x.link.runs || x.link.prompt.localeCompare(y.link.prompt));
+}
+
+export interface PageCategoryVote { path: string[]; node: string; prompts: number }
+export interface PageCategory {
+  /** the product category the page belongs to by its prompts' filing — the most-voted node */
+  top:     PageCategoryVote | null;
+  votes:   PageCategoryVote[];
+  filed:   number;                          // prompts citing the page that are filed (assigned / review)
+  total:   number;                          // prompts citing the page
+}
+
+/** Which product category a cited page belongs to, read from the taxonomy filing of the prompts
+ *  whose answers cite it — the stored assignments only, never re-derived from the URL text (II.8).
+ *  `top` is null when none of its prompts is filed yet (shown as "not in a category", I.5). */
+export function categoryOfPath(rows: PagePromptRow[]): PageCategory {
+  const byPath = new Map<string, PageCategoryVote>();
+  let filed = 0;
+  for (const r of rows) {
+    const a = r.assignment;
+    if (!a || a.status === 'none' || !Array.isArray(a.path) || a.path.length === 0) continue;
+    filed++;
+    const k = a.path.join(' › ');
+    const v = byPath.get(k) ?? { path: a.path.slice(), node: a.node, prompts: 0 };
+    v.prompts++;
+    byPath.set(k, v);
+  }
+  const votes = Array.from(byPath.values()).sort((x, y) => y.prompts - x.prompts || x.path.join(' › ').localeCompare(y.path.join(' › ')));
+  return { top: votes[0] ?? null, votes, filed, total: rows.length };
 }

@@ -30,7 +30,7 @@ import { computeSov }                          from '@/lib/sov/model';
 // the report can never run on a silently-empty map (the v7.220 under-count class).
 import { buildCanonicalClusterTopics }         from '@/lib/clusters/canonical';
 import { buildProductRows, buildCategoryTree, flattenNodes, type ProductRow, type ProductKpi, type StoredCatScan, buildPlatformMix, PLATFORM_LABEL, buildContentFootprint, type NodeKw, probeFromAnalysis, probeResultsForNode, catNodeNames, buildCategoryToUmbrella, probeResultsForUmbrella } from '@/lib/productInsights';
-import { joinPromptsToTopics, buildGapViews, type ProfoundLinkStore } from '@/lib/profound/pageLinks';   // v7.547 (Const II.6b)   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
+import { joinPromptsToTopics, buildGapViews, promptsCitingPath, categoryOfPath, type ProfoundLinkStore } from '@/lib/profound/pageLinks';   // v7.547 (Const II.6b)   // v7.427/v7.432/v7.449: the panel's shared basis (Const II.6b)
 import { buildIntentPool, classifyIntents, persistClusterAssigns, type AssignMap } from '@/lib/clusters/intentAssign';
 import { setUsageProject }                     from '@/lib/usage/context';
 import { instrumentAnthropic }                 from '@/lib/usage/record';
@@ -385,6 +385,8 @@ export async function POST(req: NextRequest) {
               noPage: gaps.noPage.slice(0, 10).map(g => ({ topic: g.topic, theme: g.theme, prompts: g.prompts, review: g.review, rivals: g.rivals })),
               neverCited: gaps.neverCited.slice(0, 10).map(g => ({ topic: g.topic, theme: g.theme, page: g.page, bestPos: g.bestPos, absent: g.absent, named: g.named, unknown: g.unknown, rivals: g.rivals })),
               noPageTotal: gaps.noPage.length, neverCitedTotal: gaps.neverCited.length, unmappedOwned: join.unmappedOwned.length,
+              // v7.569: the top cited non-ranking pages with the product category their prompts were filed into
+              unmappedTop: join.unmappedOwned.slice(0, 10).map(u => { const c = categoryOfPath(promptsCitingPath(store, u.path)); return { path: u.path, prompts: u.prompts, answers: u.answers, category: c.top ? c.top.path.join(' › ') : null, filed: c.filed }; }),
             };
           }
         } catch (err) {

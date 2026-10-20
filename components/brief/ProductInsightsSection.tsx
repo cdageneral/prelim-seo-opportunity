@@ -466,7 +466,7 @@ export default function ProductInsightsSection({
                 <div style={{ minWidth: 0 }}><PromptCell s={ps} state={linkState} /></div>
               </div>
               {kwOpen && linkState === 'ready' && links && ps && ps.rows.length > 0 && (
-                <PromptDrawer s={ps} topicLabel={t.product || t.parentName} sourceFile={links.sourceFile} builtAt={links.builtAt} />
+                <PromptDrawer s={ps} topicLabel={t.product || t.parentName} sourceFile={links.sourceFile} builtAt={links.builtAt} projectId={projectId} store={links} />
               )}
               {kwOpen && (
                 <div style={{ margin: '0 0 6px 18px', padding: '6px 8px', border: '1px solid var(--c-14142a)', borderRadius: '7px' }}>
@@ -1592,7 +1592,7 @@ export default function ProductInsightsSection({
                           {/* v7.548: the prompts behind this level (every topic at and beneath it) */}
                           {isOpen && linkState === 'ready' && links && np && np.rows.length > 0 && (
                             <div style={{ marginLeft: `${node.depth * 18}px` }}>
-                              <PromptDrawer s={np} topicLabel={node.name} sourceFile={links.sourceFile} builtAt={links.builtAt} />
+                              <PromptDrawer s={np} topicLabel={node.name} sourceFile={links.sourceFile} builtAt={links.builtAt} projectId={projectId} store={links} />
                             </div>
                           )}
                           {/* v7.433: the keywords behind this level — position, volume, ranking page */}

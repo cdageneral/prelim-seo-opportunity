@@ -63,7 +63,7 @@ import {
 } from '@/lib/profound/sentimentScore';
 // v7.547 — prompt ↔ owned-URL link store, built from the SAME visibility pass (one row per prompt)
 // and saved to its own column so Product Insights can link prompts to pages (lib/profound/pageLinks.ts).
-import { createLinkAccumulator, type ProfoundLinkStore } from '@/lib/profound/pageLinks';
+import { createLinkAccumulator, type ProfoundLinkStore, type ProfoundAnswerRow } from '@/lib/profound/pageLinks';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 type SlotKey = 'visibility' | 'sentiment' | 'platforms' | 'demand' | 'citations';
@@ -636,6 +636,37 @@ async function serverSaveLinks(pid: string, links: ProfoundLinkStore): Promise<b
 }
 async function serverDeleteLinks(pid: string): Promise<void> {
   try { await fetch(`/api/projects/${pid}/profound-links`, { method: 'DELETE' }); } catch { /* no-op */ }
+  try { await fetch(`/api/projects/${pid}/profound-links/answers`, { method: 'DELETE' }); } catch { /* no-op */ }   // v7.569
+}
+
+/**
+ * v7.569: send the answers that cite an owned page to their own table, in chunks of at most
+ * ~1.5 MB (one request each), replacing the previous upload's set. Returns the count saved, or
+ * an error naming how far it got — never a silent partial (Const I.5).
+ */
+async function serverSaveAnswers(pid: string, rows: ProfoundAnswerRow[], onProgress: (done: number, total: number) => void): Promise<{ ok: boolean; saved: number; error?: string }> {
+  const MAX_BYTES = 1_500_000;
+  let saved = 0, first = true, i = 0;
+  onProgress(0, rows.length);
+  while (i < rows.length || first) {
+    const chunk: ProfoundAnswerRow[] = [];
+    let bytes = 0;
+    while (i < rows.length && chunk.length < 400) {
+      const b = rows[i].response.length + rows[i].prompt.length + 200;
+      if (chunk.length > 0 && bytes + b > MAX_BYTES) break;
+      chunk.push(rows[i]); bytes += b; i++;
+    }
+    try {
+      const r = await fetch(`/api/projects/${pid}/profound-links/answers`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: first, answers: chunk }),
+      });
+      if (!r.ok) return { ok: false, saved, error: `answer text save stopped at ${saved.toLocaleString()} of ${rows.length.toLocaleString()} (${r.status})` };
+    } catch { return { ok: false, saved, error: `answer text save stopped at ${saved.toLocaleString()} of ${rows.length.toLocaleString()} (network)` }; }
+    saved += chunk.length; first = false;
+    onProgress(saved, rows.length);
+    if (chunk.length === 0) break;
+  }
+  return { ok: true, saved };
 }
 
 async function serverDelete(pid: string): Promise<void> {
@@ -660,7 +691,7 @@ export async function computeAll(
   // v7.547: when the project domain is known, the SAME visibility pass also builds the
   // prompt ↔ owned-URL link store (one entry per prompt) and hands it back here. Optional,
   // so every existing caller — and every retained-suite check — computes exactly as before.
-  opts: { domain?: string; onLinks?: (links: ProfoundLinkStore) => void } = {},
+  opts: { domain?: string; onLinks?: (links: ProfoundLinkStore) => void; onAnswers?: (rows: ProfoundAnswerRow[]) => void } = {},
 ): Promise<Metrics> {
   const slots: SlotMap = {};
   const linkAcc = opts.domain ? createLinkAccumulator(opts.domain) : null;
@@ -821,7 +852,10 @@ export async function computeAll(
         const citations: string[] = [];
         for (let c = 0; c < linkCiteCols.length; c++) { const u = row[linkCiteCols[c]]; if (u) citations.push(u); }
         linkAcc.add({ prompt, topic, platform: plat,
-          mentioned: mfiL === undefined ? null : (row[mfiL] || '').trim().toLowerCase() === 'yes', citations });
+          mentioned: mfiL === undefined ? null : (row[mfiL] || '').trim().toLowerCase() === 'yes', citations,
+          // v7.569: the answer text + run date, kept only when the answer cites an owned page
+          response: H['response'] === undefined ? undefined : (row[H['response']] || ''),
+          date: H['date'] === undefined ? '' : (row[H['date']] || '') });
       }
       // v7.380: strict = Profound's denominator; broad = every answer the client could have won.
       if (type.trim() === 'Visibility') {
@@ -872,6 +906,7 @@ export async function computeAll(
       throw new ProfoundParseError('visibility', [{ field: 'normalized_mentions', aliases: COLS.visibility[4].aliases, required: true, note: `resolved, but ${totalRuns} answers yielded zero brand mentions — the column format may have changed` }], []);
     }
     if (linkAcc && opts.onLinks) opts.onLinks(linkAcc.finish(f.name));   // v7.547
+    if (linkAcc && opts.onAnswers) opts.onAnswers(linkAcc.answers());     // v7.569
   }
 
   // ── Determine client + tracked roster (no hardcoding) ──
@@ -1384,6 +1419,7 @@ interface Props { projectId: string; clientName?: string | null; domain?: string
 
 export default function ProfoundVisibilitySection({ projectId, clientName, domain }: Props) {
   const [linkSaveErr, setLinkSaveErr] = useState<string | null>(null);   // v7.547
+  const [answerSave, setAnswerSave] = useState<{ done: number; total: number; startedAt: number } | null>(null);   // v7.569
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [files, setFiles] = useState<FileMap>({});
   const [progress, setProgress] = useState<Progress | null>(null);
@@ -1436,12 +1472,24 @@ export default function ProfoundVisibilitySection({ projectId, clientName, domai
     }
     try {
       let links: ProfoundLinkStore | null = null;
-      const m = await computeAll(nextFiles, cName || 'client', setProgress, { domain: domain || undefined, onLinks: (l) => { links = l; } });
+      let answerRows: ProfoundAnswerRow[] | null = null;
+      const m = await computeAll(nextFiles, cName || 'client', setProgress, { domain: domain || undefined, onLinks: (l) => { links = l; }, onAnswers: (a) => { answerRows = a; } });
       setMetrics(m);
       void serverSave(projectId, m);   // v7.318: persist to the shared project row (survives refresh + reaches other users)
       if (links) {   // v7.547: prompt ↔ page links for Product Insights — a failed save is said, not swallowed
         const l = links as ProfoundLinkStore;
-        void serverSaveLinks(projectId, l).then(ok => { if (!ok) setLinkSaveErr(`The prompt → page link store (${l.prompts.length} prompts, ${Math.round(JSON.stringify(l).length / 1024)} KB) could not be saved — Product Insights will keep asking for a re-upload. Try the upload again; if it repeats, the store is too large for one request.`); else setLinkSaveErr(null); });
+        const rowsToSave = answerRows as ProfoundAnswerRow[] | null;
+        void serverSaveLinks(projectId, l).then(async ok => {
+          if (!ok) { setLinkSaveErr(`The prompt → page link store (${l.prompts.length} prompts, ${Math.round(JSON.stringify(l).length / 1024)} KB) could not be saved — Product Insights will keep asking for a re-upload. Try the upload again; if it repeats, the store is too large for one request.`); return; }
+          setLinkSaveErr(null);
+          // v7.569: the answer text behind every "N answers" count, for the Product Insights drill
+          if (rowsToSave && rowsToSave.length > 0) {
+            const t0 = Date.now();
+            const res = await serverSaveAnswers(projectId, rowsToSave, (done, total) => setAnswerSave({ done, total, startedAt: t0 }));
+            setAnswerSave(null);
+            if (!res.ok) setLinkSaveErr(`The prompt links saved, but the ${res.error}. The prompt drill works; the answer text is incomplete — upload the Responses file again to finish it.`);
+          }
+        });
       }
       void idbSave(projectId, m);      // and the fast local cache
     } catch (e) {
@@ -1621,6 +1669,15 @@ export default function ProfoundVisibilitySection({ projectId, clientName, domai
       {error && !parseErr && (
         <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{error}</div>
       )}
+      {answerSave && (() => {
+        const el = Date.now() - answerSave.startedAt;
+        const eta = answerSave.done > 0 ? Math.max(1, Math.round((el / answerSave.done) * (answerSave.total - answerSave.done) / 1000)) : null;
+        return (
+          <div className="mt-4 rounded-lg p-3 text-xs" style={{ border: '1px solid var(--c-1e1e34)', color: 'var(--c-c8c8e8)', background: 'var(--c-0c0c16)' }}>
+            Saving the answer text behind the page drill — <b>{answerSave.done.toLocaleString()}</b> of <b>{answerSave.total.toLocaleString()}</b> answers{eta !== null ? ` · about ${eta < 90 ? `${eta}s` : `${Math.round(eta / 60)} min`} left` : ' · measuring speed…'}
+          </div>
+        );
+      })()}
       {linkSaveErr && (
         <div className="mt-4 bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 text-rose-500 text-xs">{linkSaveErr}</div>
       )}

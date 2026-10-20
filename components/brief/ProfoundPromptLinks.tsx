@@ -24,8 +24,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  orderedEngines, topicPromptsTsv, ASSIGN_REVIEW_BELOW,
+  orderedEngines, topicPromptsTsv, ASSIGN_REVIEW_BELOW, promptKey, promptsCitingPath, categoryOfPath,
   type ProfoundLinkStore, type JoinResult, type TopicPromptSummary, type TopicPromptRow, type GapViews,
+  type ProfoundAnswerRow, type PagePromptRow,
 } from '@/lib/profound/pageLinks';
 
 // ─── shared bits ─────────────────────────────────────────────────────────────
@@ -91,11 +92,119 @@ export function PromptCell({ s, state }: { s: TopicPromptSummary | undefined; st
   );
 }
 
+// ─── v7.569: the verbatim answers behind a count ─────────────────────────────
+
+const ANSWER_PAGE = 10;
+const linkBtn: React.CSSProperties = { fontSize: '9.5px', fontWeight: 700, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-9b96ff)', textDecoration: 'underline', textUnderlineOffset: '2px' };
+
+function AnswerCard({ a, showPrompt }: { a: ProfoundAnswerRow; showPrompt: boolean }) {
+  const [open, setOpen] = useState(false);
+  const long = a.response.length > 600;
+  return (
+    <div data-answer-row style={{ padding: '6px 0', borderBottom: '1px dashed var(--c-1e1e34)' }}>
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', fontSize: '9.5px', color: 'var(--c-8a8aa8)', marginBottom: '3px' }}>
+        <span className="num">{a.date || 'no date'}</span><span>·</span><b style={{ color: 'var(--c-8a8aa8)' }}>{engShort(a.platform)}</b>
+        {a.mentioned === true ? chip('amber', 'NAMES YOU') : a.mentioned === false ? chip('red', 'NO MENTION') : null}
+        <span>· cites {a.paths.join(', ')}</span>
+      </div>
+      {showPrompt && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--c-c8c8e8)', marginBottom: '2px' }}>{a.prompt}</div>}
+      <div style={{ fontSize: '10.5px', lineHeight: 1.45, color: 'var(--c-b8b8d8)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: open || !long ? undefined : '7.3em', overflow: open || !long ? undefined : 'hidden' }}>{a.response || <i style={{ color: 'var(--c-8a8aa8)' }}>empty answer in the export</i>}</div>
+      {long && <button onClick={() => setOpen(v => !v)} style={{ ...linkBtn, marginTop: '2px' }}>{open ? 'Collapse ▴' : `Full answer (${a.response.length.toLocaleString()} chars) ▾`}</button>}
+    </div>
+  );
+}
+
+/** The stored answer rows for a page and/or a prompt — read from the answers table, newest first. */
+export function AnswerList({ projectId, path, prompt, showPrompt }: { projectId: string; path?: string; prompt?: string; showPrompt: boolean }) {
+  const [rows, setRows] = useState<ProfoundAnswerRow[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const load = async (offset: number) => {
+    setBusy(true); setErr(null);
+    try {
+      const q = new URLSearchParams({ offset: String(offset), limit: String(ANSWER_PAGE) });
+      if (path) q.set('path', path);
+      if (prompt) q.set('prompt', promptKey(prompt));
+      const r = await fetch(`/api/projects/${projectId}/profound-links/answers?${q.toString()}`, { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(d?.error ? String(d.error) : `Could not load answers (${r.status})`); return; }
+      setTotal(Number(d.total ?? 0));
+      setRows(prev => offset === 0 ? (d.answers ?? []) : [...prev, ...(d.answers ?? [])]);
+    } catch { setErr('Could not load answers (network)'); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { void load(0); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projectId, path, prompt]);
+  return (
+    <div data-answer-list style={{ margin: '4px 0 6px 0', padding: '6px 9px', border: '1px solid var(--c-1e1e34)', borderRadius: '7px', background: 'var(--c-0a0a14)' }}>
+      {err && <div style={{ fontSize: '10px', color: 'var(--c-f87171)' }}>{err}</div>}
+      {total === null && !err && <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)' }}>Loading answers…</div>}
+      {total === 0 && (
+        <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)' }}>
+          No answer text stored for this yet. Answer text is kept from v7.569 on — <b>re-upload the Profound Responses file once in AI Answer Engines</b> and every answer behind these counts appears here. Nothing is reconstructed from the stored counts.
+        </div>
+      )}
+      {total !== null && total > 0 && <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-8a8aa8)', marginBottom: '2px' }}>{total.toLocaleString()} ANSWER{total === 1 ? '' : 'S'} · VERBATIM FROM THE PROFOUND EXPORT · NEWEST FIRST</div>}
+      {rows.map((a, i) => <AnswerCard key={i} a={a} showPrompt={showPrompt} />)}
+      {total !== null && rows.length < total && (
+        <button disabled={busy} onClick={() => void load(rows.length)} style={{ ...linkBtn, marginTop: '5px' }}>{busy ? 'Loading…' : `Show ${Math.min(ANSWER_PAGE, total - rows.length)} more of ${(total - rows.length).toLocaleString()} ▾`}</button>
+      )}
+    </div>
+  );
+}
+
+/** One cited page: its product category (from its prompts' filing) and the prompts behind it. */
+function PageDrill({ projectId, store, path, prompts: rows }: { projectId: string; store: ProfoundLinkStore; path: string; prompts: PagePromptRow[] }) {
+  const [openPrompt, setOpenPrompt] = useState<string | null>(null);
+  const [allAnswers, setAllAnswers] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const cat = categoryOfPath(rows);
+  const answers = rows.reduce((x, r) => x + r.answers, 0);
+  const shown = showAll ? rows : rows.slice(0, 15);
+  void store;
+  return (
+    <div data-page-drill style={{ margin: '3px 0 8px 14px', padding: '7px 9px', borderLeft: '3px solid var(--c-6c63ff)', background: 'var(--c-0c0c16)', borderRadius: '0 7px 7px 0' }}>
+      <div style={{ fontSize: '10px', color: 'var(--c-8a8aa8)', marginBottom: '5px' }}>
+        <b style={{ color: 'var(--c-8a8aa8)', fontSize: '8.5px', letterSpacing: '0.07em' }}>PRODUCT CATEGORY </b>
+        {cat.top
+          ? <><b style={{ color: 'var(--c-e8e8ff)' }} data-page-category>{cat.top.path.join(' › ')}</b> <span style={{ color: 'var(--c-8a8aa8)' }}>· {cat.top.prompts} of {cat.total} prompts filed here{cat.votes.length > 1 ? ` · also ${cat.votes.slice(1, 4).map(v => `${v.path[v.path.length - 1]} (${v.prompts})`).join(', ')}` : ''}{cat.total - cat.filed > 0 ? ` · ${cat.total - cat.filed} not filed` : ''}</span></>
+          : <span data-page-category style={{ color: 'var(--c-f59e0b)' }}>not in a product category — {cat.total === 0 ? 'no prompts' : `none of its ${cat.total} prompts is filed yet (File prompts above)`}</span>}
+      </div>
+      <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-8a8aa8)', marginBottom: '2px' }}>{rows.length} PROMPT{rows.length === 1 ? '' : 'S'} · {answers.toLocaleString()} ANSWERS CITE THIS PAGE</div>
+      {shown.map(r => {
+        const k = promptKey(r.link.prompt);
+        const engs = orderedEngines(Object.keys(r.link.engines)).filter(e => r.link.engines[e].cited > 0);
+        const a = r.assignment;
+        return (
+          <div key={k} data-page-prompt>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,1fr) minmax(120px,0.5fr) auto', gap: '8px', alignItems: 'baseline', padding: '3px 0', borderBottom: '1px dashed var(--c-1e1e34)', fontSize: '10.5px' }}>
+              <span style={{ color: 'var(--c-c8c8e8)' }}>{r.link.prompt}
+                {a && a.status !== 'none' && a.path.length > 0
+                  ? <span style={{ fontSize: '9px', color: a.status === 'review' ? 'var(--c-f59e0b)' : 'var(--c-8a8aa8)' }} title={`Filed by ${a.model} — the model's own confidence`}> · {a.path.join(' › ')}{a.status === 'review' ? ' (review)' : ''}</span>
+                  : <span style={{ fontSize: '9px', color: 'var(--c-8a8aa8)' }}> · {a?.status === 'none' ? 'no fit in the taxonomy' : 'not filed'}</span>}
+              </span>
+              <span style={{ fontSize: '9.5px', color: 'var(--c-8a8aa8)' }}>{engs.map(engShort).join(' · ') || '—'}</span>
+              <button onClick={() => setOpenPrompt(openPrompt === k ? null : k)} style={linkBtn} className="num">{r.answers} answer{r.answers === 1 ? '' : 's'} {openPrompt === k ? '▴' : '▾'}</button>
+            </div>
+            {openPrompt === k && <AnswerList projectId={projectId} path={path} prompt={r.link.prompt} showPrompt={false} />}
+          </div>
+        );
+      })}
+      <div style={{ display: 'flex', gap: '12px', marginTop: '5px' }}>
+        {rows.length > 15 && <button onClick={() => setShowAll(v => !v)} style={linkBtn}>{showAll ? 'Show fewer prompts ▴' : `Show all ${rows.length} prompts ▾`}</button>}
+        <button onClick={() => setAllAnswers(v => !v)} style={linkBtn}>{allAnswers ? 'Hide all answers ▴' : `Read all ${answers.toLocaleString()} answers ▾`}</button>
+      </div>
+      {allAnswers && <AnswerList projectId={projectId} path={path} showPrompt />}
+    </div>
+  );
+}
+
 // ─── drawer ───────────────────────────────────────────────────────────────────
 
 const PAGE = 8;
 
-function PromptRowView({ r }: { r: TopicPromptRow }) {
+function PromptRowView({ r, projectId }: { r: TopicPromptRow; projectId?: string }) {
+  const [openAns, setOpenAns] = useState(false);
   const l = r.link;
   const engs = orderedEngines(Object.keys(l.engines));
   const citedOn = engs.filter(e => l.engines[e].cited > 0);
@@ -104,7 +213,10 @@ function PromptRowView({ r }: { r: TopicPromptRow }) {
     : `${engs.length === 1 ? engShort(engs[0]) : `${engs.length} engines`} · ${l.runs} answer${l.runs === 1 ? '' : 's'}`;
   const rivals = Object.entries(l.rivals).slice(0, 3).map(([d]) => d);
   const a = r.assignment;
+  // v7.569: answers stored for this prompt = the ones citing an owned page (cited rows only)
+  const citingAnswers = Object.values(l.engines).reduce((x, e) => x + e.cited, 0);
   return (
+    <>
     <div style={{ display: 'grid', gridTemplateColumns: '84px minmax(200px,1fr) minmax(130px,0.6fr) minmax(150px,0.7fr)', gap: '8px', alignItems: 'center', padding: '4px 0', borderBottom: '1px dashed var(--c-1e1e34)', fontSize: '11px' }}>
       <span>{r.bucket === 'cited' ? chip('green', 'CITED') : r.bucket === 'named' ? chip('amber', 'NAMED') : r.bucket === 'unknown' ? chip('amber', 'FILED', 'not cited · mention unknown (no mentioned? column)') : chip('red', 'ABSENT')}</span>
       <span style={{ color: 'var(--c-c8c8e8)' }}>
@@ -116,13 +228,30 @@ function PromptRowView({ r }: { r: TopicPromptRow }) {
       <span style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)' }}>{engText}</span>
       <span style={{ fontSize: '9.5px', color: 'var(--c-6a6a90)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={Object.entries(l.rivals).map(([d, n]) => `${d} ×${n}`).join(' · ')}>
         {rivals.length ? <>{r.bucket === 'cited' ? 'also cites ' : 'cites '}<b style={{ color: 'var(--c-8a8aa8)', fontWeight: 600 }}>{rivals.join(', ')}</b>{l.rivalTotal > rivals.length ? ` +${l.rivalTotal - rivals.length}` : ''}</> : <span style={{ color: 'var(--c-55557a)' }}>no third-party citations</span>}
+        {projectId && r.bucket === 'cited' && citingAnswers > 0 && <> · <button data-drawer-answers onClick={() => setOpenAns(v => !v)} style={linkBtn}>{citingAnswers} answer{citingAnswers === 1 ? '' : 's'} {openAns ? '▴' : '▾'}</button></>}
       </span>
     </div>
+    {openAns && projectId && <AnswerList projectId={projectId} prompt={l.prompt} showPrompt={false} />}
+    </>
   );
 }
 
-export function PromptDrawer({ s, topicLabel, sourceFile, builtAt }: { s: TopicPromptSummary; topicLabel: string; sourceFile: string; builtAt: string }) {
+export function PromptDrawer({ s, topicLabel, sourceFile, builtAt, projectId, store }: { s: TopicPromptSummary; topicLabel: string; sourceFile: string; builtAt: string; projectId?: string; store?: ProfoundLinkStore | null }) {
   const [showAll, setShowAll] = useState(false);
+  const [openPage, setOpenPage] = useState<string | null>(null);
+  // v7.569: every owned URL the cited prompts on this level point at — ranking pages and pages
+  // outside the ranking pool alike — with the prompts/answers behind each (store counts, I.1).
+  const citedPages = (() => {
+    const m = new Map<string, { prompts: number; answers: number; ranking: boolean }>();
+    for (const r of s.rows) {
+      if (r.bucket !== 'cited') continue;
+      for (const pth of r.paths) {
+        const x = m.get(pth) ?? { prompts: 0, answers: 0, ranking: s.pages.includes(pth) };
+        x.prompts++; x.answers += r.link.owned[pth] ?? 0; m.set(pth, x);
+      }
+    }
+    return Array.from(m.entries()).sort((x, y) => y[1].prompts - x[1].prompts || x[0].localeCompare(y[0]));
+  })();
   const rows = showAll ? s.rows : s.rows.slice(0, PAGE);
   const page = s.pages[0];
   const download = () => {
@@ -141,7 +270,23 @@ export function PromptDrawer({ s, topicLabel, sourceFile, builtAt }: { s: TopicP
         </div>
         <button onClick={download} style={{ fontSize: '9px', fontWeight: 700, padding: '2px 7px', borderRadius: '5px', cursor: 'pointer', background: 'transparent', color: 'var(--c-8a8aa8)', border: '1px solid var(--c-2a2a40)' }}>Download TSV</button>
       </div>
-      {rows.map(r => <PromptRowView key={`${r.bucket}:${r.link.prompt}`} r={r} />)}
+      {citedPages.length > 0 && (
+        <div data-drawer-pages style={{ marginBottom: '6px', fontSize: '10px', color: 'var(--c-8a8aa8)' }}>
+          <div style={{ fontSize: '8.5px', fontWeight: 800, letterSpacing: '0.07em', color: 'var(--c-6a6a90)' }}>CITED PAGES ON THIS {s.pages.length > 1 ? 'LEVEL' : 'TOPIC'} · {citedPages.length}</div>
+          {citedPages.map(([pth, x]) => (
+            <div key={pth}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', padding: '2px 0', borderBottom: '1px dashed var(--c-1e1e34)' }}>
+                <span style={{ fontFamily: 'ui-monospace, monospace' }}>{pth} <span style={{ fontFamily: 'inherit', fontSize: '9px', color: x.ranking ? 'var(--c-34d399)' : 'var(--c-f59e0b)' }}>{x.ranking ? 'ranking page' : 'not in ranking pool'}</span></span>
+                {projectId && store
+                  ? <button onClick={() => setOpenPage(openPage === pth ? null : pth)} style={linkBtn} className="num">{x.prompts} prompt{x.prompts === 1 ? '' : 's'} · {x.answers} answers {openPage === pth ? '▴' : '▾'}</button>
+                  : <span className="num">{x.prompts} prompt{x.prompts === 1 ? '' : 's'} · {x.answers} answers</span>}
+              </div>
+              {openPage === pth && projectId && store && <PageDrill projectId={projectId} store={store} path={pth} prompts={promptsCitingPath(store, pth)} />}
+            </div>
+          ))}
+        </div>
+      )}
+      {rows.map(r => <PromptRowView key={`${r.bucket}:${r.link.prompt}`} r={r} projectId={projectId} />)}
       {s.rows.length > PAGE && (
         <button onClick={() => setShowAll(v => !v)} style={{ marginTop: '5px', fontSize: '9.5px', fontWeight: 700, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-9b96ff)', textDecoration: 'underline', textUnderlineOffset: '2px' }}>
           {showAll ? 'Show fewer ▴' : `Show all ${s.rows.length} ▾`}
@@ -176,6 +321,9 @@ export function PromptLinksCard(p: CardProps) {
   const [showAllNoPage, setShowAllNoPage] = useState(false);
   const [showAllNever, setShowAllNever] = useState(false);
   const [showUnmapped, setShowUnmapped] = useState(false);
+  const [openUnmapped, setOpenUnmapped] = useState<string | null>(null);   // v7.569
+  const [unmappedAll, setUnmappedAll] = useState(false);
+  const [unmappedCat, setUnmappedCat] = useState<string>('__all');
   const stopRef = useRef(false);
   useEffect(() => () => { stopRef.current = true; }, []);
 
@@ -294,13 +442,39 @@ export function PromptLinksCard(p: CardProps) {
         <button onClick={() => setShowUnmapped(v => !v)} style={{ fontSize: '10px', fontWeight: 700, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-9b96ff)', textDecoration: 'underline', textUnderlineOffset: '2px' }}>
           {p.join.unmappedOwned.length} owned URL{p.join.unmappedOwned.length === 1 ? ' is' : 's are'} cited but {p.join.unmappedOwned.length === 1 ? 'is' : 'are'} not a topic's ranking page {showUnmapped ? '▴' : '▾'}
         </button>
-        {showUnmapped && (
+        {showUnmapped && (() => {
+          // v7.569: each page with its product category (from its prompts' filing) — click to drill
+          const withCat = p.join.unmappedOwned.map(u => { const rows = promptsCitingPath(L, u.path); return { u, rows, cat: categoryOfPath(rows) }; });
+          const catKey = (x: typeof withCat[number]) => x.cat.top ? x.cat.top.path[0] : '__none';
+          const cats = new Map<string, number>();
+          for (const x of withCat) cats.set(catKey(x), (cats.get(catKey(x)) ?? 0) + 1);
+          const list = withCat.filter(x => unmappedCat === '__all' || catKey(x) === unmappedCat);
+          const shown = unmappedAll ? list : list.slice(0, 25);
+          return (
           <div style={{ marginTop: '4px' }}>
-            {p.join.unmappedOwned.slice(0, 25).map(u => <div key={u.path} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', padding: '2px 0', borderBottom: '1px dashed var(--c-1e1e34)' }}><a href={p.hrefFor(u.path) ?? undefined} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: '2px', fontFamily: 'ui-monospace, monospace' }}>{u.path}</a><span className="num">{u.prompts} prompt{u.prompts === 1 ? '' : 's'} · {u.answers} answers</span></div>)}
-            {p.join.unmappedOwned.length > 25 && <div style={{ color: 'var(--c-55557a)' }}>+ {p.join.unmappedOwned.length - 25} more</div>}
-            <div style={{ color: 'var(--c-55557a)', marginTop: '3px' }}>These pages are cited by AI answers but are not a ranking page of any topic on these lines, so no topic owns them. They are disclosed here, never dropped; their prompts are never filed as named or absent.</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '2px 0 5px' }}>
+              <span style={{ fontSize: '9px', fontWeight: 800, letterSpacing: '0.05em', color: 'var(--c-6a6a90)' }}>PRODUCT CATEGORY</span>
+              <select data-unmapped-filter value={unmappedCat} onChange={e => { setUnmappedCat(e.target.value); setOpenUnmapped(null); }} style={{ fontSize: '10px', background: 'var(--c-0a0a14)', color: 'var(--c-c8c8e8)', border: '1px solid var(--c-2a2a40)', borderRadius: '5px', padding: '2px 4px' }}>
+                <option value="__all">All ({withCat.length})</option>
+                {Array.from(cats.entries()).filter(([k]) => k !== '__none').sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
+                {cats.has('__none') && <option value="__none">Not in a category ({cats.get('__none')})</option>}
+              </select>
+            </div>
+            {shown.map(({ u, rows, cat }) => (
+              <div key={u.path} data-unmapped-row>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(160px,1fr) minmax(120px,0.7fr) auto', gap: '8px', padding: '2px 0', borderBottom: '1px dashed var(--c-1e1e34)', alignItems: 'baseline' }}>
+                  <a href={p.hrefFor(u.path) ?? undefined} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline', textUnderlineOffset: '2px', fontFamily: 'ui-monospace, monospace', overflowWrap: 'anywhere' }}>{u.path}</a>
+                  <span style={{ fontSize: '9.5px', color: cat.top ? 'var(--c-8a8aa8)' : 'var(--c-f59e0b)' }}>{cat.top ? cat.top.path.join(' › ') : 'not in a category'}</span>
+                  <button data-unmapped-open onClick={() => setOpenUnmapped(openUnmapped === u.path ? null : u.path)} style={linkBtn} className="num">{u.prompts} prompt{u.prompts === 1 ? '' : 's'} · {u.answers} answers {openUnmapped === u.path ? '▴' : '▾'}</button>
+                </div>
+                {openUnmapped === u.path && <PageDrill projectId={p.projectId} store={L} path={u.path} prompts={rows} />}
+              </div>
+            ))}
+            {list.length > 25 && <button onClick={() => setUnmappedAll(v => !v)} style={{ ...linkBtn, marginTop: '4px' }}>{unmappedAll ? 'Show fewer ▴' : `Show all ${list.length} ▾`}</button>}
+            <div style={{ color: 'var(--c-55557a)', marginTop: '3px' }}>These pages are cited by AI answers but are not a ranking page of any topic on these lines, so no topic owns them. The category is the one their prompts were filed into by the taxonomy filer (majority of filed prompts); "not in a category" means none of its prompts is filed. Answers are the verbatim rows of the Profound export that cite the page.</div>
           </div>
-        )}
+          );
+        })()}
       </div>
     )}
 
