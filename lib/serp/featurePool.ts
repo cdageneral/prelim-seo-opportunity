@@ -70,6 +70,18 @@ export interface UploadFeatureCounts {
   more:  Record<string, number>; // featured_snippet / knowledge_panel / local_pack / shopping / image_pack
 }
 
+/**
+ * v7.568 (Wayne 2026-10-20: the SERP Features panel "is not reflecting the updated keywords"):
+ * the uploaded /keywords rows are EVERY row ever uploaded — client, every competitor, out-of-scope
+ * categories, rows awaiting categorization. Feature availability must be counted only over the
+ * keywords the canonical pool keeps (buildKwPool: selection, brand guard, scope gate — Const
+ * II.7), so callers pass the pool's keyword set. `null` = no pool yet → rows unchanged.
+ */
+export function scopeUploadRows<T extends { keyword?: string | null }>(rows: T[], inScope: Set<string> | null): T[] {
+  if (!inScope) return rows;
+  return rows.filter(r => inScope.has(String(r.keyword ?? '').trim().toLowerCase()));
+}
+
 export function countUploadFeatures(rows: UploadKwRow[], scannedSet: Set<string>): UploadFeatureCounts {
   const more: Record<string, number> = { featured_snippet: 0, knowledge_panel: 0, local_pack: 0, shopping: 0, image_pack: 0 };
   let aio = 0, paa = 0, video = 0, withData = 0;

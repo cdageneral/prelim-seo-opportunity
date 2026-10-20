@@ -11,6 +11,8 @@ import {
   computeSerpFeatureRollup, type UploadKwRow, type FeaturePoolRow,
 } from '@/lib/serp/featurePool';
 import InsightBanner from './InsightBanner';   // v7.366: insight-sentence layer
+import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.568: count only the in-scope pool
+import { scopeUploadRows } from '@/lib/serp/featurePool';
 import { aioTollBoothInsight } from '@/lib/insights';   // v7.366 (A2)
 
 /**
@@ -56,6 +58,8 @@ interface Props {
   websiteUrl?:  string;
   projectId?:   string;   // v7.103: enables uploaded SERP-feature availability
   kwVersion?:  number;   // v7.107: parent bumps to force /keywords refetch (e.g. after Competitors modal closes)
+  defaultClientThreshold?:     number;   // v7.568: same pool options as the Keyword list / SERP scan
+  defaultCompetitorThreshold?: number;
   externalScanned?: SerpKw[];   // v7.132: live results from the page-level background SERP scan — merged into the scanned set, fresh-wins
   // v7.287: the full-footprint SERP scan CTA moved here from the Keyword panel.
   // The page owns the auto-batch loop; this panel triggers it and mirrors progress.
@@ -949,7 +953,7 @@ function FeaturePoolList({ pool, featureLabel, presentLabel }: {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 
-export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned, onStartSerpScan, serpScanRunning, serpScanProgress }: Props) {
+export default function SerpFeaturesSection({ analysis, competitors = [], clientName = '', websiteUrl = '', projectId, kwVersion, externalScanned, onStartSerpScan, serpScanRunning, serpScanProgress, defaultClientThreshold = 0, defaultCompetitorThreshold = 0 }: Props) {
   const [activeTab,   setActiveTab]   = useState<FeatureTab>('aio');
 
   const serpSnap    = analysis.serpApiSnapshot ?? {};
@@ -960,14 +964,48 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   // reload — extraScanned holds fresh batches; fresh wins on keyword overlap.
   // v7.132: the page-level background SERP scan feeds the same merge via
   // externalScanned, so this panel updates live as the global scan progresses.
+  const [uploadRowsRaw, setUploadRows] = useState<UploadKwRow[] | null>(null);
+  useEffect(() => {
+    if (!projectId) { setUploadRows([]); return; }
+    let alive = true;
+    fetch(`/api/projects/${projectId}/keywords`)
+      .then(r => r.json())
+      .then(d => { if (alive) setUploadRows((d.keywords ?? []) as UploadKwRow[]); })
+      .catch(() => { if (alive) setUploadRows([]); });
+    return () => { alive = false; };
+  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
+
+  // v7.568 (Const II.7): every count on this panel is over the canonical pool — the same
+  // buildKwPool options the SERP scan route uses — so the Step-2 selection, the brand guard
+  // and "awaiting categorization" apply here exactly as on the Keyword list. Before, the raw
+  // /keywords rows (every uploaded competitor row, every out-of-scope category) were counted:
+  // Citi (travel cards) showed 24,100 "from upload" against a 25-keyword scope.
+  const scopeSet = useMemo<Set<string> | null>(() => {
+    if (uploadRowsRaw === null || !analysis?.semrushSnapshot) return null;
+    const pool = buildKwPool({
+      semrushSnapshot:   analysis.semrushSnapshot,
+      uploadedKeywords:  uploadRowsRaw as any[],
+      clientDomain:      String(analysis.semrushSnapshot?.domain ?? websiteUrl ?? ''),
+      competitorDomains: (competitors ?? []).map((c: any) => String(c?.domain ?? '')).filter(Boolean),
+      clientVolMin:      defaultClientThreshold,
+      competitorVolMin:  defaultCompetitorThreshold,
+    });
+    return new Set(pool.map(p => p.keyword.trim().toLowerCase()));
+  }, [uploadRowsRaw, analysis, websiteUrl, competitors, defaultClientThreshold, defaultCompetitorThreshold]);
+  const uploadRows = useMemo<UploadKwRow[] | null>(
+    () => (uploadRowsRaw === null ? null : scopeUploadRows(uploadRowsRaw, scopeSet)),
+    [uploadRowsRaw, scopeSet],
+  );
+
   const [extraScanned, setExtraScanned] = useState<SerpKw[]>([]);
   const scannedKws: SerpKw[] = useMemo(() => {
     const base: SerpKw[] = serpSnap.keywords ?? [];
     const fresh: SerpKw[] = [...extraScanned, ...(externalScanned ?? [])];
-    if (fresh.length === 0) return base;
     const freshLow = new Set(fresh.map(k => (k.keyword ?? '').toLowerCase()));
-    return [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...fresh];
-  }, [serpSnap.keywords, extraScanned, externalScanned]);
+    const merged = fresh.length === 0 ? base : [...base.filter(k => !freshLow.has((k.keyword ?? '').toLowerCase())), ...fresh];
+    // v7.568: a keyword scanned while it was in scope stops counting once it leaves scope (II.7).
+    return scopeSet ? merged.filter(k => scopeSet.has((k.keyword ?? '').trim().toLowerCase())) : merged;
+  }, [serpSnap.keywords, extraScanned, externalScanned, scopeSet]);
   const scanned  = scannedKws.length;
 
   // v7.413 — the UI does not name the SERP vendor at all (Wayne, 2026-08-05:
@@ -988,17 +1026,6 @@ export default function SerpFeaturesSection({ analysis, competitors = [], client
   // Keyword" column which gives feature AVAILABILITY for the whole footprint
   // (which features exist on each keyword's SERP). It can NOT tell who is
   // cited, so captured metrics remain SerpAPI-scan based.
-  const [uploadRows, setUploadRows] = useState<UploadKwRow[] | null>(null);
-  useEffect(() => {
-    if (!projectId) { setUploadRows([]); return; }
-    let alive = true;
-    fetch(`/api/projects/${projectId}/keywords`)
-      .then(r => r.json())
-      .then(d => { if (alive) setUploadRows((d.keywords ?? []) as UploadKwRow[]); })
-      .catch(() => { if (alive) setUploadRows([]); });
-    return () => { alive = false; };
-  }, [projectId, kwVersion]);   // v7.107: kwVersion bump → refetch uploaded keywords
-
   const scannedSet = useMemo(
     () => new Set(scannedKws.map(k => (k.keyword ?? '').trim().toLowerCase())),
     [scannedKws]

@@ -152,12 +152,16 @@ export async function POST(
   if (scanFilter === 'aio') {
     const seen = new Set<string>();
     candidates = [];
+    // v7.568: only in-scope keywords — the AIO-only scan no longer spends API calls on rows the
+    // canonical pool leaves out (other categories, competitor brand terms, unfiled rows).
+    const inPool = new Set(pool.map(p => p.keyword.trim().toLowerCase()));
     for (const r of dbKws as any[]) {
       const kw = (r.keyword ?? '').trim();
       const lo = kw.toLowerCase();
       if (!kw || seen.has(lo)) continue;
       seen.add(lo);
       if (r.source === 'blocked') continue;
+      if (!inPool.has(lo)) continue;
       if (!((r.serpFeatures ?? '') as string).toLowerCase().includes('ai overview')) continue;
       candidates.push({ keyword: kw, searchVolume: r.searchVolume ?? 0 });
     }

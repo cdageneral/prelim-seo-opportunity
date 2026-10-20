@@ -17,7 +17,8 @@ import InsightsSection from '@/components/brief/InsightsSection';               
 import ThemeClustersPanel, { buildCanonicalClusterTopics, detectIntentSignal, type IntentType } from '@/components/brief/ThemeClustersPanel';
 // v7.337 (QC audit B4-proper, Const II.7): live SERP-feature roll-up for the nav score —
 // same shared builders the SERP Features panel + Executive Summary compute from.
-import { computeSerpFeatureRollup, normDomain as serpNormDomain } from '@/lib/serp/featurePool';
+import { computeSerpFeatureRollup, normDomain as serpNormDomain, scopeUploadRows } from '@/lib/serp/featurePool';
+import { buildKwPool } from '@/lib/utils/kwVolume';   // v7.568: nav SERP-feature score counts the in-scope pool only
 import { snapshotHasFootprint } from '@/lib/snapshotFootprint';
 import RefreshModal         from '@/components/brief/RefreshModal';
 import EditProjectModal     from '@/components/brief/EditProjectModal';
@@ -398,7 +399,6 @@ export default function ProjectBriefPage() {
       .catch(() => { if (!cancelled) setPageKeywords([]); });
     return () => { cancelled = true; };
   }, [projectId, kwVersion]);
-  const navScores  = calcNavScores(analysis, pageKeywords);
 
   // v7.206: client brand vocabulary. Injected once onto the analysis snapshot as
   // `_brandTerms` so every panel's buildKwPool picks it up via the snapshot fallback
@@ -459,6 +459,22 @@ export default function ProjectBriefPage() {
       : analysis),
     [analysis, brandTerms, excludedBrands, scopeOverrides, priorityOverrides, hiddenCategories, pageOverrides, pageMapNodes],
   );
+  // v7.568 (Const II.7): the nav SERP-features score reads the SAME in-scope pool as the panel
+  // and the SERP scan route — not every uploaded row.
+  const scopedPageKeywords = useMemo(() => {
+    const snap = (analysisForPanels as any)?.semrushSnapshot;
+    if (!snap || !Array.isArray(pageKeywords)) return pageKeywords;
+    const pool = buildKwPool({
+      semrushSnapshot:   snap,
+      uploadedKeywords:  pageKeywords,
+      clientDomain:      String(snap?.domain ?? project?.websiteUrl ?? ''),
+      competitorDomains: (project?.competitors ?? []).map((c: any) => String(c?.domain ?? '')).filter(Boolean),
+      clientVolMin:      project?.kwVolThresholdClient ?? 0,
+      competitorVolMin:  project?.kwVolThresholdCompetitor ?? 0,
+    });
+    return scopeUploadRows(pageKeywords, new Set(pool.map(p => p.keyword.trim().toLowerCase())));
+  }, [analysisForPanels, pageKeywords, project]);
+  const navScores  = calcNavScores(analysis, scopedPageKeywords);
 
   // v7.211: build the CANONICAL cluster topics once at the page level and pass them to
   // the Journey, so "Topics in journey" reconciles to the cluster count (one node per
@@ -2094,6 +2110,8 @@ export default function ProjectBriefPage() {
               clientName={project.clientName}
               websiteUrl={project.websiteUrl}
               projectId={project.id}
+              defaultClientThreshold={project.kwVolThresholdClient ?? 0}           // v7.568: same pool as the scan route
+              defaultCompetitorThreshold={project.kwVolThresholdCompetitor ?? 0}
               externalScanned={serpScan.results}                 // v7.132: global background scan results merge in live
               serpScanRunning={serpScan.running || serpScan.checking}   // v7.287: SERP scan CTA moved into this panel
               serpScanProgress={serpScan.running ? { done: serpScan.done, total: serpScan.total } : null}

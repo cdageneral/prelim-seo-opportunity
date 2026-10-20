@@ -422,7 +422,11 @@ export async function POST(req: NextRequest) {
       if (key) volByKw.set(key, Number(k?.searchVolume ?? 0));
     }
 
-    const keywords = rows.map(k => {
+    // v7.568 (Const II.7): only scanned keywords still in the selected scope — the same pool
+    // every other section of this report reads. A keyword scanned before it left scope is omitted.
+    const inScopeRows = rows.filter(k => volByKw.has(String(k?.keyword ?? '').toLowerCase()));
+    if (inScopeRows.length === 0) return null;
+    const keywords = inScopeRows.map(k => {
       const organic: any[] = Array.isArray(k?.organicResults) ? k.organicResults : [];
       const own = organic.find(r => isClient(String(r?.url ?? '')));
       const aioSrc: any[] = Array.isArray(k?.aioSources) ? k.aioSources : [];
