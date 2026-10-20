@@ -389,6 +389,12 @@ export async function POST(
   // v7.579 — continue a partly-done keyword scan: skip location discovery, reuse the stored
   // offices, and check only the keywords not yet stored.
   const kwContinue = body?.kwContinue === true;
+  // v7.580 — a continue with no keyword list must never fall through to the legacy grid
+  // scan (which would spend credits on a different model). The panel's list can be empty
+  // for a moment while it loads.
+  if (kwContinue && !keywordMode) {
+    return NextResponse.json({ error: 'The local keyword list has not loaded yet — wait a moment and click Continue scan again.' }, { status: 400 });
+  }
   const requestStartedAt = Date.now();
   // v7.302 — optional manual Locations URL (Wayne). Accepts an HTML locations page, a sitemap
   // (urlset/index), or a KML; lets the user point us at the right page when auto-discovery's

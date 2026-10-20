@@ -913,7 +913,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                 <b style={{ color: 'var(--c-cfccff)' }}>{fmt(kwCov.scanned)} of {fmt(kwCov.total)} keywords scanned.</b>{' '}
                 {fmt(kwCov.remaining)} still to check — the Map Pack figures below cover the scanned keywords only.
               </span>
-              <button onClick={() => requestPlan(true)} className="orbit-btn-sm">Continue scan</button>
+              <button onClick={() => requestPlan(true)} disabled={scanKeywords.length === 0} title={scanKeywords.length === 0 ? 'Loading the keyword list…' : undefined} className="orbit-btn-sm">Continue scan</button>
             </div>
           )}
           {scanError && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f08a8a)' }}>{scanError}</div>}
