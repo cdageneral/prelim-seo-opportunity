@@ -27,12 +27,16 @@
  */
 
 import { hiddenMatchers, pathIsHidden, ownIsOutOfScope, type HiddenEntry } from '@/lib/category/selectionScope';
+import { DEEP_FILER_VERSION } from '@/lib/category/pendingCategorization';
 
 export interface CarryTree {
   keywordPaths:       Record<string, string[]>;
   keywordCategories?: Record<string, string>;
   categories?:        Array<{ name?: string; type?: string }>;
+  filerVersion?:      Record<string, number>;
 }
+
+export interface CarryChange { keyword: string; before: boolean; after: boolean; held: boolean; from: string; to: string }
 
 export interface CarryResult {
   hidden:          HiddenEntry[];
@@ -40,10 +44,14 @@ export interface CarryResult {
   shared:          number;
   inBefore:        number;
   inAfter:         number;
-  /** shared keywords whose status flipped (majority rule on a mixed leaf) */
+  /** keywords with a real prior choice whose status flipped (majority rule on a mixed leaf) */
   flipped:         number;
   /** new-tree keywords the previous tree never had (they follow their node) */
   newKeywords:     number;
+  /** keywords that were held for filing before (no category choice) and land in scope now */
+  heldNowIn:       number;
+  /** every keyword whose in/out status differs from before (capped at 300), for review */
+  changes:         CarryChange[];
   /** previous hides that no longer matched any node of the new tree */
   staleBefore:     number;
 }
@@ -68,17 +76,38 @@ export function staleHideKeys(hidden: unknown, keywordPaths: Record<string, stri
 }
 
 /** In-scope status of every keyword under a tree + selection — the buildKwPool selection rule. */
-export function keywordScope(tree: CarryTree, hidden: unknown): Map<string, boolean> {
+/**
+ * In-scope status of every keyword under a tree + selection — the buildKwPool selection rule.
+ * A keyword the pool HOLDS for filing (under a brand-typed node or category, v7.566; or dropped
+ * on a parent by the old name-level filer, v7.567) was in no category yet: with
+ * held:'unknown' it is left out of the map (it votes for nothing and follows its new node);
+ * with held:'out' it is false (it is not in scope today).
+ */
+export function keywordScope(tree: CarryTree, hidden: unknown, held: 'out' | 'unknown' = 'out'): Map<string, boolean> {
   const m = hiddenMatchers(hidden);
   const brand = new Set<string>();
   for (const c of tree.categories ?? []) if (c?.type === 'brand' && c?.name) brand.add(String(c.name).toLowerCase().trim());
+  const kp = tree.keywordPaths ?? {};
+  const stamps = tree.filerVersion ?? {};
+  let parents: Set<string> | null = null;
+  const coarse = (key: string, path: string[]): boolean => {
+    const st = stamps[key];
+    if (typeof st !== 'number' || st >= DEEP_FILER_VERSION) return false;
+    if (!parents) {
+      parents = new Set<string>();
+      for (const v of Object.values(kp)) { const c = clean(v); for (let i = 1; i < c.length; i++) parents.add(c.slice(0, i).join(SEP).toLowerCase()); }
+    }
+    return parents.has(path.join(SEP).toLowerCase());
+  };
   const out = new Map<string, boolean>();
-  for (const [kw, raw] of Object.entries(tree.keywordPaths ?? {})) {
+  for (const [kw, raw] of Object.entries(kp)) {
     const path = clean(raw);
     const key = kw.toLowerCase().trim();
     if (!key) continue;
     if (path.length === 0) { out.set(key, false); continue; }
-    if (path.some(p => brand.has(p.toLowerCase()))) { out.set(key, false); continue; }   // held (v7.566)
+    const cat = String(tree.keywordCategories?.[key] ?? '').toLowerCase().trim();
+    const isHeld = path.some(p => brand.has(p.toLowerCase())) || (cat !== '' && brand.has(cat)) || coarse(key, path);
+    if (isHeld) { if (held === 'out') out.set(key, false); continue; }
     if (pathIsHidden(path, m)) { out.set(key, false); continue; }
     if (ownIsOutOfScope(path.join(SEP).toLowerCase(), m)) { out.set(key, false); continue; }
     out.set(key, true);
@@ -89,9 +118,9 @@ export function keywordScope(tree: CarryTree, hidden: unknown): Map<string, bool
 interface Node { name: string; path: string[]; children: Map<string, Node>; own: string[]; all: string[] }
 
 export function carrySelection(prev: CarryTree, prevHidden: unknown, next: CarryTree, nowIso = new Date().toISOString()): CarryResult {
-  const before = keywordScope(prev, prevHidden);
+  const before = keywordScope(prev, prevHidden, 'unknown');   // held keywords had no category choice yet
   const hasSelection = Array.isArray(prevHidden) && prevHidden.some((h: any) => h && !h.own);
-  const empty: CarryResult = { hidden: [], shared: 0, inBefore: 0, inAfter: 0, flipped: 0, newKeywords: 0, staleBefore: staleHideKeys(prevHidden, next.keywordPaths).length };
+  const empty: CarryResult = { hidden: [], shared: 0, inBefore: 0, inAfter: 0, flipped: 0, newKeywords: 0, heldNowIn: 0, changes: [], staleBefore: staleHideKeys(prevHidden, next.keywordPaths).length };
   if (!hasSelection) return empty;   // nothing was deselected — nothing to carry
 
   const brand = new Set<string>();
@@ -157,15 +186,22 @@ export function carrySelection(prev: CarryTree, prevHidden: unknown, next: Carry
   };
   for (const r of Array.from(roots.values())) walk(r);
 
-  let shared = 0, inBefore = 0, inAfter = 0, flipped = 0, newKeywords = 0;
+  let shared = 0, inBefore = 0, inAfter = 0, flipped = 0, newKeywords = 0, heldNowIn = 0;
+  const changes: CarryChange[] = [];
   const afterScope = keywordScope(next, hidden);
+  const shownBefore = keywordScope(prev, prevHidden, 'out');   // what the pool showed before
   for (const [k, s] of Array.from(afterScope.entries())) {
-    const b = before.get(k);
+    const b = shownBefore.get(k);
     if (b === undefined) { newKeywords++; continue; }
     shared++;
     if (b) inBefore++;
     if (s) inAfter++;
-    if (b !== s) flipped++;
+    const chosen = before.get(k);                                // undefined = was held for filing
+    if (chosen === undefined) { if (s) heldNowIn++; }
+    else if (chosen !== s) flipped++;
+    if (b !== s && changes.length < 300) changes.push({ keyword: k, before: b, after: s, held: chosen === undefined,
+      from: clean(prev.keywordPaths[k] ?? (prev.keywordPaths as any)[Object.keys(prev.keywordPaths).find(x => x.toLowerCase().trim() === k) ?? '']).join(SEP),
+      to: clean(next.keywordPaths[k] ?? (next.keywordPaths as any)[Object.keys(next.keywordPaths).find(x => x.toLowerCase().trim() === k) ?? '']).join(SEP) });
   }
-  return { hidden, shared, inBefore, inAfter, flipped, newKeywords, staleBefore: empty.staleBefore };
+  return { hidden, shared, inBefore, inAfter, flipped, newKeywords, heldNowIn, changes, staleBefore: empty.staleBefore };
 }

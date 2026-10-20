@@ -313,16 +313,18 @@ export async function POST(req: NextRequest) {
       if (cbNew?.keywordPaths && Array.isArray(hiddenNow) && hiddenNow.some((h: any) => h && !h.own)
           && staleHideKeys(hiddenNow, cbNew.keywordPaths).length > 0) {
         const prevRow = rowsOfCarry(await db.execute(sql`
-          SELECT semrush_snapshot->'_categoryBreakdown'->'keywordPaths' AS kp,
-                 semrush_snapshot->'_categoryBreakdown'->'categories'   AS cats
+          SELECT semrush_snapshot->'_categoryBreakdown'->'keywordPaths'      AS kp,
+                 semrush_snapshot->'_categoryBreakdown'->'keywordCategories' AS kc,
+                 semrush_snapshot->'_categoryBreakdown'->'categories'        AS cats,
+                 semrush_snapshot->'_categoryBreakdown'->'filerVersion'      AS fv
           FROM analyses WHERE project_id = ${analysis.projectId} AND id <> ${analysisId} AND status = 'completed'
             AND semrush_snapshot->'_categoryBreakdown'->'keywordPaths' IS NOT NULL
           ORDER BY triggered_at DESC LIMIT 1`))[0];
         if (prevRow) {
           const r = carrySelection(
-            { keywordPaths: asObjCarry(prevRow.kp) ?? {}, categories: asObjCarry(prevRow.cats) ?? [] },
+            { keywordPaths: asObjCarry(prevRow.kp) ?? {}, keywordCategories: asObjCarry(prevRow.kc) ?? {}, categories: asObjCarry(prevRow.cats) ?? [], filerVersion: asObjCarry(prevRow.fv) ?? {} },
             hiddenNow,
-            { keywordPaths: cbNew.keywordPaths, categories: cbNew.categories ?? [] },
+            { keywordPaths: cbNew.keywordPaths, keywordCategories: cbNew.keywordCategories ?? {}, categories: cbNew.categories ?? [], filerVersion: cbNew.filerVersion ?? {} },
           );
           if (r.hidden.length > 0) {
             try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_prev JSONB`); } catch { /* exists */ }

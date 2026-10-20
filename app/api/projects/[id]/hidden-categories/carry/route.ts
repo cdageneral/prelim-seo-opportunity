@@ -45,12 +45,13 @@ async function load(id: string) {
     SELECT id, completed_at,
       semrush_snapshot->'_categoryBreakdown'->'keywordPaths'      AS kp,
       semrush_snapshot->'_categoryBreakdown'->'keywordCategories' AS kc,
-      semrush_snapshot->'_categoryBreakdown'->'categories'        AS cats
+      semrush_snapshot->'_categoryBreakdown'->'categories'        AS cats,
+      semrush_snapshot->'_categoryBreakdown'->'filerVersion'      AS fv
     FROM analyses
     WHERE project_id = ${id} AND status = 'completed'
       AND semrush_snapshot->'_categoryBreakdown'->'keywordPaths' IS NOT NULL
     ORDER BY triggered_at DESC LIMIT 2`));
-  const tree = (r: any): CarryTree | null => r ? { keywordPaths: asObj(r.kp) ?? {}, keywordCategories: asObj(r.kc) ?? {}, categories: asObj(r.cats) ?? [] } : null;
+  const tree = (r: any): CarryTree | null => r ? { keywordPaths: asObj(r.kp) ?? {}, keywordCategories: asObj(r.kc) ?? {}, categories: asObj(r.cats) ?? [], filerVersion: asObj(r.fv) ?? {} } : null;
   return {
     hidden: asObj(proj.hidden_categories) ?? [],
     hiddenAt: proj.hidden_categories_updated_at ?? null,
@@ -72,7 +73,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (d.previous && stale.length > 0) {
     const r = carrySelection(d.previous, d.hidden, d.current);
     out.available = true;
-    out.result = { shared: r.shared, inBefore: r.inBefore, inAfter: r.inAfter, flipped: r.flipped, newKeywords: r.newKeywords, hides: r.hidden.filter(h => !h.own).length, generalRows: r.hidden.filter(h => h.own).length };
+    out.result = { shared: r.shared, inBefore: r.inBefore, inAfter: r.inAfter, flipped: r.flipped, newKeywords: r.newKeywords, heldNowIn: r.heldNowIn, changes: r.changes, hides: r.hidden.filter(h => !h.own).length, generalRows: r.hidden.filter(h => h.own).length };
   }
   return NextResponse.json(out, { headers: NO_STORE });
 }
