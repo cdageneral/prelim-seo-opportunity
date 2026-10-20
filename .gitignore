@@ -2,3 +2,8 @@
 # macOS / iCloud junk (was causing stray commits)
 .DS_Store
 **/.DS_Store
+
+# build output
+.next/
+tsconfig.tsbuildinfo
+node_modules/
