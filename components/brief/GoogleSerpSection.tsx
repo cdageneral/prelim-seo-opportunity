@@ -1,6 +1,6 @@
 'use client';
 import { useState, useMemo, useEffect, type ReactNode } from 'react';
-import { buildKwPool, computeRankedSplit, isBrandedKeyword, brandCategoriesWithClientMembers, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
+import { buildKwPool, computeRankedSplit, isBrandedKeyword, buildCompetitorBrandTokens, buildExcludedBrandTokens, textHasCompetitorBrand } from '@/lib/utils/kwVolume';
 import { computeSov, PAGE1_CTR_SUM, normSovDomain, type SovRawEntry } from '@/lib/sov/model';   // v7.335: shared SoV model (QC audit B2)
 import SegmentDownloadButton from './SegmentDownloadButton';
 import { exportRankBucketXLSX } from '@/lib/export/rankBucketExport';
@@ -1269,9 +1269,11 @@ export default function GoogleSerpSection({ analysis, projectId, kwVersion, proj
     // dropped as a competitor brand. Mirrors lib/category/categoryGuard.ts.
     const brandTerms: string[] = Array.isArray((snap as any)?._brandTerms) ? (snap as any)._brandTerms : [];
     const isClientBrand = (name: string) => isBrandedKeyword(name, clientDomain, [], brandTerms);
-    const clientBrandCats = brandCategoriesWithClientMembers(snap, clientDomain, brandTerms);   // v7.530: mirrors categoryGuard
+    // v7.566 (Const III.1 v0.41): brand is a tag, not a category — no brand-typed category is
+    // kept, the client's own included (mirrors categoryGuard). Its client keywords are filed
+    // under the product they are about by categorize-pending.
     const isForbidden   = (name: string, type: string) =>
-      (type === 'brand' && !clientBrandCats.has(name)  && !isClientBrand(name)) ||
+      (type === 'brand') ||
       (textHasCompetitorBrand(name, compTokens)        && !isClientBrand(name)) ||
       (textHasCompetitorBrand(name, exclTokens)        && !isClientBrand(name));
 

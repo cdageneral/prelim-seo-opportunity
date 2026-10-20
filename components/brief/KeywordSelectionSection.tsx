@@ -966,7 +966,7 @@ export default function KeywordSelectionSection({
                   {tree.nodes.map(n => renderNode(n, false))}
                   {brandCatNames.size > 0 && (
                     <div style={{ marginTop: 8, fontSize: 10.5, color: 'var(--c-585878)', padding: '0 8px' }}>
-                      Brand categories are always in scope and are not listed here (the brand guard owns them).
+                      Branded keywords are filed under the product they are about, so this selection applies to them too — brand is a label, not a category.
                     </div>
                   )}
                 </div>

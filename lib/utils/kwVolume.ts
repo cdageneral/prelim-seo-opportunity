@@ -42,7 +42,9 @@ export interface KwPoolItem {
   positionBasisRaw?: string;
   inDemand?:    boolean;     // appears in the deep-journey demand universe
   /** v7.535: a CLIENT keyword the analysis filed into a non-client brand category — held as
-   *  awaiting categorization until categorize-pending re-files it (never dropped). */
+   *  awaiting categorization until categorize-pending re-files it (never dropped).
+   *  v7.566: ANY brand-typed category, the client's own included — brand is a tag
+   *  (isBranded), not a category, so a branded keyword is filed under the product it is about. */
   misfiledBrandCat?: boolean;
   demandSeeds?: string[];    // seed phrase(s) that surfaced it in the demand universe
   // v7.251: real client ranking/landing URL for this keyword, when known — from the
@@ -618,12 +620,32 @@ export function buildKwPool({
   const aiBrandKw             = guards.aiBrandKw;
   const competitorBrandCats   = guards.competitorBrandCats;
   const clientKwCat: Record<string, string> = (snap as any)?._categoryBreakdown?.keywordCategories ?? {};
-  const isClientBrandStrictPool = buildClientBrandStrictTest(clientDomain, guards.effectiveBrandTerms);
+  // v7.566 (Wayne 2026-10-19: "The categories should be the ultimate boundary"): brand is a
+  // TAG, not a category. Until now the client's own brand terms and co-brand partner terms
+  // stayed in their brand bucket ("Brand Searches", "Co-Branded & Retail Cards") — and brand
+  // buckets are not in the Step-2 selection, so "citi aa", "costco citibank visa" and
+  // "citi diamond preferred card login" sat in every panel however narrow the selection was.
+  // Now a footprint keyword (client or competitor gap) in ANY brand-typed category — or under a
+  // brand-typed node of its stored path — is held as awaiting categorization and
+  // categorize-pending files it under the product or task it is about (or "Other"); the
+  // Step-2 selection then governs it like every other keyword. It is never dropped
+  // (counted while pending, Const I.5) and keeps its Branded label.
+  const brandTypedCats = new Set<string>();
+  for (const c of (((snap as any)?._categoryBreakdown?.categories ?? []) as any[])) {
+    if (c?.type === 'brand' && c?.name) brandTypedCats.add(String(c.name).toLowerCase().trim());
+  }
+  // A product-typed child of a brand umbrella ("Brand Searches › Offers & Promotions") is
+  // the same leak one level down — the Step-2 tree skips any brand-rooted path — so the
+  // stored path is checked node by node too.
+  const clientKwPath: Record<string, any> = (snap as any)?._categoryBreakdown?.keywordPaths ?? {};
   const misfiled = (kwLow: string): boolean => {
     const c = clientKwCat[kwLow];
-    // The client's own brand terms stay in their brand bucket (v7.530) — only generic or
-    // third-party terms filed there are re-filed.
-    return typeof c === 'string' && competitorBrandCats.has(c) && !isClientBrandStrictPool(kwLow);
+    if (typeof c === 'string' && c && (competitorBrandCats.has(c) || brandTypedCats.has(c.toLowerCase().trim()))) return true;
+    const p = clientKwPath[kwLow];
+    if (brandTypedCats.size > 0 && Array.isArray(p)) {
+      for (let i = 0; i < p.length; i++) if (brandTypedCats.has(String(p[i] ?? '').toLowerCase().trim())) return true;
+    }
+    return false;
   };
   const dropCompetitorBrand   = guards.drop;
 
@@ -755,6 +777,7 @@ export function buildKwPool({
       isBranded:    false,  // guaranteed by the check above
       competitor:   (k as any).competitor ?? null,
       origin:       'footprint',
+      ...(misfiled(kwLow) ? { misfiledBrandCat: true } : {}),   // v7.566: a generic gap filed under a brand node is re-filed too
     });
   }
 
@@ -783,6 +806,7 @@ export function buildKwPool({
       isBranded:    false,   // guaranteed by the competitor-brand skip above
       competitor:   k.domain ?? null,
       origin:       'footprint',
+      ...(misfiled(kwLow) ? { misfiledBrandCat: true } : {}),   // v7.566
     });
   }
 

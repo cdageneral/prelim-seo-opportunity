@@ -36,7 +36,7 @@ import { projects, competitors, projectKeywords } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { setUsageProject } from '@/lib/usage/context';
 import { instrumentAnthropic } from '@/lib/usage/record';
-import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest, isBrandedKeyword, competitorBrandCategoryNames } from '@/lib/utils/kwVolume';
+import { buildKwPool, hasStoredCategoryTree, hasStoredMembership, buildClientBrandStrictTest, competitorBrandCategoryNames } from '@/lib/utils/kwVolume';
 import { isPublisherIndustry } from '@/lib/category/publisher';   // v7.537
 import { brandLabelOf, BRAND_ALIASES, brandRootOf } from '@/lib/utils/brandRoot';   // v7.537
 import { hydrateSnapshotForPool } from '@/lib/utils/hydrateSnapshot';
@@ -137,20 +137,24 @@ async function loadContext(projectId: string) {
     })
     .sort((a, b) => (b.searchVolume ?? 0) - (a.searchVolume ?? 0));
 
-  const guard = buildCategoryGuard(snap, clientDomain, competitorDomains);
+  // v7.566: file into the TRUE home across the whole tree — not only the Step-2 selection.
+  // The selection is the boundary the pool applies at read time; filing into "selected or
+  // Other" put deselected-product keywords into "Other", which then leaked whenever "Other"
+  // was in scope (Const III.1e v0.41). A keyword filed under a deselected category is
+  // simply out of scope until that category is selected.
+  const guard = buildCategoryGuard({ ...snap, _hiddenCategories: [] }, clientDomain, competitorDomains);
   // v7.539: never a target the pool would treat as a competitor brand category (no re-file loop).
   const gapDomains = Array.from(new Set(dbKws.filter(k => k.type === 'gap' && k.source !== 'blocked' && k.domain).map(k => String(k.domain))));
   const compBrandCats = competitorBrandCategoryNames(snap, clientDomain, Array.from(new Set([...competitorDomains, ...gapDomains])),
     Array.isArray(project.brandTerms) ? project.brandTerms : [], gapDomains);
-  // Competitor/footprint keywords are filed into PRODUCT categories only: brand buckets are
-  // never a target (a competitor's generic term is not the client's brand search).
+  // Every keyword is filed into PRODUCT categories only. v7.566 (Const III.1 v0.41): brand is
+  // a tag, not a category — no brand-typed bucket is a target, the client's own included
+  // (v7.538's own-bucket exception withdrawn). A client brand search is filed under the
+  // product or task it names; the pool would hold anything filed into a brand bucket (v7.539).
   const candidates = buildCandidates(
     raw?._categoryBreakdown?.categories ?? [],
-    // v7.538: the client's OWN brand bucket ("Lloydsbank Brand Searches") is a filing target for
-    // the client's brand searches; every other brand-typed category is not.
-    (name: string, type?: string) => compBrandCats.has(name) || (type === 'brand'
-      ? !isBrandedKeyword(name, clientDomain, [], brandTerms)
-      : guard.isCompetitorBrandCategory(name, type)),
+    (name: string, type?: string) => type === 'brand' || compBrandCats.has(name) || guard.isCompetitorBrandCategory(name, type),
+    raw?._categoryBreakdown?.keywordPaths ?? {},
   );
 
   // Competitor brand names (label + known aliases) the filer must never file into a category.
@@ -192,7 +196,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if ('error' in ctx) return NextResponse.json({ error: ctx.error }, { status: ctx.status });
   if (!ctx.hasTree) return NextResponse.json({ error: 'This project has no category tree yet — run an analysis first.' }, { status: 400 });
   if (ctx.candidates.length === 0) {
-    return NextResponse.json({ error: 'No selected categories to file into — select at least one category in Keyword Selection.' }, { status: 400 });
+    return NextResponse.json({ error: 'No product categories to file into — this project\'s tree holds only brand or competitor buckets.' }, { status: 400 });
   }
 
   const source = mode === 'refile' ? ctx.refile : ctx.pending;

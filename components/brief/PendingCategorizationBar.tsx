@@ -82,7 +82,7 @@ export default function PendingCategorizationBar({ projectId, refreshKey = 0, au
     }
     setRun(null);
     if (done > 0) {
-      setSummary(`Filed ${fmtN(done - other)} keyword${done - other === 1 ? '' : 's'} into existing categories${other > 0 ? ` · ${fmtN(other)} matched no selected category and went to "Other"` : ''}.`);
+      setSummary(`Filed ${fmtN(done - other)} keyword${done - other === 1 ? '' : 's'} into existing categories${other > 0 ? ` · ${fmtN(other)} matched no category and went to "Other"` : ''}.`);
       onFiled?.();
     }
     await load();

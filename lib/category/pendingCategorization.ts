@@ -7,11 +7,12 @@
  * which would mean all keywords would have to map and match the intent of the keyword
  * categories"; Const III.1e v0.31).
  *
- * Candidates are the stored categories the shared category guard keeps (so a
- * deselected Step-2 category, or a competitor brand bucket, is never a target). A
- * keyword whose intent matches none of them is filed under "Other" — the same
- * needs-review bucket full categorization uses (III.1e) — so the Step-2 selection
- * decides whether it shows, and selecting "Other" restores it.
+ * Candidates are the stored PRODUCT categories across the whole tree (v7.566: selected or
+ * not — the Step-2 selection is applied by the pool at read time, so a keyword lands in its
+ * true home and shows only when that home is selected). No brand-typed bucket is a target,
+ * the client's own included: brand is a tag, not a category (Const III.1 v0.41). A keyword
+ * whose intent matches none of them is filed under "Other" — the same needs-review bucket
+ * full categorization uses (III.1e).
  *
  * Pure + dependency-free (no SDK, no DB) so the retained suite can check the prompt,
  * the parser and the membership it writes.
@@ -110,6 +111,7 @@ export function deterministicOther(keyword: string, clientDomain: string, brandT
 export function buildCandidates(
   categories: Array<{ name?: string; type?: string; parent?: string }>,
   isDropped: (name: string, type?: string) => boolean,
+  keywordPaths?: Record<string, unknown>,
 ): CandidateCategory[] {
   const parentOf = new Map<string, string>();
   for (const c of categories ?? []) {
@@ -125,6 +127,36 @@ export function buildCandidates(
     }
     return chain;
   };
+  // v7.566: the pool holds any keyword whose stored path passes through a brand-typed node,
+  // so a candidate's path must never contain one (or the filed keyword loops back to pending).
+  // A category's stored `parent` is a single value, while keywords reach the same leaf by
+  // different paths (Citi (travel cards): "Card Login" has parent "Co-Branded & Retail
+  // Credit Cards", yet keywords sit at "Credit Cards › Card Login"). When the parent chain
+  // runs through a brand node, the targets are the STORED keyword paths ending at that leaf
+  // with no brand node in them (one candidate each); with none, the category is not a target.
+  const brandTyped = new Set<string>();
+  for (const c of categories ?? []) if (c?.type === 'brand' && c?.name) brandTyped.add(String(c.name).trim().toLowerCase());
+  const cleanPathByLeaf = new Map<string, Map<string, { path: string[]; n: number }>>();
+  if (brandTyped.size > 0 && keywordPaths) {
+    for (const v of Object.values(keywordPaths)) {
+      if (!Array.isArray(v) || v.length === 0) continue;
+      const path = v.map(x => String(x ?? '').trim()).filter(Boolean);
+      if (path.length === 0 || path.some(x => brandTyped.has(x.toLowerCase()))) continue;
+      const leaf = path[path.length - 1].toLowerCase();
+      const sig = path.join(' › ');
+      let m = cleanPathByLeaf.get(leaf); if (!m) { m = new Map(); cleanPathByLeaf.set(leaf, m); }
+      const e = m.get(sig); if (e) e.n++; else m.set(sig, { path, n: 1 });
+    }
+  }
+  const targetPaths = (name: string): string[][] => {
+    const chain = chainOf(name);
+    if (brandTyped.size === 0 || !chain.some(x => brandTyped.has(x.toLowerCase()))) return [chain];
+    const m = cleanPathByLeaf.get(name.toLowerCase());
+    if (!m) return [];
+    // One candidate per distinct stored path (a leaf name like "Management" lives under
+    // "Credit Cards" AND "Business Credit Cards" — the model picks the one that fits).
+    return Array.from(m.values()).sort((a, b) => b.n - a.n || a.path.join(' › ').localeCompare(b.path.join(' › '))).map(e => e.path.slice());
+  };
   const out: CandidateCategory[] = [];
   const seenNames = new Set<string>();
   for (const c of categories ?? []) {
@@ -132,8 +164,10 @@ export function buildCandidates(
     if (!name || seenNames.has(name.toLowerCase())) continue;
     if (name.toLowerCase() === OTHER_CATEGORY.toLowerCase()) continue;   // "0" is the Other answer
     if (isDropped(name, c?.type)) continue;
+    const paths = targetPaths(name);
+    if (paths.length === 0) continue;
     seenNames.add(name.toLowerCase());
-    out.push({ n: out.length + 1, name, path: chainOf(name) });
+    for (const path of paths) out.push({ n: out.length + 1, name, path });
   }
   return out;
 }
@@ -171,7 +205,7 @@ Rules:
   for are not about the product itself (e.g. "bwi airport", "lollapalooza 2025", "tsa precheck", "passport",
   "travel insurance") — answer 0 unless a category is literally about that subject.
 ${brandRule}
-- Misspellings, abbreviations and partial forms of ${domain}'s OWN brand (${own}) are the client's own brand searches, not another company: file them in the category named for the client's brand if one is listed, otherwise answer 0.
+- Searches for ${domain}'s OWN brand or a partner brand (${own}) — including misspellings, abbreviations and partial forms — are the client's own searches, not another company. File each one by the product, card, account or task it names, exactly like an unbranded search: "<brand> <product> card" goes to that product's category, "<brand> <product> login" to the category for signing in to or managing that account if one is listed. A search that is only the brand name, with no product or task, or one no listed category fits — answer 0.
 - Navigation searches for another company's site — a web address, login, sign-in, activation, bill pay or account page that is not ${domain}'s or a listed partner's — answer 0.
 - Answer every keyword exactly once.
 

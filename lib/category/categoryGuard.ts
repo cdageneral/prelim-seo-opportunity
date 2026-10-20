@@ -118,6 +118,10 @@ export function buildCategoryGuard(
   const isCompetitorBrandCategory = (name: string, type?: string): boolean => {
     if (!name) return false;
     if (isOutOfScopeCategory(name)) return true;   // v7.477: Step-3 selection (see above)
+    // v7.566 (Const III.1 v0.41): brand is a tag, not a category. No brand-typed category
+    // renders as a category — the client's own and partner brand buckets included. Their
+    // client keywords are held by buildKwPool and filed under the product they are about.
+    if (type === 'brand') return true;
     const isClientBrand = isBrandedKeyword(name, clientDomain, [], brandTerms);   // v7.335: + brand vocabulary (QC audit B7)
     // v7.530 (Const III.1 v0.30): a brand bucket that holds the client's OWN keywords
     // (e.g. a generic "Brand Searches", or "Co-Branded & Retail Cards" once the partners
