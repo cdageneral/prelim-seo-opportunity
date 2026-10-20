@@ -82,7 +82,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (step === 'propose') {
     if (ctx.own.length < 4) return NextResponse.json({ error: `"${node.join(SEP)}" holds only ${ctx.own.length} keywords of its own — too few to split.` }, { status: 409 });
     const kws: SplitKeyword[] = ctx.own.map(k => ({ keyword: k, volume: ctx.vol.get(k) ?? 0 })).sort((a, b) => b.volume - a.volume).slice(0, MAX_KW);
-    const paths = Array.from(ctx.pathCase.values()).filter(p => p.split(SEP)[0] !== 'Other').sort();
+    // targets: product nodes only — never a brand-typed node (held, v7.566); "Other" for keywords that do not belong
+    const brandNames = new Set<string>(((ctx.cb.categories ?? []) as any[]).filter(c => c?.type === 'brand' && c?.name).map(c => String(c.name).toLowerCase()));
+    const paths = Array.from(ctx.pathCase.values())
+      .filter(p => { const parts = p.split(SEP); return parts[0] !== 'Other' && !parts.some(x => brandNames.has(x.toLowerCase())); })
+      .sort();
+    paths.push('Other');
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY is not set.' }, { status: 500 });
     const client = instrumentAnthropic(new Anthropic({ apiKey }));

@@ -42,7 +42,9 @@ export interface SplitProposal {
 
 const SEP = ' › ';
 /** Words that never distinguish two sub-categories of one card/account node ("Airline Credit Cards" = "Airline Card"). */
-const FILLER = new Set(['and', 'the', 'for', 'with', 'a', 'of', 'credit', 'card', 'account', 'option']);
+const FILLER = new Set(['and', 'the', 'for', 'with', 'a', 'of', 'credit', 'card', 'account', 'option',
+  // purely linguistic adjectives are never a page of their own (III.1c)
+  'best', 'top', 'good', 'great', 'cheap']);
 export const unifyLabel = (s: string): string => {
   const toks = String(s ?? '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean)
     .map(w => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w));
@@ -63,6 +65,9 @@ ${tree}
 
 RULES
 - Prefer 3-8 sub-categories. Each needs at least 2 keywords. Name each as a page topic a site would have (e.g. "Airline Credit Cards", "Hotel Credit Cards", "No Foreign Transaction Fee Cards") — short, plain, title case.
+- "best", "top", "good", "cheap" and years never make a sub-category: "best travel credit cards" and "travel credit cards" are the same page as "${node[node.length - 1]}" itself, so they go in "general".
+- No two sub-categories may be answerable by the same page. Airline cards, airline miles cards and frequent-flyer cards are ONE page; travel rewards and travel bonus cards are the general page. Merge such groups.
+- A keyword that does not belong in "${node[node.length - 1]}" at all goes to an existing category above, or to "Other" if nothing fits.
 - Name sub-categories by product type or user task, never by another company's brand${competitorBrands.length ? ` (${competitorBrands.slice(0, 30).join(', ')} are other companies)` : ''}. A keyword about one specific card of the client's own may share its product-type sub-category.
 - If a keyword clearly belongs to a category already listed above (outside "${node.join(SEP)}"), give that full path in "existing" instead of creating a sub-category.
 - Keywords that are genuinely general to "${node[node.length - 1]}" (one hub page answers them) go in "general".
@@ -111,6 +116,8 @@ export function parseSplit(
       if (hit && hit.join(SEP).toLowerCase() !== nodeKey && !nodeKey.startsWith(hit.join(SEP).toLowerCase() + SEP)) { path = hit; existing = true; }
     }
     const name = String(g?.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    // a "sub-category" that only restates the node ("Best Travel Credit Cards" under Travel) is the node itself
+    if (!path && name && unifyLabel(name) === unifyLabel(node[node.length - 1])) { for (const n of nums) used.delete(n); continue; }
     if (!path) {
       if (!name) { for (const n of nums) used.delete(n); continue; }
       if (isForeignBrand(name)) { rejected.push({ name, reason: "names another company's brand", keywords: nums.length }); for (const n of nums) used.delete(n); continue; }
