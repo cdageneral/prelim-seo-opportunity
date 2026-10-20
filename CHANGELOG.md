@@ -1,3 +1,14 @@
+# v7.570 — The category boundary survives Refresh Analysis (2026-10-20)
+
+Wayne, after running Refresh Analysis on Citi (travel cards) to rebuild the audience segments: *"argh - i refreshed and rebuilt and i lost my category boundaries"*.
+
+- **Cause (measured on the live project).** The selection was still stored: 83 entries, untouched. But it names categories by their tree path, and the refresh rebuilt the tree with new names ("Management" became "Card Management", "Choosing a Credit Card" was regrouped). 56 of the 79 unticked categories pointed at paths that no longer existed. Every new category defaults to selected, so the boundary opened back up.
+- **Fix.** New `lib/category/selectionCarry.ts` carries the selection keyword by keyword, because the keyword is the stable unit, not the category name. Each keyword's in/out status is read from the previous tree using the pool's own selection rule (II.7). Each category in the new tree then takes its keywords' status: none were in → out; all known were in → in (new keywords follow it); mixed → split further, and a mixed leaf takes the majority. A category the old tree never had → out, since the boundary is opt-in. Brand-held keywords stay held. General-row choices carry as own include/exclude.
+- **Automatic.** Every refresh now does this whenever the saved selection stops matching the new tree. The previous selection is backed up first (`hidden_categories_prev`).
+- **One-time / review.** Keyword Selection Step 2 shows a banner when the selection was made on an earlier tree. It names how many saved choices went stale and the measured in-scope count before and after, with one button to carry it forward and a one-step Undo afterwards. Route: `/api/projects/[id]/hidden-categories/carry`. It reads only the two trees' category columns (II.9).
+- **Verified.** Project `tsc` clean. Real `next build` clean. Retained suite: same FAIL set as v7.569 (pre-existing contrast pairs only). +18 v7570 checks reproduce the bug (3 of 3 keyed hides stale, deselected keywords leak) and prove the carry (exact old in-scope set restored, new node defaults out, brand nodes untouched, General rows carried, majority rule, parity with the real `buildKwPool`). +3 v7570-render checks on the banner.
+- Files: lib/category/selectionCarry.ts (new), app/api/projects/[id]/hidden-categories/carry/route.ts (new), components/brief/SelectionCarryBanner.tsx (new), components/brief/KeywordSelectionSection.tsx, app/api/synthesize/route.ts, package.json, CHANGELOG.md.
+
 # v7.569 — Drill into the prompts and answers behind every cited page (2026-10-20)
 
 Wayne, on the Product Insights "owned URLs are cited but are not a topic's ranking page" list: *"when it says 96 prompts, what are those 96 prompts. 472 answers what are those answers - also all of this needs to map to the urls in the product category drop downs"*.

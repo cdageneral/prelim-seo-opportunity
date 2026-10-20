@@ -8,6 +8,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+
+import { carrySelection, staleHideKeys } from '@/lib/category/selectionCarry';   // v7.570
+const rowsOfCarry = (res: unknown): Array<Record<string, any>> => { const r = (res as { rows?: unknown })?.rows ?? res; return Array.isArray(r) ? (r as Array<Record<string, any>>) : []; };
+const asObjCarry = (v: unknown): any => (typeof v === 'string' ? (() => { try { return JSON.parse(v); } catch { return null; } })() : v);
 import { db }      from '@/db';
 import { analyses, personas, opportunities, projects } from '@/db/schema';
 import { eq, sql } from 'drizzle-orm';
@@ -296,6 +300,41 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       console.error('[OrbitIQ] Taxonomy anchor save failed (non-fatal):', (err as any)?.message);
+    }
+
+    // ── v7.570: carry the Keyword Selection boundary onto the rebuilt tree ──────
+    // The selection names nodes by path; a rebuilt tree renames them, which silently
+    // re-opened the boundary on Citi (travel cards) 2026-10-20. Re-express it keyword by
+    // keyword from the previous tree (lib/category/selectionCarry.ts). Backup kept for undo.
+    try {
+      const cbNew: any = synthesis.categoryBreakdown;
+      const projRow = rowsOfCarry(await db.execute(sql`SELECT hidden_categories FROM projects WHERE id = ${analysis.projectId} LIMIT 1`))[0];
+      const hiddenNow = asObjCarry(projRow?.hidden_categories) ?? [];
+      if (cbNew?.keywordPaths && Array.isArray(hiddenNow) && hiddenNow.some((h: any) => h && !h.own)
+          && staleHideKeys(hiddenNow, cbNew.keywordPaths).length > 0) {
+        const prevRow = rowsOfCarry(await db.execute(sql`
+          SELECT semrush_snapshot->'_categoryBreakdown'->'keywordPaths' AS kp,
+                 semrush_snapshot->'_categoryBreakdown'->'categories'   AS cats
+          FROM analyses WHERE project_id = ${analysis.projectId} AND id <> ${analysisId} AND status = 'completed'
+            AND semrush_snapshot->'_categoryBreakdown'->'keywordPaths' IS NOT NULL
+          ORDER BY triggered_at DESC LIMIT 1`))[0];
+        if (prevRow) {
+          const r = carrySelection(
+            { keywordPaths: asObjCarry(prevRow.kp) ?? {}, categories: asObjCarry(prevRow.cats) ?? [] },
+            hiddenNow,
+            { keywordPaths: cbNew.keywordPaths, categories: cbNew.categories ?? [] },
+          );
+          if (r.hidden.length > 0) {
+            try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_prev JSONB`); } catch { /* exists */ }
+            try { await db.execute(sql`ALTER TABLE projects ADD COLUMN IF NOT EXISTS hidden_categories_prev_at TIMESTAMP`); } catch { /* exists */ }
+            await db.execute(sql`UPDATE projects SET hidden_categories_prev = hidden_categories, hidden_categories_prev_at = NOW(),
+              hidden_categories = ${JSON.stringify(r.hidden)}::jsonb, hidden_categories_updated_at = NOW() WHERE id = ${analysis.projectId}`);
+            console.log(`[OrbitIQ] v7.570 selection carried onto the new tree: ${r.shared} shared keywords, in scope ${r.inBefore} → ${r.inAfter}, ${r.newKeywords} new keywords follow their node`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[OrbitIQ] Selection carry failed (non-fatal — the Step 2 banner offers it):', (err as any)?.message);
     }
 
     console.log(`[OrbitIQ] Phase 2 complete for ${analysisId}`);

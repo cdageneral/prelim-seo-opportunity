@@ -31,6 +31,7 @@ import { isClientFootprintRow, isCompetitorGapRow } from '@/lib/keywordLandscape
 import { parseKeywordCsvMeta } from '@/lib/keywords/csvParse';                        // v7.459: THE shared CSV parser
 import { buildSelectionTree, type SelectionNode, type SelectionTree } from '@/lib/category/selectionScope';
 import PendingCategorizationBar from './PendingCategorizationBar';   // v7.531
+import SelectionCarryBanner from './SelectionCarryBanner';   // v7.570
 
 interface Props {
   projectId: string;
@@ -951,6 +952,8 @@ export default function KeywordSelectionSection({
             </div>
           ) : (
             <div>
+              {/* v7.570: a selection made on an earlier tree is carried forward, keyword by keyword */}
+              <SelectionCarryBanner projectId={projectId} refreshKey={kwVersion} />
               {/* v7.567: filing lives where the boundary is set (also kept on Step 3) */}
               <PendingCategorizationBar projectId={projectId} refreshKey={kwVersion} onFiled={onDeepJourneyBuilt} />
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
