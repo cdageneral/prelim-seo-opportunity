@@ -21,6 +21,11 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [volOf, setVolOf] = useState<Record<string, number>>({});
+  // v7.578: what to do with each group — Add (create it / move there), Leave (keywords stay in this
+  // category, no new page), Exclude (keywords leave scope → Other). Default: Add.
+  type Decision = 'add' | 'leave' | 'exclude';
+  const [decision, setDecision] = useState<Record<string, Decision>>({});
+  const decOf = (k: string): Decision => decision[k] ?? 'add';
   const [, tick] = useState(0);
   // v7.577: the saved selection, so each row can say whether its keywords would still count
   const [hidden, setHidden] = useState<unknown[] | null>(null);
@@ -48,10 +53,29 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
     try { const d = await call({ step: 'propose', path: nodeKey.split(SEP) }); setP(d.proposal); setVolOf(d.volumes ?? {}); } catch (e) { setErr((e as Error).message); }
     setBusy(null);
   };
+  /** The proposal as decided: only Add groups are created; Leave → General; Exclude → Other. */
+  const finalProposal = (): Proposal | null => {
+    if (!p) return null;
+    const groups: Group[] = []; const stay = [...p.stay]; let stayVolume = p.stayVolume; const excluded: string[] = []; let exVol = 0;
+    for (const g of p.groups) {
+      const d = decOf(g.path.join(SEP));
+      if (d === 'add') groups.push(g);
+      else if (d === 'leave') { stay.push(...g.keywords); stayVolume += g.volume; }
+      else { excluded.push(...g.keywords); exVol += g.volume; }
+    }
+    if (excluded.length > 0) {
+      const oi = groups.findIndex(g => g.path.length === 1 && g.path[0] === 'Other');
+      if (oi >= 0) groups[oi] = { ...groups[oi], keywords: [...groups[oi].keywords, ...excluded], volume: groups[oi].volume + exVol };
+      else groups.push({ name: 'Other', path: ['Other'], existing: true, keywords: excluded, volume: exVol });
+    }
+    return { ...p, groups, stay, stayVolume };
+  };
   const apply = async () => {
-    if (!p) return;
+    const fp = finalProposal();
+    if (!fp) return;
+    if (fp.groups.length === 0) { setErr('Nothing to apply — every group is set to Leave. Click Cancel to close.'); return; }
     setErr(null); setBusy({ label: 'Saving the new sub-categories', startedAt: Date.now(), expectS: 10 });
-    try { await call({ step: 'apply', proposal: p }); window.location.reload(); } catch (e) { setErr((e as Error).message); setBusy(null); }
+    try { await call({ step: 'apply', proposal: fp }); window.location.reload(); } catch (e) { setErr((e as Error).message); setBusy(null); }
   };
 
   // review edits: fold one group into another, or back onto the parent — nothing is invented,
@@ -81,7 +105,11 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
   const el = busy ? Math.round((Date.now() - busy.startedAt) / 1000) : 0;
   const btn = (primary: boolean) => ({ fontSize: 11, fontWeight: 700, padding: '5px 11px', borderRadius: 7, cursor: busy ? 'wait' : 'pointer',
     background: primary ? 'var(--c-6c63ff)' : 'transparent', color: primary ? 'var(--on-fill-accent)' : 'var(--c-c8c8e8)', border: primary ? '1px solid var(--c-6c63ff)' : '1px solid var(--c-2a2a40)' }) as const;
-  const moved = p ? p.groups.reduce((n, g) => n + g.keywords.length, 0) : 0;
+  const fp = finalProposal();
+  const created = fp ? fp.groups.filter(g => !g.existing).length : 0;
+  const nLeave = p ? p.groups.filter(g => decOf(g.path.join(SEP)) === 'leave').reduce((n, g) => n + g.keywords.length, 0) : 0;
+  const nExcl = p ? p.groups.filter(g => decOf(g.path.join(SEP)) === 'exclude').reduce((n, g) => n + g.keywords.length, 0) : 0;
+  const moved = p ? p.groups.filter(g => decOf(g.path.join(SEP)) === 'add').reduce((n, g) => n + g.keywords.length, 0) : 0;
 
   return (
     <div data-split-panel style={{ margin: '4px 8px 8px 46px', padding: '10px 12px', border: '1px solid var(--c-1e1e34)', borderLeft: '3px solid var(--c-6c63ff)', borderRadius: '0 9px 9px 0', background: 'var(--c-0c0c16)', fontSize: 11.5, color: 'var(--c-c8c8e8)' }}>
@@ -97,24 +125,37 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
       )}
       {p && (
         <div style={{ marginTop: 4 }}>
-          <div style={{ color: 'var(--c-8a8aa8)', marginBottom: 4 }}>{p.groups.length} sub-categories · {moved.toLocaleString()} keywords move · {p.stay.length.toLocaleString()} stay on &ldquo;General {p.node.slice(-1)[0]}&rdquo; ({fmtVol(p.stayVolume)}/mo)</div>
+          <div data-split-summary style={{ color: 'var(--c-8a8aa8)', marginBottom: 4 }}>{created} new page{created === 1 ? '' : 's'} · {moved.toLocaleString()} keywords move · {(p.stay.length + nLeave).toLocaleString()} stay on &ldquo;General {p.node.slice(-1)[0]}&rdquo;{nExcl > 0 ? ` · ${nExcl.toLocaleString()} excluded (moved to Other)` : ''}</div>
+          <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', marginBottom: 6 }}>For each group: <b>Add</b> creates it (or moves it to the category shown) · <b>Leave</b> makes no page — its keywords stay in {p.node.slice(-1)[0]} as they are now · <b>Exclude</b> takes its keywords out of scope.</div>
           {p.groups.map(g => {
             const k = g.path.join(SEP);
             return (
-              <div key={k} data-split-group style={{ borderBottom: '1px dashed var(--c-1e1e34)', padding: '3px 0' }}>
+              <div key={k} data-split-group style={{ borderBottom: '1px dashed var(--c-1e1e34)', padding: '3px 0', opacity: decOf(k) === 'add' ? 1 : 0.55 }}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                   <button onClick={() => setOpen(open === k ? null : k)} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-e8e8ff)', fontWeight: 700, fontSize: 11.5, textAlign: 'left' }}>{open === k ? '▾' : '▸'} {g.name}</button>
                   {g.existing && <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-34d399)' }} title={k}>REUSES EXISTING · {k}</span>}
                   {!g.existing && <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-9b96ff)' }}>NEW PAGE</span>}
                   {outOfScope(g.path) === true && <span data-split-out style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-f87171)' }} title="This category is unticked in Step 2">OUT OF YOUR SCOPE — these keywords stop counting</span>}
                   <span style={{ marginLeft: 'auto', color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{g.keywords.length} kw · {fmtVol(g.volume)}/mo</span>
+                  <span data-split-decision={k} style={{ display: 'inline-flex', border: '1px solid var(--c-2a2a40)', borderRadius: 6, overflow: 'hidden', flexShrink: 0 }}>
+                    {(['add', 'leave', 'exclude'] as Decision[]).map(d => {
+                      const on = decOf(k) === d;
+                      const col = d === 'add' ? 'var(--c-34d399)' : d === 'leave' ? 'var(--c-9b96ff)' : 'var(--c-f87171)';
+                      return (
+                        <button key={d} data-split-choice={d} disabled={!!busy} onClick={() => setDecision(prev => ({ ...prev, [k]: d }))}
+                          title={d === 'add' ? 'Create this group (or move it to the category shown)' : d === 'leave' ? `No page — keywords stay in ${p.node.slice(-1)[0]}` : 'Take these keywords out of scope (move to Other)'}
+                          style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', border: 'none', cursor: 'pointer', background: on ? 'var(--c-14142a)' : 'transparent', color: on ? col : 'var(--c-8a8aa8)', boxShadow: on ? `inset 0 -2px 0 ${col}` : 'none' }}>
+                          {d === 'add' ? 'Add' : d === 'leave' ? 'Leave' : 'Exclude'}
+                        </button>
+                      );
+                    })}
+                  </span>
                   <select data-split-merge={k} value="" disabled={!!busy} onChange={e => { const v = e.target.value; if (!v) return; if (v === '__own') makeOwn(k); else merge(k, v); }}
                     title="Keep as its own page, or fold it into another group"
                     style={{ fontSize: 10, background: 'var(--c-0a0a14)', color: 'var(--c-c8c8e8)', border: '1px solid var(--c-2a2a40)', borderRadius: 5, padding: '1px 3px', maxWidth: 150 }}>
-                    <option value="">Change…</option>
+                    <option value="">More…</option>
                     {g.existing && !(g.path.length === 1 && g.path[0] === 'Other') && <option value="__own">Make it its own new page under {p.node.slice(-1)[0]}</option>}
                     {p.groups.filter(o => o !== g).map(o => <option key={o.path.join(SEP)} value={o.path.join(SEP)}>Merge into {o.name}</option>)}
-                    <option value="__general">General {p.node.slice(-1)[0]} (keep on parent)</option>
                   </select>
                 </div>
                 {open === k && (
@@ -135,7 +176,7 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
       )}
       <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {!p && <button data-split-propose disabled={!!busy} onClick={() => void propose()} style={btn(true)}>{busy ? 'Working…' : 'Propose sub-categories'}</button>}
-        {p && <button data-split-apply disabled={!!busy} onClick={() => void apply()} style={btn(true)}>{busy ? 'Saving…' : (() => { const n = p.groups.filter(g => !g.existing).length; return `Apply · create ${n} sub-categor${n === 1 ? 'y' : 'ies'}`; })()}</button>}
+        {p && <button data-split-apply disabled={!!busy} onClick={() => void apply()} style={btn(true)}>{busy ? 'Saving…' : `Apply · create ${created} new page${created === 1 ? '' : 's'}`}</button>}
         {p && <button disabled={!!busy} onClick={() => { setP(null); void propose(); }} style={btn(false)}>Propose again</button>}
         <button disabled={!!busy} onClick={onClose} style={btn(false)}>Cancel</button>
         {err && <span style={{ color: 'var(--c-f87171)' }}>{err}</span>}
