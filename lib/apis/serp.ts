@@ -679,6 +679,10 @@ export async function getMapsListings(
 export interface LocalPackResult {
   packPresent: boolean;
   places:      MapsPlace[];   // the local 3-pack (≤3), in shown order
+  // v7.579 — true when the lookup itself failed (no key, HTTP error, timeout). The pack is
+  // UNKNOWN, not absent: the keyword scan leaves such a keyword pending instead of storing
+  // it as "no map pack" (Const I.5). Absent on every real read.
+  failed?:     boolean;
 }
 
 /**
@@ -696,7 +700,7 @@ export async function getLocalPack(
   // 3-pack has never been parity-tested against DataForSEO (Const I.1).
   if (localSerpProvider() === 'dataforseo') return dfsGetLocalPack(keyword, market, ll);
   const API_KEY = process.env.SERP_API_KEY;
-  if (!API_KEY) return { packPresent: false, places: [] };
+  if (!API_KEY) return { packPresent: false, places: [], failed: true };
   const m = market ?? getMarket('us');
   const params = new URLSearchParams({
     api_key:       API_KEY,
@@ -711,7 +715,7 @@ export async function getLocalPack(
   if (ll) params.set('ll', ll);
   try {
     const res = await fetch(`${SERP_BASE}?${params.toString()}`, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) { console.error(`SerpAPI local-pack error ${res.status}`); return { packPresent: false, places: [] }; }
+    if (!res.ok) { console.error(`SerpAPI local-pack error ${res.status}`); return { packPresent: false, places: [], failed: true }; }
     await recordSerp('google_local_pack', API_KEY);   // v7.225: 1 billed search
     const data = await res.json();
     // On the google engine, local_results is an object { places: [...] }.
@@ -723,6 +727,6 @@ export async function getLocalPack(
     return { packPresent: places.length > 0, places };
   } catch (err) {
     console.error('SerpAPI local-pack fetch failed:', err);
-    return { packPresent: false, places: [] };
+    return { packPresent: false, places: [], failed: true };
   }
 }

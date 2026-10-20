@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { keywordScanCoverage } from '@/lib/local/keywordQueue';   // v7.579
 import { buildKwPool, buildLocalPackKeywordSet, hasAnyLocalSignal } from '@/lib/utils/kwVolume';
 import { buildCategoryModel } from '@/lib/category/categoryModel';
 import { buildLocalServiceLines } from '@/lib/local/serviceLines';   // v7.298: mirror the Keyword panel's local-pack product lines
@@ -151,7 +152,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   const [scanning, setScanning]     = useState(false);
   const [progress, setProgress]     = useState<{ done: number; total: number; seed: string; startedAt: number } | null>(null);
   const [scanError, setScanError]   = useState<string | null>(null);
-  const [plan, setPlan]             = useState<{ seeds?: number; seedList?: string[]; cells?: number; willScan?: number; locations?: number; locationsScannable?: number; locationsUsed?: number; potentialCells?: number; estCalls?: number; source?: string; model?: string; order?: string; firstCities?: string[]; keywords?: number; totalKeywords?: number } | null>(null);
+  const [plan, setPlan]             = useState<{ seeds?: number; seedList?: string[]; cells?: number; willScan?: number; locations?: number; locationsScannable?: number; locationsUsed?: number; potentialCells?: number; estCalls?: number; source?: string; model?: string; order?: string; firstCities?: string[]; keywords?: number; totalKeywords?: number; alreadyScanned?: number; resume?: boolean; estCostUSD?: number | null; costBasis?: string } | null>(null);
   // per-run scan setup (Wayne sets these each scan)
   // v7.284 — curated primary-service terms (services only; brand pinned). null = follow auto.
   const [curated, setCurated]       = useState<string[] | null>(() => readCuratedServices(projectId));
@@ -410,12 +411,15 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
   }, [clientLocations]);
 
   // ── scan flow: dryRun → confirm → stream ────────────────────────────────────
-  const requestPlan = useCallback(async () => {
+  // v7.579 — `resume` estimates only the keywords not yet stored (Continue scan).
+  const requestPlan = useCallback(async (resume?: boolean) => {
     setScanError(null);
     try {
       const r = await fetch(`/api/projects/${projectId}/local-scan`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dryRun: true, keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
+        body: JSON.stringify(resume
+          ? { dryRun: true, kwContinue: true, keywords: scanKeywords }
+          : { dryRun: true, keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
       });
       const d = await r.json();
       if (!r.ok) { setScanError(d?.error ?? `Could not estimate (${r.status})`); return; }
@@ -423,52 +427,93 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
   }, [projectId, scanKeywords, locationsUrl]);
 
-  const runScan = useCallback(async () => {
+  // v7.579 — AUTO-CONTINUE, the v7.410 review-fetch pattern. Each request scans keywords
+  // (highest real volume first) until its time budget, checkpoints, and reports how many
+  // are left; this loops until none are. Replaces the v7.299 single request that kept the
+  // first 300 keywords and dropped the rest. A pass that stores nothing on a continue is
+  // a provider failure, not progress, so the loop stops and says so instead of spinning.
+  const runScan = useCallback(async (resume?: boolean) => {
+    const isResume = resume === true || plan?.resume === true;
     setPlan(null); setScanError(null); setScanning(true);
     setProgress({ done: 0, total: 0, seed: '', startedAt: Date.now() });
+    const MAX_PASSES = 200;   // belt-and-braces; the zero-progress stop below is the real guard
+    let passes = 0, carriedDone = 0, sessionTotal = 0, cont = isResume;
     try {
-      const r = await fetch(`/api/projects/${projectId}/local-scan`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
-      });
-      if (!r.ok || !r.body) {
-        let msg = `Scan failed (${r.status})`;
-        try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
-        setScanError(msg); setScanning(false); setProgress(null); return;
-      }
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
       for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let ev: any; try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === 'start') {
-            setProgress(p => ({ done: 0, total: ev.total ?? 0, seed: '', startedAt: p?.startedAt ?? Date.now() }));
-          } else if (ev.type === 'progress') {
-            setProgress(p => ({ done: ev.done ?? p?.done ?? 0, total: ev.total ?? p?.total ?? 0, seed: ev.seed ?? ev.phase ?? '', startedAt: p?.startedAt ?? Date.now() }));
-          } else if (ev.type === 'error') {
-            setScanError(ev.error ?? 'Scan failed');
-          } else if (ev.type === 'done' && ev.localScan) {
-            setScan(ev.localScan);
-            // v7.407: the route now writes to the row this page displays, so a
-            // completed scan IS on the snapshot. Marked as such so the
-            // browser-only warning does not fire on a scan that just landed.
-            setScanOrigin('snapshot');
-            setTab('pack');
-            try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
+        passes++;
+        const r = await fetch(`/api/projects/${projectId}/local-scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cont
+            ? { keywords: scanKeywords, kwContinue: true }
+            : { keywords: scanKeywords, locationsUrl: locationsUrl.trim() }),
+        });
+        if (!r.ok || !r.body) {
+          let msg = `Scan failed (${r.status})`;
+          try { const d = await r.json(); msg = d?.error ?? msg; } catch {}
+          setScanError(msg); break;
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let doneEv: any = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            let ev: any; try { ev = JSON.parse(line); } catch { continue; }
+            if (ev.type === 'start') {
+              // progress spans the WHOLE backlog of this run, not just this pass
+              if (sessionTotal === 0) sessionTotal = ev.pending ?? ev.total ?? 0;
+              setProgress(p => ({ done: carriedDone, total: sessionTotal, seed: '', startedAt: p?.startedAt ?? Date.now() }));
+            } else if (ev.type === 'progress') {
+              setProgress(p => (sessionTotal > 0 && typeof ev.done === 'number' && !ev.phase)
+                ? { done: carriedDone + ev.done, total: sessionTotal, seed: ev.seed ?? '', startedAt: p?.startedAt ?? Date.now() }
+                : { done: ev.done ?? p?.done ?? 0, total: ev.total ?? p?.total ?? 0, seed: ev.seed ?? ev.phase ?? '', startedAt: p?.startedAt ?? Date.now() });
+            } else if (ev.type === 'error') {
+              setScanError(ev.error ?? 'Scan failed');
+            } else if (ev.type === 'done') {
+              if (ev.localScan) {
+                setScan(ev.localScan);
+                // v7.407: the route writes to the row this page displays, so a
+                // completed scan IS on the snapshot. Marked as such so the
+                // browser-only warning does not fire on a scan that just landed.
+                setScanOrigin('snapshot');
+                if (!cont) setTab('pack');
+                try { window.localStorage.setItem(cacheKey(analysis), JSON.stringify(ev.localScan)); } catch {}
+              }
+              doneEv = ev;
+            }
           }
         }
+        if (!doneEv) {
+          // The stream ended without a done event — the function was cut off. Every
+          // checkpoint IS saved, so say so plainly (Const I.5).
+          setScanError('The scan was interrupted before this batch reported back. Keywords up to the last checkpoint are saved — click Continue scan to pick up from there.');
+          break;
+        }
+        const remaining = Number(doneEv.remaining ?? 0);
+        const completed = Number(doneEv.completed ?? 0);
+        const failed = Number(doneEv.failed ?? 0);
+        carriedDone += completed + failed;
+        if (remaining <= 0) break;
+        if (completed === 0 && cont) {
+          setScanError(`No map-pack lookups succeeded in the last batch${failed > 0 ? ` (${failed} failed at the provider)` : ''}. ${remaining} keyword${remaining !== 1 ? 's are' : ' is'} still to check and everything scanned so far is saved — click Continue scan to retry.`);
+          break;
+        }
+        if (passes >= MAX_PASSES) {
+          setScanError(`Stopped after ${passes} batches with ${remaining} keywords still to check — click Continue scan to keep going.`);
+          break;
+        }
+        cont = true;   // every later pass continues the stored scan
       }
     } catch (e) { setScanError(String((e as any)?.message ?? e)); }
     finally { setScanning(false); setProgress(null); }
-  }, [projectId, analysis, scanKeywords, locationsUrl]);
+  }, [projectId, analysis, scanKeywords, locationsUrl, plan]);
 
   // ── v7.307 review fetch flow: dryRun → confirm → stream (per-office Google lookup) ──
   const requestReviewPlan = useCallback(async () => {
@@ -745,6 +790,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
 
   // ── progress UI ──
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const kwCov = keywordScanCoverage(scan);   // v7.579: shared with the PDF
   const eta = progress && progress.total > 0 && progress.done > 0 && progress.done < progress.total
     ? fmtEta((progress.total - progress.done) * (((Date.now() - progress.startedAt) / 1000) / progress.done)) : '';
   // v7.307 — review-fetch progress
@@ -770,7 +816,7 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {scanDate && <span className="badge-soft">Last scan: {scanDate}</span>}
-              {scan && <span className="badge-soft">{fmt(scan.scannedCount)} keywords · {scan.callsUsed} credits</span>}
+              {scan && <span className="badge-soft">{kwCov && kwCov.partial ? `${fmt(kwCov.scanned)} of ${fmt(kwCov.total)}` : fmt(scan.scannedCount)} keywords · {scan.callsUsed} credits</span>}
               {!scanning && (
                 <button onClick={() => (plan ? runScan() : requestPlan())} className="orbit-btn-sm">
                   {scan ? '↻ Re-run scan' : '▸ Run local scan'}
@@ -828,11 +874,21 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
           {/* confirm plan */}
           {plan && !scanning && (
             <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid var(--ca-108-99-255-0_3)', background: 'var(--ca-108-99-255-0_06)', maxWidth: 560 }}>
-              <div style={{ fontSize: 12.5, color: 'var(--c-cfccff)', fontWeight: 600 }}>Ready to scan the local map pack</div>
+              <div style={{ fontSize: 12.5, color: 'var(--c-cfccff)', fontWeight: 600 }}>{plan.resume ? 'Ready to continue the map-pack scan' : 'Ready to scan the local map pack'}</div>
               <div style={{ fontSize: 11.5, color: 'var(--c-9090b8)', marginTop: 5 }}>
                 <b style={{ color: 'var(--c-cfccff)' }}>{fmt(plan.keywords ?? 0)}</b> local-intent keyword{(plan.keywords ?? 0) !== 1 ? 's' : ''} = <b style={{ color: 'var(--c-cfccff)' }}>{fmt(plan.keywords ?? 0)}</b> map-pack check{(plan.keywords ?? 0) !== 1 ? 's' : ''} ·
                 <b style={{ color: 'var(--c-f6c061)' }}> ~{fmt(plan.estCalls ?? 0)} SerpAPI credits</b>
+                {typeof plan.estCostUSD === 'number' && <> · <b style={{ color: 'var(--c-f6c061)' }}>${plan.estCostUSD.toFixed(2)}</b></>}
               </div>
+              {typeof plan.estCostUSD === 'number' && plan.costBasis && (
+                <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)', marginTop: 3 }}>Cost = {plan.costBasis}. The usage ledger records each search actually made.</div>
+              )}
+              {plan.resume && (plan.alreadyScanned ?? 0) > 0 && (
+                <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)', marginTop: 3 }}>{fmt(plan.alreadyScanned ?? 0)} of {fmt(plan.totalKeywords ?? 0)} keywords are already scanned and saved — only the rest are checked.</div>
+              )}
+              {(plan.keywords ?? 0) > 0 && (
+                <div style={{ fontSize: 10.5, color: 'var(--c-8888aa)', marginTop: 3 }}>Every keyword is checked, highest search volume first. Large sets run in batches of a few minutes each; progress is saved after every batch, so nothing is lost if the page is closed.</div>
+              )}
               {typeof plan.locations === 'number' && (
                 <div style={{ fontSize: 10.5, color: (plan.locations ?? 0) > 0 ? 'var(--c-5ee68f)' : 'var(--c-f6c061)', marginTop: 4 }}>
                   {(plan.locations ?? 0) > 0
@@ -840,16 +896,24 @@ export default function LocalSearchSection({ projectId, analysis, projectName, d
                     : (locationsUrl.trim() ? '📍 No offices found at that URL — check it points to your locations page, sitemap, or .kml.' : '📍 No office locations auto-detected — add a Locations URL above if you have one.')}
                 </div>
               )}
-              {(plan.totalKeywords ?? 0) > (plan.keywords ?? 0) && (
-                <div style={{ fontSize: 10.5, color: 'var(--c-f6c061)', marginTop: 4 }}>Scanning {fmt(plan.keywords ?? 0)} of {fmt(plan.totalKeywords ?? 0)} keywords this run (runtime safety cap).</div>
-              )}
               {(plan.source === 'kml' || plan.source === 'sitemap-pages') && (
                 <div style={{ fontSize: 10.5, color: 'var(--c-5ee68f)', marginTop: 4 }}>✓ Locations read free from the client's sitemap — no credits spent on discovery.</div>
               )}
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button onClick={runScan} className="orbit-btn-sm">Confirm &amp; scan</button>
+                <button onClick={() => runScan()} className="orbit-btn-sm">{plan.resume ? 'Confirm & continue' : <>Confirm &amp; scan</>}</button>
                 <button onClick={() => setPlan(null)} className="orbit-btn-ghost">Cancel</button>
               </div>
+            </div>
+          )}
+          {/* v7.579 — a keyword scan that has not checked every keyword yet: say how far it
+              got and put the Continue CTA right here (Const I.5 / IV.4). */}
+          {!scanning && !plan && kwCov && kwCov.partial && (
+            <div className="kw-partial" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 9, border: '1px solid var(--ca-245-158-11-0_35)', background: 'var(--ca-245-158-11-0_08)' }}>
+              <span style={{ fontSize: 11.5, color: 'var(--c-c8c8e0)', flex: '1 1 300px' }}>
+                <b style={{ color: 'var(--c-cfccff)' }}>{fmt(kwCov.scanned)} of {fmt(kwCov.total)} keywords scanned.</b>{' '}
+                {fmt(kwCov.remaining)} still to check — the Map Pack figures below cover the scanned keywords only.
+              </span>
+              <button onClick={() => requestPlan(true)} className="orbit-btn-sm">Continue scan</button>
             </div>
           )}
           {scanError && <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--c-f08a8a)' }}>{scanError}</div>}

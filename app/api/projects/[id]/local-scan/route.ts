@@ -33,7 +33,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { setUsageProject } from '@/lib/usage/context';
 import { db } from '@/db';
 import { analyses, projects, projectKeywords } from '@/db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { getMapsListings, getLocalPack, type MapsPlace } from '@/lib/apis/serp';
 import { getMarket } from '@/lib/utils/markets';
 import { normAddress, distanceKm, PROFILE_MATCH_KM } from '@/lib/local/listingIntegrity';
@@ -53,6 +53,9 @@ import { cityMarketRank, detectLocalIntent } from '@/lib/local/detect';
 // the project page uses, so the scan target and the report's read target cannot drift.
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';   // v7.503 (II.9)
 import { titleMatchesClientRoot } from '@/lib/local/clientMatch';   // v7.564
+import { dedupeKeywords, pendingKeywords, mergeKeywordScans } from '@/lib/local/keywordQueue';   // v7.579
+import { resolveRate } from '@/lib/usage/pricing';   // v7.579: plan cost at the registry rate (I.5b)
+import { localSerpProvider } from '@/lib/apis/serp';
 
 export const maxDuration = 300;
 
@@ -73,13 +76,29 @@ const REVIEW_MAX_PER_REQUEST  = 150;      // hard cap on offices per request
 const REVIEW_TIME_BUDGET_MS   = 200_000;  // stop + persist well before the 300s cap
 const REVIEW_CHECKPOINT_EVERY = 25;       // persist partial progress this often
 const KW_CONCURRENCY    = 10;     // v7.299: keyword map-pack scan = 1 search each (no AI 2nd call) → safe at higher concurrency
-const MAX_SCAN_KEYWORDS = 300;    // v7.299: runtime ceiling so one streamed request stays under the 300s Vercel cap (NOT a data cap)
+// v7.579 — MAX_SCAN_KEYWORDS (300) is gone. It kept the first 300 keywords of whatever order
+// the panel sent and silently dropped the rest (Const I.6). The keyword scan now works like
+// the v7.410 review fetch: each request scans until its time budget, checkpoints, and reports
+// what is left; the panel continues automatically until every keyword has been checked.
+const KW_REQUEST_BUDGET_MS = 230_000;  // stop STARTING lookups at this age of the request (each lookup has a 15s timeout → done by ~245s, well inside the 300s cap)
+const KW_CHECKPOINT_EVERY  = 50;       // persist partial progress this often
 const ENRICH_BUDGET_MS  = 120_000; // v7.303: wall-clock cap for fetching office detail pages inside a scan (keeps the request under 300s)
 // v7.506 — the standalone "fill office details" pass: its own request, so a slow client
 // site cannot run the first scan out of time and leave most offices without their own
 // address/GPS. Sono Bello: 141 pages, only 45 fitted inside the in-scan budget.
 const ENRICH_PASS_BUDGET_MS = 200_000;   // stop + persist well before the 300s cap
 const ENRICH_CONCURRENCY    = 12;
+
+// v7.579 — the confirm card's cost line, priced from the ONE rate registry (Const I.5b).
+// The local map pack runs on localSerpProvider(); when that provider has no per-unit rate
+// on file (measured or unpriced), no dollar figure is shown rather than a guessed one.
+function planCost(lookups: number): { estCostUSD: number | null; costBasis: string } {
+  const r = resolveRate(localSerpProvider(), 'searches', 'google_local_pack');
+  if (r.status === 'rate' && r.usdPerUnit != null) {
+    return { estCostUSD: Math.round(lookups * r.usdPerUnit * 100) / 100, costBasis: `${r.label} at ${r.basis === 'plan-quota' ? 'your plan rate' : 'list price'} ($${r.usdPerUnit.toFixed(5)} each)` };
+  }
+  return { estCostUSD: null, costBasis: '' };
+}
 
 function normalizeDomain(url: string): string {
   return String(url ?? '')
@@ -367,6 +386,10 @@ export async function POST(
     ? body.keywords.map((k: any) => String(k ?? '').toLowerCase().trim()).filter(Boolean)
     : [];
   const keywordMode = bodyKeywords.length > 0;
+  // v7.579 — continue a partly-done keyword scan: skip location discovery, reuse the stored
+  // offices, and check only the keywords not yet stored.
+  const kwContinue = body?.kwContinue === true;
+  const requestStartedAt = Date.now();
   // v7.302 — optional manual Locations URL (Wayne). Accepts an HTML locations page, a sitemap
   // (urlset/index), or a KML; lets the user point us at the right page when auto-discovery's
   // path conventions don't match. Free fetch (no SerpAPI).
@@ -694,6 +717,118 @@ export async function POST(
           return;
         }
 
+        // ── v7.579 KEYWORD SCAN PASS (shared by a fresh scan and a continue) ──────────
+        // Scans pending keywords (highest real volume first) until the request's time
+        // budget, merges into the stored rows, checkpoints every KW_CHECKPOINT_EVERY, and
+        // reports `remaining`. A lookup that FAILS is not stored — it stays pending and is
+        // retried next pass — so a provider error is never recorded as "no map pack" (I.5).
+        const volByKw: Record<string, number> = {};
+        for (let i = 0; i < (pool as any[]).length; i++) {
+          const it = (pool as any[])[i];
+          const kw = String(it.keyword ?? '').toLowerCase().trim();
+          const v = it.searchVolume || 0;
+          if (kw && (volByKw[kw] == null || v > volByKw[kw])) volByKw[kw] = v;
+        }
+        const runKeywordScan = async (o: { listings: LocalListing[]; source: string; priorKeywords: LocalKeywordScan[]; priorCalls: number }): Promise<void> => {
+          const allKws = dedupeKeywords(bodyKeywords);
+          const queue = pendingKeywords(allKws, o.priorKeywords, volByKw);
+          const clientPlaceIds: Record<string, boolean> = {};
+          o.listings.forEach(l => { if (l.placeId) clientPlaceIds[l.placeId] = true; });
+          const deadline = requestStartedAt + KW_REQUEST_BUDGET_MS;
+          const fresh: LocalKeywordScan[] = [];
+          let next = 0, attempted = 0, failed = 0, passCalls = 0;
+          const total = o.priorKeywords.length + queue.length;
+          send({ type: 'start', total: queue.length, pending: queue.length, alreadyScanned: o.priorKeywords.length, totalKeywords: total });
+
+          const build = (): LocalScan => {
+            const merged = mergeKeywordScans(o.priorKeywords, fresh);
+            return {
+              domain:       clientDomain,
+              market:       market.code,
+              locations:    o.listings,
+              keywords:     merged,
+              builtAt:      new Date().toISOString(),
+              scannedCount: merged.length,
+              localTotal:   Math.max(merged.length, total),
+              callsUsed:    o.priorCalls + passCalls,
+              source:       o.source,
+              model:        'keyword',
+              locationsScanned: 0,
+            };
+          };
+          // jsonb_set writes ONLY _localScan, so a checkpoint never rewrites (or reverts) the
+          // rest of the snapshot from this request's in-memory copy.
+          const persist = async (): Promise<LocalScan> => {
+            const ls = build();
+            await db.execute(sql`UPDATE analyses SET semrush_snapshot = jsonb_set(semrush_snapshot, '{_localScan}', ${JSON.stringify(ls)}::jsonb, true) WHERE id = ${analysis.id}`);
+            return ls;
+          };
+
+          const kwWorker = async (): Promise<void> => {
+            while (next < queue.length) {
+              if (Date.now() > deadline) return;   // the rest stay pending for the next pass
+              const kw = queue[next++];
+              let res: { packPresent: boolean; places: MapsPlace[]; failed?: boolean };
+              try { res = await getLocalPack(kw, market); }   // single market locale, no ll (v7.299)
+              catch { res = { packPresent: false, places: [], failed: true }; }
+              attempted++;
+              if (res.failed) { failed++; }
+              else {
+                passCalls++;
+                const members: LocalPackMember[] = res.places.map(p => ({
+                  position: p.position, title: p.title, placeId: p.placeId,
+                  rating: p.rating, reviews: p.reviews,
+                  isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
+                }));
+                const mine = members.find(m => m.isClient);
+                const leader = members.find(m => m.position === 1);
+                const det = detectLocalIntent(kw);
+                fresh.push({
+                  keyword:          kw,
+                  searchVolume:     volByKw[kw] ?? 0,
+                  intent:           det ? det.intent : 'implicit-local',
+                  matchedTerm:      det ? det.matchedTerm : '',
+                  packPresent:      res.packPresent,
+                  clientBestRank:   mine ? mine.position : null,
+                  bestLocationId:   mine ? (mine.placeId || null) : null,
+                  bestLocationCity: '',
+                  packLeader:       leader ? leader.title : '',
+                  pack:             members,
+                });
+                if (fresh.length % KW_CHECKPOINT_EVERY === 0) {
+                  try { await persist(); } catch (e) { console.error('[OrbitIQ] keyword-scan checkpoint failed:', e); }
+                }
+              }
+              send({ type: 'progress', done: attempted, total: queue.length, seed: kw });
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(KW_CONCURRENCY, queue.length || 1) }, () => kwWorker()));
+
+          const localScan = await persist();
+          const remaining = Math.max(0, localScan.localTotal - localScan.scannedCount);
+          console.log(`[OrbitIQ] Local keyword scan pass: ${fresh.length} stored, ${failed} failed (left pending), ${remaining} remaining of ${localScan.localTotal}`);
+          send({ type: 'done', localScan, completed: fresh.length, failed, remaining, totalKeywords: localScan.localTotal });
+          controller.close();
+        };
+
+        if (keywordMode && kwContinue) {
+          const prior = (analysis.semrushSnapshot as any)?._localScan as LocalScan | undefined;
+          if (!prior || prior.model !== 'keyword') {
+            if (dryRun) send({ type: 'done', dryRun: true, plan: { model: 'keyword', keywords: 0, totalKeywords: 0, estCalls: 0 } });
+            else send({ type: 'error', error: 'There is no keyword scan to continue. Run the local scan first.' });
+            controller.close();
+            return;
+          }
+          if (dryRun) {
+            const pend = pendingKeywords(dedupeKeywords(bodyKeywords), prior.keywords ?? [], volByKw);
+            send({ type: 'done', dryRun: true, plan: { model: 'keyword', resume: true, keywords: pend.length, totalKeywords: (prior.keywords ?? []).length + pend.length, alreadyScanned: (prior.keywords ?? []).length, estCalls: pend.length, ...planCost(pend.length), source: prior.source ?? 'none', locations: (prior.locations ?? []).length } });
+            controller.close();
+            return;
+          }
+          await runKeywordScan({ listings: prior.locations ?? [], source: prior.source ?? 'none', priorKeywords: prior.keywords ?? [], priorCalls: prior.callsUsed ?? 0 });
+          return;
+        }
+
         // ── 1. Discover client locations ──────────────────────────────────────
         // PRIMARY (v7.179): the client's OWN sitemap/KML — authoritative, free,
         // every location with GPS. FALLBACK: a SerpAPI Maps brand search (1 call)
@@ -763,85 +898,18 @@ export async function POST(
         }
 
         // ── v7.299 KEYWORD MODE: scan each real local-intent keyword's map pack ───────
+        // v7.579 — every keyword, in resumable passes (was: the first 300, rest dropped).
         if (keywordMode) {
-          const seen: Record<string, boolean> = {};
-          const kws: string[] = [];
-          for (let i = 0; i < bodyKeywords.length; i++) { const kw = bodyKeywords[i]; if (kw && !seen[kw]) { seen[kw] = true; kws.push(kw); } }
-          const scanKws = kws.slice(0, MAX_SCAN_KEYWORDS);
-          // real Semrush volume per keyword from the canonical pool (Const I.1)
-          const volByKw: Record<string, number> = {};
-          for (let i = 0; i < (pool as any[]).length; i++) {
-            const it = (pool as any[])[i];
-            const kw = String(it.keyword ?? '').toLowerCase().trim();
-            const v = it.searchVolume || 0;
-            if (kw && (volByKw[kw] == null || v > volByKw[kw])) volByKw[kw] = v;
-          }
-
           if (dryRun) {
+            const n = dedupeKeywords(bodyKeywords).length;
             send({
               type: 'done', dryRun: true,
-              plan: { model: 'keyword', keywords: scanKws.length, totalKeywords: kws.length, estCalls: scanKws.length, source, locations: listings.length },
+              plan: { model: 'keyword', keywords: n, totalKeywords: n, estCalls: n, ...planCost(n), source, locations: listings.length },
             });
             controller.close();
             return;
           }
-
-          send({ type: 'start', total: scanKws.length });
-          const out: LocalKeywordScan[] = new Array(scanKws.length);
-          let next = 0, done = 0;
-          const kwWorker = async (): Promise<void> => {
-            while (next < scanKws.length) {
-              const i = next++;
-              const kw = scanKws[i];
-              let res: { packPresent: boolean; places: MapsPlace[] };
-              try { res = await getLocalPack(kw, market); }   // single market locale, no ll (v7.299)
-              catch { res = { packPresent: false, places: [] }; }
-              callsUsed++;
-              const members: LocalPackMember[] = res.places.map(p => ({
-                position: p.position, title: p.title, placeId: p.placeId,
-                rating: p.rating, reviews: p.reviews,
-                isClient: isClientPlace(p) || (!!p.placeId && clientPlaceIds[p.placeId] === true),
-              }));
-              const mine = members.find(m => m.isClient);
-              const leader = members.find(m => m.position === 1);
-              const det = detectLocalIntent(kw);
-              out[i] = {
-                keyword:          kw,
-                searchVolume:     volByKw[kw] ?? 0,
-                intent:           det ? det.intent : 'implicit-local',
-                matchedTerm:      det ? det.matchedTerm : '',
-                packPresent:      res.packPresent,
-                clientBestRank:   mine ? mine.position : null,
-                bestLocationId:   mine ? (mine.placeId || null) : null,
-                bestLocationCity: '',
-                packLeader:       leader ? leader.title : '',
-                pack:             members,
-              };
-              done++;
-              send({ type: 'progress', done, total: scanKws.length, seed: kw });
-            }
-          };
-          await Promise.all(Array.from({ length: Math.min(KW_CONCURRENCY, scanKws.length || 1) }, () => kwWorker()));
-
-          const localScan: LocalScan = {
-            domain:       clientDomain,
-            market:       market.code,
-            locations:    listings,
-            keywords:     out.filter(Boolean),
-            builtAt:      new Date().toISOString(),
-            scannedCount: scanKws.length,
-            localTotal:   kws.length,
-            callsUsed,
-            source,
-            model:        'keyword',
-            locationsScanned: 0,
-          };
-          await db.update(analyses)
-            .set({ semrushSnapshot: { ...(analysis.semrushSnapshot as any), _localScan: localScan } as any })
-            .where(eq(analyses.id, analysis.id));
-          console.log(`[OrbitIQ] Local keyword scan stored: ${scanKws.length} keywords, ${callsUsed} credits`);
-          send({ type: 'done', localScan });
-          controller.close();
+          await runKeywordScan({ listings, source, priorKeywords: [], priorCalls: callsUsed });
           return;
         }
 

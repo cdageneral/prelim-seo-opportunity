@@ -28,6 +28,7 @@
  */
 
 import { checkListingIntegrity } from '@/lib/local/listingIntegrity';
+import { keywordScanCoverage } from '@/lib/local/keywordQueue';   // v7.579
 import { demandPortfolioTotals, type LocalDemand } from '@/lib/local/localDemand';   // v7.504 (II.6b)
 import { buildDemandGaps, demandGapTotals, GAP_LABEL } from '@/lib/local/demandGaps';   // v7.505 (II.6b)
 import type { SovComputed } from '@/lib/sov/model';
@@ -481,6 +482,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
 
   // local: render only when the scan holds real pack rows or listings
   const scan = d.localScan && ((d.localScan.keywords?.length ?? 0) > 0 || (d.localScan.locations?.length ?? 0) > 0) ? d.localScan : null;
+  const lpCov = keywordScanCoverage(scan);   // v7.579: same coverage rule as the Local panel
   const lp = scan ? {
     pack:    buildPackRollup(scan.keywords ?? []),
     reviews: buildReviewRollup(scan.locations ?? []),
@@ -1061,7 +1063,7 @@ export function buildAssessmentHTML(d: AssessmentData): string {
       barRow(r.isClient ? `${d.clientName} (you)` : r.name, (r.appearances / solvMax) * 100, `${n0(r.appearances)} · ${p0(r.sharePct)}`, r.isClient ? 'var(--blue)' : '#c9c8c1', '1.5in', '.85in')).join('');
     pages.push(pageWrap('LOCAL SEARCH — THE MAP PACK', 'PART II · THE DIAGNOSIS', `
       <h1 class="pg">${lp.pack.presenceRate < 50 ? `Where you show up, you ${lp.pack.avgRank > 0 && lp.pack.avgRank <= 2 ? 'win' : 'compete'}. You show up ${p0(lp.pack.presenceRate)} of the time.` : `You appear in ${p0(lp.pack.presenceRate)} of your map packs.`}</h1>
-      <div class="lede">The local scan checked <b>${n0(lp.pack.scanned)} local-intent keywords</b> against your <b>${n0(lp.clientLocs.length)} location${lp.clientLocs.length === 1 ? '' : 's'}</b>: ${n0(lp.pack.withPack)} returned a Google map pack, and you appear in ${n0(lp.pack.inPack)} of them${lp.pack.avgRank > 0 ? ` — at an average rank of <b>${lp.pack.avgRank}</b> when you do` : ''}.</div>
+      <div class="lede">The local scan checked <b>${n0(lp.pack.scanned)}${lpCov && lpCov.partial ? ` of ${n0(lpCov.total)}` : ''} local-intent keywords</b>${lpCov && lpCov.partial ? ' (the scan has not finished — figures cover the keywords checked so far)' : ''} against your <b>${n0(lp.clientLocs.length)} location${lp.clientLocs.length === 1 ? '' : 's'}</b>: ${n0(lp.pack.withPack)} returned a Google map pack, and you appear in ${n0(lp.pack.inPack)} of them${lp.pack.avgRank > 0 ? ` — at an average rank of <b>${lp.pack.avgRank}</b> when you do` : ''}.</div>
       <div class="lgrid" style="margin-bottom:13px;">
         <div class="panelbox">
           <div class="figtitle">Local Visibility Index</div>

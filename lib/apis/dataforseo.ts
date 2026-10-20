@@ -435,7 +435,7 @@ export async function dfsGetLocalPack(
   market?: Market,
   ll?: string,
 ): Promise<LocalPackResult> {
-  if (!dataForSeoEnabled()) return { packPresent: false, places: [] };
+  if (!dataForSeoEnabled()) return { packPresent: false, places: [], failed: true };   // v7.579: unknown, not absent
   const m = market ?? getMarket('us');
   const coord = llToLocationCoordinate(ll);
   const task: Record<string, unknown> = {
@@ -447,7 +447,8 @@ export async function dfsGetLocalPack(
   if (coord) task.location_coordinate = coord;
   else task.location_name = m.dfsLocationName;
 
-  const { result } = await dfsPost<any>(ORGANIC_ENDPOINT, task, 'google_local_pack');
+  const { result, failure } = await dfsPost<any>(ORGANIC_ENDPOINT, task, 'google_local_pack');
+  if (failure) return { packPresent: false, places: [], failed: true };   // v7.579: a failed read is unknown, not "no pack"
   const items: any[] = Array.isArray(result?.items) ? result.items : [];
   const packs = items.filter(i => i?.type === 'local_pack');
   // A local_pack item can be either one place per item, or a container with .items.
