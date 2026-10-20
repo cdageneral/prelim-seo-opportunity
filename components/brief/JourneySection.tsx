@@ -21,6 +21,7 @@ import { segmentLabelAt } from '@/lib/audience/segmentRows';   // v7.328: per-se
 import { exportSegmentXLSX, type ExportTopicRow } from '@/lib/export/topicExport';   // v7.328
 import { InsightStack } from './InsightBanner';   // v7.366: insight-sentence layer
 import { mandateInsight, preProductZeroInsight } from '@/lib/insights';   // v7.366 (G6 + pre-product zero)
+import AudienceScopeBanner from './AudienceScopeBanner';   // v7.572
 // v7.489: the mind-map's GEOMETRY moved to lib/journey/mapLayout.ts so the PDF export
 // can draw EVERY umbrella with the SAME function this panel draws the focused one with
 // (Const II.6a/II.7 — one layout, never a second implementation that drifts).
@@ -3021,6 +3022,9 @@ export default function JourneySection({ projectId, kwVersion, analysis, competi
           How each segment moves from life-problem search to product decision &mdash; a topic mind map color-coded by content coverage.
         </p>
       </div>
+
+      {/* v7.572: what the segments were built on + rebuild from the in-scope keywords */}
+      <AudienceScopeBanner projectId={projectId} onRebuilt={onDeepJourneyBuilt} />
 
       {/* v7.273: View toggle moved to the top, directly under the header text and ABOVE
           the segment boxes (Wayne 2026-06-23). It only governs the canonical list/mind-map
