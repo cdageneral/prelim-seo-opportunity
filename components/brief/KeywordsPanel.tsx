@@ -158,7 +158,7 @@ interface KwCategoryBreakdown {
   keywordCategories:  Record<string, string>; // lowercase kw → category name
   // v7.339 (Const III.1e): taxonomy merges auto-applied at synthesis — rendered as
   // a visible log so every re-label / re-parent is inspectable. Absent pre-v7.339.
-  mergeLog?:          Array<{ from: string; to: string; kind: 'label' | 'reparent' }>;
+  mergeLog?:          Array<{ from: string; to: string; kind: 'label' | 'reparent' | 'split'; keywords?: number }>;   // v7.573: + split
 }
 
 // ─── Branded detection — delegated to shared utility ─────────────────────────
@@ -3020,10 +3020,10 @@ export function KwCategorySection({
         <div style={{ margin: '2px 20px 6px', maxHeight: 170, overflowY: 'auto', border: '1px solid var(--c-111120)', borderRadius: 6, background: 'var(--c-07070f)' }}>
           {mergeLog.map((m, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 6, padding: '3px 10px', borderBottom: i < mergeLog.length - 1 ? '1px solid var(--c-0e0e1e)' : 'none' }}>
-              <span style={{ fontSize: '8px', fontWeight: 600, flexShrink: 0, letterSpacing: '.05em', textTransform: 'uppercase' as const, color: m.kind === 'reparent' ? 'var(--amber)' : 'var(--c-55557a)' }}>
-                {m.kind === 'reparent' ? 'moved' : 'relabeled'}
+              <span style={{ fontSize: '8px', fontWeight: 600, flexShrink: 0, letterSpacing: '.05em', textTransform: 'uppercase' as const, color: m.kind === 'reparent' ? 'var(--amber)' : m.kind === 'split' ? 'var(--c-9b96ff)' : 'var(--c-55557a)' }}>
+                {m.kind === 'reparent' ? 'moved' : m.kind === 'split' ? `split · ${(m as any).keywords ?? ''} kw` : 'relabeled'}
               </span>
-              <span style={{ fontSize: '10px', color: 'var(--c-55557a)', textDecoration: 'line-through' }}>{m.from}</span>
+              <span style={{ fontSize: '10px', color: 'var(--c-55557a)', textDecoration: m.kind === 'split' ? 'none' : 'line-through' }}>{m.from}</span>
               <span style={{ fontSize: '10px', color: 'var(--c-404060)' }}>→</span>
               <span style={{ fontSize: '10px', color: 'var(--c-a0a0c8)' }}>{m.to}</span>
             </div>

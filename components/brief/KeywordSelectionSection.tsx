@@ -32,6 +32,9 @@ import { parseKeywordCsvMeta } from '@/lib/keywords/csvParse';                  
 import { buildSelectionTree, type SelectionNode, type SelectionTree } from '@/lib/category/selectionScope';
 import PendingCategorizationBar from './PendingCategorizationBar';   // v7.531
 import SelectionCarryBanner from './SelectionCarryBanner';   // v7.570
+import SplitCategoryPanel from './SplitCategoryPanel';   // v7.573
+/** v7.573: a category holding at least this many keywords of its own offers Split. */
+const SPLIT_MIN_OWN = 20;
 
 interface Props {
   projectId: string;
@@ -729,6 +732,7 @@ export default function KeywordSelectionSection({
 
   // ── Tree row renderer ───────────────────────────────────────────────────────
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set());
+  const [splitKey, setSplitKey] = useState<string | null>(null);   // v7.573
   const renderNode = (n: SelectionNode, ancestorHidden: boolean): React.ReactNode => {
     const keyLow = n.key.toLowerCase();
     const selfEntry = hiddenDraft.has(keyLow);
@@ -748,11 +752,18 @@ export default function KeywordSelectionSection({
             onChange={() => toggleNode(n)}
             style={{ width: 14, height: 14, accentColor: 'var(--c-6c63ff)', cursor: 'pointer', flexShrink: 0 }} />
           <span style={{ fontSize: n.depth === 0 ? 12.5 : 12, fontWeight: n.depth === 0 ? 700 : 600, color: n.depth === 0 ? 'var(--c-e8e8ff)' : 'var(--c-c8c8e8)' }}>{n.name}</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--c-585878)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--c-585878)', fontVariantNumeric: 'tabular-nums', flexShrink: 0, alignItems: 'center' }}>
+            {/* v7.573: a broad category can be split into page-level sub-categories */}
+            {!hid && n.depth > 0 && n.ownCount >= SPLIT_MIN_OWN && (
+              <button data-split-open={n.key} onClick={() => setSplitKey(splitKey === n.key ? null : n.key)}
+                title={`${n.ownCount} keywords sit directly in this category — split them into sub-categories so each can map to its own page`}
+                style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, cursor: 'pointer', background: 'transparent', color: 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>Split</button>
+            )}
             <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtN(n.kwCount)}</b> kw</span>
             <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtVol(n.monthlyVol)}</b>/mo</span>
           </span>
         </div>
+        {splitKey === n.key && <SplitCategoryPanel projectId={projectId} nodeKey={n.key} ownCount={n.ownCount} onClose={() => setSplitKey(null)} />}
         {!collapsed && n.children.length > 0 && (
           <div style={{ marginLeft: 22, borderLeft: '1px solid var(--c-1e1e34)', paddingLeft: 2 }}>
             {hasGeneral && (() => {
