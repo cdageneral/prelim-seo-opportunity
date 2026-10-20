@@ -122,18 +122,22 @@ export default function CompetitorsModal({
     Array.from(new Set((initBrandTerms ?? []).map(t => t.toLowerCase().trim()).filter(Boolean))));
   const [newTerm,     setNewTerm]     = useState('');
   const [brandState,  setBrandState]  = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [termsDirty,  setTermsDirty]  = useState(false);   // v7.567: edits not saved yet are said so
   const [suggesting,  setSuggesting]  = useState(false);
   const [suggestErr,  setSuggestErr]  = useState('');
   const [brandUpdatedAt, setBrandUpdatedAt] = useState<string | null>(initBrandUpdatedAt);
 
   function addTermLocal(raw: string) {
-    const t = raw.toLowerCase().trim();
-    if (!t) return;
-    setTerms(prev => Array.from(new Set([...prev, t])));
+    // v7.567: a pasted list works — split on commas, semicolons and new lines.
+    const parts = String(raw ?? '').split(/[,;\n]+/).map(x => x.toLowerCase().trim()).filter(Boolean);
+    if (parts.length === 0) return;
+    setTerms(prev => Array.from(new Set([...prev, ...parts])));
+    setTermsDirty(true);
     setNewTerm('');
   }
   function removeTermLocal(t: string) {
     setTerms(prev => prev.filter(x => x !== t));
+    setTermsDirty(true);
   }
 
   async function saveBrandTerms(next: string[]) {
@@ -148,6 +152,7 @@ export default function CompetitorsModal({
       const data = await res.json();
       setBrandUpdatedAt(data?.project?.brandTermsUpdatedAt ?? new Date().toISOString());
       setBrandState('saved');
+      setTermsDirty(false);
       onChanged();   // refetch project → panels recompute branded counts
       setTimeout(() => setBrandState('idle'), 2000);
     } catch {
@@ -165,6 +170,7 @@ export default function CompetitorsModal({
       const proposed: string[] = Array.isArray(data.brandTerms) ? data.brandTerms : [];
       if (proposed.length === 0) { setSuggestErr('No suggestions returned — add terms manually.'); return; }
       setTerms(prev => Array.from(new Set([...prev, ...proposed.map(t => t.toLowerCase().trim()).filter(Boolean)])));
+      setTermsDirty(true);
     } catch {
       setSuggestErr('Could not reach the suggestion service.');
     } finally {
@@ -959,6 +965,11 @@ export default function CompetitorsModal({
                   {brandState === 'saving' ? 'Saving…' : brandState === 'saved' ? '✓ Saved' : 'Save failed — try again'}
                 </span>
               )}
+              {brandState === 'idle' && termsDirty && (
+                <span data-unsaved-terms style={{ fontSize: '10px', whiteSpace: 'nowrap', padding: '3px 9px', borderRadius: '10px', color: 'var(--c-f59e0b)', background: 'var(--ca-136-136-176-0_08)', border: '1px solid var(--c-f59e0b)' }}>
+                  Not saved yet — click Save brand terms
+                </span>
+              )}
             </div>
 
             {/* Chips */}
@@ -981,7 +992,7 @@ export default function CompetitorsModal({
                 value={newTerm}
                 onChange={e => setNewTerm(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTermLocal(newTerm); } }}
-                placeholder="add a brand term…"
+                placeholder="add brand terms — one, or a comma-separated list…"
                 style={{ flex: '1 1 160px', minWidth: '120px', fontSize: '12px', color: 'var(--c-e8e8ff)', background: 'var(--c-0a0a14)', border: '1px solid var(--c-26264a)', borderRadius: '8px', padding: '7px 10px' }}
               />
               <button type="button" onClick={() => addTermLocal(newTerm)}

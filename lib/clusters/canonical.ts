@@ -1163,7 +1163,7 @@ export function _canonSig(
     // v7.477: the Step-3 selection and the umbrella scope CHANGE the output but left the
     // signature unchanged — after saving a selection the cache served pre-selection topics
     // (the second half of the Synchrony leak). Fingerprint both stores by content.
-    (Array.isArray(snap?._hiddenCategories) ? snap._hiddenCategories.map((h: any) => String(h?.key ?? h?.name ?? '')).sort().join('~') : ''),
+    (Array.isArray(snap?._hiddenCategories) ? snap._hiddenCategories.map((h: any) => (h?.own ? 'own:' + h.own + ':' : '') + String(h?.key ?? h?.name ?? '')).sort().join('~') : ''),   // v7.567: + General-row choices
     JSON.stringify(snap?._scopeOverrides ?? {}),
     JSON.stringify(snap?._pageOverrides ?? {}),   // v7.549: a set page changes the roots
     Object.keys(snap?._pageMapNodes ?? {}).length + ':' + String(Object.values(snap?._pageMapNodes ?? {}).map((m: any) => m?.mappedAt ?? '').sort().pop() ?? ''),   // v7.549: a new mapping changes the roots

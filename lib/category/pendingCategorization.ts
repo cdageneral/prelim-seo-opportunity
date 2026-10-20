@@ -26,10 +26,17 @@ export const OTHER_CATEGORY = 'Other';
  * competitor keywords an older rule set filed (refile mode) and the loop knows when it is done.
  */
 /** v7.538: stamp for CLIENT keywords re-filed with the client's own name and brand buckets in view. */
-export const CLIENT_FILER_VERSION = 538;
-/** v7.537: stamp for publisher projects (third-party brands filed by topic). */
-export const PUBLISHER_FILER_VERSION = 537;
-export const FILER_VERSION = 536;   // v7.536: stricter relevance rules + stronger model (re-files every 532-filed keyword)
+export const CLIENT_FILER_VERSION = 568;   // v7.567: was 538 — files into the most specific stored node
+/** v7.537: stamp for publisher projects (third-party brands filed by topic). v7.567: was 537. */
+export const PUBLISHER_FILER_VERSION = 569;
+export const FILER_VERSION = 567;   // v7.567: was 536 — deep-node targets (536: stricter relevance rules + stronger model)
+/**
+ * v7.567: every stamp from this release on is >= DEEP_FILER_VERSION. A keyword stamped below
+ * it that sits on a node with children was filed by the old name-level filer into a broad
+ * parent ("Credit Cards › Card Types") — buildKwPool holds it and categorize-pending re-files
+ * it into the most specific node. Anything stamped >= this is never held again (no loop).
+ */
+export const DEEP_FILER_VERSION = 567;
 
 /** Lowercase domain root ("www.citi.com" → "citi"). */
 function domainRoot(domain: string): string {
@@ -105,8 +112,23 @@ export function deterministicOther(keyword: string, clientDomain: string, brandT
 
 /**
  * Build the numbered candidate list from the stored tree.
+ *
+ * v7.567: candidates are the stored NODES of the tree — every distinct `keywordPaths` path
+ * and each of its prefixes ("Credit Cards", "Credit Cards › Card Types", "Credit Cards ›
+ * Card Types › Travel") — not just the ~30 names in `categories`. The old list let the
+ * model only pick broad parents, so co-brand terms piled into "Credit Cards › Card Types"
+ * (Citi (travel cards): 3,026 keywords) instead of "… › Travel". Each candidate's `name`
+ * (the stored `keywordCategories` value) is the deepest node on its path that is a
+ * `categories` name, exactly as synthesis stores it (Const II.8).
+ *
+ * Never a target: a path through a brand-typed node (v7.566 — the pool would hold it, a
+ * re-file loop), "Other" (that is the 0 answer), the Pre-Product Journey root (the demand
+ * lane files itself), or a node whose category name the guard drops. The Step-2 selection
+ * is NOT applied here — the pool applies it at read time (v7.566).
+ *
  * @param categories   `_categoryBreakdown.categories` (name, type, parent)
- * @param isDropped    the shared category guard's test (competitor brand / out of selection)
+ * @param isDropped    the shared category guard's test (competitor brand / brand-typed)
+ * @param keywordPaths `_categoryBreakdown.keywordPaths`; absent → the categories' parent chains
  */
 export function buildCandidates(
   categories: Array<{ name?: string; type?: string; parent?: string }>,
@@ -114,9 +136,14 @@ export function buildCandidates(
   keywordPaths?: Record<string, unknown>,
 ): CandidateCategory[] {
   const parentOf = new Map<string, string>();
+  const catByLow = new Map<string, { name: string; type?: string }>();
+  const brandTyped = new Set<string>();
   for (const c of categories ?? []) {
     const nm = String(c?.name ?? '').trim(); const par = String(c?.parent ?? '').trim();
-    if (nm && par && par.toLowerCase() !== nm.toLowerCase()) parentOf.set(nm.toLowerCase(), par);
+    if (!nm) continue;
+    if (!catByLow.has(nm.toLowerCase())) catByLow.set(nm.toLowerCase(), { name: nm, type: c?.type });
+    if (c?.type === 'brand') brandTyped.add(nm.toLowerCase());
+    if (par && par.toLowerCase() !== nm.toLowerCase()) parentOf.set(nm.toLowerCase(), par);
   }
   const chainOf = (name: string): string[] => {
     const chain = [name]; const seen = new Set([name.toLowerCase()]); let cur = name;
@@ -127,48 +154,41 @@ export function buildCandidates(
     }
     return chain;
   };
-  // v7.566: the pool holds any keyword whose stored path passes through a brand-typed node,
-  // so a candidate's path must never contain one (or the filed keyword loops back to pending).
-  // A category's stored `parent` is a single value, while keywords reach the same leaf by
-  // different paths (Citi (travel cards): "Card Login" has parent "Co-Branded & Retail
-  // Credit Cards", yet keywords sit at "Credit Cards › Card Login"). When the parent chain
-  // runs through a brand node, the targets are the STORED keyword paths ending at that leaf
-  // with no brand node in them (one candidate each); with none, the category is not a target.
-  const brandTyped = new Set<string>();
-  for (const c of categories ?? []) if (c?.type === 'brand' && c?.name) brandTyped.add(String(c.name).trim().toLowerCase());
-  const cleanPathByLeaf = new Map<string, Map<string, { path: string[]; n: number }>>();
-  if (brandTyped.size > 0 && keywordPaths) {
-    for (const v of Object.values(keywordPaths)) {
+  const OTHER_LOW = OTHER_CATEGORY.toLowerCase();
+  const PRE_LOW = 'pre-product journey';
+  const out: CandidateCategory[] = [];
+  const seenPaths = new Set<string>();
+  const offer = (path: string[]) => {
+    if (path.length === 0) return;
+    const lows = path.map(x => x.toLowerCase());
+    if (lows[0] === OTHER_LOW || lows[0] === PRE_LOW) return;
+    if (lows.some(x => brandTyped.has(x) || x === OTHER_LOW)) return;
+    const sig = lows.join(' › ');
+    if (seenPaths.has(sig)) return;
+    // The stored category name = deepest node on the path that is a `categories` entry.
+    let cat: { name: string; type?: string } | undefined;
+    for (let i = lows.length - 1; i >= 0 && !cat; i--) cat = catByLow.get(lows[i]);
+    const name = cat ? cat.name : path[path.length - 1];
+    if (isDropped(name, cat?.type)) return;
+    seenPaths.add(sig);
+    out.push({ n: 0, name, path: path.slice() });
+  };
+  const kpVals = keywordPaths ? Object.values(keywordPaths) : [];
+  if (kpVals.length > 0) {
+    for (const v of kpVals) {
       if (!Array.isArray(v) || v.length === 0) continue;
       const path = v.map(x => String(x ?? '').trim()).filter(Boolean);
-      if (path.length === 0 || path.some(x => brandTyped.has(x.toLowerCase()))) continue;
-      const leaf = path[path.length - 1].toLowerCase();
-      const sig = path.join(' › ');
-      let m = cleanPathByLeaf.get(leaf); if (!m) { m = new Map(); cleanPathByLeaf.set(leaf, m); }
-      const e = m.get(sig); if (e) e.n++; else m.set(sig, { path, n: 1 });
+      for (let d = 1; d <= path.length; d++) offer(path.slice(0, d));
+    }
+  } else {
+    for (const c of categories ?? []) {
+      const name = String(c?.name ?? '').trim();
+      if (name) offer(chainOf(name));
     }
   }
-  const targetPaths = (name: string): string[][] => {
-    const chain = chainOf(name);
-    if (brandTyped.size === 0 || !chain.some(x => brandTyped.has(x.toLowerCase()))) return [chain];
-    const m = cleanPathByLeaf.get(name.toLowerCase());
-    if (!m) return [];
-    // One candidate per distinct stored path (a leaf name like "Management" lives under
-    // "Credit Cards" AND "Business Credit Cards" — the model picks the one that fits).
-    return Array.from(m.values()).sort((a, b) => b.n - a.n || a.path.join(' › ').localeCompare(b.path.join(' › '))).map(e => e.path.slice());
-  };
-  const out: CandidateCategory[] = [];
-  const seenNames = new Set<string>();
-  for (const c of categories ?? []) {
-    const name = String(c?.name ?? '').trim();
-    if (!name || seenNames.has(name.toLowerCase())) continue;
-    if (name.toLowerCase() === OTHER_CATEGORY.toLowerCase()) continue;   // "0" is the Other answer
-    if (isDropped(name, c?.type)) continue;
-    const paths = targetPaths(name);
-    if (paths.length === 0) continue;
-    seenNames.add(name.toLowerCase());
-    for (const path of paths) out.push({ n: out.length + 1, name, path });
-  }
+  // Tree order (a parent directly above its children) so the list reads as the taxonomy.
+  out.sort((a, b) => a.path.join(' › ').localeCompare(b.path.join(' › ')));
+  for (let i = 0; i < out.length; i++) out[i].n = i + 1;
   return out;
 }
 
@@ -197,6 +217,7 @@ ${kws}
 
 Rules:
 - For each keyword choose the ONE category whose search intent the keyword matches — what the searcher is trying to find or do, not a shared word.
+- Categories are a tree ("Parent > Child > Sub-child"). Choose the MOST SPECIFIC one that fits: a child over its parent whenever the child fits. Choose a parent only when the search is general to the whole parent and no child fits.
 - You may ONLY answer with a category number from the list above. Never invent, rename or combine categories.
 - If no category matches the keyword's intent closely, answer 0. When unsure, answer 0.
 - Test every pick: would a page in that category of ${domain}'s site directly answer this exact search? Sharing a

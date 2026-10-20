@@ -1156,7 +1156,7 @@ export default function KeywordsPanel({
     const r = await fetch(`/api/projects/${projectId}/hidden-categories`, { cache: 'no-store' });
     const d = r.ok ? await r.json() : { hidden: [] };
     const cur: any[] = Array.isArray(d.hidden) ? d.hidden : [];
-    const have = new Set(cur.map((h: any) => String(h?.key ?? h?.name ?? '').toLowerCase().trim()));
+    const have = new Set(cur.filter((h: any) => !h?.own).map((h: any) => String(h?.key ?? h?.name ?? '').toLowerCase().trim()));   // v7.567: own markers are not hides
     const now = new Date().toISOString();
     const next = cur.concat(
       entries
@@ -1175,7 +1175,7 @@ export default function KeywordsPanel({
     const d = r.ok ? await r.json() : { hidden: [] };
     const cur: any[] = Array.isArray(d.hidden) ? d.hidden : [];
     const idLow = ident.toLowerCase().trim();
-    const next = cur.filter((h: any) => String(h?.key ?? h?.name ?? '').toLowerCase().trim() !== idLow);
+    const next = cur.filter((h: any) => !!h?.own || String(h?.key ?? h?.name ?? '').toLowerCase().trim() !== idLow);   // v7.567: never drops a General-row choice
     if (next.length === cur.length) { onScopeChanged?.(); return; }   // already restored elsewhere
     const pr = await fetch(`/api/projects/${projectId}/hidden-categories`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hidden: next }),
@@ -1827,7 +1827,7 @@ export default function KeywordsPanel({
             serpPositions={((analysis?.semrushSnapshot as any)?.serpCompetitorPositions ?? {}) as Record<string, Array<{ keyword: string; position: number }>>}
             clientDomain={clientDomain}
             clientName={clientName}
-            hiddenList={(Array.isArray((analysis?.semrushSnapshot as any)?._hiddenCategories) ? (analysis!.semrushSnapshot as any)._hiddenCategories : []) as Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>}
+            hiddenList={(Array.isArray((analysis?.semrushSnapshot as any)?._hiddenCategories) ? (analysis!.semrushSnapshot as any)._hiddenCategories.filter((h: any) => !h?.own) : []) as Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }>}
             onHideCategories={hideCategories}
             onRestoreCategory={restoreHiddenCategory}
             onMoveToPlan={moveTopicsToPlan}

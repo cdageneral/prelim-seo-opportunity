@@ -15,6 +15,8 @@ import { brandRootOf, brandTokensOf } from '@/lib/utils/brandRoot';   // v7.533 
  */
 
 import { buildScopeResolver, type UmbrellaScope } from '@/lib/category/scopeModel';   // v7.326: scope gate
+import { hiddenMatchers, pathIsHidden, ownIsOutOfScope } from '@/lib/category/selectionScope';   // v7.567: one selection rule (II.7)
+import { DEEP_FILER_VERSION } from '@/lib/category/pendingCategorization';   // v7.567: coarse-filed hold
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -638,7 +640,28 @@ export function buildKwPool({
   // the same leak one level down — the Step-2 tree skips any brand-rooted path — so the
   // stored path is checked node by node too.
   const clientKwPath: Record<string, any> = (snap as any)?._categoryBreakdown?.keywordPaths ?? {};
+  // v7.567: a keyword the OLD name-level filer (stamp < DEEP_FILER_VERSION) dropped onto a
+  // node that has children ("Credit Cards › Card Types") is held and re-filed into the most
+  // specific node. Synthesis-placed keywords carry no stamp and are never touched.
+  const filerStamp: Record<string, any> = (snap as any)?._categoryBreakdown?.filerVersion ?? {};
+  let parentPaths: Set<string> | null = null;
+  const coarseFiled = (kwLow: string): boolean => {
+    const st = filerStamp[kwLow];
+    if (typeof st !== 'number' || st >= DEEP_FILER_VERSION) return false;
+    const p = clientKwPath[kwLow];
+    if (!Array.isArray(p) || p.length === 0) return false;
+    if (!parentPaths) {
+      parentPaths = new Set<string>();
+      for (const v of Object.values(clientKwPath)) {
+        if (!Array.isArray(v) || v.length < 2) continue;
+        let acc = '';
+        for (let i = 0; i < v.length - 1; i++) { acc = acc ? acc + ' › ' + String(v[i] ?? '').trim().toLowerCase() : String(v[i] ?? '').trim().toLowerCase(); parentPaths.add(acc); }
+      }
+    }
+    return parentPaths.has(p.map((x: any) => String(x ?? '').trim().toLowerCase()).join(' › '));
+  };
   const misfiled = (kwLow: string): boolean => {
+    if (coarseFiled(kwLow)) return true;
     const c = clientKwCat[kwLow];
     if (typeof c === 'string' && c && (competitorBrandCats.has(c) || brandTypedCats.has(c.toLowerCase().trim()))) return true;
     const p = clientKwPath[kwLow];
@@ -895,16 +918,11 @@ export function buildKwPool({
     // exactly the subtree the user clicked, even when the display row is a collapsed
     // survivor whose name differs from path[0]; name-only entries match the flat stored
     // membership name (brand/location/Other) or a path root of the same name.
-    const hiddenKeys  = [] as string[];
-    const hiddenNames = new Set<string>();
-    for (const h of hiddenRaw) {
-      if (typeof h === 'string') { const n = h.toLowerCase().trim(); if (n) hiddenNames.add(n); continue; }
-      const k = String(h?.key ?? '').toLowerCase().trim();
-      if (k) { hiddenKeys.push(k); continue; }
-      const n = String(h?.name ?? '').toLowerCase().trim();
-      if (n) hiddenNames.add(n);
-    }
-    if (!includeHidden && (hiddenKeys.length > 0 || hiddenNames.size > 0)) {
+    // v7.567: parsing + matching come from lib/category/selectionScope (the wizard tree
+    // and the seed gate use the same functions — Const II.7), and keywords filed DIRECTLY
+    // on a partly-selected node are out unless its "General" row is ticked (ownIsOutOfScope).
+    const m = hiddenMatchers(hiddenRaw);
+    if (!includeHidden && (m.hiddenKeys.length > 0 || m.hiddenNames.size > 0 || m.ownExclude.size > 0)) {
       const kp: Record<string, any> = snap?._categoryBreakdown?.keywordPaths ?? {};
       const kc: Record<string, any> = snap?._categoryBreakdown?.keywordCategories ?? {};
       out = out.filter(p => {
@@ -912,16 +930,12 @@ export function buildKwPool({
         const kwLow = p.keyword.toLowerCase().trim();
         const path  = kp[kwLow];
         if (Array.isArray(path) && path.length > 0) {
-          if (hiddenNames.has(String(path[0] ?? '').toLowerCase().trim())) return false;
-          if (hiddenKeys.length > 0) {
-            const joined = path.map((s: any) => String(s ?? '').trim()).join(' › ').toLowerCase();
-            for (const hk of hiddenKeys) {
-              if (joined === hk || joined.startsWith(hk + ' › ')) return false;
-            }
-          }
+          if (pathIsHidden(path, m)) return false;
+          const joined = path.map((x: any) => String(x ?? '').trim()).join(' › ').toLowerCase();
+          if (ownIsOutOfScope(joined, m)) return false;
         }
         const cat = kc[kwLow];
-        if (typeof cat === 'string' && hiddenNames.has(cat.toLowerCase().trim())) return false;
+        if (typeof cat === 'string' && m.hiddenNames.has(cat.toLowerCase().trim())) return false;
         return true;
       });
     }

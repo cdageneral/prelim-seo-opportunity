@@ -56,6 +56,9 @@ const PutSchema = z.object({
     key:      z.string().min(1).max(600).optional(),
     kwCount:  z.number().int().min(0),
     hiddenAt: z.string().max(40),
+    // v7.567: a "General <node>" choice — the node's OWN keywords kept ('include') or
+    // dropped ('exclude'). Not a hide: the node and its children are untouched.
+    own:      z.enum(['include', 'exclude']).optional(),
   }).strict()).max(2000),
 }).strict();
 
@@ -88,16 +91,17 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   // (path key when present, else name). We store exactly the user's hide decisions —
   // nothing modeled (Const I.1).
   const seen = new Set<string>();
-  const hidden: Array<{ name: string; key?: string; kwCount: number; hiddenAt: string }> = [];
+  const hidden: Array<{ name: string; key?: string; kwCount: number; hiddenAt: string; own?: 'include' | 'exclude' }> = [];
   for (const entry of parsed.data.hidden) {
     const name    = entry.name.trim();
     const pathKey = entry.key?.trim() || undefined;
-    const ident   = (pathKey ?? name).toLowerCase();
+    const ident   = (entry.own ? 'own:' : '') + (pathKey ?? name).toLowerCase();   // v7.567: own markers never collide with hides
     if (!name || seen.has(ident)) continue;
     seen.add(ident);
-    hidden.push(pathKey
+    const base = pathKey
       ? { name, key: pathKey, kwCount: entry.kwCount, hiddenAt: entry.hiddenAt }
-      : { name, kwCount: entry.kwCount, hiddenAt: entry.hiddenAt });
+      : { name, kwCount: entry.kwCount, hiddenAt: entry.hiddenAt };
+    hidden.push(entry.own ? { ...base, own: entry.own } : base);
   }
 
   await db.update(projects)

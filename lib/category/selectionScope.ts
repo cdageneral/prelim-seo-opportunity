@@ -24,13 +24,39 @@
 
 import { buildCollapsedPathForest, type PathTreeNode } from '@/lib/category/pathTree';
 
-export interface HiddenEntry { name: string; key?: string; kwCount?: number; hiddenAt?: string }
+export interface HiddenEntry { name: string; key?: string; kwCount?: number; hiddenAt?: string; own?: 'include' | 'exclude' }
 
 export interface HiddenMatchers {
   /** Lowercased ' › '-joined path prefixes (entries that carry a `key`). */
   hiddenKeys:  string[];
   /** Lowercased names (entries WITHOUT a `key`) — match a path ROOT or a flat stored category name. */
   hiddenNames: Set<string>;
+  /** v7.567: lowercased joined paths of PARTLY-selected nodes (a strict prefix of a hidden key). */
+  partialKeys: Set<string>;
+  /** v7.567: explicit "General <node>" choices — keys whose OWN keywords are kept / dropped. */
+  ownInclude:  Set<string>;
+  ownExclude:  Set<string>;
+}
+
+/**
+ * v7.567 (Wayne 2026-10-19, Const III.1e v0.42): only ticked boxes count. A keyword filed
+ * directly on a node that has children (its "General" keywords) is out of scope when that
+ * node is only PARTLY selected — some descendant hidden — unless the user ticked the
+ * node's "General" row (own: 'include'). A fully selected node keeps them unless the
+ * General row was unticked (own: 'exclude'). Before v7.567 they stayed in scope with no
+ * checkbox at all: 3,072 keywords / 4.56M per month on Citi (travel cards).
+ */
+export function ownIsOutOfScope(joinedLower: string, m: HiddenMatchers): boolean {
+  if (!joinedLower) return false;
+  if (m.ownInclude.has(joinedLower)) return false;
+  if (m.ownExclude.has(joinedLower)) return true;
+  return m.partialKeys.has(joinedLower);
+}
+
+/** Identity of a stored scope entry (an own-marker never collides with a hide entry). */
+export function scopeEntryIdent(h: any): string {
+  const base = String(h?.key ?? h?.name ?? '').toLowerCase().trim();
+  return h?.own === 'include' || h?.own === 'exclude' ? 'own:' + base : base;
 }
 
 /** Parse the stored hidden list into matchers — same parsing as buildKwPool's hidden filter. */
@@ -38,15 +64,28 @@ export function hiddenMatchers(hidden: unknown): HiddenMatchers {
   const raw: any[] = Array.isArray(hidden) ? hidden : [];
   const hiddenKeys: string[] = [];
   const hiddenNames = new Set<string>();
+  const ownInclude = new Set<string>();
+  const ownExclude = new Set<string>();
   for (let i = 0; i < raw.length; i++) {
     const h = raw[i];
     if (typeof h === 'string') { const n = h.toLowerCase().trim(); if (n) hiddenNames.add(n); continue; }
+    if (h?.own === 'include' || h?.own === 'exclude') {   // v7.567: a General-row choice, never a hide
+      const ok = String(h?.key ?? h?.name ?? '').toLowerCase().trim();
+      if (ok) (h.own === 'include' ? ownInclude : ownExclude).add(ok);
+      continue;
+    }
     const k = String(h?.key ?? '').toLowerCase().trim();
     if (k) { hiddenKeys.push(k); continue; }
     const n = String(h?.name ?? '').toLowerCase().trim();
     if (n) hiddenNames.add(n);
   }
-  return { hiddenKeys, hiddenNames };
+  const partialKeys = new Set<string>();
+  for (let i = 0; i < hiddenKeys.length; i++) {
+    const parts = hiddenKeys[i].split(' › ');
+    let acc = '';
+    for (let j = 0; j < parts.length - 1; j++) { acc = acc ? acc + ' › ' + parts[j] : parts[j]; partialKeys.add(acc); }
+  }
+  return { hiddenKeys, hiddenNames, partialKeys, ownInclude, ownExclude };
 }
 
 /**
@@ -89,6 +128,8 @@ export interface SelectionNode {
   monthlyVol: number;
   /** In the CURRENT stored selection (before any unsaved wizard edits)? */
   inScope:  boolean;
+  /** v7.567: are this node's OWN keywords in scope (General-row rule, ownIsOutOfScope)? */
+  ownInScope: boolean;
   children: SelectionNode[];
 }
 
@@ -157,7 +198,8 @@ export function buildSelectionTree(
       totalKw += kwCount; totalVol += monthlyVol;
       if (!selfHidden) { /* root-level in-scope accumulation happens below per node */ }
     }
-    return { key: n.key, name: n.name, depth, ownCount: n.own.length, kwCount, monthlyVol, inScope: !selfHidden, children };
+    const ownInScope = !selfHidden && !(children.length > 0 && ownIsOutOfScope(n.key.toLowerCase(), m));
+    return { key: n.key, name: n.name, depth, ownCount: n.own.length, kwCount, monthlyVol, inScope: !selfHidden, ownInScope, children };
   };
   const nodes = forest.map(n => toNode(n, 0, false));
   nodes.sort((a, b) => b.monthlyVol - a.monthlyVol);
@@ -165,7 +207,7 @@ export function buildSelectionTree(
   // Exact in-scope accounting: walk again counting each node's OWN rows once,
   // honoring per-node inScope (a hidden subtree under a visible root subtracts).
   const walk = (n: SelectionNode): void => {
-    if (n.inScope) {
+    if (n.ownInScope) {
       // own rows of an in-scope node count in-scope
       inScopeKw  += n.ownCount;
       // ownVol not kept on the node — recompute from rollup minus children rollups

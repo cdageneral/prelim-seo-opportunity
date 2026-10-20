@@ -465,7 +465,7 @@ export async function POST(req: NextRequest) {
   // v7.476 (Const II.6b): the client-selected keyword scope — the pool above is already
   // filtered through it (hydrateSnapshotForPool → buildKwPool), so every figure in this
   // report obeys the selection; this block STATES it (real stored entries only, I.1).
-  const hiddenScopeEntries: any[] = Array.isArray((project as any).hiddenCategories) ? (project as any).hiddenCategories : [];
+  const hiddenScopeEntries: any[] = Array.isArray((project as any).hiddenCategories) ? (project as any).hiddenCategories.filter((h: any) => !h?.own) : [];   // v7.567: General-row choices are not exclusions
   const keywordScope = hiddenScopeEntries.length > 0
     ? {
         excludedCount: hiddenScopeEntries.length,

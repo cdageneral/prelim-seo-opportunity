@@ -135,8 +135,14 @@ export default function KeywordSelectionSection({
 
   // ── Draft scope state (idents = node keys; stored entries seed it) ──────────
   const storedHidden: any[] = Array.isArray(snap?._hiddenCategories) ? snap._hiddenCategories : [];
+  // v7.567: a "General <node>" choice rides in the same draft set as 'own:include:<key>' /
+  // 'own:exclude:<key>' — it can never match a path prefix, so every hide test is unchanged.
   const storedIdentsJson = JSON.stringify(
-    storedHidden.map(h => String(h?.key ?? h?.name ?? '').toLowerCase().trim()).filter(Boolean),
+    storedHidden.map(h => {
+      const k = String(h?.key ?? h?.name ?? '').toLowerCase().trim();
+      if (!k) return '';
+      return h?.own === 'include' || h?.own === 'exclude' ? `own:${h.own}:${k}` : k;
+    }).filter(Boolean),
   );
   const [hiddenDraft, setHiddenDraft] = useState<Set<string>>(() => new Set(JSON.parse(storedIdentsJson) as string[]));
   const [draftDirty,  setDraftDirty]  = useState(false);
@@ -177,6 +183,38 @@ export default function KeywordSelectionSection({
     return null;
   };
   const isNodeHidden = (key: string) => hiddenBy(key) !== null;
+
+  // ── v7.567: "General <node>" — keywords filed DIRECTLY on a node that has children ──
+  // Only ticked boxes count (Wayne 2026-10-19). A partly-selected node's own keywords are
+  // OUT unless its General row is ticked; a fully selected node keeps them unless the row
+  // is unticked. Same rule as the pool (selectionScope.ownIsOutOfScope, Const II.7).
+  const isPartialDraft = (keyLow: string): boolean => {
+    let hit = false;
+    hiddenDraft.forEach(id => { if (!hit && id.indexOf('own:') !== 0 && id.indexOf(keyLow + ' › ') === 0) hit = true; });
+    return hit;
+  };
+  const ownModeOf = (keyLow: string): 'include' | 'exclude' | null =>
+    hiddenDraft.has('own:include:' + keyLow) ? 'include' : hiddenDraft.has('own:exclude:' + keyLow) ? 'exclude' : null;
+  const ownInDraft = (n: SelectionNode, hid: boolean): boolean => {
+    if (hid) return false;
+    if (n.children.length === 0) return true;
+    const keyLow = n.key.toLowerCase();
+    const mode = ownModeOf(keyLow);
+    if (mode === 'include') return true;
+    if (mode === 'exclude') return false;
+    return !isPartialDraft(keyLow);
+  };
+  const toggleOwn = (n: SelectionNode) => {
+    const keyLow = n.key.toLowerCase();
+    const want = !ownInDraft(n, isNodeHidden(n.key));
+    const next = new Set(hiddenDraft);
+    next.delete('own:include:' + keyLow); next.delete('own:exclude:' + keyLow);
+    const byDefault = !isPartialDraft(keyLow);              // what the rule gives with no marker
+    if (want !== byDefault) next.add((want ? 'own:include:' : 'own:exclude:') + keyLow);
+    setHiddenDraft(next);
+    setDraftDirty(true);
+    setScopeError(null);
+  };
 
   const toggleNode = (node: SelectionNode) => {
     const keyLow = node.key.toLowerCase();
@@ -281,7 +319,7 @@ export default function KeywordSelectionSection({
       let childVol = 0;
       for (const c of n.children) childVol += c.monthlyVol;
       const ownVol = n.monthlyVol - childVol;
-      if (hid) { outKw += n.ownCount; outVol += ownVol; } else { inKw += n.ownCount; inVol += ownVol; }
+      if (!ownInDraft(n, hid)) { outKw += n.ownCount; outVol += ownVol; } else { inKw += n.ownCount; inVol += ownVol; }   // v7.567: General rule
       n.children.forEach(c => walk(c, hid));
     };
     tree.nodes.forEach(n => { if (!hiddenDraft.has(n.key.toLowerCase())) inRoots++; walk(n, false); });
@@ -302,6 +340,16 @@ export default function KeywordSelectionSection({
       const now = new Date().toISOString();
       const hidden: any[] = [];
       hiddenDraft.forEach(ident => {
+        if (ident.indexOf('own:') === 0) {   // v7.567: General-row choice
+          const mode = ident.indexOf('own:include:') === 0 ? 'include' : 'exclude';
+          const k = ident.slice(('own:' + mode + ':').length);
+          const node = nodeByKey.get(k);
+          if (!node) return;                  // node no longer in the tree — drop the stale choice
+          let childKw = 0; for (const c of node.children) childKw += c.kwCount;
+          const prevOwn = cur.find((h: any) => h?.own === mode && String(h?.key ?? h?.name ?? '').toLowerCase().trim() === k);
+          hidden.push({ name: node.name, key: node.key, kwCount: node.kwCount - childKw, hiddenAt: prevOwn?.hiddenAt ?? now, own: mode });
+          return;
+        }
         const node = nodeByKey.get(ident);
         const prev = curByIdent.get(ident);
         const name = node ? node.name : (prev?.name ?? ident);
@@ -685,7 +733,9 @@ export default function KeywordSelectionSection({
     const selfEntry = hiddenDraft.has(keyLow);
     const hid = ancestorHidden || selfEntry;
     const collapsed = collapsedKeys.has(keyLow);
-    const someHiddenBelow = !hid && n.children.some(c => isNodeHidden(c.key));
+    const ownIn = ownInDraft(n, hid);
+    const hasGeneral = n.children.length > 0 && n.ownCount > 0;
+    const someHiddenBelow = !hid && (n.children.some(c => isNodeHidden(c.key)) || (hasGeneral && !ownIn));
     return (
       <div key={n.key}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8, opacity: hid ? 0.5 : 1 }}>
@@ -704,6 +754,22 @@ export default function KeywordSelectionSection({
         </div>
         {!collapsed && n.children.length > 0 && (
           <div style={{ marginLeft: 22, borderLeft: '1px solid var(--c-1e1e34)', paddingLeft: 2 }}>
+            {hasGeneral && (() => {
+              let childVol = 0; for (const c of n.children) childVol += c.monthlyVol;
+              return (
+                <div data-general-row={n.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 8, opacity: ownIn ? 1 : 0.5 }}
+                  title={`Keywords filed directly under ${n.name}, not under one of its sub-categories. They count only when this box is ticked.`}>
+                  <span style={{ width: 16 }} />
+                  <input type="checkbox" checked={ownIn} disabled={hid} onChange={() => toggleOwn(n)}
+                    style={{ width: 14, height: 14, accentColor: 'var(--c-6c63ff)', cursor: hid ? 'default' : 'pointer', flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, fontStyle: 'italic', color: 'var(--c-c8c8e8)' }}>General {n.name}</span>
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: 12, fontSize: 11, color: 'var(--c-585878)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                    <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtN(n.ownCount)}</b> kw</span>
+                    <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtVol(n.monthlyVol - childVol)}</b>/mo</span>
+                  </span>
+                </div>
+              );
+            })()}
             {n.children.map(c => renderNode(c, hid))}
           </div>
         )}
@@ -872,7 +938,7 @@ export default function KeywordSelectionSection({
               <PendingCategorizationBar projectId={projectId} refreshKey={kwVersion} onFiled={onDeepJourneyBuilt} />
             </div>
             <p style={{ fontSize: 10.5, color: 'var(--c-585878)', marginTop: 10 }}>
-              Competitor keywords are filed into your EXISTING categories after upload — no new categories are created. Keywords that match none of your selected categories go to "Other"; nothing counts until it is filed, and the Step-2 selection applies to all of it.
+              Competitor keywords are filed into your EXISTING categories after upload — no new categories are created. Each keyword goes to the most specific category it fits, selected or not, or to "Other" if none fits; nothing counts until it is filed, and only what you ticked in Step 2 counts.
             </p>
           </div>
         )}
@@ -885,6 +951,8 @@ export default function KeywordSelectionSection({
             </div>
           ) : (
             <div>
+              {/* v7.567: filing lives where the boundary is set (also kept on Step 3) */}
+              <PendingCategorizationBar projectId={projectId} refreshKey={kwVersion} onFiled={onDeepJourneyBuilt} />
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
                 <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--c-9090c0)', background: 'var(--c-0c0c16)', border: '1px solid var(--c-1e1e34)', borderRadius: 999, padding: '5px 11px' }}>
                   <b style={{ color: 'var(--c-e8e8ff)' }}>{fmtN(draftStats.inKw)}</b> in scope · <b style={{ color: 'var(--c-e8e8ff)' }}>{fmtVol(draftStats.inVol)}</b>/mo
