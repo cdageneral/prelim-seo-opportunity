@@ -41,6 +41,16 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
     try { await call({ step: 'apply', proposal: p }); window.location.reload(); } catch (e) { setErr((e as Error).message); setBusy(null); }
   };
 
+  // review edits: fold one group into another, or back onto the parent — nothing is invented,
+  // keywords and their stored volumes just move between the proposed groups
+  const merge = (fromKey: string, toKey: string) => {
+    if (!p) return;
+    const from = p.groups.find(g => g.path.join(SEP) === fromKey);
+    if (!from) return;
+    const rest = p.groups.filter(g => g !== from);
+    if (toKey === '__general') { setP({ ...p, groups: rest, stay: [...p.stay, ...from.keywords], stayVolume: p.stayVolume + from.volume }); return; }
+    setP({ ...p, groups: rest.map(g => g.path.join(SEP) === toKey ? { ...g, keywords: [...g.keywords, ...from.keywords], volume: g.volume + from.volume } : g) });
+  };
   const el = busy ? Math.round((Date.now() - busy.startedAt) / 1000) : 0;
   const btn = (primary: boolean) => ({ fontSize: 11, fontWeight: 700, padding: '5px 11px', borderRadius: 7, cursor: busy ? 'wait' : 'pointer',
     background: primary ? 'var(--c-6c63ff)' : 'transparent', color: primary ? 'var(--on-fill-accent)' : 'var(--c-c8c8e8)', border: primary ? '1px solid var(--c-6c63ff)' : '1px solid var(--c-2a2a40)' }) as const;
@@ -69,6 +79,13 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
                   <button onClick={() => setOpen(open === k ? null : k)} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-e8e8ff)', fontWeight: 700, fontSize: 11.5, textAlign: 'left' }}>{open === k ? '▾' : '▸'} {g.name}</button>
                   {g.existing && <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-34d399)' }} title={k}>REUSES EXISTING · {k}</span>}
                   <span style={{ marginLeft: 'auto', color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{g.keywords.length} kw · {fmtVol(g.volume)}/mo</span>
+                  <select data-split-merge={k} value="" disabled={!!busy} onChange={e => { if (e.target.value) merge(k, e.target.value); }}
+                    title="Same page as another group? Fold it in."
+                    style={{ fontSize: 10, background: 'var(--c-0a0a14)', color: 'var(--c-c8c8e8)', border: '1px solid var(--c-2a2a40)', borderRadius: 5, padding: '1px 3px', maxWidth: 150 }}>
+                    <option value="">Merge into…</option>
+                    {p.groups.filter(o => o !== g).map(o => <option key={o.path.join(SEP)} value={o.path.join(SEP)}>{o.name}</option>)}
+                    <option value="__general">General {p.node.slice(-1)[0]} (keep on parent)</option>
+                  </select>
                 </div>
                 {open === k && <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', padding: '2px 0 4px 14px', lineHeight: 1.5 }}>{g.keywords.join(' · ')}</div>}
               </div>

@@ -95,6 +95,16 @@ export function parseSplit(
   const childByUnified = new Map<string, string>();
   for (const c of existingChildren) childByUnified.set(unifyLabel(c), c);
 
+  // core label of a proposed name with the node's own words removed ("Travel Cards with Lounge
+  // Access" under Travel → "access lounge") — used to catch a new group that IS an existing node
+  const nodeToks = new Set(unifyLabel(node[node.length - 1]).split(' '));
+  const core = (name: string) => unifyLabel(name).split(' ').filter(w => w && !nodeToks.has(w)).sort().join(' ');
+  const existingByCore = new Map<string, string[]>();
+  for (const [pk, pp] of Array.from(pathSet.entries())) {
+    if (pk === nodeKey || nodeKey.startsWith(pk + SEP) || pk.startsWith(nodeKey + SEP)) continue;   // not self, ancestors or own children
+    const c = core(pp[pp.length - 1]);
+    if (c && !existingByCore.has(c)) existingByCore.set(c, pp);
+  }
   const byPath = new Map<string, SplitGroup>();
   const rejected: SplitProposal['rejected'] = [];
   const take = (arr: any): number[] => {
@@ -117,9 +127,13 @@ export function parseSplit(
     }
     const name = String(g?.name ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
     // a "sub-category" that only restates the node ("Best Travel Credit Cards" under Travel) is the node itself
-    if (!path && name && unifyLabel(name) === unifyLabel(node[node.length - 1])) { for (const n of nums) used.delete(n); continue; }
+    if (!path && name && (unifyLabel(name) === unifyLabel(node[node.length - 1]) || core(name) === '')) { for (const n of nums) used.delete(n); continue; }
     if (!path) {
       if (!name) { for (const n of nums) used.delete(n); continue; }
+      const same = existingByCore.get(core(name));
+      if (same) { path = same; existing = true; }
+    }
+    if (!path) {
       if (isForeignBrand(name)) { rejected.push({ name, reason: "names another company's brand", keywords: nums.length }); for (const n of nums) used.delete(n); continue; }
       const child = childByUnified.get(unifyLabel(name)) ?? name;
       path = [...node, child];
