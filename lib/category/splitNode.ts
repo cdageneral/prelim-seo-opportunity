@@ -181,7 +181,7 @@ export function validateForApply(p: SplitProposal, ownNow: Set<string>, node: st
   for (const g of p.groups) {
     const gk = g.path.join(SEP).toLowerCase();
     const isChild = gk.startsWith(nodeKey + SEP) && g.path.length === node.length + 1;
-    if (!isChild && !allPaths.has(gk)) return { ok: false, error: `"${g.path.join(SEP)}" is neither a sub-category of this category nor an existing category`, moves: {} };
+    if (!isChild && gk !== 'other' && !allPaths.has(gk)) return { ok: false, error: `"${g.path.join(SEP)}" is neither a sub-category of this category nor an existing category`, moves: {} };
     for (const k of g.keywords) {
       const kl = k.toLowerCase().trim();
       if (seen.has(kl)) return { ok: false, error: `"${k}" is placed twice`, moves: {} };

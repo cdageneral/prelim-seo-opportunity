@@ -7,6 +7,7 @@
  * "reuses existing category") → Apply. Nothing is written until Apply. Theme tokens only (IV.6).
  */
 import { useEffect, useState } from 'react';
+import { hiddenMatchers, pathIsHidden, ownIsOutOfScope } from '@/lib/category/selectionScope';   // v7.577: same rule as the pool
 
 interface Group { name: string; path: string[]; existing: boolean; keywords: string[]; volume: number }
 interface Proposal { node: string[]; groups: Group[]; stay: string[]; stayVolume: number; rejected: Array<{ name: string; reason: string; keywords: number }> }
@@ -19,7 +20,19 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
   const [busy, setBusy] = useState<null | { label: string; startedAt: number; expectS: number }>(null);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [volOf, setVolOf] = useState<Record<string, number>>({});
   const [, tick] = useState(0);
+  // v7.577: the saved selection, so each row can say whether its keywords would still count
+  const [hidden, setHidden] = useState<unknown[] | null>(null);
+  useEffect(() => {
+    fetch(`/api/projects/${projectId}/hidden-categories`, { cache: 'no-store' }).then(r => r.ok ? r.json() : null)
+      .then(d => setHidden(Array.isArray(d?.hidden) ? d.hidden : [])).catch(() => setHidden(null));
+  }, [projectId]);
+  const outOfScope = (path: string[]): boolean | null => {
+    if (!hidden) return null;
+    const m = hiddenMatchers(hidden);
+    return pathIsHidden(path, m) || ownIsOutOfScope(path.join(SEP).toLowerCase(), m);
+  };
   useEffect(() => { if (!busy) return; const t = setInterval(() => tick(x => x + 1), 1000); return () => clearInterval(t); }, [busy]);
 
   const call = async (body: object) => {
@@ -32,7 +45,7 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
     setErr(null);
     // expected time scales with the keyword count the model reads (one call, ≤200s budget)
     setBusy({ label: `Reading ${ownCount.toLocaleString()} keywords and proposing sub-categories`, startedAt: Date.now(), expectS: Math.min(180, 25 + Math.round(ownCount * 0.4)) });
-    try { const d = await call({ step: 'propose', path: nodeKey.split(SEP) }); setP(d.proposal); } catch (e) { setErr((e as Error).message); }
+    try { const d = await call({ step: 'propose', path: nodeKey.split(SEP) }); setP(d.proposal); setVolOf(d.volumes ?? {}); } catch (e) { setErr((e as Error).message); }
     setBusy(null);
   };
   const apply = async () => {
@@ -50,6 +63,20 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
     const rest = p.groups.filter(g => g !== from);
     if (toKey === '__general') { setP({ ...p, groups: rest, stay: [...p.stay, ...from.keywords], stayVolume: p.stayVolume + from.volume }); return; }
     setP({ ...p, groups: rest.map(g => g.path.join(SEP) === toKey ? { ...g, keywords: [...g.keywords, ...from.keywords], volume: g.volume + from.volume } : g) });
+  };
+  // v7.577: keep a reused-category group as its OWN page under this category instead
+  const makeOwn = (fromKey: string) => {
+    if (!p) return;
+    setP({ ...p, groups: p.groups.map(g => g.path.join(SEP) === fromKey ? { ...g, path: [...p.node, g.name], existing: false } : g) });
+  };
+  // v7.577: drop one keyword — it goes to "Other" (out of every count unless Other is ticked)
+  const dropKeyword = (fromKey: string, kw: string) => {
+    if (!p) return;
+    let groups = p.groups.map(g => g.path.join(SEP) === fromKey ? { ...g, keywords: g.keywords.filter(x => x !== kw), volume: g.volume - (g.keywords.includes(kw) ? (volOf[kw] ?? 0) : 0) } : g);
+    const oi = groups.findIndex(g => g.path.length === 1 && g.path[0] === 'Other');
+    if (oi >= 0) groups[oi] = { ...groups[oi], keywords: [...groups[oi].keywords, kw], volume: groups[oi].volume + (volOf[kw] ?? 0) };
+    else groups = [...groups, { name: 'Other', path: ['Other'], existing: true, keywords: [kw], volume: volOf[kw] ?? 0 }];
+    setP({ ...p, groups: groups.filter(g => g.keywords.length > 0) });
   };
   const el = busy ? Math.round((Date.now() - busy.startedAt) / 1000) : 0;
   const btn = (primary: boolean) => ({ fontSize: 11, fontWeight: 700, padding: '5px 11px', borderRadius: 7, cursor: busy ? 'wait' : 'pointer',
@@ -78,16 +105,28 @@ export default function SplitCategoryPanel({ projectId, nodeKey, ownCount, onClo
                 <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                   <button onClick={() => setOpen(open === k ? null : k)} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-e8e8ff)', fontWeight: 700, fontSize: 11.5, textAlign: 'left' }}>{open === k ? '▾' : '▸'} {g.name}</button>
                   {g.existing && <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-34d399)' }} title={k}>REUSES EXISTING · {k}</span>}
+                  {!g.existing && <span style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-9b96ff)' }}>NEW PAGE</span>}
+                  {outOfScope(g.path) === true && <span data-split-out style={{ fontSize: 9, fontWeight: 800, color: 'var(--c-f87171)' }} title="This category is unticked in Step 2">OUT OF YOUR SCOPE — these keywords stop counting</span>}
                   <span style={{ marginLeft: 'auto', color: 'var(--c-8a8aa8)', fontVariantNumeric: 'tabular-nums' }}>{g.keywords.length} kw · {fmtVol(g.volume)}/mo</span>
-                  <select data-split-merge={k} value="" disabled={!!busy} onChange={e => { if (e.target.value) merge(k, e.target.value); }}
-                    title="Same page as another group? Fold it in."
+                  <select data-split-merge={k} value="" disabled={!!busy} onChange={e => { const v = e.target.value; if (!v) return; if (v === '__own') makeOwn(k); else merge(k, v); }}
+                    title="Keep as its own page, or fold it into another group"
                     style={{ fontSize: 10, background: 'var(--c-0a0a14)', color: 'var(--c-c8c8e8)', border: '1px solid var(--c-2a2a40)', borderRadius: 5, padding: '1px 3px', maxWidth: 150 }}>
-                    <option value="">Merge into…</option>
-                    {p.groups.filter(o => o !== g).map(o => <option key={o.path.join(SEP)} value={o.path.join(SEP)}>{o.name}</option>)}
+                    <option value="">Change…</option>
+                    {g.existing && !(g.path.length === 1 && g.path[0] === 'Other') && <option value="__own">Make it its own new page under {p.node.slice(-1)[0]}</option>}
+                    {p.groups.filter(o => o !== g).map(o => <option key={o.path.join(SEP)} value={o.path.join(SEP)}>Merge into {o.name}</option>)}
                     <option value="__general">General {p.node.slice(-1)[0]} (keep on parent)</option>
                   </select>
                 </div>
-                {open === k && <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', padding: '2px 0 4px 14px', lineHeight: 1.5 }}>{g.keywords.join(' · ')}</div>}
+                {open === k && (
+                  <div style={{ fontSize: 10.5, color: 'var(--c-8a8aa8)', padding: '2px 0 4px 14px', lineHeight: 1.7, display: 'flex', flexWrap: 'wrap', gap: '2px 10px' }}>
+                    {g.keywords.map(kw => (
+                      <span key={kw} data-split-kw style={{ whiteSpace: 'nowrap' }}>{kw}{!(g.path.length === 1 && g.path[0] === 'Other') && (
+                        <button data-split-drop={kw} onClick={() => dropKeyword(k, kw)} title="Leave this keyword out (moves to Other)"
+                          style={{ marginLeft: 3, background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--c-f87171)', fontWeight: 800, fontSize: 10 }}>✕</button>
+                      )}</span>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}

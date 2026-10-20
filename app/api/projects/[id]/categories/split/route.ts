@@ -102,7 +102,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       console.error('[OrbitIQ] split: no usable groups', { rejected: proposal.rejected, stay: proposal.stay.length, head: text.slice(0, 600) });
       return NextResponse.json({ error: 'No usable sub-categories came back — nothing was changed. Try again.', diag: { rejected: proposal.rejected, stay: proposal.stay.length, replyStart: text.slice(0, 400) } }, { status: 502 });
     }
-    return NextResponse.json({ proposal, keywords: kws.length, truncated: ctx.own.length > MAX_KW ? ctx.own.length - MAX_KW : 0, ms: Date.now() - t0, model: MODEL });
+    return NextResponse.json({ proposal, volumes: Object.fromEntries(kws.map(k => [k.keyword, k.volume])), keywords: kws.length, truncated: ctx.own.length > MAX_KW ? ctx.own.length - MAX_KW : 0, ms: Date.now() - t0, model: MODEL });
   }
 
   // apply
