@@ -77,6 +77,23 @@ Return ONLY JSON:
 {"groups":[{"name":"<sub-category name>","existing":"<full existing path, or empty>","keywords":[<numbers>]}],"general":[<numbers>]}`;
 }
 
+/** The first balanced {...} in a reply (code fences, prose before/after, or a trailing note with braces are all tolerated). */
+export function extractFirstJsonObject(text: string): any {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const src = fence ? fence[1] : text;
+  const start = src.indexOf('{');
+  if (start < 0) return {};
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) { try { return JSON.parse(src.slice(start, i + 1)); } catch { return {}; } } }
+  }
+  return {};
+}
+
 export function parseSplit(
   text: string,
   node: string[],
@@ -85,9 +102,7 @@ export function parseSplit(
   existingChildren: string[],
   isForeignBrand: (name: string) => boolean,
 ): SplitProposal {
-  const m = String(text ?? '').match(/\{[\s\S]*\}/);
-  let raw: any = {};
-  try { raw = m ? JSON.parse(m[0]) : {}; } catch { raw = {}; }
+  const raw: any = extractFirstJsonObject(String(text ?? ''));
   const used = new Set<number>();
   const pathSet = new Map<string, string[]>();
   for (const p of allPaths) pathSet.set(p.toLowerCase(), p.split(SEP));
