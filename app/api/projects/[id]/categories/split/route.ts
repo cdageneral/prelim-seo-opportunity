@@ -98,7 +98,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       text = res.content.map((b: any) => (b.type === 'text' ? b.text : '')).join('');
     } catch (e) { return NextResponse.json({ error: `The split call failed: ${String((e as any)?.message ?? e)}` }, { status: 502 }); }
     const proposal = parseSplit(text, node, kws, paths, ctx.childNames, isForeignBrand);
-    if (proposal.groups.length === 0) return NextResponse.json({ error: 'No usable sub-categories came back — nothing was changed. Try again.' }, { status: 502 });
+    if (proposal.groups.length === 0) {
+      console.error('[OrbitIQ] split: no usable groups', { rejected: proposal.rejected, stay: proposal.stay.length, head: text.slice(0, 600) });
+      return NextResponse.json({ error: 'No usable sub-categories came back — nothing was changed. Try again.', diag: { rejected: proposal.rejected, stay: proposal.stay.length, replyStart: text.slice(0, 400) } }, { status: 502 });
+    }
     return NextResponse.json({ proposal, keywords: kws.length, truncated: ctx.own.length > MAX_KW ? ctx.own.length - MAX_KW : 0, ms: Date.now() - t0, model: MODEL });
   }
 
