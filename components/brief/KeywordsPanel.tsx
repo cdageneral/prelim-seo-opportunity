@@ -848,6 +848,33 @@ export default function KeywordsPanel({
     };
   }, [scopedSummaryRows]);
 
+  // ── v7.581: competitor gap keywords the card does NOT count, and why ─────────
+  // Wayne 2026-10-20 (Sonobello): the card read "0" while 2,105 competitor rows were stored —
+  // v7.567 had held them for re-filing, and nothing on the card said so. Same pool builder,
+  // same options as the card (no floors), toggling only the two rules that hold keywords out:
+  //   outOfScope = filed under a category unticked in Step 2 (incl. a hidden "Other");
+  //   held       = awaiting categorization (unfiled, or filed under a brand / coarse node).
+  // Counts of real stored rows only; nothing estimated (Const I.1 / I.5).
+  const gapNotCounted = useMemo(() => {
+    if (!dbLoaded) return null;
+    const base = {
+      semrushSnapshot: analysis?.semrushSnapshot, uploadedKeywords: dbKeywords, clientDomain, competitorDomains,
+      clientVolMin: 0, competitorVolMin: 0, brandTerms, includeDemand: true,
+    };
+    const gapSet = (pool: any[]) => {
+      const set = new Set<string>();
+      for (const r of pool) if (isCompetitorGapRow(r) && inJourneyScope(r.keyword)) set.add(String(r.keyword).toLowerCase().trim());
+      return set;
+    };
+    const counted   = gapSet(buildKwPool(base));
+    const withHid   = gapSet(buildKwPool({ ...base, includeHidden: true }));
+    const withPend  = gapSet(buildKwPool({ ...base, includePending: true }));
+    let outOfScope = 0, held = 0;
+    withHid.forEach(k => { if (!counted.has(k)) outOfScope++; });
+    withPend.forEach(k => { if (!counted.has(k)) held++; });
+    return { outOfScope, held };
+  }, [dbLoaded, analysis, dbKeywords, clientDomain, competitorDomains, brandTerms, inJourneyScope]);
+
   // ── v7.326: ADJACENT VERTICALS (scope-gate staging) ────────────────────────
   // Competitor-only umbrellas the client doesn't compete in (e.g. "Car Insurance" for a
   // lender). They are EXCLUDED from every panel + all volume totals by buildKwPool's default
@@ -1391,7 +1418,15 @@ export default function KeywordsPanel({
             id: 'competitorGap', label: 'Competitor Gap', count: kwSummary.gapCount, vol: kwSummary.gapVol,
             accent: 'var(--c-f59e0b)', activeBg: 'var(--ca-245-158-11-0_10)', activeBdr: 'var(--ca-245-158-11-0_45)',
             dimBg: 'var(--ca-245-158-11-0_04)', dimBdr: 'var(--ca-245-158-11-0_15)',
-            icon: 'ti-arrows-diff', subtitle: 'Competitor ranks, client doesn\'t', clearScope: 'competitor',
+            icon: 'ti-arrows-diff',
+            // v7.581: say what the card leaves out instead of a bare number
+            subtitle: gapNotCounted && (gapNotCounted.outOfScope > 0 || gapNotCounted.held > 0)
+              ? [
+                  gapNotCounted.outOfScope > 0 ? `${gapNotCounted.outOfScope.toLocaleString()} more in unticked categories` : '',
+                  gapNotCounted.held > 0 ? `${gapNotCounted.held.toLocaleString()} awaiting categorization` : '',
+                ].filter(Boolean).join(' · ')
+              : 'Competitor ranks, client doesn\'t',
+            clearScope: 'competitor',
           },
         ];
         return (

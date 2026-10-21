@@ -10,6 +10,10 @@
  *        a mergeLog entry per group (III.1e — every structural change is visible), and the new
  *        paths onto projects.taxonomy_anchor so the next Refresh Analysis keeps them.
  * Writes are jsonb_set patches on the display analysis — the rest of the snapshot is untouched.
+ *
+ * v7.581 — the same route sorts the top-level "Other" bucket (Const III.1e v0.43): new groups are
+ * new TOP-LEVEL categories, created only from this reviewed proposal. Keywords left in Other are
+ * marked reviewed (`_categoryBreakdown.otherSorted`) so the next proposal reads the next ones.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -22,7 +26,7 @@ import { instrumentAnthropic } from '@/lib/usage/record';
 import { loadDisplayAnalysisWithSemrush } from '@/lib/analysis/loadDisplayAnalysis';
 import { brandLabelOf, BRAND_ALIASES, brandRootOf } from '@/lib/utils/brandRoot';
 import { FILER_VERSION, CLIENT_FILER_VERSION } from '@/lib/category/pendingCategorization';
-import { buildSplitPrompt, parseSplit, validateForApply, type SplitKeyword, type SplitProposal } from '@/lib/category/splitNode';
+import { buildSplitPrompt, parseSplit, validateForApply, isOtherRoot, type SplitKeyword, type SplitProposal } from '@/lib/category/splitNode';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -51,6 +55,8 @@ async function loadCtx(projectId: string, node: string[]) {
     for (let i = 1; i <= p.length; i++) { const j = p.slice(0, i).join(SEP); allPaths.add(j.toLowerCase()); if (!pathCase.has(j.toLowerCase())) pathCase.set(j.toLowerCase(), j); }
     const j = p.join(SEP).toLowerCase();
     if (j.startsWith(nodeKey + SEP) && p.length > node.length) childNames.add(p[node.length]);
+    // v7.581: sorting "Other" — a group is matched against the existing TOP-LEVEL categories
+    if (isOtherRoot(node) && p[0].toLowerCase() !== 'other') childNames.add(p[0]);
     if (j === nodeKey) { const kl = k.toLowerCase().trim(); own.push(kl); storedKey.set(kl, k); }
   }
   // real volumes: the larger of the stored rows for the keyword (client or competitor), never estimated
@@ -65,7 +71,9 @@ async function loadCtx(projectId: string, node: string[]) {
   const competitorBrands = Array.from(new Set(domains.filter(d => brandRootOf(d) !== clientRoot)
     .flatMap(d => [brandLabelOf(d), ...(BRAND_ALIASES[brandRootOf(d)] ?? [])]).map(s => String(s ?? '').toLowerCase()).filter(s => s.length >= 3)));
   const clientKw = new Set<string>((raw.topKeywords ?? []).map((t: any) => String(t?.keyword ?? '').toLowerCase().trim()));
-  return { project, analysisId: loaded!.head.id, raw, cb, kp, allPaths, pathCase, childNames: Array.from(childNames), own, storedKey, vol, competitorBrands, clientKw, domain: String(raw.domain ?? project.websiteUrl ?? '') } as const;
+  // v7.581: keywords already reviewed by an earlier "Sort Other" and left in Other
+  const reviewed = new Set<string>(Object.keys((cb.otherSorted && typeof cb.otherSorted === 'object') ? cb.otherSorted : {}).map(k => k.toLowerCase().trim()));
+  return { project, reviewed, analysisId: loaded!.head.id, raw, cb, kp, allPaths, pathCase, childNames: Array.from(childNames), own, storedKey, vol, competitorBrands, clientKw, domain: String(raw.domain ?? project.websiteUrl ?? '') } as const;
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -80,8 +88,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const isForeignBrand = (name: string) => { const n = ' ' + name.toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' '; return ctx.competitorBrands.some(b => n.includes(' ' + b + ' ')); };
 
   if (step === 'propose') {
-    if (ctx.own.length < 4) return NextResponse.json({ error: `"${node.join(SEP)}" holds only ${ctx.own.length} keywords of its own — too few to split.` }, { status: 409 });
-    const kws: SplitKeyword[] = ctx.own.map(k => ({ keyword: k, volume: ctx.vol.get(k) ?? 0 })).sort((a, b) => b.volume - a.volume).slice(0, MAX_KW);
+    const sortingOther = isOtherRoot(node);
+    // v7.581: when sorting Other, skip what an earlier sort already reviewed and left there
+    const candidates = sortingOther ? ctx.own.filter(k => !ctx.reviewed.has(k)) : ctx.own;
+    if (sortingOther && candidates.length < 2) return NextResponse.json({ error: `Every keyword in Other has already been reviewed (${ctx.own.length.toLocaleString()} keywords) — nothing left to sort.` }, { status: 409 });
+    if (!sortingOther && ctx.own.length < 4) return NextResponse.json({ error: `"${node.join(SEP)}" holds only ${ctx.own.length} keywords of its own — too few to split.` }, { status: 409 });
+    const kws: SplitKeyword[] = candidates.map(k => ({ keyword: k, volume: ctx.vol.get(k) ?? 0 })).sort((a, b) => b.volume - a.volume).slice(0, MAX_KW);
     // targets: product nodes only — never a brand-typed node (held, v7.566); "Other" for keywords that do not belong
     const brandNames = new Set<string>(((ctx.cb.categories ?? []) as any[]).filter(c => c?.type === 'brand' && c?.name).map(c => String(c.name).toLowerCase()));
     const paths = Array.from(ctx.pathCase.values())
@@ -102,7 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       console.error('[OrbitIQ] split: no usable groups', { rejected: proposal.rejected, stay: proposal.stay.length, head: text.slice(0, 600) });
       return NextResponse.json({ error: 'No usable sub-categories came back — nothing was changed. Try again.', diag: { rejected: proposal.rejected, stay: proposal.stay.length, replyStart: text.slice(0, 400) } }, { status: 502 });
     }
-    return NextResponse.json({ proposal, volumes: Object.fromEntries(kws.map(k => [k.keyword, k.volume])), keywords: kws.length, truncated: ctx.own.length > MAX_KW ? ctx.own.length - MAX_KW : 0, ms: Date.now() - t0, model: MODEL });
+    return NextResponse.json({ proposal, volumes: Object.fromEntries(kws.map(k => [k.keyword, k.volume])), keywords: kws.length, truncated: candidates.length > MAX_KW ? candidates.length - MAX_KW : 0, sortingOther, reviewedBefore: sortingOther ? ctx.own.length - candidates.length : 0, ms: Date.now() - t0, model: MODEL });
   }
 
   // apply
@@ -120,10 +132,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const sk = ctx.storedKey.get(kl) ?? kl;
     pathPatch[sk] = v.moves[kl];
     const target = v.moves[kl].join(SEP).toLowerCase();
-    if (!target.startsWith(nodeKey + SEP)) { const c = catAt.get(target); if (c) catPatch[sk] = c; }
+    if (!target.startsWith(nodeKey + SEP)) {
+      const c = catAt.get(target);
+      if (c) catPatch[sk] = c;
+      // v7.581: a NEW top-level category has no stored keyword yet — its name is the category
+      else if (isOtherRoot(node) && v.moves[kl].length === 1) catPatch[sk] = v.moves[kl][0];
+    }
     stamps[sk] = ctx.clientKw.has(kl) ? CLIENT_FILER_VERSION : FILER_VERSION;
   }
   const at = new Date().toISOString();
+  // v7.581: keywords this sort left in Other (stay + Exclude) are marked reviewed
+  const reviewedPatch: Record<string, string> = {};
+  if (isOtherRoot(node)) {
+    const ownNow = new Set(ctx.own);
+    const left = [...(Array.isArray(proposal.stay) ? proposal.stay : []),
+      ...proposal.groups.filter(g => g.path.length === 1 && g.path[0].toLowerCase() === 'other').flatMap(g => g.keywords)];
+    for (const k of left) { const kl = String(k ?? '').toLowerCase().trim(); if (ownNow.has(kl)) reviewedPatch[ctx.storedKey.get(kl) ?? kl] = at; }
+  }
   const log = proposal.groups.filter(g => g.keywords.some(k => v.moves[k.toLowerCase().trim()]))
     .map(g => ({ from: node.join(SEP), to: g.path.join(SEP), kind: 'split', keywords: g.keywords.filter(k => v.moves[k.toLowerCase().trim()]).length, at }));
   await db.execute(sql`
@@ -134,6 +159,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         '{_categoryBreakdown,filerVersion}', COALESCE(semrush_snapshot #> '{_categoryBreakdown,filerVersion}', '{}'::jsonb) || ${JSON.stringify(stamps)}::jsonb, true),
         '{_categoryBreakdown,mergeLog}', COALESCE(semrush_snapshot #> '{_categoryBreakdown,mergeLog}', '[]'::jsonb) || ${JSON.stringify(log)}::jsonb, true)
     WHERE id = ${ctx.analysisId}`);
+  if (Object.keys(reviewedPatch).length > 0) {
+    await db.execute(sql`
+      UPDATE analyses SET semrush_snapshot = jsonb_set(semrush_snapshot,
+        '{_categoryBreakdown,otherSorted}', COALESCE(semrush_snapshot #> '{_categoryBreakdown,otherSorted}', '{}'::jsonb) || ${JSON.stringify(reviewedPatch)}::jsonb, true)
+      WHERE id = ${ctx.analysisId}`);
+  }
   // keep the new sub-categories on the next Refresh Analysis (III.1e anchor)
   try {
     const anchor: string[][] = Array.isArray(ctx.project.taxonomyAnchor) ? (ctx.project.taxonomyAnchor as string[][]) : [];
@@ -141,5 +172,5 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const add = proposal.groups.map(g => g.path).filter(p => !have.has(p.join(SEP).toLowerCase()));
     if (add.length > 0) await db.update(projects).set({ taxonomyAnchor: [...add, ...anchor], taxonomyAnchorUpdatedAt: new Date() } as any).where(eq(projects.id, params.id));
   } catch (e) { console.error('[OrbitIQ] split: anchor update failed (non-fatal):', (e as any)?.message); }
-  return NextResponse.json({ ok: true, moved: keys.length, groups: log.length });
+  return NextResponse.json({ ok: true, moved: keys.length, groups: log.length, reviewed: Object.keys(reviewedPatch).length });
 }
