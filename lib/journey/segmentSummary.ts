@@ -22,6 +22,10 @@
  *                                      the Assessment PDF already use (labeled a modeled
  *                                      attribution per Const I.5a)
  *
+ * v7.582 (Wayne 2026-10-21): the rollup also splits the shared topics into existing vs
+ * to build (same canonTopicState rule), and the segment view prints the slice's real
+ * volume as its own tile.
+ *
  * No React, no DOM — importable by a route.
  */
 
@@ -74,6 +78,8 @@ export interface JourneyRollup {
   annualVolume: number;  // monthlyVolume × 12
   segments: JourneyRollupSegment[];
   shared: number;        // topics attributed to more than one / no single segment
+  sharedExisting: number;   // v7.582: shared topics the client already has a page for
+  sharedBuild: number;      // v7.582: shared topics that are net-new pages (existing + build = shared)
 }
 
 /** The persona fields the summary card + PDF print — stored segment research, read as written. */
@@ -174,9 +180,11 @@ export function summarizeJourneyRollup(
 ): JourneyRollup {
   const bucket = segTok.length ? buildCanonTopicSegmentMap(topics as any, segTok) : new Map<string, string>();
   const counts = new Map<string, number>();
+  let sharedExisting = 0, sharedBuild = 0;
   for (const t of topics) {
     const b = bucket.get(t.id) ?? SHARED_BUCKET;
     counts.set(b, (counts.get(b) ?? 0) + 1);
+    if (b === SHARED_BUCKET) { if (isExisting(t)) sharedExisting++; else sharedBuild++; }
   }
   const monthlyVolume = dedupedVolume(topics);
   const catKeys = new Set(topics.map(t => `${umbrellaOfTopic(t)}\u0000${categoryOf(t)}`));
@@ -188,6 +196,8 @@ export function summarizeJourneyRollup(
     segments: segments.map((s, i) => ({ id: s.id, label: segmentLabelAt(i), name: s.name ?? '', topics: counts.get(s.id) ?? 0 })),
     // with no segments there is no partition — every topic is unattributed, and the UI hides the split
     shared: segTok.length ? (counts.get(SHARED_BUCKET) ?? 0) : 0,
+    sharedExisting: segTok.length ? sharedExisting : 0,
+    sharedBuild: segTok.length ? sharedBuild : 0,
   };
 }
 

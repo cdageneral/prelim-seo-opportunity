@@ -1,0 +1,9 @@
+# v7.582 — Journey panel: shared topics split by existing / to build; each segment shows its search volume (2026-10-21)
+
+Wayne: *"in the journey panel I want to add in the all segments tab the following: Total topics shared across segments for existing and net new. Then in each audience filter I want to add the total search volume for the content mapped to that audience in addition to the info we have."*
+
+- **All Segments:** the **Overlapping segments** card now shows "N existing · M to build" under its count. These are the topics shared by more than one segment, or matching none specifically, split by the same existing/build rule the panel uses everywhere. Existing + to build always equals the card's count.
+- **Each segment:** the Journey & Content Gap summary gains a seventh tile, **Search volume**. It is the real Semrush monthly searches for that segment's topics, each keyword counted once, with the annual figure (monthly × 12) under it. It is the same deduped figure the umbrella table rows are built from.
+- **Journey-map PDF:** the segment page prints the same Search volume tile, and the All Segments page prints the shared split. The figures come from the one shared builder, so the screen and the PDF can't disagree (II.6a).
+- A segment's volume counts each keyword once within that segment. Because a keyword can appear in topics of two segments, the segment volumes don't have to add up to the All Segments total.
+- Verified: `tsc`, real `next build`, retained suite 3,622 PASS. Same FAIL set as v7.581, except the known v7552 ETA timing flake. +16 v7.582 checks: hand-tallied shared split including a net-new case, segment volume vs hand dedupe, PDF parity, and the real JourneySection rendered in dark and light. The v7554 Segment C tile check was updated by design with a dated note (V.6).

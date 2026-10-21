@@ -46,6 +46,16 @@ function Tile({ value, label, color }: { value: number; label: string; color?: s
   );
 }
 
+/** v7.582: the slice's real search volume — monthly headline, annual (monthly × 12) under it */
+function VolumeTile({ monthly }: { monthly: number }) {
+  return (
+    <div data-tile="Search volume" style={{ flex: '1 1 130px', minWidth: 120, background: T.tile, border: `1px solid ${T.line}`, borderRadius: 10, padding: '12px 14px' }}>
+      <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1, color: T.ink }}><span data-seg-monthly>{fmtSummaryVol(monthly)}</span><span style={{ fontSize: 12, fontWeight: 600, color: T.body }}>/mo</span></div>
+      <div style={{ fontSize: 12, color: T.body, marginTop: 4 }}>Search volume · <span data-seg-annual>{fmtSummaryVol(monthly * 12)}</span>/yr</div>
+    </div>
+  );
+}
+
 function SectionLabel({ children, color }: { children: ReactNode; color: string }) {
   return <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color, marginBottom: 4 }}>{children}</div>;
 }
@@ -130,6 +140,7 @@ export function SegmentJourneySummary({ persona, summary, accent }: { persona: S
             <Tile value={summary.existing} label="Existing pages" color={T.green} />
             <Tile value={summary.build} label="To build" color={T.red} />
             <Tile value={summary.inPlan} label="In Content Plan" />
+            <VolumeTile monthly={summary.volume} />
           </div>
           {summary.umbrellas.length === 0 ? (
             <div style={{ marginTop: 14, border: `1px dashed ${T.line2}`, borderRadius: 10, padding: '20px 14px', textAlign: 'center', fontSize: 12, color: T.faint }}>
@@ -167,7 +178,7 @@ export function SegmentJourneySummary({ persona, summary, accent }: { persona: S
           )}
           <p style={{ fontSize: 10.5, color: T.faint, margin: '10px 0 0', lineHeight: 1.5 }}>
             <b style={{ color: T.green }}>Existing</b> = the client already ranks or holds a page; <b style={{ color: T.red }}>Build</b> = net-new page.
-            Volumes are real Semrush monthly searches, each keyword counted once. Topics are attributed to this segment by the same
+            Volumes are real Semrush monthly searches, each keyword counted once (annual = monthly &times; 12). Topics are attributed to this segment by the same
             audience-language partition every panel uses (a modeled attribution). In plan = this segment&rsquo;s topics in the Content Plan.
           </p>
         </div>
@@ -180,11 +191,18 @@ export function AllJourneysRollup({ rollup, existing, build, accents }: {
   rollup: JourneyRollup; existing: number; build: number; accents: string[];
 }) {
   const hasSegs = rollup.segments.length > 0;
-  const card = (key: string, title: string, value: number, color: string, sub = 'content articles') => (
+  const card = (key: string, title: string, value: number, color: string, sub = 'content articles', split?: { existing: number; build: number }) => (
     <div key={key} data-rollup-seg={key} style={{ flex: '1 1 150px', minWidth: 140, background: T.tile, borderTop: `4px solid ${color}`, borderRadius: '0 0 10px 10px', padding: '12px 14px' }}>
       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase', color: T.body, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={title}>{title}</div>
       <div style={{ fontSize: 30, fontWeight: 800, color, lineHeight: 1.15, marginTop: 6 }}>{n0(value)}</div>
       <div style={{ fontSize: 11.5, color: T.body, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={sub}>{sub}</div>
+      {split && (
+        <div data-rollup-shared-split style={{ fontSize: 12, marginTop: 4 }}>
+          <span style={{ color: T.green, fontWeight: 700 }}>{n0(split.existing)} existing</span>
+          <span style={{ color: T.faint }}> · </span>
+          <span style={{ color: T.red, fontWeight: 700 }}>{n0(split.build)} to build</span>
+        </div>
+      )}
     </div>
   );
   return (
@@ -214,7 +232,7 @@ export function AllJourneysRollup({ rollup, existing, build, accents }: {
       {hasSegs && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 16 }}>
           {rollup.segments.map((s, i) => card(s.id, s.label, s.topics, accents[i % accents.length], `content articles · ${s.name}`))}
-          {card('shared', 'Overlapping segments', rollup.shared, T.orange, 'content articles · shared across segments')}
+          {card('shared', 'Overlapping segments', rollup.shared, T.orange, 'content articles · shared across segments', { existing: rollup.sharedExisting ?? 0, build: rollup.sharedBuild ?? 0 })}
         </div>
       )}
       <p style={{ fontSize: 10.5, color: T.faint, margin: '10px 0 0', lineHeight: 1.5 }}>

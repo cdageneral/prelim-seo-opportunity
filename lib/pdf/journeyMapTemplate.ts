@@ -394,6 +394,7 @@ export function summaryPage(d: JourneyMapInput): string {
       <div class="tile"><div class="tv green">${n0(sl.existing)}</div><div class="tl">Existing pages</div></div>
       <div class="tile"><div class="tv red">${n0(sl.build)}</div><div class="tl">To build</div></div>
       <div class="tile"><div class="tv">${n0(sl.inPlan)}</div><div class="tl">In Content Plan</div></div>
+      ${sm.kind === 'segment' ? `<div class="tile"><div class="tv">${esc(fmtSummaryVol(sl.volume))}<span class="tvu">/mo</span></div><div class="tl">Search volume &middot; ${esc(fmtSummaryVol(sl.volume * 12))}/yr</div></div>` : ''}
     </div>`;
   const table = sl.umbrellas.length ? `<table class="tbl">
       <tr><th>Umbrella</th><th class="num">Volume</th><th class="num">Categories</th><th class="num">Topics</th><th class="num">Existing</th><th class="num">Build</th><th class="num">In plan</th></tr>
@@ -438,7 +439,7 @@ export function summaryPage(d: JourneyMapInput): string {
   if (!r) return '';
   const segCards = r.segments.length
     ? `<div class="rsegs">${r.segments.map(s => `<div class="rseg"><div class="rsl">${esc(s.label)}</div><div class="rsv">${n0(s.topics)}</div><div class="rss">${esc(s.name)}</div></div>`).join('')}
-        <div class="rseg ov"><div class="rsl">Overlapping segments</div><div class="rsv">${n0(r.shared)}</div><div class="rss">shared across segments</div></div></div>` : '';
+        <div class="rseg ov"><div class="rsl">Overlapping segments</div><div class="rsv">${n0(r.shared)}</div><div class="rss">shared across segments</div><div class="rss"><span class="green">${n0(r.sharedExisting ?? 0)} existing</span> &middot; <span class="red">${n0(r.sharedBuild ?? 0)} to build</span></div></div></div>` : '';
   return `<section class="page" data-summary="rollup">
     <div class="kicker">OrbitIQ &middot; All audience journeys</div>
     <div class="rhead">Total pages required in all product journeys</div>
@@ -486,6 +487,7 @@ export function buildJourneyMapHTML(d: JourneyMapInput): string {
     border-top:1px solid var(--line); padding-top:5px; }
   .tiles { display:flex; gap:10px; margin:20px 0 16px; }
   .tile { flex:1; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .tvu { font-size:11px; font-weight:600; opacity:.7; }
   .tv { font-size:26px; font-weight:700; }
   .tl { font-size:10px; color:var(--muted); margin-top:2px; }
   .green { color:var(--green); } .red { color:var(--red); }
