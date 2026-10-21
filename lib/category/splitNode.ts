@@ -20,6 +20,13 @@
  *   - names are unified case/"&"/plural-insensitively against the node's existing children, so a
  *     re-split never mints "Airline Cards" beside "Airline Card".
  * The proposal is shown to the user before anything is written; the apply step re-validates it.
+ *
+ * v7.581 — "Sort Other" (Wayne 2026-10-21, Sonobello; Const III.1e v0.43). The same tool runs on
+ * the top-level "Other" bucket. There a new group is a NEW TOP-LEVEL category ([name]), never a
+ * sub-folder of Other (a child of Other would stay out of scope with it). Only the user creates
+ * it, through this reviewed proposal; the filer and Refresh Analysis still never invent one.
+ * Keywords the model leaves in "general" stay in Other and are marked reviewed, so the next run
+ * reads the next unreviewed keywords instead of the same ones again.
  */
 
 export interface SplitKeyword { keyword: string; volume: number }
@@ -41,6 +48,9 @@ export interface SplitProposal {
 }
 
 const SEP = ' › ';
+export const OTHER_ROOT = 'Other';
+/** v7.581: the node is the top-level "Other" bucket (new groups become top-level categories). */
+export const isOtherRoot = (node: string[]): boolean => node.length === 1 && String(node[0] ?? '').trim().toLowerCase() === 'other';
 /** Words that never distinguish two sub-categories of one card/account node ("Airline Credit Cards" = "Airline Card"). */
 const FILLER = new Set(['and', 'the', 'for', 'with', 'a', 'of', 'credit', 'card', 'account', 'option',
   // purely linguistic adjectives are never a page of their own (III.1c)
@@ -53,6 +63,7 @@ export const unifyLabel = (s: string): string => {
 };
 
 export function buildSplitPrompt(domain: string, node: string[], kws: SplitKeyword[], allPaths: string[], competitorBrands: string[]): string {
+  if (isOtherRoot(node)) return buildSortOtherPrompt(domain, kws, allPaths, competitorBrands);
   const list = kws.map((k, i) => `${i + 1}. ${k.keyword} (${k.volume.toLocaleString()}/mo)`).join('\n');
   const tree = allPaths.slice(0, 400).map(p => `- ${p}`).join('\n');
   return `You are organising the content architecture of ${domain}. One category in its stored taxonomy is too broad: every keyword below sits in "${node.join(SEP)}", so it can only ever map to ONE page. Split it into sub-categories where EACH sub-category is a page Google would rank on its own (the Same Page Test: two keywords share a sub-category only if one page could fully answer both).
@@ -75,6 +86,34 @@ RULES
 
 Return ONLY JSON:
 {"groups":[{"name":"<sub-category name>","existing":"<full existing path, or empty>","keywords":[<numbers>]}],"general":[<numbers>]}`;
+}
+
+/** v7.581: "Other" holds keywords no existing category fits. Group the ones that belong on the
+ * client's site into new TOP-LEVEL categories (or an existing category when one fits); the rest
+ * stay in Other. Same JSON contract as a split, so parseSplit validates both. */
+export function buildSortOtherPrompt(domain: string, kws: SplitKeyword[], allPaths: string[], competitorBrands: string[]): string {
+  const list = kws.map((k, i) => `${i + 1}. ${k.keyword} (${k.volume.toLocaleString()}/mo)`).join('\n');
+  const tree = allPaths.slice(0, 400).map(p => `- ${p}`).join('\n');
+  return `You are organising the content architecture of ${domain}. The keywords below sit in "Other": when they were filed, no existing category of the site fitted them. Some are searches the site should answer with pages of their own (for example the body concerns, problems or questions that lead people to the site's services); others have nothing to do with the site.
+
+KEYWORDS IN "Other":
+${list}
+
+EVERY CATEGORY ALREADY IN THE TREE (reuse one when it is the right home — never invent a duplicate of something listed here):
+${tree}
+
+RULES
+- Group keywords that belong on ${domain} into NEW top-level categories, each a topic area the site would have a section for (e.g. "Body Concerns & Problem Areas"). Prefer 2-8 categories. Each needs at least 2 keywords. Short, plain, title case.
+- If a keyword clearly belongs to a category already listed above, give that full path in "existing" instead of creating a category.
+- A keyword goes into a category only if a page in that category would directly answer that exact search. Sharing a context is not enough.
+- Keywords with no real connection to what ${domain} offers go in "general" — they stay in Other.
+- Name categories by topic or user task, never by a company's brand${competitorBrands.length ? ` (${competitorBrands.slice(0, 30).join(', ')} are other companies)` : ''}. Another company's brand, login or product search goes in "general".
+- "best", "top", "good", "cheap" and years never make a category of their own.
+- No two categories may be answerable by the same page section. Merge such groups.
+- Use each keyword number exactly once.
+
+Return ONLY JSON:
+{"groups":[{"name":"<category name>","existing":"<full existing path, or empty>","keywords":[<numbers>]}],"general":[<numbers>]}`;
 }
 
 /** The first balanced {...} in a reply (code fences, prose before/after, or a trailing note with braces are all tolerated). */
@@ -151,7 +190,8 @@ export function parseSplit(
     if (!path) {
       if (isForeignBrand(name)) { rejected.push({ name, reason: "names another company's brand", keywords: nums.length }); for (const n of nums) used.delete(n); continue; }
       const child = childByUnified.get(unifyLabel(name)) ?? name;
-      path = [...node, child];
+      // v7.581: under "Other" a new group is a top-level category (existingChildren = the roots)
+      path = isOtherRoot(node) ? [child] : [...node, child];
       existing = existingChildren.includes(child);
     }
     const key = path.join(SEP).toLowerCase();
@@ -180,7 +220,8 @@ export function validateForApply(p: SplitProposal, ownNow: Set<string>, node: st
   const seen = new Set<string>();
   for (const g of p.groups) {
     const gk = g.path.join(SEP).toLowerCase();
-    const isChild = gk.startsWith(nodeKey + SEP) && g.path.length === node.length + 1;
+    const isChild = (gk.startsWith(nodeKey + SEP) && g.path.length === node.length + 1)
+      || (isOtherRoot(node) && g.path.length === 1 && gk !== 'other');   // v7.581: a new top-level category
     if (!isChild && gk !== 'other' && !allPaths.has(gk)) return { ok: false, error: `"${g.path.join(SEP)}" is neither a sub-category of this category nor an existing category`, moves: {} };
     for (const k of g.keywords) {
       const kl = k.toLowerCase().trim();

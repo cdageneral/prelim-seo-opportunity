@@ -35,6 +35,8 @@ import SelectionCarryBanner from './SelectionCarryBanner';   // v7.570
 import SplitCategoryPanel from './SplitCategoryPanel';   // v7.573
 /** v7.573: a category holding at least this many keywords of its own offers Split. */
 const SPLIT_MIN_OWN = 20;
+/** v7.581: the top-level "Other" bucket offers Sort (new top-level categories, Const III.1e v0.43) — even while unticked. */
+const isOtherRootNode = (n: { depth: number; key: string }): boolean => n.depth === 0 && n.key.trim().toLowerCase() === 'other';
 
 interface Props {
   projectId: string;
@@ -639,7 +641,8 @@ export default function KeywordSelectionSection({
   const steps = [
     { n: 1, title: 'Upload client footprint', sub: baseDone ? `${fmtN(clientCount)} client keywords` : 'required', done: baseDone },
     { n: 2, title: 'Select categories',       sub: hasTree ? `${draftStats.inRoots} of ${draftStats.totalRoots} in scope` : 'runs after categorization', done: hasTree && !draftDirty },
-    { n: 3, title: 'Add competitors',         sub: compDone ? `${fmtN(gapCount)} gap keywords` : 'required', done: compDone },
+    // v7.581: competitor rows live only in the uploaded rows — say "loading" until they arrive, never "required"
+    { n: 3, title: 'Add competitors',         sub: compDone ? `${fmtN(gapCount)} gap keywords` : !dbLoaded ? 'loading…' : 'required', done: compDone },
     { n: 4, title: 'Expand footprint',        sub: productTopics > 0 ? `${fmtN(productTopics)} topics built` : 'optional · full-funnel', done: productTopics > 0 },
     { n: 5, title: 'Pre-product journey',     sub: preTopics > 0 ? `${fmtN(preTopics)} topics built` : 'optional · need-based', done: preTopics > 0 },
   ];
@@ -758,6 +761,12 @@ export default function KeywordSelectionSection({
               <button data-split-open={n.key} onClick={() => setSplitKey(splitKey === n.key ? null : n.key)}
                 title={`${n.ownCount} keywords sit directly in this category — split them into sub-categories so each can map to its own page`}
                 style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, cursor: 'pointer', background: 'transparent', color: 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>Split</button>
+            )}
+            {/* v7.581: Other holds keywords no category fitted — sort them into new top-level categories */}
+            {isOtherRootNode(n) && n.ownCount >= 2 && (
+              <button data-sort-other-open onClick={() => setSplitKey(splitKey === n.key ? null : n.key)}
+                title="Keywords in Other count nowhere. Propose new top-level categories for the ones that belong on the site; you review every group before anything changes."
+                style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, cursor: 'pointer', background: 'transparent', color: 'var(--c-9b96ff)', border: '1px solid var(--c-2a2a40)' }}>Sort into categories</button>
             )}
             <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtN(n.kwCount)}</b> kw</span>
             <span><b style={{ color: 'var(--c-9090c0)', fontWeight: 700 }}>{fmtVol(n.monthlyVol)}</b>/mo</span>
