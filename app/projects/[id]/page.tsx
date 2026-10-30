@@ -1130,7 +1130,9 @@ export default function ProjectBriefPage() {
   const scanDate = analysis?.completedAt
     ? (() => {
         const d = new Date(analysis.completedAt);
-        return `${d.toISOString().slice(0, 10)} · ${d.toISOString().slice(11, 16)} UTC`;
+        // v7.583 — scan stamp reads MM/DD/YYYY (was ISO YYYY-MM-DD); date and time both UTC.
+        const iso = d.toISOString();
+        return `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(0, 4)} · ${iso.slice(11, 16)} UTC`;
       })()
     : null;
 

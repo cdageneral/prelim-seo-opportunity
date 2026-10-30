@@ -1,3 +1,11 @@
+# v7.583 — Scan stamp reads Month/Day/Year (2026-10-30)
+
+Wayne, on the synchrony.com project header showing `SCAN: 2026-08-10 · 22:16 UTC`: *"can you change the date format to be Month/Day/Year"*.
+
+- The scan stamp under the project name now prints **MM/DD/YYYY** — the same scan reads `SCAN: 08/10/2026 · 22:16 UTC`. The time and the UTC basis are unchanged; only the date order changed.
+- The stamp is built from the stored `completedAt` of the latest analysis exactly as before; nothing else was touched. Filenames of downloaded PDFs keep their ISO date suffix so they still sort by name.
+- Verified: `tsc` (project tsconfig) clean; the formatter checked against the screenshot's own timestamp and two edge cases (zero-padded month/day, year-end); source check that the old ISO expression is gone.
+
 # v7.582 — Journey panel: shared topics split by existing / to build; each segment shows its search volume (2026-10-21)
 
 Wayne: *"in the journey panel I want to add in the all segments tab the following: Total topics shared across segments for existing and net new. Then in each audience filter I want to add the total search volume for the content mapped to that audience in addition to the info we have."*
